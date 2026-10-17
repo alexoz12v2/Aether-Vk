@@ -61,8 +61,10 @@ const float DUST_FLOW_SHARE          = 0.85;
 const float DUST_FLOW_KAPPA          = 4.0;
 const float DUST_FLOW_I0_KAPPA       = 11.301922;
 const float DUST_CHILD_PX_MAX        = 12.0;
-// render cluster y word: ring slot | stream shift << 27 | live << 31 (dust::render_word)
+// render cluster y word: ring slot | log2 capacity << 22 | stream shift << 27 | live << 31
+// (dust::render_word)
 const uint  DUST_RENDER_SLOT_MASK    = (1u << 22u) - 1u;
+const uint  DUST_RENDER_LOG2CAP_BIT0 = 22u;
 const uint  DUST_RENDER_SHIFT_BIT0   = 27u;
 const uint  DUST_RENDER_LIVE_BIT     = 0x80000000u;
 // ─── v4 render (mirror of dust::splat::*): Gaussian packets, capsule splats, pyramid ───
@@ -99,6 +101,13 @@ const float DUST_LIT_ARC_END_EPS      = 1e-5;  // dust::LIT_ARC_END_EPS
 const float DUST_SPIRAL_MIN_TURN      = 0.01;  // dust::SPIRAL_MIN_TURN (rad)
 const float DUST_SPIRAL_MAX_AGE_SAMPLES = 8.0; // dust::SPIRAL_MAX_AGE_SAMPLES
 const float DUST_TIME_SWEEP_STEP_PX   = 1.0;   // dust::TIME_SWEEP_STEP_PX
+// the cluster level of detail (dust::PYR_LOD, dust::group_bins / lod_px_active): the header word
+// (f32 bits, pixels per drawn segment, 0 = off, host-written), the size bins one bin of the loop
+// spans (1 outside a grouped cluster: every function reading edges b and b + 1 reads b + dust_group)
+// and the frame's knob (the sweep step); set per cluster by dust_splat.comp
+const uint  DUST_PYR_LOD              = 61u;
+uint  dust_group  = 1u;
+float dust_lod_px = 0.0;
 const float DUST_MERGE_PX             = 1.0;    // dust::DUST_MERGE_PX
 const float DUST_DET_ANISO_FLOOR      = 1e-6;   // dust::DUST_DET_ANISO_FLOOR
 const float DUST_COUNT_MAX_PER_ADD    = 16777216.0;
@@ -129,6 +138,32 @@ const uint  DUST_VOLUME_AXIS_TIME     = 1u;     // dust::DUST_VOLUME_AXIS_TIME
 const uint  DUST_VOLUME_AXIS_GRID     = 2u;     // dust::DUST_VOLUME_AXIS_GRID
 const uint  DUST_VOLUME_MAX_EVALS     = 4096u;  // dust::DUST_VOLUME_MAX_EVALS: texels x pieces per volumetric packet
 const uint  DUST_VOLUME_FRAME_BUDGET  = 67108864u; // dust::DUST_VOLUME_FRAME_BUDGET (1 << 26): the in-frame gate at DUST_FRAME_HARD_FACTOR of it
+// K1c, the texel's integral (dust::volume_class and its constants)
+const uint  DUST_VOLUME_COARSE_LEVELS = 2u;     // dust::DUST_VOLUME_COARSE_LEVELS
+const float DUST_VOLUME_SMALL_TEXELS  = 2.0;    // dust::DUST_VOLUME_SMALL_TEXELS
+const uint  DUST_VOLUME_THIN_LEVELS   = 6u;     // dust::DUST_VOLUME_THIN_LEVELS
+const uint  DUST_VOLUME_LINE_LEVELS   = 5u;     // dust::DUST_VOLUME_LINE_LEVELS
+const uint  DUST_VOLUME_SUBRAY_ORDER_MAX = 4u;  // dust::DUST_VOLUME_SUBRAY_ORDER_MAX
+const uint  DUST_VOLUME_SUBRAY_ORDER_TOP = 3u;  // dust::DUST_VOLUME_SUBRAY_ORDER_TOP
+const uint  DUST_VOLUME_SUBRAY_ORDER_LOW = 2u;  // dust::DUST_VOLUME_SUBRAY_ORDER_LOW
+const float DUST_SMALL_COVER          = 4.0;    // dust::DUST_SMALL_COVER
+const float DUST_GH5_N1 = 1.3556262;  // dust::DUST_GH5_N1 (5-point Gauss-Hermite, probabilists')
+const float DUST_GH5_N2 = 2.8569700;  // dust::DUST_GH5_N2
+const float DUST_GH5_W0 = 0.5333333;  // dust::DUST_GH5_W0
+const float DUST_GH5_W1 = 0.2220759;  // dust::DUST_GH5_W1
+const float DUST_GH5_W2 = 0.0112574;  // dust::DUST_GH5_W2
+const float DUST_SMALL_DEPTH5_EPS = 0.1; // dust::DUST_SMALL_DEPTH5_EPS
+const uint  DUST_VOLUME_CLASS_CENTRE  = 0u;     // dust::DUST_VOLUME_CLASS_CENTRE
+const uint  DUST_VOLUME_CLASS_SMALL   = 1u;     // dust::DUST_VOLUME_CLASS_SMALL
+const uint  DUST_VOLUME_CLASS_SUBRAY  = 2u;     // dust::DUST_VOLUME_CLASS_SUBRAY
+const uint  DUST_VOLUME_CLASS_LINE    = 3u;     // dust::DUST_VOLUME_CLASS_LINE
+const float DUST_GH3_NODE             = 1.7320508; // dust::DUST_GH3_NODE (sqrt 3)
+const float DUST_UT2_NODE             = 1.41421356; // dust::DUST_UT2_NODE (sqrt 2)
+const float DUST_INV_2PI              = 0.15915494; // dust::DUST_INV_2PI
+const float DUST_SMALL_RHO_MAX        = 0.9;    // dust::DUST_SMALL_RHO_MAX
+const float DUST_SQRT_2PI             = 2.5066283; // dust::DUST_SQRT_2PI
+const float DUST_SQRT_2               = 1.41421356; // core::f32::consts::SQRT_2
+const float DUST_FRAC_1_SQRT_2        = 0.70710678; // core::f32::consts::FRAC_1_SQRT_2
 const float DUST_AU_M                 = 1.495978707e11;
 
 // ─── df64 primitives (mirror of dust::df) ──────────────────────────────────
@@ -345,6 +380,13 @@ float dust_spin_rate(uint mi) { return dust_mom.m[mi].edges[1].w; }
 vec3 dust_spin_axis(uint mi) { return vec3(dust_mom.m[mi].edges[2].w, dust_mom.m[mi].edges[3].w, dust_mom.m[mi].edges[4].w); }
 float dust_helio_au(uint mi) { return dust_mom.m[mi].edges[5].w; }
 vec3 dust_sun_dir(uint mi) { return vec3(dust_mom.m[mi].edges[6].w, dust_mom.m[mi].edges[7].w, dust_mom.m[mi].edges[8].w); }
+// the speck pass's walk mask (dust::DustMoments::specks_mask): bit b = size bin b is walked for
+// specks this frame, so the continuum gives up its shell mass; edges[15].w as bits (0 from the
+// propagate), written by dust_specks.comp before the splat (atomicOr on the word)
+uint dust_specks_mask(uint mi) { return floatBitsToUint(dust_mom.m[mi].edges[15].w); }
+const uint  DUST_MOMENTS_WORDS           = 80u;  // uints per DustMoments
+const uint  DUST_MOMENTS_SPECKS_MASK_WORD = 12u + 15u * 4u + 3u;  // edges[15].w
+const float DUST_SPECKS_WALK_MIN         = 0.25; // dust::specks::DUST_SPECKS_WALK_MIN
 
 layout(buffer_reference, std430, buffer_reference_align = 4) buffer DustUintBuffer {
     uint v[];
@@ -547,21 +589,35 @@ void dust_dispersion_frame(vec3 eject, out vec3 e1, out vec3 e2, out vec3 e3) {
 }
 
 // ─── Streaklines (mirror of dust::streak_*) ─────────────────────────────────
-uint dust_render_word(uint slot, uint shift) {
-    return (slot & DUST_RENDER_SLOT_MASK) | ((shift & 0xFu) << DUST_RENDER_SHIFT_BIT0) | DUST_RENDER_LIVE_BIT;
+uint dust_render_word(uint slot, uint shift, uint log2cap) {
+    return (slot & DUST_RENDER_SLOT_MASK) | ((log2cap & 0x1Fu) << DUST_RENDER_LOG2CAP_BIT0)
+        | ((shift & 0xFu) << DUST_RENDER_SHIFT_BIT0) | DUST_RENDER_LIVE_BIT;
 }
 bool dust_render_live(float y) { return (floatBitsToUint(y) & DUST_RENDER_LIVE_BIT) != 0u; }
 uint dust_render_shift(float y) { return (floatBitsToUint(y) >> DUST_RENDER_SHIFT_BIT0) & 0xFu; }
+uint dust_render_slot(float y) { return floatBitsToUint(y) & DUST_RENDER_SLOT_MASK; }
+uint dust_render_log2_capacity(float y) { return (floatBitsToUint(y) >> DUST_RENDER_LOG2CAP_BIT0) & 0x1Fu; }
+// the tier's ring mask (capacity - 1; dust::render_mask)
+uint dust_render_mask(float y) {
+    uint l = dust_render_log2_capacity(y);
+    return l >= 32u ? 0xFFFFFFFFu : (1u << l) - 1u;
+}
 bool dust_stream_break(float dbetaField) { return (floatBitsToUint(dbetaField) & DUST_STREAM_BREAK_BIT) != 0u; }
 
-// Stream predecessor of render cluster r (r - S, the same stream's previous, older time sample),
-// -1 for the first S clusters, after a stream break, or outside the tier's age band. Reads only
-// the y / z words, which the LOD never rewrites (it rewrites w concurrently).
-int dust_streak_pred(DustRenderBuffer render, uint r) {
-    vec2 yz = render.c[r].age_id_dbeta_flux.yz;
+// Stream predecessor of the render cluster in ring slot `slot` (the buffer is slot indexed): the
+// slot (slot - S) & mask of the same stream's previous, older time sample, -1 when the cluster's
+// ring offset k = (slot - firstSlot) & mask is below S or not below liveCount (so a retired,
+// reused slot is never a predecessor: k - S is in the live range), after a stream break, or
+// outside the tier's age band (dust::streak_pred_slot). Reads only the y / z words, which the
+// LOD never rewrites (it rewrites w concurrently).
+int dust_streak_pred(DustRenderBuffer render, uint slot, uint firstSlot, uint liveCount) {
+    vec2 yz = render.c[slot].age_id_dbeta_flux.yz;
+    uint mask = dust_render_mask(yz.x);
     uint n = 1u << dust_render_shift(yz.x);
-    if (r < n || dust_stream_break(yz.y)) return -1;
-    return dust_render_live(render.c[r - n].age_id_dbeta_flux.y) ? int(r - n) : -1;
+    uint k = (slot - firstSlot) & mask;
+    if (k < n || k >= liveCount || dust_stream_break(yz.y)) return -1;
+    uint p = (slot - n) & mask;
+    return dust_render_live(render.c[p].age_id_dbeta_flux.y) ? int(p) : -1;
 }
 
 // The stable child-pattern id in the low bits of the beta half-spread field (mirror of
@@ -739,6 +795,24 @@ float dust_segment_carry(uint seed, uint key) {
 
 // the frame's DUST_PYR_SPLIT_DEPTH word, set by the splat pass (diagnostic bits; 0 elsewhere)
 uint dust_pyr_split_word = 0u;
+// the frame's deep-chord bit (dust::DUST_FRAME_DEEP_CHORD of DUST_PYR_FLAGS, set by dust_split.comp;
+// false elsewhere): a chord deep only by its span at the depth limit drawn by the EWA at
+// dust_deep_chord_factors instead of by the ray integral
+const uint DUST_FRAME_DEEP_CHORD = 1u << 20u;
+bool dust_deep_chord = false;
+// the deep chord's Jacobian point u_g = sqrt(w0) / (sqrt(w0) + sqrt(w1)) (the screen segment
+// exact) and flux factor k (the perspective's light along the chord); the proof in
+// dust::deep_chord_factors (same arithmetic, same order)
+vec2 dust_deep_chord_factors(float w0, float w1, vec2 rho) {
+    float s0 = sqrt(w0), s1 = sqrt(w1);
+    float uG = s0 / (s0 + s1);
+    float dw = w1 - w0;
+    float ubar = w0 * w1 * (log(w1 / w0) + w0 / w1 - 1.0) / (dw * dw);
+    float m = 0.5 * (rho.x + rho.y);
+    float k = (m > 0.0 && !isinf(ubar) && !isnan(ubar))
+        ? (rho.x + (rho.y - rho.x) * clamp(ubar, 0.0, 1.0)) / m : 1.0;
+    return vec2(uG, k);
+}
 // a + b saturating at 0xFFFFFFFF (no saturating atomics in core GLSL): one atomicAdd, and when
 // it wrapped (old + b < old) an atomicMax to the ceiling. Every interleaving ends saturated once
 // any add wrapped: an add that lands on a saturated word wraps and re-saturates it, and an add
@@ -824,8 +898,8 @@ uint dust_bin_subbins(uint b) { return (b == 0u && !dust_legacy_kernel()) ? DUST
 // sub-bin j of nj of size bin b (dust::sub_edges): the bin's chord and speed-factor range cut into
 // nj equal parts, the bin's own edges exactly at its ends
 void dust_sub_edges(uint mi, uint b, uint j, uint nj, out vec3 a, out vec3 c, out float fa, out float fc) {
-    vec3 e0 = dust_mom.m[mi].edges[b].xyz, e1 = dust_mom.m[mi].edges[b + 1u].xyz;
-    float f0 = dust_edge_factor(mi, b), f1 = dust_edge_factor(mi, b + 1u);
+    vec3 e0 = dust_mom.m[mi].edges[b].xyz, e1 = dust_mom.m[mi].edges[b + dust_group].xyz;
+    float f0 = dust_edge_factor(mi, b), f1 = dust_edge_factor(mi, b + dust_group);
     if (j == 0u) { a = e0; fa = f0; }
     else { float u = float(j) / float(nj); a = e0 + (e1 - e0) * u; fa = f0 + (f1 - f0) * u; }
     if (j + 1u == nj) { c = e1; fc = f1; }
@@ -835,7 +909,7 @@ void dust_sub_edges(uint mi, uint b, uint j, uint nj, out vec3 a, out vec3 c, ou
 // ramp integrated over the sub-bin, over the bin (1 for one sub-bin)
 float dust_sub_share(uint mi, uint b, uint j, uint nj) {
     if (nj <= 1u) return 1.0;
-    vec2 r = dust_bin_density_ends(dust_edge_factor(mi, b), dust_edge_factor(mi, b + 1u));
+    vec2 r = dust_bin_density_ends(dust_edge_factor(mi, b), dust_edge_factor(mi, b + dust_group));
     float u0 = float(j) / float(nj), u1 = float(j + 1u) / float(nj);
     return (u1 - u0) * (r.x + (r.y - r.x) * 0.5 * (u0 + u1)) / (0.5 * (r.x + r.y));
 }
@@ -867,20 +941,35 @@ float dust_var_along(float S[6], vec3 f) {
 const float DUST_SUPPORT_MASS_MIN = 0.05;
 const float DUST_SUPPORT_CUT_MIN = 1.0e-3;
 bool dust_has_support(vec4 s) { return s.x != 0.0 || s.y != 0.0 || s.z != 0.0; }
-// the share of a ray's Gaussian (centre -b/a, variance 1/a in t along eye + t u) in front of the
-// eye and of the support (dust::ray_kept)
-float dust_ray_kept(float a, float b, vec3 eye, vec3 u, vec4 s) {
+// the mass of the 3-sigma ball of a 3-D standard normal (dust::DUST_BALL3_MASS): a volumetric
+// piece's density is its Gaussian inside its 3-sigma ellipsoid over this (step F)
+const float DUST_BALL3_MASS = 0.9707094;
+const float DUST_BOUND_R2 = 9.0;
+const float DUST_BOUND_VAR = 0.91781;   // dust::DUST_BOUND_VAR
+// the share of a ray's bounded Gaussian (centre -b/a, variance 1/a in t along eye + t u) on the
+// ray's chord of the piece's 3-sigma ellipsoid (|t - t*| <= sqrt((9 - rr2) / a)) and of the
+// packet's capsule [capLo, capHi] (dust_capsule_interval), in front of the eye and of the support,
+// over DUST_BALL3_MASS (dust::ray_kept)
+float dust_ray_kept(float a, float b, float rr2, float capLo, float capHi, vec3 eye, vec3 u, vec4 s) {
+    if (!(rr2 < DUST_BOUND_R2)) return 0.0;
     float sa = sqrt(a);
     float tStar = -b / a;
     float k = sa * 0.7071067811865476;
-    // P(t >= lo) in the upper-tail form
-    if (!dust_has_support(s)) return 0.5 * (1.0 + dust_erf((tStar - 0.0) * k));
-    float nu = dot(s.xyz, u), ne = dot(s.xyz, eye) - s.w;
-    if (abs(nu) < 1e-12) return ne >= 0.0 ? 0.5 * (1.0 + dust_erf((tStar - 0.0) * k)) : 0.0;
-    float tPlane = -ne / nu;
-    if (nu > 0.0) return 0.5 * (1.0 + dust_erf((tStar - max(tPlane, 0.0)) * k));
-    if (tPlane <= 0.0) return 0.0;
-    return max(0.5 * (dust_erf((tPlane - tStar) * k) - dust_erf((0.0 - tStar) * k)), 0.0);
+    float h = sqrt((DUST_BOUND_R2 - rr2) / a);
+    float lo = max(max(capLo, 0.0), tStar - h);
+    float hi = min(capHi, tStar + h);
+    if (dust_has_support(s)) {
+        float nu = dot(s.xyz, u), ne = dot(s.xyz, eye) - s.w;
+        if (abs(nu) < 1e-12) {
+            if (!(ne >= 0.0)) return 0.0;
+        } else {
+            float tPlane = -ne / nu;
+            if (nu > 0.0) lo = max(lo, tPlane);
+            else hi = min(hi, tPlane);
+        }
+    }
+    if (!(hi > lo)) return 0.0;
+    return max(0.5 * (dust_erf((hi - tStar) * k) - dust_erf((lo - tStar) * k)), 0.0) / DUST_BALL3_MASS;
 }
 
 // A packet to splat (dust::Packet): start of the segment (local m), covariance, segment, flux,
@@ -1128,10 +1217,10 @@ float dust_volume_weight(vec3 meanRef, vec3 x, vec3 u) {
 // One step of the perspective split (dust::split_step; the rules, the proof and the numbers are
 // documented there). depth = (mean - eye).f of the chord's start, sigma_v^2 = f^T S f, span = seg.f:
 // (1) depth + 3 sigma_v + max(0, span) < 0: drop (wholly behind the eye plane);
+// (2b) perspective, the eye inside or near the packet (dust_is_volumetric): drawn whole by its
+//     exact ray integral (dust_volume_scatter), which cuts every ray at the eye — before the clip;
 // (2) the chord's ends on both sides of the plane: clip to the in-front part less
 //     DUST_SPLIT_CLIP_EPS of it (the kept start strictly in front), the cut end closed;
-// (2b) perspective, the eye inside or near the packet (dust_is_volumetric): drawn by its exact
-//     ray integral (dust_volume_scatter);
 // (3) 3 sigma_v > depth (the ellipsoid crosses the plane) or, in perspective only (the EWA is
 //     exact for an orthographic projection), sigma_v > DUST_SPLIT_EPS depth or
 //     |span| > DUST_SPLIT_EPS depth, below the frame's depth limit depthMax (DUST_PYR_SPLIT_DEPTH):
@@ -1147,6 +1236,11 @@ int dust_split_step(DustPacket p, bool clipped, uint level, uint depthMax, vec3 
     float spanS = dot(p.seg, fwd);
     float span = abs(spanS);
     if (depth + 3.0 * sigmaV + max(spanS, 0.0) < 0.0) return DUST_SPLIT_DROP;
+    // (2b) before the clip (step F3): the eye inside or near the packet — the exact ray integral
+    // cuts each ray at the eye itself, so a chord across the eye plane is drawn whole (the clip's
+    // closed end ramped the density in front of the eye down over the pieces' sigma: a chord along
+    // the view with the eye inside drew 0.79 of its light)
+    if (!force && perspective && dust_is_volumetric(p, eye)) return DUST_SPLIT_VOLUME;
     float d1 = depth + spanS;
     if (!clipped && span > 0.0 && (depth < 0.0) != (d1 < 0.0)) {
         float uStar = -depth / spanS;
@@ -1159,8 +1253,6 @@ int dust_split_step(DustPacket p, bool clipped, uint level, uint depthMax, vec3 
         a = dust_sub_chord(p, 0.0, uHi, p.openStart, false);
         return DUST_SPLIT_CLIP;
     }
-    // (2b) the eye inside or near the packet: the exact ray integral, no split, no EWA
-    if (!force && perspective && dust_is_volumetric(p, eye)) return DUST_SPLIT_VOLUME;
     bool want = force || 3.0 * sigmaV > depth
              || (perspective && (sigmaV > DUST_SPLIT_EPS * depth || span > DUST_SPLIT_EPS * depth));
     if (want && level < min(depthMax, DUST_SPLIT_DEPTH_MAX)) {
@@ -1192,7 +1284,12 @@ int dust_split_step(DustPacket p, bool clipped, uint level, uint depthMax, vec3 
         }
     }
     // (4) still too deep for one Jacobian at the depth limit: the exact ray integral (dust::split_step)
-    if (want && !force && perspective) return DUST_SPLIT_VOLUME;
+    // (a chord deep only by its span with the deep-chord bit: kept, its EWA at dust_deep_chord_factors)
+    if (want && !force && perspective) {
+        bool deepOnly = depth > 0.0 && span > 3.0 * sigmaV
+                     && !(3.0 * sigmaV > depth) && !(sigmaV > DUST_SPLIT_EPS * depth);
+        if (!(deepOnly && dust_deep_chord)) return DUST_SPLIT_VOLUME;
+    }
     return DUST_SPLIT_KEEP;
 }
 
@@ -1268,6 +1365,14 @@ bool dust_project_packet(vec3 mean, float S[6], vec3 d, float flux, float exposu
     float wEnd = dot(r3, mean + d) + mvp[3][3];
     bool shallow = abs(wEnd - clip.w) <= DUST_SPLIT_EPS * clip.w;
     float jAt = (shallow && ((dust_pyr_split_word >> 23u) & 1u) == 0u) ? 0.5 : 0.0;
+    // the deep chord's EWA (dust_deep_chord, off by default): the Jacobian at the geometric-mean
+    // depth and the flux by the perspective's light factor (dust::project_packet_lit)
+    float deepK = 1.0;
+    if (!shallow && dust_deep_chord && clip.w > 0.0 && wEnd > 0.0) {
+        vec2 f = dust_deep_chord_factors(clip.w, wEnd, rho);
+        jAt = f.x;
+        deepK = f.y;
+    }
     vec4 clipJ = mvp * vec4(mean + jAt * d, 1.0);
     if (!(clipJ.w > 0.0)) clipJ = clip;
     vec2 ndcJ = clipJ.xy / clipJ.w;
@@ -1313,7 +1418,7 @@ bool dust_project_packet(vec3 mean, float S[6], vec3 d, float flux, float exposu
     precise float detRaw = P.cov.x * P.cov.z - P.cov.y * P.cov.y;
     float detC = max(max(detRaw, DUST_DET_ANISO_FLOOR * lamMax * lamMax), 1e-30);
     P.det = detC;
-    P.amp = exposure * flux * sqrt(detG) / (2.0 * DUST_PI_F32 * sqrt(detC));
+    P.amp = exposure * flux * deepK * sqrt(detG) / (2.0 * DUST_PI_F32 * sqrt(detC));
     // the part of the packet in front of the eye (dust::project_packet_lit): its Gaussian along
     // the view direction, centred on the capsule's middle, cut at the eye's plane (1 for the
     // split's leaves; it matters for the leaves left straddling the plane)
@@ -1433,7 +1538,7 @@ void dust_bin_packet_sub(uint mi, uint b, uint j, uint nj, out vec3 mean, out fl
     S[3] = f2 * dust_mom.m[mi].cov_a.w + k * h.y * h.y;
     S[4] = f2 * dust_mom.m[mi].cov_b_age_id.x + k * h.y * h.z;
     S[5] = f2 * dust_mom.m[mi].cov_b_age_id.y + k * h.z * h.z;
-    flux = dust_mom.m[mi].mean_flux.w / float(DUST_SIZE_BINS) * dust_sub_share(mi, b, j, nj);
+    flux = dust_mom.m[mi].mean_flux.w * float(dust_group) / float(DUST_SIZE_BINS) * dust_sub_share(mi, b, j, nj);
 }
 void dust_bin_packet(uint mi, uint b, out vec3 mean, out float S[6], out float flux) {
     dust_bin_packet_sub(mi, b, 0u, 1u, mean, S, flux);
@@ -1456,7 +1561,7 @@ void dust_bin_chord_sub(uint mi, uint b, uint j, uint nj, vec3 segT, out vec3 me
     S[3] = f2 * dust_mom.m[mi].cov_a.w + k * h.y * h.y;
     S[4] = f2 * dust_mom.m[mi].cov_b_age_id.x + k * h.y * h.z;
     S[5] = f2 * dust_mom.m[mi].cov_b_age_id.y + k * h.z * h.z;
-    flux = dust_mom.m[mi].mean_flux.w / float(DUST_SIZE_BINS) * dust_sub_share(mi, b, j, nj);
+    flux = dust_mom.m[mi].mean_flux.w * float(dust_group) / float(DUST_SIZE_BINS) * dust_sub_share(mi, b, j, nj);
 }
 void dust_bin_chord(uint mi, uint b, vec3 segT, out vec3 mean, out vec3 chord, out float S[6], out float flux) {
     dust_bin_chord_sub(mi, b, 0u, 1u, segT, mean, chord, S, flux);
@@ -1467,13 +1572,15 @@ bool dust_project_point(vec3 p, mat4 mvp, float W, float H, out vec2 px);
 // the predecessor's per DUST_TIME_SWEEP_STEP_PX, at most DUST_TIME_SWEEP_MAX
 uint dust_time_sweep(uint mi, uint pi, uint b, mat4 mvp, float W, float H) {
     float gap = 0.0;
-    for (uint e = b; e <= b + 1u; ++e) {
+    for (uint e = b; e <= b + dust_group; e += dust_group) {
         vec2 a, c;
         if (dust_project_point(dust_mom.m[mi].edges[e].xyz, mvp, W, H, a) && dust_project_point(dust_mom.m[pi].edges[e].xyz, mvp, W, H, c))
             gap = max(gap, length(c - a));
     }
     if (isinf(gap) || isnan(gap)) return 1u;
-    return clamp(uint(ceil(gap / DUST_TIME_SWEEP_STEP_PX)), 1u, DUST_TIME_SWEEP_MAX);
+    // the level of detail's step (dust_lod_px), at least a pixel
+    float step = max(dust_lod_px, DUST_TIME_SWEEP_STEP_PX);
+    return clamp(uint(min(ceil(gap / step), 1.0e6)), 1u, DUST_TIME_SWEEP_MAX);
 }
 // the k-th of nS sweep sub-capsules of bin b (dust::bin_sweep_packet): the chord interpolated at
 // u = (k + 1/2)/nS between the bin's own edges and the predecessor's, Sigma_v scaled by the
@@ -1499,7 +1606,7 @@ void dust_bin_sweep_sub(uint mi, uint pi, uint b, uint j, uint nj, uint k, uint 
     S[3] = f2 * dust_mom.m[mi].cov_a.w + kv * h.y * h.y;
     S[4] = f2 * dust_mom.m[mi].cov_b_age_id.x + kv * h.y * h.z;
     S[5] = f2 * dust_mom.m[mi].cov_b_age_id.y + kv * h.z * h.z;
-    flux = dust_mom.m[mi].mean_flux.w / float(DUST_SIZE_BINS * nS) * dust_sub_share(mi, b, j, nj);
+    flux = dust_mom.m[mi].mean_flux.w * float(dust_group) / float(DUST_SIZE_BINS * nS) * dust_sub_share(mi, b, j, nj);
 }
 void dust_bin_sweep(uint mi, uint pi, uint b, uint k, uint nS, out vec3 mean, out vec3 chord, out float S[6], out float flux) {
     dust_bin_sweep_sub(mi, pi, b, 0u, 1u, k, nS, mean, chord, S, flux);
@@ -1773,6 +1880,91 @@ bool dust_polyline_merged(uint mi, mat4 mvp, float W, float H) {
 bool dust_time_shallow(uint mi, uint pi, mat4 mvp) {
     float wm = dust_clip_w(dust_mom.m[mi].mean_flux.xyz, mvp), wp = dust_clip_w(dust_mom.m[pi].mean_flux.xyz, mvp);
     return abs(wp - wm) < DUST_SPLIT_EPS * wm || wp == wm;
+}
+
+// ─── The cluster level of detail (mirror of dust::lod_*: DUST_PYR_LOD) ───
+// dust_lod_px pixels per drawn segment. A polyline whose bins are shorter than that on screen is
+// drawn as chord groups of 2, 4, 8 or 16 bins (the smallest power of two whose group chord is at
+// least the knob; 16 = one chord along the whole polyline); the time pieces are capped at
+// ceil(T / knob) with T the time segment on screen; the sweeps step by the knob. Points behind the
+// camera keep full detail. The depth rule: a group chord or a time piece may not span more depth
+// than the split tolerates for one Jacobian (DUST_SPLIT_EPS x the depth of the polyline's nearest
+// edge), so the level of detail never makes a packet the split would have to bisect.
+// the frame's pixels per drawn segment (0 = off) of the header word (dust::lod_px)
+float dust_lod_px_of(DustUintBuffer pyr) {
+    float v = uintBitsToFloat(pyr.v[DUST_PYR_LOD]);
+    return (!isnan(v) && !isinf(v) && v > 0.0) ? v : 0.0;
+}
+// the polyline's depth (dust::polyline_depth): the depth span per bin and the depth of its nearest
+// edge along fwd from eye over its 17 edges; false when an edge is at or behind the eye (full
+// detail, as behind the camera)
+bool dust_polyline_depth(uint mi, vec3 eye, vec3 fwd, out float binDepth, out float near) {
+    float lo = 0.0, hi = 0.0;
+    for (uint j = 0u; j < DUST_SIZE_EDGES; ++j) {
+        float d = dot(dust_mom.m[mi].edges[j].xyz - eye, fwd);
+        lo = j == 0u ? d : min(lo, d);
+        hi = j == 0u ? d : max(hi, d);
+    }
+    binDepth = (hi - lo) / float(DUST_SIZE_BINS);
+    near = lo;
+    return lo > 0.0 && !isinf(hi) && !isnan(hi);
+}
+// the largest chord group (a power of two <= 16) whose chord spans no more depth than the split
+// tolerates, g * binDepth <= DUST_SPLIT_EPS * near (dust::lod_group_depth_cap); 16 without a depth
+// (orthographic), 1 when even a bin is too deep
+uint dust_lod_group_depth_cap(bool hasDepth, float binDepth, float near) {
+    if (!hasDepth) return DUST_SIZE_BINS;
+    float lim = DUST_SPLIT_EPS * near;
+    uint g = 1u;
+    while (g < DUST_SIZE_BINS && float(2u * g) * binDepth <= lim) g *= 2u;
+    return g;
+}
+// the fewest time pieces whose depth span the split tolerates, ceil(span / (DUST_SPLIT_EPS * near))
+// for a time segment of depth span `span` (dust::time_pieces_depth); 1 without a depth
+uint dust_time_pieces_depth(bool hasSpan, float span, bool hasDepth, float near) {
+    if (!(hasSpan && hasDepth && near > 0.0)) return 1u;
+    return clamp(uint(min(ceil(abs(span) / (DUST_SPLIT_EPS * near)), 1.0e6)), 1u, DUST_TIME_PIECES_MAX);
+}
+// the polyline's on-screen half-extent (dust::polyline_extent_px): the largest distance of its 17
+// edges from its mean, in pixels; false when a point is behind the camera
+bool dust_polyline_extent_px(uint mi, mat4 mvp, float W, float H, out float ext) {
+    vec2 c, p;
+    if (!dust_project_point(dust_mom.m[mi].mean_flux.xyz, mvp, W, H, c)) return false;
+    ext = 0.0;
+    for (uint j = 0u; j < DUST_SIZE_EDGES; ++j) {
+        if (!dust_project_point(dust_mom.m[mi].edges[j].xyz, mvp, W, H, p)) return false;
+        vec2 d = p - c;
+        ext = max(ext, sqrt(d.x * d.x + d.y * d.y));
+    }
+    return !isinf(ext) && !isnan(ext);
+}
+// the time segment on screen (dust::time_segment_px): the distance between the means of the
+// cluster and its predecessor, in pixels; false behind the camera
+bool dust_time_segment_px(uint mi, uint pi, mat4 mvp, float W, float H, out float t) {
+    vec2 a, c;
+    if (!dust_project_point(dust_mom.m[mi].mean_flux.xyz, mvp, W, H, a)) return false;
+    if (!dust_project_point(dust_mom.m[pi].mean_flux.xyz, mvp, W, H, c)) return false;
+    vec2 d = c - a;
+    t = sqrt(d.x * d.x + d.y * d.y);
+    return !isinf(t) && !isnan(t);
+}
+// the chord group of a polyline of half-extent ext on screen (dust::lod_group): 1 when off,
+// unknown (behind the camera) or when a bin is already lodPx long; else the smallest of 2, 4, 8,
+// 16 whose group chord g * 2 ext / 16 reaches lodPx (16 when none), never more than depthCap
+uint dust_lod_group(bool hasExt, float ext, float lodPx, uint depthCap) {
+    if (!hasExt || !(lodPx > 0.0)) return 1u;
+    float binPx = 2.0 * ext / float(DUST_SIZE_BINS);
+    if (binPx >= lodPx) return 1u;
+    uint g = 2u;
+    while (g < DUST_SIZE_BINS && float(g) * binPx < lodPx) g *= 2u;
+    return min(g, max(depthCap, 1u));
+}
+// the time pieces after the level of detail (dust::time_pieces_lod): nT when off or unknown, else
+// clamp(ceil(tPx / lodPx), 1, nT), and at least depthMin of them
+uint dust_time_pieces_lod(uint nT, bool hasT, float tPx, float lodPx, uint depthMin) {
+    if (!(hasT && lodPx > 0.0)) return nT;
+    uint c = uint(min(ceil(tPx / lodPx), 1.0e6));
+    return clamp(max(c, depthMin), 1u, max(nT, 1u));
 }
 
 // ─── Kepler (universal variables, Laguerre-Conway). Mirror of `dust::kepler` ─

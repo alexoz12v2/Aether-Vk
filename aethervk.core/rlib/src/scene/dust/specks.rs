@@ -127,6 +127,10 @@ pub const DUST_SPECKS_BUDGET: u32 = 1 << 20;
 /// 2¹⁸ holds 1.3·10⁵ specks per bin — the 6.4·10⁴ of a bin of `specks_and_continuum_conserve_the_flux`
 /// with a factor 2 to spare (2¹⁶ truncated it to 2·10⁴); at ~100 flops per node a thread's
 /// worst case is ~3·10⁷ flops (tens of ms), the frame's total stays [`DUST_SPECKS_FRAME_NODES`]
+/// (2026-10-16: tried at 2¹⁴ — the 1 km pass stayed at 130–140 ms with 2.5–4.9 M nodes a
+/// frame, so the per-walk cap is not the lever: a warp's 32 lanes walk 32 different trees and the
+/// warp serialises them, ~32× a lane's node time; the cut is a warp per walked bin, see the
+/// record. Kept at 2¹⁸: the hand-over tests' walks need it.)
 pub const DUST_SPECKS_MAX_NODES: u32 = 1 << 18;
 /// the `ξ` tolerance of the node culling: the inverse normal CDF is monotone only to its own
 /// approximation error (2·10⁻⁶ after the Halley step, a 4·10⁻⁶ step where the tail branch meets
@@ -201,6 +205,12 @@ pub const SIZE_Q_STEPS: f32 = 32.0;
 
 const AU_M_F32: f32 = 1.495_978_707e11;
 const PI32: f32 = core::f32::consts::PI;
+/// The walk gate: a (cluster, bin) is walked for specks only if it expects at least this many
+/// grains inside the shell ([`SpeckCluster::expected_in_shell`]); the continuum keeps the shell
+/// mass of the bins below it ([`super::DustMoments::specks_walked`]), the haze they are in
+/// expectation. 97 % of the walks at 1 km found no grain (2026-10-16). Mirror of
+/// `DUST_SPECKS_WALK_MIN`.
+pub const DUST_SPECKS_WALK_MIN: f32 = 0.25;
 const PI64: f64 = core::f64::consts::PI;
 
 #[inline]
@@ -689,7 +699,8 @@ pub struct ShellUpdate {
   /// specks drawn / not drawn (the budget) in the measured frame
   pub specks: u32,
   pub overflow: u32,
-  /// walks stopped by a node cap ([`PYR_SPECKS_TRUNCATED`]; not demand)
+  /// walks stopped by a node cap ([`PYR_SPECKS_TRUNCATED`]): the shell shrinks by the node
+  /// ratio until the walks complete (a truncated walk leaves the shell's handed-over mass undrawn)
   pub truncated: u32,
   /// tree nodes the speck passes visited ([`PYR_SPECKS_NODES`])
   pub nodes: u32,
@@ -716,11 +727,22 @@ impl ShellUpdate {
     } else {
       0.0
     };
+    let truncated = header[PYR_SPECKS_TRUNCATED as usize];
+    let nodes = header[PYR_SPECKS_NODES as usize];
     if prev_d_max_m > 0.0 {
       let budget = header[PYR_SPECKS_BUDGET as usize];
       let demand = specks as f64 + overflow as f64;
       let step = if overflow > 0 {
         ((DUST_SPECKS_TARGET as f64 * budget as f64 / demand.max(1.0)).cbrt() as f32)
+          .clamp(DUST_SPECKS_SHRINK_MIN, DUST_SPECKS_SHRINK)
+      } else if truncated > 0 {
+        // walks stopped by the frame's node account (or their own cap) found only part of the
+        // shell's grains, and the continuum has already given that mass up: the shell must
+        // shrink until the walks complete, by the node ratio as the specks scale with the ball's
+        // volume (until 2026-10-16 a truncating frame drew few specks, counted as demand under
+        // a quarter of the budget, and the shell *grew*: the walks truncated more, the light
+        // inside the shell was lost, 4.7 k specks drawn of millions at 1 km)
+        ((DUST_SPECKS_TARGET as f64 * DUST_SPECKS_FRAME_NODES as f64 / (nodes.max(1) as f64)).cbrt() as f32)
           .clamp(DUST_SPECKS_SHRINK_MIN, DUST_SPECKS_SHRINK)
       } else if budget > 0 && specks < budget / 4 {
         // toward half the budget (the specks scale with the ball's volume), at most ×GROW; ×GROW
@@ -742,8 +764,8 @@ impl ShellUpdate {
       n_eye_m3,
       specks,
       overflow,
-      truncated: header[PYR_SPECKS_TRUNCATED as usize],
-      nodes: header[PYR_SPECKS_NODES as usize],
+      truncated,
+      nodes,
       d_max_m: d,
     }
   }
@@ -1184,6 +1206,9 @@ pub struct SpeckCluster {
   pub root_hash: u32,
   /// the probability a leaf of the `mant · 2^exp` tree is kept ([`count_bound`])
   pub keep: f32,
+  /// the bin's leaf as the continuum draws it ([`speck_leaf`]): the walk gate's expected grains
+  /// inside the shell use the continuum's own cut of it ([`SpeckCluster::expected_in_shell`])
+  pub leaf: Packet,
   /// the bin's edge speed factors (its sizes run from `s_ref / f1²` to `s_ref / f0²`), the
   /// reference radius (µm) and the size law exponent
   pub f0: f32,
@@ -1263,6 +1288,7 @@ impl SpeckCluster {
     Self {
       f0: lo + (hi - lo) * (b as f32 / SIZE_BINS as f32),
       f1: lo + (hi - lo) * ((b + 1) as f32 / SIZE_BINS as f32),
+      leaf: p,
       ..Self::from_map(
         p.mean,
         map,
@@ -1313,6 +1339,24 @@ impl SpeckCluster {
       exp,
       root_hash,
       keep,
+      // the leaf of a cluster given by its map: the Gaussian `M Mᵀ` about `mean`, no uniform
+      // axis ([`Self::new`] stores the bin's real leaf)
+      leaf: Packet {
+        mean,
+        cov: [
+          map[0][0] * map[0][0] + map[1][0] * map[1][0] + map[2][0] * map[2][0],
+          map[0][0] * map[0][1] + map[1][0] * map[1][1] + map[2][0] * map[2][1],
+          map[0][0] * map[0][2] + map[1][0] * map[1][2] + map[2][0] * map[2][2],
+          map[0][1] * map[0][1] + map[1][1] * map[1][1] + map[2][1] * map[2][1],
+          map[0][1] * map[0][2] + map[1][1] * map[1][2] + map[2][1] * map[2][2],
+          map[0][2] * map[0][2] + map[1][2] * map[1][2] + map[2][2] * map[2][2],
+        ],
+        seg: [0.0; 3],
+        flux,
+        open: [false, false],
+        rho: [1.0, 1.0],
+        seg_t: [0.0; 3],
+      },
       f0: 1.0,
       f1: 1.0,
       s_ref_um,
@@ -1338,6 +1382,20 @@ impl SpeckCluster {
   /// once). Mirror of the density in `dust_specks.comp`.
   pub fn density_count_rel(&self, me: [f32; 3]) -> f32 {
     self.count * gaussian_density(&self.mm_chol, add3(me, self.mm_offset), [0.0; 3])
+  }
+
+  /// The grains the bin expects inside the shell: its unfaded count times the fraction of its
+  /// leaf the continuum's cut puts inside the ball ([`ShellCut::classify`],
+  /// [`ShellCut::outside_fraction`]: the same arithmetic that hands the mass over, so a bin walked
+  /// for a quarter grain is a bin whose shell mass the continuum drops). Mirror of the gate in
+  /// `dust_specks.comp`.
+  pub fn expected_in_shell(&self, cut: &ShellCut) -> f32 {
+    let inside = match cut.classify(&self.leaf) {
+      ShellClass::Inside => 1.0,
+      ShellClass::Outside => 0.0,
+      ShellClass::Straddles => (1.0 - cut.outside_fraction(&self.leaf)).clamp(0.0, 1.0),
+    };
+    self.count * inside
   }
 
   /// `mean − eye` in df64 per axis (an exact two-sum of the f32 inputs): the eye-relative leaf
@@ -1392,16 +1450,26 @@ impl SpeckCluster {
   /// The coordinates of probability `w` (`(Φ⁻¹(w₀), Φ⁻¹(w₁), ζ(w₂))`).
   pub fn coords(&self, w: [f32; 3]) -> [f32; 3] {
     [
-      inv_norm_cdf(w[0]),
-      inv_norm_cdf(w[1]),
-      zeta_quantile(w[2], self.kappa, self.rho),
+      self.coord_axis(w[0], 0),
+      self.coord_axis(w[1], 1),
+      self.coord_axis(w[2], 2),
     ]
   }
 
-  /// The node's coordinate box: `(mid, half)` per axis.
-  fn node_box(&self, lo: [f32; 3], width: [f32; 3]) -> ([f32; 3], [f32; 3]) {
-    let a = self.coords(lo);
-    let b = self.coords(add3(lo, width));
+  /// One axis of [`Self::coords`] (a split changes one boundary: `Node::a` / `Node::b`). Mirror
+  /// of `dust_specks_coord`.
+  pub fn coord_axis(&self, w: f32, k: usize) -> f32 {
+    if k == 2 {
+      zeta_quantile(w, self.kappa, self.rho)
+    } else {
+      inv_norm_cdf(w)
+    }
+  }
+
+  /// The node's coordinate box `(mid, half)` per axis from its bounds `a = coords(lo)`,
+  /// `b = coords(lo + width)` (carried in the node since 2026-10-16: a split evaluates the one
+  /// boundary it moves, the same values as evaluating every node's six).
+  fn node_box_of(a: [f32; 3], b: [f32; 3]) -> ([f32; 3], [f32; 3]) {
     let mut mid = [0.0f32; 3];
     let mut half = [0.0f32; 3];
     for k in 0..3 {
@@ -1449,7 +1517,26 @@ impl SpeckCluster {
     d_max: f32,
     fwd: Option<[f32; 3]>,
   ) -> bool {
-    let (mid, half) = self.node_box(lo, width);
+    let a = self.coords(lo);
+    let b = self.coords(add3(lo, width));
+    self.node_class(a, b, me, y_eye, sigma_lo, d_max, fwd) != NodeClass::Outside
+  }
+
+  /// [`Self::node_meets`] with the answer in three: outside (no speck of the ball in the cell),
+  /// meets, or contained (the cell's image wholly inside the ball and in front of the plane: its
+  /// subtree needs no test; `dust_specks_node_class`), from the cell's coordinate bounds
+  #[allow(clippy::too_many_arguments)]
+  pub fn node_class(
+    &self,
+    a: [f32; 3],
+    b: [f32; 3],
+    me: [f32; 3],
+    y_eye: [f32; 3],
+    sigma_lo: f32,
+    d_max: f32,
+    fwd: Option<[f32; 3]>,
+  ) -> NodeClass {
+    let (mid, half) = Self::node_box_of(a, b);
     let tol = |c: f32| DUST_SPECKS_XI_TOL * (1.0 + fabs(c));
     let half = [
       half[0] + tol(mid[0]),
@@ -1464,8 +1551,14 @@ impl SpeckCluster {
       + self.col_norm[1] * fabs(mid[1])
       + self.col_norm[2] * fabs(mid[2]);
     let r = self.box_radius(half) + 8.0 * f32::EPSILON * (norm3(me) + terms + norm3(d));
-    if norm3(d) - r > d_max {
-      return false;
+    let dn = norm3(d);
+    if dn - r > d_max {
+      return NodeClass::Outside;
+    }
+    // the cell's image wholly inside the ball and in front of the plane: its subtree needs no
+    // test (the same `d` and `r`, so this costs nothing more)
+    if dn + r <= d_max && fwd.is_none_or(|f| dot3(d, f) - r >= 0.0) {
+      return NodeClass::Contained;
     }
     if sigma_lo > 0.0 {
       let mut q = 0.0f32;
@@ -1478,7 +1571,7 @@ impl SpeckCluster {
         q += o * o;
       }
       if sigma_lo * sqrtf(q) > d_max {
-        return false;
+        return NodeClass::Outside;
       }
       // the exact per-axis bound of the ball's preimage `y_eye + M⁻¹·ball`: coordinate k within
       // `d_max·‖row_k(M⁻¹)‖` of `y_eye` (widened 10⁻⁴ for the f32 inverse; the start box's own
@@ -1490,16 +1583,16 @@ impl SpeckCluster {
         let hk = h0 + 1.0e-4 * (fabs(y_eye[k]) + h0);
         let o = fabs(y_eye[k] - mid[k]) - half[k] - 8.0 * f32::EPSILON * (fabs(y_eye[k]) + fabs(mid[k]));
         if o > hk {
-          return false;
+          return NodeClass::Outside;
         }
       }
     }
     if let Some(f) = fwd
       && dot3(d, f) + r < 0.0
     {
-      return false;
+      return NodeClass::Outside;
     }
-    true
+    NodeClass::Meets
   }
 
   /// The walk's start nodes (the jump start): the ball of radius `d_max` about the eye maps to
@@ -1529,6 +1622,9 @@ impl SpeckCluster {
       mant: self.mant,
       exp: self.exp,
       hash: self.root_hash,
+      inside: false,
+      a: self.coords([0.0; 3]),
+      b: self.coords([1.0; 3]),
     };
     if !(sigma_lo > 0.0) || !(d_max > 0.0) {
       out[0] = root;
@@ -1606,7 +1702,7 @@ impl SpeckCluster {
         let dim = (node.level % 3) as usize;
         let m = (node.level + 2 - dim as u32) / 3;
         let half = if m + 1 >= 32 { 0 } else { 1u32 << (31 - m) };
-        let (left, right) = split_node(&node);
+        let (left, right) = split_node(self, &node);
         node = if target[dim] & half != 0 { right } else { left };
       }
       if node.mant == 0 {
@@ -1695,6 +1791,7 @@ impl SpeckCluster {
     // (`start_nodes`), pushed in reverse so the first is visited first
     let (starts, n_starts) = self.start_nodes(y_eye, if jump { sigma_lo } else { 0.0 }, d_max);
     st.starts = n_starts as u32;
+    st.start_level = if n_starts > 0 { starts[0].level } else { 0 };
     let mut sp = 0usize;
     for k in (0..n_starts).rev() {
       stack[sp] = starts[k];
@@ -1722,8 +1819,15 @@ impl SpeckCluster {
         continue;
       }
       let (lo, width, half_bits) = node_cell(node.level, node.lo);
-      if !self.node_meets(lo, width, me, y_eye, sigma_lo, d_max, plane) {
-        continue;
+      // a node inside a contained ancestor's cell needs no test; one that is not is tested, and
+      // marked for its subtree when its own cell's image is wholly inside the ball
+      let mut node = node;
+      if !node.inside {
+        match self.node_class(node.a, node.b, me, y_eye, sigma_lo, d_max, plane) {
+          NodeClass::Outside => continue,
+          NodeClass::Meets => {}
+          NodeClass::Contained => node.inside = true,
+        }
       }
       let leaf = (node.mant == 1 && node.exp == 0) || node.level >= DUST_SPECKS_MAX_LEVEL;
       if leaf {
@@ -1773,7 +1877,7 @@ impl SpeckCluster {
       // split dim level mod 3 at its probability midpoint; the right child is pushed first so
       // the left is visited first
       let _ = half_bits;
-      let (left, right) = split_node(&node);
+      let (left, right) = split_node(self, &node);
       stack[sp] = right;
       sp += 1;
       stack[sp] = left;
@@ -1795,6 +1899,14 @@ struct Node {
   mant: u32,
   exp: u32,
   hash: u32,
+  /// the cell's image lies wholly inside the ball and in front of the plane (an ancestor passed
+  /// [`SpeckCluster::node_class`] as contained): its subtree needs no node test (the same nodes are
+  /// visited, each for less; the leaves' own ball test stays)
+  inside: bool,
+  /// the cell's coordinate bounds `coords(lo)` and `coords(lo + width)`
+  /// ([`SpeckCluster::coords`]): a split moves one of them per child
+  a: [f32; 3],
+  b: [f32; 3],
 }
 
 /// The two children of a node split at its level's dim (`level mod 3`) at the probability
@@ -1802,10 +1914,27 @@ struct Node {
 /// else `Bin(n, ½)` from the node's hash ([`child_count`]); the children's hashes from the
 /// parent's. The walk and the jump start's path descent share it. Mirror of the split in
 /// `dust_specks.comp`.
-fn split_node(node: &Node) -> (Node, Node) {
+fn split_node(sc: &SpeckCluster, node: &Node) -> (Node, Node) {
   let dim = (node.level % 3) as usize;
   let m = (node.level + 2 - dim as u32) / 3;
   let half = if m + 1 >= 32 { 0 } else { 1u32 << (31 - m) };
+  // the children's new boundaries on the split axis, as `node_cell` + `coords` of each child
+  // would compute them (the other axes keep the parent's): the left child's upper bound at its
+  // `lo + width`, the right child's lower bound at its `lo`, its upper bound at its `lo + width`
+  let (lo_c, width_c, _) = node_cell(node.level + 1, node.lo);
+  let left_b = sc.coord_axis(lo_c[dim] + width_c[dim], dim);
+  let mut lo_r_bits = node.lo;
+  lo_r_bits[dim] = lo_r_bits[dim].wrapping_add(half);
+  let (lo_rf, width_rf, _) = node_cell(node.level + 1, lo_r_bits);
+  let right_a = sc.coord_axis(lo_rf[dim], dim);
+  let right_b = sc.coord_axis(lo_rf[dim] + width_rf[dim], dim);
+  let mut a_l = node.a;
+  let mut b_l = node.b;
+  b_l[dim] = left_b;
+  let mut a_r = node.a;
+  let mut b_r = node.b;
+  a_r[dim] = right_a;
+  b_r[dim] = right_b;
   let (ml, mr, exp) = if node.exp > 0 {
     let (m, e) = normalise_count((node.mant, node.exp - 1));
     (m, m, e)
@@ -1822,6 +1951,9 @@ fn split_node(node: &Node) -> (Node, Node) {
       mant: ml,
       exp,
       hash: dust_hash32(node.hash ^ 0x2545_F491),
+      inside: node.inside,
+      a: a_l,
+      b: b_l,
     },
     Node {
       level: node.level + 1,
@@ -1829,6 +1961,9 @@ fn split_node(node: &Node) -> (Node, Node) {
       mant: mr,
       exp,
       hash: dust_hash32(node.hash ^ 0x6C8E_9CF5),
+      inside: node.inside,
+      a: a_r,
+      b: b_r,
     },
   )
 }
@@ -1868,12 +2003,22 @@ pub struct Speck {
   pub bin: u32,
 }
 
+/// A node's cell against the ball ([`SpeckCluster::node_class`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NodeClass {
+  Outside,
+  Meets,
+  Contained,
+}
+
 /// Statistics of one [`SpeckCluster::enumerate`].
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct EnumStats {
   pub nodes: u32,
-  /// the jump start's start nodes ([`SpeckCluster::start_nodes`])
+  /// the jump start's start nodes ([`SpeckCluster::start_nodes`]) and their level (the depth
+  /// the walk begins at: the ball's preimage box decides it)
   pub starts: u32,
+  pub start_level: u32,
   pub specks: u32,
   /// the node cap was hit
   pub truncated: bool,
@@ -2131,7 +2276,7 @@ pub fn n_eye_counts(density_m3: f32) -> u64 {
 /// `PYR_SPECKS_OVERFLOW`). `flow` is the flow clock (the flow marks modulate the exposure by the
 /// cluster's age when `DUST_VIEW_FLOW` is set, as the splat's).
 pub fn specks_tier(
-  moments: &[DustMoments],
+  moments: &mut [DustMoments],
   render: &[DustRenderCluster],
   pc: &DustSpecksPushConstants,
   flow: &DustFlowUniform,
@@ -2145,7 +2290,12 @@ pub fn specks_tier(
   let (s_ref, fade_ratio, ttl) = (pc.s_ref_um(), pc.fade_ratio(), pc.eye_local[3]);
   let q = pc.size_q();
   let mut stats = SpeckPassStats::default();
+  let cut = ShellCut::new(view.eye, hdr.d_max);
   for i in 0..n {
+    // the walk mask of the cluster ([`DustMoments::specks_mask`]): the bins walked below, for the
+    // splat's hand-over; cleared first (the propagate leaves 0, a replay may not)
+    let mut mask = 0u32;
+    moments[i].edges[15][3] = 0.0;
     let m = &moments[i];
     if !(m.flux() > 0.0) {
       continue;
@@ -2172,10 +2322,16 @@ pub fn specks_tier(
         me_df[1].hi + me_df[1].lo,
         me_df[2].hi + me_df[2].lo,
       ];
-      n_eye_add(pyramid, n_eye_counts(sc.density_count_rel(me)));
-      if !(hdr.d_max > 0.0) || sc.mant == 0 {
+      let dens = sc.density_count_rel(me);
+      n_eye_add(pyramid, n_eye_counts(dens));
+      // the walk gate ([`DUST_SPECKS_WALK_MIN`]): the bins expecting a grain in the shell
+      if !(hdr.d_max > 0.0)
+        || sc.mant == 0
+        || !(sc.expected_in_shell(&cut) >= DUST_SPECKS_WALK_MIN)
+      {
         continue;
       }
+      mask |= 1 << b;
       // the whole bin against the shell first (most bins are far from the eye)
       let (y_eye, sigma_lo) = sc.eye_in_xi(me);
       if !sc.node_meets([0.0; 3], [1.0; 3], me, y_eye, sigma_lo, hdr.d_max, None) {
@@ -2209,6 +2365,15 @@ pub fn specks_tier(
       pyramid[PYR_SPECKS_NODES as usize] = frame_nodes;
       stats.nodes += st.nodes as u64;
       stats.enumerated += st.specks;
+      stats.start_levels[(st.start_level / 6).min(9) as usize] += 1;
+      let band = match st.specks {
+        0 => 0,
+        1..=3 => 1,
+        4..=15 => 2,
+        _ => 3,
+      };
+      stats.walks_by_found[band] += 1;
+      stats.nodes_by_found[band] += st.nodes as u64;
       if st.truncated {
         // an incomplete walk: counted apart from the refused specks ([`PYR_SPECKS_TRUNCATED`]);
         // the shell reacts to the refused specks only (a truncated walk is walk cost, not demand)
@@ -2216,6 +2381,7 @@ pub fn specks_tier(
         sat_add(&mut pyramid[PYR_SPECKS_TRUNCATED as usize], 1);
       }
     }
+    moments[i].edges[15][3] = f32::from_bits(mask);
   }
   stats
 }
@@ -2233,6 +2399,12 @@ pub struct SpeckPassStats {
   pub nodes: u64,
   /// (cluster, bin) walks that hit the per-walk or the frame node cap (each counts one overflow)
   pub truncated: u32,
+  /// walks by their start level, in bands of 6 levels (0–5, 6–11, …, ≥ 54): where the ball's
+  /// preimage box lets the jump start begin
+  pub start_levels: [u32; 10],
+  /// walks and the nodes they visited, by the specks they found: none / 1–3 / 4–15 / ≥ 16
+  pub walks_by_found: [u32; 4],
+  pub nodes_by_found: [u64; 4],
 }
 
 // ─── The shell cut of the continuum ─────────────────────────────────────────

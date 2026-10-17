@@ -93,10 +93,12 @@ pub const BATCH_BREAK_FLAG: u32 = 16;
 /// `comet_mode_full.rdc`); at night `lit_time_map` maps it to the last lit instant.
 pub const BATCH_PROVISIONAL_FLAG: u32 = 32;
 /// `DustRenderCluster::age_id_dbeta_flux.y` bits: the ring slot (low 22 bits), the tier's stream
-/// shift at [`RENDER_SHIFT_BIT0`] (4 bits) and [`RENDER_LIVE_BIT`] (evaluated in the age band;
-/// culled records have only the slot). The LOD never rewrites this word, so a cluster reads its
-/// predecessor's validity race free.
+/// shift at [`RENDER_SHIFT_BIT0`] (4 bits), log2 of the ring capacity at [`RENDER_LOG2CAP_BIT0`]
+/// (5 bits: any reader derives the ring mask from a record, [`render_mask`]) and
+/// [`RENDER_LIVE_BIT`] (evaluated in the age band; culled records have only the slot). The LOD
+/// never rewrites this word, so a cluster reads its predecessor's validity race free.
 pub const RENDER_SLOT_MASK: u32 = (1 << RENDER_SLOT_BITS) - 1;
+pub const RENDER_LOG2CAP_BIT0: u32 = 22;
 pub const RENDER_SHIFT_BIT0: u32 = 27;
 pub const RENDER_LIVE_BIT: u32 = 1 << 31;
 /// tiers per system with an LOD header (see [`dust_tier_count`])
@@ -1010,9 +1012,11 @@ pub struct DustPropagatePushConstants {
   pub first_slot: u32,
   pub live_count: u32,
   pub ring_mask: u32,
-  pub _pad0: u32,
-  /// std430 pads the `vec4` frame to a 16-byte boundary
-  pub _pad1: [u32; 2],
+  /// the host's propagate generation: the stamp written to the moments' `edges[12].w` (bits)
+  pub generation: u32,
+  /// `[0]` 1 = leave a slot already stamped with `generation` as it is; `[1]` unused (std430
+  /// pads the `vec4` frame to a 16-byte boundary)
+  pub skip: [u32; 2],
   pub frame: DustFrame,
 }
 const _: () = assert!(core::mem::size_of::<DustPropagatePushConstants>() == 128);
@@ -1023,8 +1027,26 @@ const _: () = assert!(core::mem::size_of::<DustPropagatePushConstants>() == 128)
 
 /// `DustRenderCluster::age_id_dbeta_flux.y` of a live cluster (see [`RENDER_SLOT_MASK`])
 #[inline]
-pub fn render_word(slot: u32, shift: u32) -> u32 {
-  (slot & RENDER_SLOT_MASK) | ((shift & 0xF) << RENDER_SHIFT_BIT0) | RENDER_LIVE_BIT
+pub fn render_word(slot: u32, shift: u32, log2cap: u32) -> u32 {
+  (slot & RENDER_SLOT_MASK)
+    | ((log2cap & 0x1F) << RENDER_LOG2CAP_BIT0)
+    | ((shift & 0xF) << RENDER_SHIFT_BIT0)
+    | RENDER_LIVE_BIT
+}
+/// log2 of the tier's ring capacity of a live render cluster's `y` word
+#[inline]
+pub fn render_log2_capacity(y: f32) -> u32 {
+  (y.to_bits() >> RENDER_LOG2CAP_BIT0) & 0x1F
+}
+/// the tier's ring mask (`capacity − 1`) of a live render cluster's `y` word
+#[inline]
+pub fn render_mask(y: f32) -> u32 {
+  ((1u64 << render_log2_capacity(y)) - 1) as u32
+}
+/// log2 of a ring capacity given its mask (`capacity − 1`, a power of two minus one)
+#[inline]
+pub fn ring_log2_capacity(mask: u32) -> u32 {
+  mask.count_ones()
 }
 /// ring slot of a render cluster's `y` word
 #[inline]
@@ -1549,8 +1571,20 @@ pub fn size_mean_inv_s_um(size_params: [f32; 4]) -> f32 {
 // Evaluation (mirrors dust_propagate.comp)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Evaluates the cluster in ring slot `slot` at `frame`'s time, in the particle-system frame.
+/// Evaluates the cluster in ring slot `slot` at `frame`'s time, in the particle-system frame, as
+/// [`evaluate_cluster_in`] on a ring of the render word's full slot range (`2^RENDER_SLOT_BITS`).
 pub fn evaluate_cluster(c: &DustCluster, slot: u32, frame: &DustFrame) -> DustRenderCluster {
+  evaluate_cluster_in(c, slot, RENDER_SLOT_BITS, frame)
+}
+
+/// Evaluates the cluster in ring slot `slot` of a ring of `2^log2cap` slots at `frame`'s time, in
+/// the particle-system frame (the render word carries `log2cap`, [`render_word`]).
+pub fn evaluate_cluster_in(
+  c: &DustCluster,
+  slot: u32,
+  log2cap: u32,
+  frame: &DustFrame,
+) -> DustRenderCluster {
   let t_now = Df::new(frame.ps_r_t_hi[3], frame.ps_r_t_lo[3]);
   let age = t_now.sub(c.t0());
   let age_f = age.hi + age.lo;
@@ -1578,7 +1612,7 @@ pub fn evaluate_cluster(c: &DustCluster, slot: u32, frame: &DustFrame) -> DustRe
     pos_size: [local[0], local[1], local[2], size],
     age_id_dbeta_flux: [
       age_f,
-      f32::from_bits(render_word(slot, frame.ttl[3] as u32)),
+      f32::from_bits(render_word(slot, frame.ttl[3] as u32, log2cap)),
       c.misc[3],
       flux,
     ],

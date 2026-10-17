@@ -43,7 +43,8 @@ const uint DUST_PROF_CMAX          = 105u; // its slowest lane's cycles
 const uint DUST_PROF_STHREAD       = 106u; // (lo, hi) the splitter's lane cycles (dust_split.comp)
 const uint DUST_PROF_SLANES        = 108u; // its lanes with a record
 const uint DUST_PROF_SMAX          = 109u; // its slowest lane's cycles
-const uint DUST_PROF_WORDS_END     = 110u; // ..127 spare (DUST_QUEUE_HEADER_WORDS = 128)
+const uint DUST_PROF_K1C0          = 110u; // 5 x (lo, hi), K1c's parts of vplan / vdraw (every volumetric draw, in-thread and consumer): vclass (pass A's per-class sums), vsmallpts (a small piece's depth points), vsmall (its texels' rectangle integrals), vsubline (sub-ray and line texels), vcentre (the centre class's rows), 110..119
+const uint DUST_PROF_WORDS_END     = 120u; // ..127 spare (DUST_QUEUE_HEADER_WORDS = 128)
 
 #ifdef DUST_PROFILE
 #define DUST_PROF_BEGIN_AS(t)   uint dust_prof_t0_##t = clock2x32ARB().x;
@@ -61,6 +62,10 @@ uint dust_prof_thread = 0u, dust_prof_setup = 0u, dust_prof_subpk = 0u, dust_pro
      dust_prof_cone = 0u, dust_prof_split = 0u, dust_prof_project = 0u, dust_prof_scprep = 0u,
      dust_prof_qput = 0u, dust_prof_ewa = 0u, dust_prof_vplan = 0u, dust_prof_vdraw = 0u,
      dust_prof_tracer = 0u, dust_prof_vemit = 0u, dust_prof_count = 0u;
+// K1c's parts (nested in vplan / vdraw)
+uint dust_prof_vclass = 0u, dust_prof_vsmallpts = 0u, dust_prof_vsmall = 0u, dust_prof_vsubline = 0u,
+     dust_prof_vcentre = 0u;
+void dust_prof_flush_k1c(DustUintBuffer pyr, uint base);
 uint dust_prof_n_packets = 0u, dust_prof_n_cone = 0u, dust_prof_n_leaves = 0u,
      dust_prof_n_records = 0u, dust_prof_n_volume = 0u, dust_prof_n_nodes = 0u,
      dust_prof_n_ewa_texels = 0u, dust_prof_n_volume_texels = 0u;
@@ -116,10 +121,19 @@ void dust_prof_flush_splat(DustUintBuffer pyr, uint base, bool ran) {
     dust_prof_add32(pyr, base + DUST_PROF_NODES, dust_prof_n_nodes);
     dust_prof_add64(pyr, base + DUST_PROF_EWA_TEXELS, dust_prof_n_ewa_texels);
     dust_prof_add64(pyr, base + DUST_PROF_VOLUME_TEXELS, dust_prof_n_volume_texels);
+    dust_prof_flush_k1c(pyr, base);
     if (ran) {
         uint bucket = uint(clamp(findMSB(max(dust_prof_thread, 1u)), 0, 31));
         atomicAdd(pyr.v[base + DUST_PROF_HIST + bucket], 1u);
     }
+}
+// K1c's parts of the volumetric draw (DUST_PROF_K1C0: vclass vsmallpts vsmall vsubline)
+void dust_prof_flush_k1c(DustUintBuffer pyr, uint base) {
+    dust_prof_add64(pyr, base + DUST_PROF_K1C0 + 0u, dust_prof_vclass);
+    dust_prof_add64(pyr, base + DUST_PROF_K1C0 + 2u, dust_prof_vsmallpts);
+    dust_prof_add64(pyr, base + DUST_PROF_K1C0 + 4u, dust_prof_vsmall);
+    dust_prof_add64(pyr, base + DUST_PROF_K1C0 + 6u, dust_prof_vsubline);
+    dust_prof_add64(pyr, base + DUST_PROF_K1C0 + 8u, dust_prof_vcentre);
 }
 void dust_prof_flush_queue(DustUintBuffer pyr, uint base) {
     uint s0 = base + DUST_PROF_QSTAGE0;
@@ -155,6 +169,7 @@ void dust_prof_flush_split(DustUintBuffer pyr, uint base, bool ran) {
     dust_prof_add32(pyr, base + DUST_PROF_NODES, dust_prof_n_nodes);
     dust_prof_add64(pyr, base + DUST_PROF_EWA_TEXELS, dust_prof_n_ewa_texels);
     dust_prof_add64(pyr, base + DUST_PROF_VOLUME_TEXELS, dust_prof_n_volume_texels);
+    dust_prof_flush_k1c(pyr, base);
     dust_prof_add64(pyr, base + DUST_PROF_STHREAD, dust_prof_thread);
     dust_prof_add32(pyr, base + DUST_PROF_SLANES, ran ? 1u : 0u);
     dust_prof_max32(pyr, base + DUST_PROF_SMAX, ran ? dust_prof_thread : 0u);
@@ -167,6 +182,7 @@ void dust_prof_flush_volume(DustUintBuffer pyr, uint base, bool ran) {
     dust_prof_add64(pyr, base + DUST_PROF_CVDRAW, dust_prof_vdraw);
     dust_prof_add32(pyr, base + DUST_PROF_CPACKETS, ran ? 1u : 0u);
     dust_prof_add64(pyr, base + DUST_PROF_CTEXELS, dust_prof_n_volume_texels);
+    dust_prof_flush_k1c(pyr, base);
     dust_prof_max32(pyr, base + DUST_PROF_CMAX, ran ? dust_prof_thread : 0u);
 }
 #else
