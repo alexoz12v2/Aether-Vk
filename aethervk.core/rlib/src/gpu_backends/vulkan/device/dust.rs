@@ -48,7 +48,10 @@ pub const DUST_READBACK_SLOTS: usize = 4;
 /// after the splats and specks, after the measure and readback copy, around the composite; then
 /// after the splats (before the specks), after each of the first [`DUST_TS_CALLS`] splat
 /// dispatches, and after the packet queue
-pub const DUST_TIMESTAMPS: u32 = 16;
+pub const DUST_TIMESTAMPS: u32 = 17;
+/// the most workgroups a dispatch may have per dimension on the baseline devices (Vulkan's
+/// required `maxComputeWorkGroupCount`); larger dispatches go two-dimensional
+pub const DUST_DISPATCH_MAX_X: u32 = 65_535;
 pub const DUST_TS_BEGIN: u32 = 0;
 pub const DUST_TS_PROPAGATED: u32 = 1;
 pub const DUST_TS_SPLATTED: u32 = 2;
@@ -61,7 +64,10 @@ pub const DUST_TS_CALL0: u32 = 7;
 pub const DUST_TS_CALLS: usize = 8;
 /// after the packet queue's draw (`dust_draw_queue.comp`, in [`Device::cmd_dust_frame_end`])
 pub const DUST_TS_QUEUED: u32 = DUST_TS_CALL0 + DUST_TS_CALLS as u32;
-const _: () = assert!(DUST_TS_QUEUED < DUST_TIMESTAMPS);
+/// after the speck passes, which run before the splats since 2026-10-16 (they write the walk
+/// mask the splats read: `DustMoments::specks_mask`)
+pub const DUST_TS_SPECKED: u32 = DUST_TS_QUEUED + 1;
+const _: () = assert!(DUST_TS_SPECKED < DUST_TIMESTAMPS);
 
 /// What a dust frame cost on the GPU, per pass (ms; `NaN` = not measured: a pass not recorded
 /// that frame, or its timestamps not yet available), read [`DUST_READBACK_SLOTS`] frames after
@@ -113,9 +119,16 @@ impl DustGpuTimings {
     let span = |a: u32, b: u32| timestamp_span_ms(ts[a as usize], ts[b as usize], period_ns);
     let propagate_ms = span(DUST_TS_BEGIN, DUST_TS_PROPAGATED);
     let splat_ms = span(DUST_TS_PROPAGATED, DUST_TS_SPLATTED);
-    let splat_only_ms = span(DUST_TS_PROPAGATED, DUST_TS_SPLATS_DONE);
-    let specks_ms = span(DUST_TS_SPLATS_DONE, DUST_TS_SPLATTED);
-    let mut prev = DUST_TS_PROPAGATED;
+    // the specks run before the splats (`DUST_TS_SPECKED`); a frame without them has no such
+    // timestamp and the splats start at the propagate's end
+    let after_specks = if ts[DUST_TS_SPECKED as usize].is_some() {
+      DUST_TS_SPECKED
+    } else {
+      DUST_TS_PROPAGATED
+    };
+    let splat_only_ms = span(after_specks, DUST_TS_SPLATS_DONE);
+    let specks_ms = span(DUST_TS_PROPAGATED, DUST_TS_SPECKED);
+    let mut prev = after_specks;
     let call_ms = core::array::from_fn(|k| {
       let at = DUST_TS_CALL0 + k as u32;
       let ms = span(prev, at);
@@ -210,6 +223,12 @@ pub struct DustGpuSystem {
   /// the inputs of each tier's last recorded propagate (keyed by ring base;
   /// [`Device::cmd_dust_propagate_cached`]): equal inputs, equal output, so the dispatch is skipped
   propagated: spin::Mutex<alloc::collections::BTreeMap<u32, PropagateKey>>,
+  /// each tier's propagate generation (keyed by ring base): the inputs it was last bumped for
+  /// and the counter, the stamp `dust_propagate.comp` writes to `edges[12].w`
+  propagate_gen: spin::Mutex<alloc::collections::BTreeMap<u32, (PropagateGenKey, u32)>>,
+  /// the propagate's skip flag (a test hook, [`Device::dust_set_propagate_skip`]): a slot stamped
+  /// with the current generation is left as it is
+  propagate_skip: core::sync::atomic::AtomicBool,
   /// CPU particle mode ring
   pub cpu_ring: Option<spin::RwLock<alloc::vec::Vec<DustCluster>>>,
   /// CPU particle mode: this frame's evaluated clusters and moments per tier (keyed by ring base)
@@ -242,6 +261,8 @@ impl DustGpuSystem {
       trace_rb: spin::Mutex::new(None),
       trace_meta: spin::Mutex::new([const { None }; DUST_READBACK_SLOTS]),
       propagated: spin::Mutex::new(alloc::collections::BTreeMap::new()),
+      propagate_gen: spin::Mutex::new(alloc::collections::BTreeMap::new()),
+      propagate_skip: core::sync::atomic::AtomicBool::new(false),
       cpu_ring: None,
       cpu_render: spin::Mutex::new(alloc::collections::BTreeMap::new()),
     }
@@ -274,6 +295,18 @@ struct PropagateKey {
   render: u64,
   moments: u64,
   emitted: u64,
+}
+
+/// The inputs a tier's propagate generation follows ([`PropagateKey`]'s notion without the
+/// buffers): the generation is bumped whenever they differ from the last propagate's. `emitted`
+/// is `None` for an uncached propagate (no emission timeline known).
+#[derive(Clone, Copy, PartialEq)]
+struct PropagateGenKey {
+  frame: DustFrame,
+  capacity: u32,
+  first_slot: u32,
+  live_count: u32,
+  emitted: Option<u64>,
 }
 
 /// bytes of the traced clusters of one readback slot (all tiers)
@@ -330,7 +363,7 @@ pub struct DustViewHost {
   /// planned (`EwaStats::suggested_bias`)
   pub ewa_bias: u32,
   /// per readback slot: the timestamps written that frame (bit i = [`DUST_TS_BEGIN`] + i)
-  ts_written: [u16; DUST_READBACK_SLOTS],
+  ts_written: [u32; DUST_READBACK_SLOTS],
   /// per readback slot: its frame number when recorded
   ts_frame: [u64; DUST_READBACK_SLOTS],
   /// the slot this frame's timestamps go to, `None` before a frame begin reset it
@@ -372,6 +405,19 @@ pub struct DustViewHost {
   /// the frames draw the legacy kernel (`dust::DUST_FRAME_LEGACY_KERNEL_BIT`;
   /// [`Device::dust_set_legacy_kernel`], or `AETHERVK_DUST_LEGACY_KERNEL=1` for every view)
   pub legacy_kernel: bool,
+  /// the frames draw deep chords by the EWA (`dust::DUST_FRAME_DEEP_CHORD`;
+  /// [`Device::dust_set_deep_chord`], else `AETHERVK_DUST_DEEP_CHORD=1`; off by default)
+  pub deep_chord: Option<bool>,
+  /// the cluster level of detail the frames draw with (`dust::PYR_LOD`, pixels per drawn segment,
+  /// 0 = off): a test's override ([`Device::dust_set_lod_px`]); else `AETHERVK_DUST_LOD_PX`, else
+  /// [`dust::DUST_LOD_PX_DEFAULT`]
+  pub lod_px: Option<f32>,
+  /// a fixed volumetric level bias (a test hook, `Device::dust_set_volume_bias`; `None`: the
+  /// feedback's `volume_bias`, or `AETHERVK_DUST_VOLUME_BIAS`)
+  pub volume_bias_override: Option<u32>,
+  /// the walk pass records every speck it draws ([`Device::dust_set_specks_trace`],
+  /// `dust::DUST_SPECKS_TRACE_*`; a test hook)
+  pub specks_trace: bool,
 }
 
 /// how long the pyramid download (diagnostics, `download_dust_pyramid`) waits for the graphics
@@ -431,6 +477,10 @@ impl Default for DustViewHost {
       vqueue_counts: (0, 0, 0),
       ts_reused: [false; DUST_READBACK_SLOTS],
       legacy_kernel: false,
+      deep_chord: None,
+      lod_px: None,
+      volume_bias_override: None,
+      specks_trace: false,
       drawn: None,
     }
   }
@@ -566,6 +616,9 @@ pub struct DustView {
   /// the volume packet queue's records per chunk, as allocated ([`Device::dust_vqueue_records`]:
   /// from the device's memory; at most [`dust::DUST_VQUEUE_CAPACITY`])
   pub vqueue_records: u32,
+  /// the speck walk's spill slots this view allocated (`dust::DUST_SPILL_SLOTS` in proportion
+  /// to the volume queue's records; 0 in CPU mode)
+  pub spill_slots: u32,
   /// CPU particle mode: the pyramid is host-visible and written directly; one per frame in
   /// flight (`DUST_READBACK_SLOTS`), since the GPU may still read the previous frames' while the
   /// host zeroes and fills the next (the first entry is `pyramid`'s)
@@ -603,6 +656,9 @@ pub struct DustSplatRecord {
   pub render_offset: u64,
   pub moments: vk::Buffer,
   pub moments_offset: u64,
+  /// the tier's live range start (ring slot) and sub-ring size: the buffers are slot indexed
+  pub first_slot: u32,
+  pub capacity: u32,
   pub pc: DustSplatPushConstants,
   pub flow: dust::DustFlowUniform,
   pub tracer_counts: u32,
@@ -1242,13 +1298,18 @@ impl Device {
       // header is the queue draw's indirect dispatch), then the volume packet queue sized from
       // the device's memory
       let vqueue_records = self.dust_vqueue_records();
-      let vqueue_words = dust::DUST_VQUEUE_HEADER_WORDS + vqueue_records * dust::DUST_VQUEUE_RECORD_WORDS;
+      // then the sub-packet queue and the speck walk's spill (its slots in proportion to the
+      // volume queue's records), placed after the records this view has: the shaders read them
+      // from the volume header's `DUST_VQUEUE_RECORDS` word (`dust_squeue_base`)
+      let offsets = dust::dust_queue_offsets(vqueue_records);
+      let spill_slots = offsets.spill_slots;
+      let queue_words = offsets.end;
       let (pyramid, pmapped) = self.dust_create_buffer(
         &allocator,
         if cpu {
           bytes
         } else {
-          bytes + (dust::DUST_QUEUE_WORDS + vqueue_words + dust::DUST_SQUEUE_WORDS) as u64 * 4
+          bytes + queue_words as u64 * 4
         },
         if cpu {
           DustMem::HostWrite
@@ -1338,6 +1399,7 @@ impl Device {
         DustView {
           layout: layout.clone(),
           vqueue_records,
+          spill_slots: if cpu { 0 } else { spill_slots },
           pyramid: Some(pyramid),
           cpu_pyramids,
           pyramid_mapped: pmapped,
@@ -1387,9 +1449,11 @@ impl Device {
         let (level, queue) = rest.split_at(rest.len() - dust::DUST_QUEUE_HEADER_WORDS as usize);
         host.absorb(header, level, 1 << lvl, unit);
         // the packet queue of that frame: records drawn, packets appended (the rest in-thread)
-        host.queue_counts = (queue[0], queue[3]);
+        // (header word 0 is the dispatch's x, at most `DUST_QUEUE_DISPATCH_X`: not the count)
+        let held = dust::dust_queue_held(queue);
+        host.queue_counts = (held, queue[3]);
         if aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_QUEUE_LOG").is_some_and(|v| v.trim() == "1") {
-          aethervk_oshal_rlib::log!("[Dust] view {}: queue {} records drawn of {} appended", pe.0, queue[0], queue[3]);
+          aethervk_oshal_rlib::log!("[Dust] view {}: queue {} records drawn of {} appended", pe.0, held, queue[3]);
         }
         // the volume packet queue of that frame: the consumer's records, the overflowed ones
         // (drawn in-thread), and the packets per cluster that size the next frame's chunks
@@ -1473,11 +1537,27 @@ impl Device {
     let shell_override = host.shell_override;
     let legacy = host.legacy_kernel
       || aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_LEGACY_KERNEL").is_some_and(|v| v.trim() == "1");
+    let deep_bits = if host.deep_chord.unwrap_or_else(|| {
+      aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_DEEP_CHORD").is_some_and(|v| v.trim() == "1")
+    }) {
+      dust::DUST_FRAME_DEEP_CHORD
+    } else {
+      0
+    };
+    let lod_px = host.lod_px.unwrap_or_else(|| {
+      aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_LOD_PX")
+        .and_then(|v| v.trim().parse::<f32>().ok())
+        .filter(|v| v.is_finite() && *v >= 0.0)
+        .unwrap_or(dust::DUST_LOD_PX_DEFAULT)
+    });
     let split_depth = host.split_depth.min(split_depth_cap());
     // `AETHERVK_DUST_VOLUME_BIAS=<n>`: a fixed volumetric level bias (diagnostics: measures what the
     // frame budget's coarsening costs in accuracy; the per-packet evaluation cap still bounds work)
-    let volume_bias = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_VOLUME_BIAS")
-      .and_then(|v| v.trim().parse::<u32>().ok())
+    let volume_bias = host
+      .volume_bias_override
+      .or_else(|| {
+        aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_VOLUME_BIAS").and_then(|v| v.trim().parse::<u32>().ok())
+      })
       .unwrap_or(host.volume_bias)
       .min(255);
     // `AETHERVK_DUST_EWA_BIAS=<n>`: a fixed EWA bias (diagnostics)
@@ -1521,7 +1601,7 @@ impl Device {
         _ => 0,
       }
     });
-    header[dust::PYR_FLAGS as usize] = flags | queue_bits | vqueue_bits;
+    header[dust::PYR_FLAGS as usize] = flags | queue_bits | vqueue_bits | deep_bits;
     // `AETHERVK_DUST_VOLUME_AXIS=chord|time|grid`: the volumetric packets' piece axes (bits 16–17)
     let volume_axis = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_VOLUME_AXIS")
       .map(|v| dust::volume_axis_from_str(&v))
@@ -1567,6 +1647,9 @@ impl Device {
       0.0
     };
     header[dust::PYR_TRACER_COUNTS as usize] = tracer_counts.to_bits();
+    // the cluster level of detail (`dust::PYR_LOD`: pixels per drawn segment, 0 = off; the word is
+    // in the reuse fingerprint, so a changed knob redraws)
+    header[dust::PYR_LOD as usize] = lod_px.to_bits();
     // the unit this frame's counts are written with, for dump readers (`download_dust_pyramid`)
     header[dust::PYR_UNIT as usize] = unit.to_bits();
     // the white point and softening this frame is shown with (dump readers)
@@ -1643,6 +1726,8 @@ impl Device {
         vq[1] = 1;
         vq[2] = 1;
         vq[4] = vqueue_capacity;
+        // the records this view allocated: the shaders' sub-packet queue and spill follow them
+        vq[dust::DUST_VQUEUE_RECORDS] = view.vqueue_records;
         self.device.cmd_update_buffer(
           cmd,
           pyramid.buffer,
@@ -1709,6 +1794,8 @@ impl Device {
     pe: gpu::PresentationEngineHandle,
     id: u64,
     ring_base: u32,
+    first_slot: u32,
+    capacity: u32,
     render: u64,
     moments: u64,
     mut pc: DustSpecksPushConstants,
@@ -1730,8 +1817,8 @@ impl Device {
     pc.moments = moments;
     pc.pyramid = pyramid.address;
     if sys.cpu_ring.is_some() {
-      let cpu = sys.cpu_render.lock();
-      let Some((clusters, moms)) = cpu.get(&ring_base) else {
+      let mut cpu = sys.cpu_render.lock();
+      let Some((clusters, moms)) = cpu.get_mut(&ring_base) else {
         return Ok(());
       };
       let flow = sys.host.lock().flow;
@@ -1760,9 +1847,38 @@ impl Device {
     if pc.live_count == 0 {
       return Ok(());
     }
+    // the gate pass (a thread per cluster × bin: the density at the eye, the walk gate, the
+    // cluster's walk mask), a barrier for the mask, then the walk pass (a workgroup of 32 lanes
+    // per cluster × bin; the ones not marked return at once)
     let pipeline = self.kernels.pipelines.dust_specks;
+    let walk = self.kernels.pipelines.dust_specks_walk;
     self.kernels.pipelines.assert_pc_size(pipeline, core::mem::size_of_val(&pc));
+    self.kernels.pipelines.assert_pc_size(walk, core::mem::size_of_val(&pc));
     let threads = pc.live_count.saturating_mul(dust::SIZE_BINS);
+    // the spill's header for this pass, before the gate (both passes read its ring words): no
+    // slot claimed, the view's slot count, the trace's capacity (a test hook) and count, the
+    // tier's live range start (ring slot) and ring mask (the buffers are slot indexed). After the
+    // previous tier's walk (its spill atomics) and before this tier's passes.
+    let spill_offset = (view.layout.total_words + dust::dust_queue_offsets(view.vqueue_records).spill) as u64 * 4;
+    let trace_cap = if view.host.lock().specks_trace { dust::DUST_SPECKS_TRACE_CAPACITY } else { 0 };
+    let to_update = vk::MemoryBarrier2::default()
+      .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+      .src_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE | vk::AccessFlags2::SHADER_STORAGE_READ)
+      .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+      .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE);
+    unsafe {
+      self.device.synchronization2.cmd_pipeline_barrier2(
+        cmd,
+        &vk::DependencyInfo::default().memory_barriers(core::slice::from_ref(&to_update)),
+      );
+      self.device.cmd_update_buffer(
+        cmd,
+        pyramid.buffer,
+        spill_offset,
+        bytemuck::cast_slice(&[0u32, view.spill_slots, trace_cap, 0, first_slot, capacity.wrapping_sub(1)]),
+      );
+    }
+    self.cmd_dust_pre_splat_barrier(cmd);
     unsafe {
       self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
       self.device.cmd_push_constants(
@@ -1774,13 +1890,34 @@ impl Device {
       );
       self.device.cmd_dispatch(cmd, threads.div_ceil(DUST_WG), 1, 1);
     }
+    // the gate's walk masks → the walk pass
+    self.cmd_dust_pre_splat_barrier(cmd);
+    unsafe {
+      self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, walk);
+      self.device.cmd_push_constants(
+        cmd,
+        self.kernels.pipelines.pipeline_layout,
+        vk::ShaderStageFlags::COMPUTE,
+        0,
+        bytemuck::bytes_of(&pc),
+      );
+      // a workgroup per cluster × bin in two dimensions: at most DUST_DISPATCH_MAX_X per
+      // dimension (Vulkan's required maxComputeWorkGroupCount is 65 535, which the baseline
+      // devices report; a tier of 131 072 clusters is 2.1 M workgroups)
+      let x = threads.min(DUST_DISPATCH_MAX_X);
+      let y = threads.div_ceil(x.max(1));
+      self.device.cmd_dispatch(cmd, x, y, 1);
+    }
     Ok(())
   }
 
   /// Records (GPU) or performs (CPU mode) the splat pass of one tier of system `id` into the
   /// pyramid of `pe` (see `dust_splat.comp`): `render` / `moments` are the tier's buffers from
   /// [`Self::cmd_dust_propagate`], `pc` the push constants without the buffer addresses, which
-  /// are filled here. After [`Self::cmd_dust_pre_splat_barrier`].
+  /// are filled here. After [`Self::cmd_dust_pre_splat_barrier`]. `first_slot` / `capacity`
+  /// are the tier's live range start and sub-ring size as given to the propagate: the GPU
+  /// buffers are slot indexed (`dust_splat.comp` maps the range offset `k` to the slot
+  /// `(first_slot + k) & (capacity − 1)`); the CPU mode's are compact in ring order.
   #[allow(clippy::too_many_arguments)]
   pub fn cmd_dust_splat(
     &self,
@@ -1788,6 +1925,8 @@ impl Device {
     pe: gpu::PresentationEngineHandle,
     id: u64,
     ring_base: u32,
+    first_slot: u32,
+    capacity: u32,
     render: u64,
     moments: u64,
     mut pc: DustSplatPushConstants,
@@ -1819,6 +1958,8 @@ impl Device {
         render_offset: render.wrapping_sub(rb.address),
         moments: mb.buffer,
         moments_offset: moments.wrapping_sub(mb.address),
+        first_slot,
+        capacity,
         pc,
         flow: sys.host.lock().flow,
         tracer_counts: f32::from_bits(view.frame_words.lock()[dust::PYR_TRACER_COUNTS as usize])
@@ -1905,11 +2046,11 @@ impl Device {
         // (measured 2026-10-15 at 1 km: 256 / 512 / 1024 / 2400 / 8192 clusters a chunk give
         // 347 / 307 / 293 / 327 / 327 ms: a chunk's records fit the L2 at ~1024, below that the
         // dispatches' fixed cost shows)
-        let auto = (view.vqueue_records as f32 / (2.0 * host.vqueue_ppc.max(1.0))) as u32;
+        // (the floor scales with the view's records: a small device's chunk fits its queue)
         let c = if host.vqueue_chunk > 0 {
           host.vqueue_chunk.min(dust::DUST_SQUEUE_CLUSTERS)
         } else {
-          auto.clamp(dust::DUST_VQUEUE_CHUNK_MIN, dust::DUST_VQUEUE_CHUNK_MAX)
+          dust::dust_vqueue_auto_chunk(view.vqueue_records, host.vqueue_ppc)
         };
         c.min(pc.live_count)
       };
@@ -1917,9 +2058,9 @@ impl Device {
     };
     let nodraw = vqueue_off
       || aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_VQUEUE_NODRAW").is_some_and(|v| v.trim() == "1");
-    let vbase = (view.layout.total_words + dust::DUST_QUEUE_WORDS) as u64 * 4;
-    let sbase = vbase
-      + (dust::DUST_VQUEUE_HEADER_WORDS + view.vqueue_records * dust::DUST_VQUEUE_RECORD_WORDS) as u64 * 4;
+    let offsets = dust::dust_queue_offsets(view.vqueue_records);
+    let vbase = (view.layout.total_words + offsets.vqueue) as u64 * 4;
+    let sbase = (view.layout.total_words + offsets.squeue) as u64 * 4;
     // the consumer's (and the previous producer's) storage writes → the header update
     let to_update = vk::MemoryBarrier2::default()
       .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
@@ -1955,6 +2096,14 @@ impl Device {
           );
         }
         self.device.cmd_update_buffer(cmd, pyramid.buffer, vbase, bytemuck::cast_slice(&hdr));
+        // the tier's ring words: the range offsets → slots (words 7–9 are the frame's counters)
+        let ring = [first_slot, capacity.wrapping_sub(1)];
+        self.device.cmd_update_buffer(
+          cmd,
+          pyramid.buffer,
+          vbase + dust::DUST_VQUEUE_FIRST_SLOT as u64 * 4,
+          bytemuck::cast_slice(&ring),
+        );
         // the sub-packet queue: empty (its record counter and overflow count)
         let shdr = [0u32, dust::DUST_SQUEUE_CAPACITY, 0, 0];
         self.device.cmd_update_buffer(cmd, pyramid.buffer, sbase, bytemuck::cast_slice(&shdr));
@@ -2272,6 +2421,87 @@ impl Device {
     }
   }
 
+  /// `pe`'s frames draw deep chords by the EWA (`dust::DUST_FRAME_DEEP_CHORD`) from the next frame
+  /// on; `None` returns to `AETHERVK_DUST_DEEP_CHORD`. A no-op without a view.
+  pub fn dust_set_deep_chord(&self, pe: gpu::PresentationEngineHandle, on: Option<bool>) {
+    let res = self.res.read();
+    if let Some(view) = res.dust_manager.as_ref().and_then(|m| m.views.get(&pe)) {
+      view.host.lock().deep_chord = on;
+    }
+  }
+
+  /// `pe`'s frames draw their volumetric packets at the level bias `bias` from the next frame on
+  /// (a test hook: the parity of the texel integral at a coarse bias); `None` returns to the
+  /// feedback. A no-op without a view.
+  pub fn dust_set_volume_bias(&self, pe: gpu::PresentationEngineHandle, bias: Option<u32>) {
+    let res = self.res.read();
+    if let Some(view) = res.dust_manager.as_ref().and_then(|m| m.views.get(&pe)) {
+      view.host.lock().volume_bias_override = bias;
+    }
+  }
+
+  /// `pe`'s frames draw with the cluster level of detail `lod` (pixels per drawn segment, 0 = off)
+  /// from the next frame on; `None` returns to `AETHERVK_DUST_LOD_PX` / [`dust::DUST_LOD_PX_DEFAULT`].
+  /// A no-op without a view.
+  pub fn dust_set_lod_px(&self, pe: gpu::PresentationEngineHandle, lod: Option<f32>) {
+    let res = self.res.read();
+    if let Some(view) = res.dust_manager.as_ref().and_then(|m| m.views.get(&pe)) {
+      view.host.lock().lod_px = lod;
+    }
+  }
+
+  /// `pe`'s walk passes record every speck they draw from the next frame on (a test hook:
+  /// `(hash, dp)` per speck, [`Self::download_dust_specks_trace`]); a no-op without a view.
+  pub fn dust_set_specks_trace(&self, pe: gpu::PresentationEngineHandle, on: bool) {
+    let res = self.res.read();
+    if let Some(view) = res.dust_manager.as_ref().and_then(|m| m.views.get(&pe)) {
+      view.host.lock().specks_trace = on;
+    }
+  }
+
+  /// The specks the last frame's walk passes recorded (`(hash, dp)` in local metres from the eye;
+  /// [`Self::dust_set_specks_trace`]): the spill header's count, capped at the capacity, then the
+  /// records. GPU views only.
+  pub fn download_dust_specks_trace(&self, pe: gpu::PresentationEngineHandle) -> GpuResult<alloc::vec::Vec<(u32, [f32; 3])>> {
+    Ok(
+      self
+        .download_dust_specks_trace_records(pe)?
+        .iter()
+        .map(|w| (w[0], [f32::from_bits(w[1]), f32::from_bits(w[2]), f32::from_bits(w[3])]))
+        .collect(),
+    )
+  }
+
+  /// The whole trace records ([`dust::DUST_SPECKS_TRACE_WORDS`] words: hash, dp xyz, w xyz, the
+  /// coordinates xyz, κ, the node level; floats as bits).
+  pub fn download_dust_specks_trace_records(
+    &self,
+    pe: gpu::PresentationEngineHandle,
+  ) -> GpuResult<alloc::vec::Vec<[u32; dust::DUST_SPECKS_TRACE_WORDS as usize]>> {
+    let (buffer, spill_offset, slots) = {
+      let res = self.res.read();
+      let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
+      let view = mgr.views.get(&pe).ok_or(gpu_err!("dust view of PE {} absent", pe.0))?;
+      let pyramid = view.pyramid.as_ref().ok_or(gpu_err!("dust view has no pyramid"))?;
+      let off = (view.layout.total_words + dust::dust_queue_offsets(view.vqueue_records).spill) as u64 * 4;
+      (pyramid.buffer, off, view.spill_slots)
+    };
+    let header: alloc::vec::Vec<u32> = pod_vec(&self.dust_download_bytes(buffer, spill_offset, dust::DUST_SPILL_HEADER_WORDS as u64 * 4)?);
+    let n = header[3].min(header[2]).min(dust::DUST_SPECKS_TRACE_CAPACITY);
+    if n == 0 {
+      return Ok(alloc::vec::Vec::new());
+    }
+    let records_offset = spill_offset
+      + (dust::DUST_SPILL_HEADER_WORDS + slots * dust::DUST_SPILL_NODES * dust::DUST_SPILL_NODE_WORDS) as u64 * 4;
+    let words: alloc::vec::Vec<u32> = pod_vec(&self.dust_download_bytes(buffer, records_offset, n as u64 * dust::DUST_SPECKS_TRACE_WORDS as u64 * 4)?);
+    Ok(
+      words
+        .chunks_exact(dust::DUST_SPECKS_TRACE_WORDS as usize)
+        .map(|w| core::array::from_fn(|k| w[k]))
+        .collect(),
+    )
+  }
+
   /// The GPU timings of `pe`'s last measured frame that drew (not reused, see
   /// [`DustGpuTimings::reused`]): the cost of a changing view
   pub fn dust_gpu_timings_drawn(&self, pe: gpu::PresentationEngineHandle) -> Option<DustGpuTimings> {
@@ -2312,8 +2542,8 @@ impl Device {
       let pyramid = view.pyramid.as_ref().ok_or(gpu_err!("dust view has no pyramid"))?;
       (pyramid.buffer, view.layout.total_words as u64 * 4)
     };
-    let w: alloc::vec::Vec<u32> = pod_vec(&self.dust_download_bytes(buffer, base, 16)?);
-    Ok((w[0], w[3]))
+    let w: alloc::vec::Vec<u32> = pod_vec(&self.dust_download_bytes(buffer, base, 32)?);
+    Ok((dust::dust_queue_held(&w), w[3]))
   }
 
   /// The volume packet queue's records per chunk for a new view, from the device-local memory
@@ -2386,15 +2616,26 @@ impl Device {
       let pyramid = view.pyramid.as_ref().ok_or(gpu_err!("dust view has no pyramid"))?;
       (
         pyramid.buffer,
-        (view.layout.total_words
-          + dust::DUST_QUEUE_WORDS
-          + dust::DUST_VQUEUE_HEADER_WORDS
-          + view.vqueue_records * dust::DUST_VQUEUE_RECORD_WORDS) as u64
-          * 4,
+        (view.layout.total_words + dust::dust_queue_offsets(view.vqueue_records).squeue) as u64 * 4,
       )
     };
     let w: alloc::vec::Vec<u32> = pod_vec(&self.dust_download_bytes(buffer, base, 16)?);
     Ok((w[0], w[dust::DUST_SQUEUE_OVERFLOWED]))
+  }
+
+  /// `pe`'s last frame's volumetric deposits above `DUST_COUNT_MAX_PER_ADD`, split into several
+  /// adds (`dust::DUST_VQUEUE_SPLIT_ADDS`; diagnostics, waits for the GPU)
+  pub fn dust_volume_split_adds(&self, pe: gpu::PresentationEngineHandle) -> GpuResult<u32> {
+    let (buffer, base) = {
+      let res = self.res.read();
+      let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
+      let view = mgr.views.get(&pe).ok_or(gpu_err!("dust view of PE {} absent", pe.0))?;
+      let pyramid = view.pyramid.as_ref().ok_or(gpu_err!("dust view has no pyramid"))?;
+      (pyramid.buffer, (view.layout.total_words + dust::DUST_QUEUE_WORDS) as u64 * 4)
+    };
+    let w: alloc::vec::Vec<u32> =
+      pod_vec(&self.dust_download_bytes(buffer, base, dust::DUST_VQUEUE_HEADER_WORDS as u64 * 4)?);
+    Ok(w[dust::DUST_VQUEUE_SPLIT_ADDS])
   }
 
   /// `pe`'s last frame's volume packet queue (diagnostics, waits for the GPU): the records the
@@ -2618,17 +2859,34 @@ impl Device {
       }
     };
     let mut out = alloc::vec::Vec::with_capacity(records.len());
+    // the tier's live range gathered from the slot-indexed buffer into compact ring order (two
+    // copies when it wraps)
+    let gather = |buffer: vk::Buffer, offset: u64, stride: u64, rec: &DustSplatRecord| -> GpuResult<alloc::vec::Vec<u8>> {
+      let cap = rec.capacity.max(1);
+      let n = rec.pc.live_count.min(cap);
+      let first = rec.first_slot & (cap - 1);
+      let head = n.min(cap - first);
+      if n == 0 {
+        return Ok(alloc::vec::Vec::new());
+      }
+      let mut bytes = self.dust_download_bytes(buffer, offset + first as u64 * stride, head as u64 * stride)?;
+      if n > head {
+        bytes.extend_from_slice(&self.dust_download_bytes(buffer, offset, (n - head) as u64 * stride)?);
+      }
+      Ok(bytes)
+    };
     for rec in records {
-      let n = rec.pc.live_count as u64;
-      let rb = self.dust_download_bytes(
+      let rb = gather(
         rec.render,
         rec.render_offset,
-        n * core::mem::size_of::<dust::DustRenderCluster>() as u64,
+        core::mem::size_of::<dust::DustRenderCluster>() as u64,
+        &rec,
       )?;
-      let mb = self.dust_download_bytes(
+      let mb = gather(
         rec.moments,
         rec.moments_offset,
-        n * core::mem::size_of::<dust::DustMoments>() as u64,
+        core::mem::size_of::<dust::DustMoments>() as u64,
+        &rec,
       )?;
       out.push(DustSplatSnapshot {
         pc: rec.pc,
@@ -2697,10 +2955,11 @@ impl Device {
       if t.tier >= dust::LOD_MAX_TIERS {
         continue;
       }
-      for (k, &(i, _)) in t.samples.iter().enumerate().take(per_tier as usize) {
+      // (the GPU render buffer is slot indexed: the sample's ring slot)
+      for (k, &(_, ring_slot)) in t.samples.iter().enumerate().take(per_tier as usize) {
         regions.push(
           vk::BufferCopy::default()
-            .src_offset((base as u64 + i as u64) * stride)
+            .src_offset((base as u64 + ring_slot as u64) * stride)
             .dst_offset(
               slot as u64 * TRACE_SLOT_BYTES + (t.tier as u64 * per_tier + k as u64) * stride,
             )
@@ -2733,6 +2992,24 @@ impl Device {
     self
       .propagate(cmd, id, ring_base, capacity, first_slot, live_count, frame, None)
       .map(|(addrs, _)| addrs)
+  }
+
+  /// Test hook: the propagate's skip flag for system `id` (a slot whose moments already carry the
+  /// tier's current generation stamp is left as it is; off by default)
+  pub fn dust_set_propagate_skip(&self, id: u64, on: bool) -> GpuResult<()> {
+    let res = self.res.read();
+    let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
+    let sys = mgr.systems.get(&id).ok_or(gpu_err!("dust system {} not found", id))?;
+    sys.propagate_skip.store(on, core::sync::atomic::Ordering::Relaxed);
+    Ok(())
+  }
+
+  /// The propagate generation of the tier at `ring_base` of system `id` (the stamp its last
+  /// propagate wrote, `edges[12].w`), `None` before the first
+  pub fn dust_propagate_generation(&self, id: u64, ring_base: u32) -> Option<u32> {
+    let res = self.res.read();
+    let sys = res.dust_manager.as_ref()?.systems.get(&id)?;
+    sys.propagate_gen.lock().get(&ring_base).map(|e| e.1)
   }
 
   /// [`Self::cmd_dust_propagate`], skipped when the tier's inputs equal its last recorded
@@ -2788,7 +3065,12 @@ impl Device {
       let mut ms = alloc::vec::Vec::with_capacity(live_count as usize);
       for i in 0..live_count {
         let slot = first_slot.wrapping_add(i) & mask;
-        let (r, m) = dust::packet_moments(&ring[(ring_base + slot) as usize], slot, frame);
+        let (r, m) = dust::packet_moments_in(
+          &ring[(ring_base + slot) as usize],
+          slot,
+          dust::ring_log2_capacity(mask),
+          frame,
+        );
         rs.push(r);
         ms.push(m);
       }
@@ -2826,6 +3108,24 @@ impl Device {
         sys.propagated.lock().remove(&ring_base);
       }
     }
+    // the generation stamp: bumped when the inputs differ from the last propagate's (never 0,
+    // the CPU mirror's stamp)
+    let generation = {
+      let gk = PropagateGenKey {
+        frame: *frame,
+        capacity,
+        first_slot,
+        live_count,
+        emitted,
+      };
+      let mut gens = sys.propagate_gen.lock();
+      let e = gens.entry(ring_base).or_insert((gk, 1));
+      if e.0 != gk {
+        e.1 = e.1.wrapping_add(1).max(1);
+        e.0 = gk;
+      }
+      e.1
+    };
     if live_count > 0 && !skipped {
       let pc = DustPropagatePushConstants {
         clusters: clusters.address + ring_base as u64 * core::mem::size_of::<DustCluster>() as u64,
@@ -2838,8 +3138,11 @@ impl Device {
         first_slot,
         live_count,
         ring_mask: mask,
-        _pad0: 0,
-        _pad1: [0; 2],
+        generation,
+        skip: [
+          sys.propagate_skip.load(core::sync::atomic::Ordering::Relaxed) as u32,
+          0,
+        ],
         frame: *frame,
       };
       let pipeline = self.kernels.pipelines.dust_propagate;

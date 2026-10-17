@@ -1106,118 +1106,10 @@ pub fn prepare_dust(
   } else {
     0.0
   };
-  for layer in render_scene.depth_layers.iter_mut().filter(|_| !reuse) {
-    let camera =
-      render_scene
-        .camera_data
-        .rebuild_for_layer(layer.near, layer.far, layer.frame_scale);
-    for call in layer.dust_calls.iter_mut() {
-      let Some((render, moments)) = buffers.next().flatten() else {
-        call.state.live_count = 0;
-        continue;
-      };
-      let (mvp, params) = call.mvp_params(&camera, extent);
-      let s = &call.state;
-      let eye = call.eye_local_m();
-      let debug_env = |name: &str| {
-        aethervk_oshal_rlib::os::env::var(name).and_then(|v| v.trim().parse::<u32>().ok())
-      };
-      let flags = match (
-        debug_env("AETHERVK_DUST_DEBUG_STREAM"),
-        debug_env("AETHERVK_DUST_DEBUG_SAMPLE_MOD"),
-      ) {
-        (Some(v), _) => flags | crate::scene::dust::DUST_VIEW_DEBUG_STREAM | ((v & 0xFF) << 20),
-        (None, Some(v)) => flags | crate::scene::dust::DUST_VIEW_DEBUG_SAMPLE | ((v & 0xFF) << 20),
-        (None, None) => flags,
-      };
-      let pc = crate::scene::dust::DustSplatPushConstants {
-        moments: 0,
-        render: 0,
-        pyramid: 0,
-        live_count: s.live_count.min(s.capacity),
-        flags,
-        exposure: call.raw_exposure(),
-        inv_unit,
-        color: crate::scene::dust::pack_color(call.stream_color),
-        albedo: s.albedo,
-        mvp,
-        eye_local: [eye[0], eye[1], eye[2], s.ttl_s],
-      };
-      // AETHERVK_DUST_DEBUG_SKIP=splat|composite|readback: bisection aids (no production use);
-      // AETHERVK_DUST_DEBUG_TIER=<k>: only tier k is splatted (which tier draws a feature)
-      let skip_splat = dust_debug_skip("splat")
-        || aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_DEBUG_TIER")
-          .and_then(|v| v.trim().parse::<u32>().ok())
-          .is_some_and(|k| k != s.tier);
-      let splat = if skip_splat {
-        Ok(())
-      } else {
-        device.cmd_dust_splat(
-          cmd,
-          pe,
-          call.entity_id.as_ffi(),
-          s.ring_base,
-          render,
-          moments,
-          pc,
-        )
-      };
-      match splat {
-        Ok(()) => {
-          if !skip_splat {
-            use crate::gpu_backends::vulkan::device::dust::{DUST_TS_CALL0, DUST_TS_CALLS};
-            if (splat_calls as usize) < DUST_TS_CALLS {
-              device.cmd_dust_timestamp(cmd, pe, DUST_TS_CALL0 + splat_calls);
-            }
-            splat_calls += 1;
-          }
-          if tracing {
-            use crate::gpu::dust_trace::{TraceFrameMeta, TraceTierMeta, sample_slots};
-            let id = call.entity_id.as_ffi();
-            let i = match traced.iter().position(|t| t.0 == id) {
-              Some(i) => i,
-              None => {
-                traced.push((
-                  id,
-                  TraceFrameMeta {
-                    frame: frame_no,
-                    wall_us: aethervk_oshal_rlib::os::time::get_monotonic_time() as u64,
-                    sim_time_s: s.frame.t_now_s(),
-                    system: id,
-                    eye_m: call.eye_m,
-                    nucleus_m: call.nucleus_m,
-                    viewport: extent,
-                    tiers: Vec::new(),
-                  },
-                  Vec::new(),
-                ));
-                traced.len() - 1
-              }
-            };
-            traced[i].1.tiers.push(TraceTierMeta {
-              tier: s.tier,
-              anchor_m: s.anchor_m,
-              t_now_s: s.frame.t_now_s(),
-              rte_position: call.rte_position,
-              units_per_m: call.units_per_m,
-              mvp,
-              samples: sample_slots(s.first_slot, s.live_count.min(s.capacity), s.capacity),
-            });
-            traced[i].2.push(s.ring_base);
-          }
-        }
-        Err(e) => {
-          aethervk_oshal_rlib::log!("[Dust] splat failed for {:?}: {}", call.entity_id, e);
-          call.state.live_count = 0;
-          device.dust_forget_drawn(pe);
-        }
-      }
-    }
-  }
-  device.cmd_dust_timestamp(cmd, pe, crate::gpu_backends::vulkan::device::dust::DUST_TS_SPLATS_DONE);
-  // the physical specks (`dust_specks.comp`, WP3b): one pass per tier on the same pyramid, after
-  // its splat; it measures the density at the eye and draws only inside the header's shell
-  // radius. `AETHERVK_DUST_DEBUG_SKIP=specks` skips it. The size law is the
+  // the physical specks (`dust_specks.comp`, WP3b): one pass per tier on the same pyramid,
+  // **before** the splats (since 2026-10-16: it writes the walk mask the splats read for the
+  // shell hand-over, `DustMoments::specks_mask`); it measures the density at the eye and draws
+  // only inside the header's shell radius. `AETHERVK_DUST_DEBUG_SKIP=specks` skips it. The size law is the
   // system's (`DustDrawState::s_ref_um` / `size_q`, from `ParticleSystemEmitParams`); a state
   // without one (0) falls back to `AETHERVK_DUST_SPECKS_SREF_UM` or 50 µm, and q = 3.5.
   // skipped when nothing needs it (`Device::dust_specks_needed`: the specks off and no eye
@@ -1276,6 +1168,8 @@ pub fn prepare_dust(
           pe,
           call.entity_id.as_ffi(),
           s.ring_base,
+          s.first_slot,
+          s.capacity,
           render,
           moments,
           pc,
@@ -1286,6 +1180,120 @@ pub fn prepare_dust(
       }
     }
   }
+  device.cmd_dust_timestamp(cmd, pe, crate::gpu_backends::vulkan::device::dust::DUST_TS_SPECKED);
+  // the walk masks and the specks' texels before the splats read / add to them
+  device.cmd_dust_pre_splat_barrier(cmd);
+  for layer in render_scene.depth_layers.iter_mut().filter(|_| !reuse) {
+    let camera =
+      render_scene
+        .camera_data
+        .rebuild_for_layer(layer.near, layer.far, layer.frame_scale);
+    for call in layer.dust_calls.iter_mut() {
+      let Some((render, moments)) = buffers.next().flatten() else {
+        call.state.live_count = 0;
+        continue;
+      };
+      let (mvp, params) = call.mvp_params(&camera, extent);
+      let s = &call.state;
+      let eye = call.eye_local_m();
+      let debug_env = |name: &str| {
+        aethervk_oshal_rlib::os::env::var(name).and_then(|v| v.trim().parse::<u32>().ok())
+      };
+      let flags = match (
+        debug_env("AETHERVK_DUST_DEBUG_STREAM"),
+        debug_env("AETHERVK_DUST_DEBUG_SAMPLE_MOD"),
+      ) {
+        (Some(v), _) => flags | crate::scene::dust::DUST_VIEW_DEBUG_STREAM | ((v & 0xFF) << 20),
+        (None, Some(v)) => flags | crate::scene::dust::DUST_VIEW_DEBUG_SAMPLE | ((v & 0xFF) << 20),
+        (None, None) => flags,
+      };
+      let pc = crate::scene::dust::DustSplatPushConstants {
+        moments: 0,
+        render: 0,
+        pyramid: 0,
+        live_count: s.live_count.min(s.capacity),
+        flags,
+        exposure: call.raw_exposure(),
+        inv_unit,
+        color: crate::scene::dust::pack_color(call.stream_color),
+        albedo: s.albedo,
+        mvp,
+        eye_local: [eye[0], eye[1], eye[2], s.ttl_s],
+      };
+      // AETHERVK_DUST_DEBUG_SKIP=splat|composite|readback: bisection aids (no production use);
+      // AETHERVK_DUST_DEBUG_TIER=<k>: only tier k is splatted (which tier draws a feature)
+      let skip_splat = dust_debug_skip("splat")
+        || aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_DEBUG_TIER")
+          .and_then(|v| v.trim().parse::<u32>().ok())
+          .is_some_and(|k| k != s.tier);
+      let splat = if skip_splat {
+        Ok(())
+      } else {
+        device.cmd_dust_splat(
+          cmd,
+          pe,
+          call.entity_id.as_ffi(),
+          s.ring_base,
+          s.first_slot,
+          s.capacity,
+          render,
+          moments,
+          pc,
+        )
+      };
+      match splat {
+        Ok(()) => {
+          if !skip_splat {
+            use crate::gpu_backends::vulkan::device::dust::{DUST_TS_CALL0, DUST_TS_CALLS};
+            if (splat_calls as usize) < DUST_TS_CALLS {
+              device.cmd_dust_timestamp(cmd, pe, DUST_TS_CALL0 + splat_calls);
+            }
+            splat_calls += 1;
+          }
+          if tracing {
+            use crate::gpu::dust_trace::{TraceFrameMeta, TraceTierMeta, sample_slots};
+            let id = call.entity_id.as_ffi();
+            let i = match traced.iter().position(|t| t.0 == id) {
+              Some(i) => i,
+              None => {
+                traced.push((
+                  id,
+                  TraceFrameMeta {
+                    frame: frame_no,
+                    wall_us: aethervk_oshal_rlib::os::time::get_monotonic_time() as u64,
+                    sim_time_s: s.frame.t_now_s(),
+                    system: id,
+                    eye_m: call.eye_m,
+                    nucleus_m: call.nucleus_m,
+                    viewport: extent,
+                    tiers: Vec::new(),
+                  },
+                  Vec::new(),
+                ));
+                traced.len() - 1
+              }
+            };
+            traced[i].1.tiers.push(TraceTierMeta {
+              tier: s.tier,
+              anchor_m: s.anchor_m,
+              t_now_s: s.frame.t_now_s(),
+              rte_position: call.rte_position,
+              units_per_m: call.units_per_m,
+              mvp,
+              samples: sample_slots(s.first_slot, s.live_count.min(s.capacity), s.capacity),
+            });
+            traced[i].2.push(s.ring_base);
+          }
+        }
+        Err(e) => {
+          aethervk_oshal_rlib::log!("[Dust] splat failed for {:?}: {}", call.entity_id, e);
+          call.state.live_count = 0;
+          device.dust_forget_drawn(pe);
+        }
+      }
+    }
+  }
+  device.cmd_dust_timestamp(cmd, pe, crate::gpu_backends::vulkan::device::dust::DUST_TS_SPLATS_DONE);
   device.cmd_dust_timestamp(cmd, pe, crate::gpu_backends::vulkan::device::dust::DUST_TS_SPLATTED);
   device.cmd_dust_post_splat_barrier(cmd);
   device.cmd_checkpoint(cmd, c"dust: trace + readback");

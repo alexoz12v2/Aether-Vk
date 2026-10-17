@@ -309,12 +309,12 @@ mod tests {
     };
     let ok = DustRenderCluster {
       pos_size: [1000.0, 0.0, 0.0, 10.0],
-      age_id_dbeta_flux: [3600.0, f32::from_bits(dust::render_word(77, 6)), 0.0, 1.0],
+      age_id_dbeta_flux: [3600.0, f32::from_bits(dust::render_word(77, 6, dust::RENDER_SLOT_BITS)), 0.0, 1.0],
     };
     // off screen (flux 0 after the LOD): kept, not drawn
     let hidden = DustRenderCluster {
       pos_size: [5.0, 0.0, 0.0, 10.0],
-      age_id_dbeta_flux: [3600.0, f32::from_bits(dust::render_word(78, 6)), 0.0, 0.0],
+      age_id_dbeta_flux: [3600.0, f32::from_bits(dust::render_word(78, 6, dust::RENDER_SLOT_BITS)), 0.0, 0.0],
     };
     // wrong slot: skipped
     let stale = DustRenderCluster {

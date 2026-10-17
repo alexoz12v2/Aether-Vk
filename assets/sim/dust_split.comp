@@ -52,11 +52,14 @@ void dust_split_record(uint recs, uint r, uint ord, uint levels, float W, float 
     vec3 mean, d, segT, color, sun;
     float S[6];
     float flux, exposure, origin, rh;
-    bool openStart, openEnd, hasO;
+    bool openStart, openEnd, hasO, walked;
     vec2 rho;
     vec4 support;
     uint i;
-    DUST_SQUEUE_GET(pc.pyramid, recs, r, mean, S, d, flux, exposure, openStart, openEnd, rho, segT, color, support, hasO, origin, sun, rh, i)
+    DUST_SQUEUE_GET(pc.pyramid, recs, r, mean, S, d, flux, exposure, openStart, openEnd, rho, segT, color, support, hasO, origin, sun, rh, i, walked)
+    // the speck shell's hand-over per bin (dust::splat_cluster_inner): a record whose bin the
+    // speck pass does not walk keeps its shell mass (no shell for it)
+    float recShell = walked ? shellDMax : 0.0;
     dust_phot_support = support;
     dust_phot_has_origin = hasO;
     dust_phot_origin = origin;
@@ -65,7 +68,7 @@ void dust_split_record(uint recs, uint r, uint ord, uint levels, float W, float 
     dust_cluster_seed = dust_hash32(i);
     dust_packet_ord = ord;
     dust_project_split_scatter(mean, S, d, flux, exposure, openStart, openEnd, rho, segT, color, levels,
-                               W, H, fwd, perspective, splitDepth, volumeBias, shellDMax, volumeAxis);
+                               W, H, fwd, perspective, splitDepth, volumeBias, recShell, volumeAxis);
 }
 
 void main() {
@@ -84,6 +87,7 @@ void main() {
     dust_phot_lut = pc.pyramid;
     dust_pyr_split_word = pc.pyramid.v[DUST_PYR_SPLIT_DEPTH];
     dust_vqueue_on = (pc.pyramid.v[DUST_PYR_FLAGS] & DUST_FRAME_VQUEUE_OFF) == 0u;
+    dust_deep_chord = (pc.pyramid.v[DUST_PYR_FLAGS] & DUST_FRAME_DEEP_CHORD) != 0u;
     uint levels = pc.pyramid.v[DUST_PYR_LEVELS];
     float W = float(pc.pyramid.v[DUST_PYR_WIDTH]);
     float H = float(pc.pyramid.v[DUST_PYR_HEIGHT]);

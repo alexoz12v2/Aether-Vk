@@ -1433,6 +1433,15 @@ fn dust_profile_report(
       }
     ));
   }
+  // K1c's parts of the volumetric draw (all shaders): pass A's per-class sums, a small piece's
+  // depth points, its texels' rectangle integrals, the sub-ray and line texels
+  let k1c: Vec<u64> = (0..d::DUST_PROF_K1C_NAMES.len()).map(|k| p.u64_at(d::DUST_PROF_K1C0 + 2 * k)).collect();
+  if k1c.iter().any(|&c| c > 0) {
+    out.push(format!(
+      "[observer]   K1c parts (lane-cycles): {}",
+      d::DUST_PROF_K1C_NAMES.iter().zip(&k1c).map(|(n, c)| format!("{n} {c}")).collect::<Vec<_>>().join(", ")
+    ));
+  }
   // the queue draw
   let q: Vec<u64> = (0..4).map(|k| p.qstage(k)).collect();
   let qrecords = p.word(d::DUST_PROF_QRECORDS) as u64;
@@ -2516,7 +2525,8 @@ fn main() {
     // drew, what overflowed into the producers' threads, the chunks
     if let Some((drawn, overflowed, chunks)) = ctx.dust_vqueue_counts(pe) {
       log_line(&format!(
-        "[observer] dust volume queue: {drawn} packets drawn by the consumer, {overflowed} overflowed (drawn in-thread), {chunks} chunks"
+        "[observer] dust volume queue: {drawn} packets drawn by the consumer, {overflowed} overflowed (drawn in-thread), {chunks} chunks; {} volume deposits split above the per-add cap",
+        ctx.dust_volume_split_adds(pe).map_or("?".to_string(), |n| n.to_string())
       ));
     }
     // the shader-clock profiler's counters of the last drawn frame (`AETHERVK_DUST_PROFILE=1`,
@@ -2904,7 +2914,7 @@ fn main() {
       };
       specks_rec = Some(sk);
       log_line(&format!(
-        "[observer] pyramid frame {i}: levels {levels} tau_max {:.3e} mask {:#x} tracer {:.1} split children {split_children} overflow {split_overflow} dropped flux {split_dropped:.3e} depth {split_depth} volume evals {} bias {} ewa texels {:.4e} ewa bias {} specks {} overflow {} d_max {:.4e} m n_eye {:.4e} m⁻³ (texels/Σcounts/max) {}",
+        "[observer] pyramid frame {i}: levels {levels} tau_max {:.3e} mask {:#x} tracer {:.1} split children {split_children} overflow {split_overflow} dropped flux {split_dropped:.3e} depth {split_depth} volume evals {} bias {} ewa texels {:.4e} ewa bias {} specks {} overflow {} nodes {} truncated {} d_max {:.4e} m n_eye {:.4e} m⁻³ (texels/Σcounts/max) {}",
         f32::from_bits(pyr[d::PYR_TAU_MAX as usize]),
         pyr[d::PYR_LEVEL_MASK as usize],
         f32::from_bits(pyr[d::PYR_TRACER_COUNTS as usize]),
@@ -2914,6 +2924,8 @@ fn main() {
         d::EwaStats::load(&pyr).bias,
         sk.specks,
         sk.overflow,
+        pyr[aethervk_core_rlib::scene::dust::specks::PYR_SPECKS_NODES as usize],
+        pyr[aethervk_core_rlib::scene::dust::specks::PYR_SPECKS_TRUNCATED as usize],
         sk.d_max_m,
         sk.n_eye_m3,
         per_level.join(" ")
@@ -3789,6 +3801,10 @@ fn mc_rng(state: &mut u64) -> f64 {
 /// direction bandwidth's, or a packet's Gaussian across its capsule), in σ: the triple is redrawn
 /// until `|g| ≤ k` — the 3-D standard normal truncated to the ball, as the kernels draw it
 /// (`DUST_KICK_SIGMAS`). Default 3; `0` unbounded (the former draws, bit for bit)
+/// the per-packet probe's volumetric deposits split above the per-add cap (`dust::take_volume_split_adds`
+/// summed over its threads)
+static PROBE_SPLIT_ADDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 fn mc_kick_max() -> f64 {
   static K: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
   *K.get_or_init(|| {
@@ -4340,6 +4356,8 @@ fn monte_carlo_truth_from(
     let ready = std::sync::Condvar::new();
     let mut rhist_sum = vec![0.0f64; 0];
     let rhist_on = std::env::var("OBSERVER_LAB_RHIST").is_ok_and(|v| v == "1");
+    // `OBSERVER_MC_W2_NOISE=1` (diagnostic, the replay lab): Σ w² per pixel into [`MC_W2`]
+    let w2_on = mc_w2_on();
     let sink = std::sync::Mutex::new((
       &mut truth,
       &mut age_sum,
@@ -4372,6 +4390,7 @@ fn monte_carlo_truth_from(
             let mut age2_hist = vec![0.0f64; w * h];
             let mut col_hist = vec![0.0f64; 3 * w * h];
             let mut cnt_hist = vec![0.0f64; w * h];
+            let mut w2_hist = vec![0.0f64; if w2_on { w * h } else { 0 }];
             let mut n_drawn = 0usize;
             let mut seen: Vec<(usize, usize, f64)> = Vec::with_capacity(pieces.len());
             let sq = core::cell::Cell::new(0.0f64);
@@ -4491,6 +4510,9 @@ fn monte_carlo_truth_from(
                 col_hist[3 * (y * w + x) + k] += wv * rgb[k] as f64;
               }
               cnt_hist[y * w + x] += 1.0;
+              if w2_on {
+                w2_hist[y * w + x] += wv * wv;
+              }
               true
             };
             for &(bi, lo, hi) in pieces {
@@ -4810,11 +4832,11 @@ fn monte_carlo_truth_from(
               }
               seen.push((bi, n_drawn - drawn_before, sq.get() - sq_before));
             }
-            (hist, age_hist, age2_hist, col_hist, cnt_hist, n_drawn, seen, rhist)
+            (hist, age_hist, age2_hist, col_hist, cnt_hist, n_drawn, seen, rhist, w2_hist)
           };
           let mut g = order.lock().unwrap();
           g.1.insert(u, out);
-          while let Some((hist, ah, a2h, colh, ch, n, seen, rh)) = {
+          while let Some((hist, ah, a2h, colh, ch, n, seen, rh, w2h)) = {
             let k = g.0;
             g.1.remove(&k)
           } {
@@ -4844,6 +4866,14 @@ fn monte_carlo_truth_from(
             if rhist_on {
               rhist_sum.resize(RHIST_BINS, 0.0);
               for (a, b) in rhist_sum.iter_mut().zip(rh.iter()) {
+                *a += *b;
+              }
+            }
+            if w2_on {
+              // in unit order, like the histograms: bit-identical at any thread count
+              let mut q = MC_W2.lock().unwrap();
+              q.resize(w * h, 0.0);
+              for (a, b) in q.iter_mut().zip(w2h.iter()) {
                 *a += *b;
               }
             }
@@ -4904,6 +4934,8 @@ fn monte_carlo_truth_from(
     }
   }
   RHIST.lock().unwrap().clear();
+  // the pilots deposited too: only the final draw's Σ w² is kept
+  MC_W2.lock().unwrap().clear();
   let weights: Vec<f64> = batches
     .iter()
     .zip(pilot.iter().zip(pilot_n.iter()))
@@ -5802,6 +5834,15 @@ const TRUTH_MAGIC: &[u8; 4] = b"DTRU";
 /// nucleus centre (every grain drawn, in view or not; [`RHIST_BIN_M`] bins), for the packets'
 /// same histogram ([`lab_packet_mc`])
 static RHIST: std::sync::Mutex<Vec<f64>> = std::sync::Mutex::new(Vec::new());
+/// `OBSERVER_MC_W2_NOISE=1` (diagnostic, off by default; the image and every score unchanged):
+/// the truth's final draw also sums each grain's squared τ weight per pixel, so the lab prints a
+/// second judged value whose noise term is the weighted variance Σw² (boxed) / (Σw)² instead of
+/// the grain count's 1/n — the perspective weight 1/(A_px·cos θ) ∝ 1/depth² makes the weights
+/// heavy-tailed near the eye, where 1/n understates the noise
+static MC_W2: std::sync::Mutex<Vec<f64>> = std::sync::Mutex::new(Vec::new());
+fn mc_w2_on() -> bool {
+  std::env::var("OBSERVER_MC_W2_NOISE").is_ok_and(|v| v == "1")
+}
 const RHIST_BIN_M: f64 = 250.0;
 const RHIST_BINS: usize = 90;
 
@@ -6142,12 +6183,215 @@ fn print_work_log(log: &[aethervk_core_rlib::scene::dust::ClusterWork]) {
   }
 }
 
+/// `OBSERVER_LAB_CADENCE=1` (the replay lab, with `AETHERVK_DUST_WORK_LOG=1`): the temporal-reuse
+/// study (plan "temporal reuse by per-cluster cadence classes", step 1). Per cluster the on-screen
+/// rate per frame δ = |px(p + v·Δt − Δeye) − px(p)| at the polyline's nearest point (v the
+/// comet-relative velocity approximated as mean / age; the real rule uses the Kepler velocity),
+/// plus the growth max(extent, time segment) · Δt / age, the spiral's turn ω · Δt · extent, and for
+/// a cloud enclosing the eye |v·Δt − Δeye| / σ_min of the frame; a cluster goes to the largest
+/// class N ∈ {8, 16, 64} with δ · 2N ≤ ε, else it is fresh. Printed per simulation step per frame
+/// (`OBSERVER_LAB_DT=<s>` or the app's speeds at 60 fps) and tolerance (`OBSERVER_LAB_CADENCE_EPS`,
+/// default 1,2,4,16 px): the packets per class (the replay's own packets per cluster) and the
+/// per-frame load P_fresh + Σ P_k / N_k, i.e. what a cadenced frame would draw. The eye moves
+/// `OBSERVER_LAB_DEYE` m per frame (default 2.9: an orbit at 10°/s at 1 km) across the view.
+fn lab_cadence_study(tiers: &LabTiers, log: &[aethervk_core_rlib::scene::dust::ClusterWork], w: u32, h: u32) {
+  use aethervk_core_rlib::scene::dust as d;
+  let env_list = |k: &str, default: &[f64]| -> Vec<f64> {
+    std::env::var(k)
+      .ok()
+      .map(|v| v.split(',').filter_map(|x| x.trim().parse::<f64>().ok()).collect::<Vec<_>>())
+      .filter(|v| !v.is_empty())
+      .unwrap_or_else(|| default.to_vec())
+  };
+  let eps_list = env_list("OBSERVER_LAB_CADENCE_EPS", &[1.0, 2.0, 4.0, 16.0]);
+  let dt_list = env_list("OBSERVER_LAB_DT", &[0.0, 1.0 / 60.0, 10.0 / 60.0, 1.0, 60.0, 1440.0]);
+  let deye_m = std::env::var("OBSERVER_LAB_DEYE").ok().and_then(|v| v.trim().parse::<f64>().ok()).unwrap_or(2.9);
+  const CLASSES: [u32; 3] = [8, 16, 64];
+  // per cluster: its packets and the ingredients of δ
+  struct C {
+    packets: f64,
+    near: [f32; 3],
+    v_rel: [f32; 3],
+    ext_px: f32,
+    age: f32,
+    spin: f32,
+    enclosing: bool,
+    sigma_min: f32,
+    tier: usize,
+  }
+  let mut cs: Vec<C> = Vec::with_capacity(log.len());
+  let mut behind = 0usize;
+  // the log's entries come tier by tier (the tiers are splatted one after the other); two tiers
+  // may share a live count, so a tier takes the contiguous block of its own entries
+  let mut cursor = 0usize;
+  for (ti, (pc, _, _, render, moments)) in tiers.iter().enumerate() {
+    let eye = [pc.eye_local[0], pc.eye_local[1], pc.eye_local[2]];
+    let view = d::SplitView::of(&pc.mvp, eye);
+    let px = |q: [f32; 3]| d::project_point(q, &pc.mvp, w, h);
+    let start = cursor;
+    while cursor < log.len() && log[cursor].live == pc.live_count && cursor - start < pc.live_count as usize {
+      cursor += 1;
+    }
+    for c in &log[start..cursor] {
+      let i = c.index as usize;
+      let Some(m) = moments.get(i) else { continue };
+      if !(m.flux() > 0.0) {
+        continue;
+      }
+      let pred = d::streak_pred(render, i).and_then(|q| moments.get(q));
+      let age = m.age().max(1.0);
+      // the nearest point of the polyline (perspective: the smallest depth along the view)
+      let mut near = m.mean();
+      if view.perspective {
+        let mut best = f32::INFINITY;
+        for j in 0..d::SIZE_EDGES as usize {
+          let e = m.edge(j);
+          let dep = (e[0] - eye[0]) * view.fwd[0] + (e[1] - eye[1]) * view.fwd[1] + (e[2] - eye[2]) * view.fwd[2];
+          if dep < best {
+            best = dep;
+            near = e;
+          }
+        }
+      }
+      // a polyline with a point behind the camera (the eye inside the old coma: a cloud
+      // enclosing the eye) has no screen extent: its image changes by its relative change,
+      // |shift| / σ and Δt / age of the frame (the enclosing term below), not by a parallax
+      let ext_px = match (d::polyline_extent_px(m, &px), d::time_segment_px(m, pred, &px)) {
+        (Some(e), Some(t)) => e.max(t),
+        (Some(e), None) => e,
+        _ => {
+          behind += 1;
+          f32::INFINITY
+        }
+      };
+      let spin = pred.and_then(|p| d::spiral_of(m, p)).map_or(0.0, |(_, omega)| omega);
+      let cv = m.cov_v();
+      let sig2_max = cv[0].max(cv[3]).max(cv[5]).max(0.0);
+      let sig2_min = cv[0].min(cv[3]).min(cv[5]).max(1e-6);
+      let dm = [m.mean()[0] - eye[0], m.mean()[1] - eye[1], m.mean()[2] - eye[2]];
+      let enclosing = view.perspective && (!ext_px.is_finite() || dm[0] * dm[0] + dm[1] * dm[1] + dm[2] * dm[2] < 9.0 * sig2_max);
+      cs.push(C {
+        packets: c.packets as f64,
+        near,
+        v_rel: [m.mean()[0] / age, m.mean()[1] / age, m.mean()[2] / age],
+        ext_px,
+        age,
+        spin,
+        enclosing,
+        sigma_min: sig2_min.sqrt(),
+        tier: ti,
+      });
+    }
+  }
+  let total: f64 = cs.iter().map(|c| c.packets).sum();
+  println!(
+    "lab cadence: {} clusters, {total:.0} packets, {behind} enclosing the eye (a point behind the camera: rated by |shift| / σ_min and Δt / age of the frame); Δeye {deye_m} m per frame across the view; classes {CLASSES:?} (staleness ≤ 2N frames)",
+    cs.len()
+  );
+  let frame_px = w.max(h) as f32;
+  for &dt in &dt_list {
+    // δ per cluster for this step: the eye's lateral step is along the view's x axis
+    let deltas: Vec<f32> = cs
+      .iter()
+      .map(|c| {
+        let (pc, ..) = &tiers[c.tier];
+        let eye = [pc.eye_local[0], pc.eye_local[1], pc.eye_local[2]];
+        let view = d::SplitView::of(&pc.mvp, eye);
+        let f = view.fwd;
+        let up = if f[0].abs() < 0.9 { [1.0f32, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
+        let r = [f[1] * up[2] - f[2] * up[1], f[2] * up[0] - f[0] * up[2], f[0] * up[1] - f[1] * up[0]];
+        let rn = (r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).sqrt().max(1e-12);
+        let de = [r[0] / rn * deye_m as f32, r[1] / rn * deye_m as f32, r[2] / rn * deye_m as f32];
+        let dt = dt as f32;
+        let shift = [c.v_rel[0] * dt - de[0], c.v_rel[1] * dt - de[1], c.v_rel[2] * dt - de[2]];
+        let px = |q: [f32; 3]| d::project_point(q, &pc.mvp, w, h);
+        let moved = [c.near[0] + shift[0], c.near[1] + shift[1], c.near[2] + shift[2]];
+        let sn = (shift[0] * shift[0] + shift[1] * shift[1] + shift[2] * shift[2]).sqrt();
+        if !c.ext_px.is_finite() {
+          // enclosing the eye: the relative change of its τ profile over the frame
+          return (sn / c.sigma_min + dt / c.age) * frame_px;
+        }
+        let d1 = match (px(c.near), px(moved)) {
+          (Some(a), Some(b)) => ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt(),
+          _ => f32::INFINITY,
+        };
+        let d2 = c.ext_px * dt / c.age;
+        let d3 = c.spin * dt * c.ext_px;
+        let d4 = if c.enclosing { sn / c.sigma_min * frame_px } else { 0.0 };
+        d1 + d2 + d3 + d4
+      })
+      .collect();
+    let mut sorted: Vec<f32> = deltas.iter().copied().filter(|v| v.is_finite()).collect();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let q = |p: f64| sorted.get(((sorted.len().saturating_sub(1)) as f64 * p) as usize).copied().unwrap_or(f32::INFINITY);
+    println!(
+      "lab cadence: Δt {dt:.4} s/frame: δ px per cluster p10 {:.3} p50 {:.3} p90 {:.3} p99 {:.3} ({} infinite)",
+      q(0.1),
+      q(0.5),
+      q(0.9),
+      q(0.99),
+      deltas.len() - sorted.len()
+    );
+    for &eps in &eps_list {
+      let mut per_class = [0.0f64; 4]; // fresh, 8, 16, 64
+      let mut clusters = [0usize; 4];
+      for (c, &delta) in cs.iter().zip(&deltas) {
+        let mut k = 0usize;
+        for (ci, &n) in CLASSES.iter().enumerate() {
+          if (delta as f64) * 2.0 * n as f64 <= eps {
+            k = ci + 1;
+          }
+        }
+        per_class[k] += c.packets;
+        clusters[k] += 1;
+      }
+      let load = per_class[0] + per_class[1] / 8.0 + per_class[2] / 16.0 + per_class[3] / 64.0;
+      println!(
+        "lab cadence:   ε {eps:>4} px: packets fresh {:.0} / N8 {:.0} / N16 {:.0} / N64 {:.0} (clusters {} / {} / {} / {}); per-frame load {:.0} = {:.1} % of the frame",
+        per_class[0],
+        per_class[1],
+        per_class[2],
+        per_class[3],
+        clusters[0],
+        clusters[1],
+        clusters[2],
+        clusters[3],
+        load,
+        100.0 * load / total.max(1.0)
+      );
+    }
+  }
+}
+
 fn observer_threads() -> usize {
   std::env::var("OBSERVER_THREADS")
     .ok()
     .and_then(|v| v.trim().parse::<usize>().ok())
     .filter(|&n| n >= 1)
     .unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(1, 32))
+}
+
+/// `OBSERVER_PROBE_THREADS=<n>`: the threads of the packet MC and the per-packet probe
+/// ([`lab_packet_mc`]; default `OBSERVER_THREADS`, i.e. all cores). Every result is the same at
+/// any count (fixed cluster blocks summed in block order, each cluster's rounding seeds its own).
+fn probe_threads() -> usize {
+  std::env::var("OBSERVER_PROBE_THREADS")
+    .ok()
+    .and_then(|v| v.trim().parse::<usize>().ok())
+    .filter(|&n| n >= 1)
+    .unwrap_or_else(observer_threads)
+}
+
+/// One probe thread's reused drawing state ([`lab_packet_mc`] with `OBSERVER_LAB_PACKET_DRAW=1`):
+/// the pyramid each packet is drawn alone on (all zero between packets past the header: only the
+/// texel rectangles the packet's scatters logged, `d::set_touch_log`, are summed and cleared),
+/// the log, the touched texels `[word index, level, tx, ty]` and the split's scratch.
+#[derive(Default)]
+struct ProbeScratch {
+  pyr: Vec<u32>,
+  log: Vec<[u32; 6]>,
+  touched: Vec<[u32; 4]>,
+  split: aethervk_core_rlib::scene::dust::SplitLeaves,
 }
 
 /// `OBSERVER_LAB_PACKET_MC=<k>` (the replay lab): the render's own packets ([`d::subpackets_swept`]
@@ -6211,8 +6455,51 @@ fn lab_packet_mc(tiers: &LabTiers, header: &[u32], w: u32, h: u32, k: usize, out
     Some((it.next()??, it.next()??))
   });
   let layout = d::PyramidLayout::new(w, h);
+  // the composite's in-frame weight of each texel, per level and axis: Σ over the frame's pixels
+  // of the bilinear weight it gets (texel centres at (t + 0.5)·s, clamped at the grid's edges, as
+  // `composite_sample` reads it); a texel's light on screen is its counts × wx·wy / s² (the
+  // bilinear weight is separable, so this is exact at every level)
+  let comp_w: Vec<(Vec<f64>, Vec<f64>)> = layout
+    .levels
+    .iter()
+    .enumerate()
+    .map(|(l, &(_, lw, lh))| {
+      let s = (1u64 << l) as f64;
+      let axis = |n: u32, len: u32| {
+        let mut v = vec![0.0f64; n as usize];
+        for x in 0..len {
+          let f = (x as f64 + 0.5) / s - 0.5;
+          let x0 = f.floor();
+          let a = f - x0;
+          let t0 = (x0 as i64).clamp(0, n as i64 - 1) as usize;
+          let t1 = (x0 as i64 + 1).clamp(0, n as i64 - 1) as usize;
+          v[t0] += 1.0 - a;
+          v[t1] += a;
+        }
+        v
+      };
+      (axis(lw, w), axis(lh, h))
+    })
+    .collect();
+  // `AETHERVK_DUST_LAB_TRACE_CLUSTER=<id>[,<id>…]` (with `OBSERVER_LAB_PACKET_DRAW=1`): every
+  // packet of these clusters drawn alone with the splat's trace on (`set_volume_trace`: its
+  // route, leaves, volume plan and pieces), then its MC and drawn light
+  let trace_ids: Vec<usize> = std::env::var("AETHERVK_DUST_LAB_TRACE_CLUSTER")
+    .ok()
+    .map(|v| v.split(',').filter_map(|x| x.trim().parse::<usize>().ok()).collect())
+    .unwrap_or_default();
   let mut total = fresh();
-  let threads = observer_threads();
+  let threads = probe_threads();
+  // `OBSERVER_PROBE_SPARSE=0`: each packet on a freshly allocated pyramid, its whole pyramid
+  // summed (the former probe; the reference of the sparse one). `OBSERVER_PROBE_VERIFY=1`: the
+  // sparse probe also sums the whole pyramid, compares the two sums' bits and checks the pyramid
+  // is all zero past the header after the clear (a texel written outside the logged rectangles)
+  let sparse = !std::env::var("OBSERVER_PROBE_SPARSE").is_ok_and(|v| v.trim() == "0");
+  let verify = std::env::var("OBSERVER_PROBE_VERIFY").is_ok_and(|v| v.trim() == "1");
+  let verify_bad = std::sync::atomic::AtomicUsize::new(0);
+  // read once (it was read per sample: the environment's lock on every thread)
+  let rhist_mode = std::env::var("OBSERVER_LAB_RHIST_MODE");
+  let lvl0 = layout.levels[0].0 as usize;
   let cell_of = |q: &d::DustMoments| -> (V3, V3) {
     let (e0, e1) = (q.edge(0), q.edge(d::SIZE_BINS as usize));
     let (f0, f1) = (q.edge_factor(0) as f64, q.edge_factor(d::SIZE_BINS as usize) as f64);
@@ -6232,9 +6519,13 @@ fn lab_packet_mc(tiers: &LabTiers, header: &[u32], w: u32, h: u32, k: usize, out
     let n = (pc.live_count as usize).min(moments.len()).min(render.len());
     // one cluster's packets into `a`; each packet draws from its own stream (tier, cluster,
     // packet, piece), so no draw depends on another cluster's
-    let cluster = |i: usize, a: &mut LabMcAcc| {
+    let cluster = |i: usize, a: &mut LabMcAcc, ws: &mut ProbeScratch| {
       // the frame's kernel (`DUST_FRAME_LEGACY_KERNEL_BIT`), on this thread
       d::set_legacy_kernel(d::legacy_kernel(header));
+      // the cluster's rounding seeds start from its ring slot, as the splat's
+      // (`d::begin_cluster_packets`): its packets' drawn light is the same on any thread and in
+      // any order (the thread's sequence ran on across clusters before)
+      d::begin_cluster_packets(d::render_slot(render[i].age_id_dbeta_flux[1]));
       d::set_lod_px_active(d::lod_px(header));
       d::set_lod_view_active(view.perspective.then_some((view.eye, view.fwd)));
       let LabMcAcc { img, rh, cat, sup, sup_cat, pk } = a;
@@ -6464,7 +6755,7 @@ fn lab_packet_mc(tiers: &LabTiers, header: &[u32], w: u32, h: u32, k: usize, out
           if (!kernel_cut && rejected(class)) || behind(q) {
             continue;
           }
-          let kb = match std::env::var("OBSERVER_LAB_RHIST_MODE").as_deref() {
+          let kb = match rhist_mode.as_deref() {
             _ if cell_mode.is_some() => {
               let cm = cell_mode.unwrap();
               let cn = norm(c_u).max(1e-30);
@@ -6551,8 +6842,20 @@ fn lab_packet_mc(tiers: &LabTiers, header: &[u32], w: u32, h: u32, k: usize, out
         }
         }
         if draw_cmp {
-          // the packet alone on a fresh pyramid carrying the lab's header (its counters zeroed)
-          let mut pyr = vec![0u32; layout.total_words as usize];
+          // the packet alone on a fresh pyramid carrying the lab's header (its counters zeroed):
+          // the thread's reused one (zero past the header, see below), or a new one
+          // (`OBSERVER_PROBE_SPARSE=0`)
+          let mut fresh_pyr;
+          let pyr: &mut Vec<u32> = if sparse {
+            if ws.pyr.len() != layout.total_words as usize {
+              ws.pyr = vec![0u32; layout.total_words as usize];
+            }
+            ws.pyr[..lvl0].fill(0);
+            &mut ws.pyr
+          } else {
+            fresh_pyr = vec![0u32; layout.total_words as usize];
+            &mut fresh_pyr
+          };
           pyr[..header.len()].copy_from_slice(header);
           for w in [d::PYR_VOLUME_EVALS, d::PYR_EWA_TEXELS, d::PYR_SPLIT_CHILDREN, d::PYR_SPLIT_DROPPED_FLUX, d::PYR_TAU_MAX, d::PYR_LEVEL_MASK] {
             pyr[w as usize] = 0;
@@ -6560,18 +6863,103 @@ fn lab_packet_mc(tiers: &LabTiers, header: &[u32], w: u32, h: u32, k: usize, out
           let mut view_d = view.clone();
           view_d.shell = d::specks::ShellCut::from_header(&pyr, eye).d_max;
           let phot = d::Photometry { albedo: pc.albedo, sun, r_h_au: m.helio_au(), support: ksup, origin: w_o };
-          let mut scratch = d::SplitLeaves::default();
-          let n_hard = d::hard_axis_pieces(&pyr);
+          // (`mut`: the probe block below borrows it as `&mut scratch`)
+          let mut scratch = &mut ws.split;
+          let n_hard = d::hard_axis_pieces(pyr);
+          let traced = trace_ids.contains(&i);
+          if traced {
+            println!("lab: trace cluster {i} packet {pi} (tier {ti}, class {}):", if cut_here { "cut" } else { "uncut" });
+            d::set_volume_trace(true);
+          }
           // as the splat draws it (its cone of grains included, `Photometry::origin`)
+          if sparse {
+            d::set_touch_log(true);
+          }
           for j in 0..n_hard.max(1) {
             let q = d::hard_axis_leaf(&p_whole, n_hard, j);
-            d::project_split_scatter(&q, 1.0, &pc.mvp, &view_d, &phot, [1.0; 3], &layout, pc.inv_unit, &mut pyr, &mut scratch);
+            d::project_split_scatter(&q, 1.0, &pc.mvp, &view_d, &phot, [1.0; 3], &layout, pc.inv_unit, pyr, scratch);
           }
-          let counts: f64 = pyr[d::PYRAMID_HEADER_WORDS as usize..]
-            .chunks_exact(d::PYRAMID_TEXEL_WORDS as usize)
-            .map(|t| t[0] as f64)
-            .sum();
+          d::set_volume_trace(false);
+          PROBE_SPLIT_ADDS.fetch_add(d::take_volume_split_adds(), std::sync::atomic::Ordering::Relaxed);
+          // the light the composite shows in the frame, exactly: each texel's counts × its
+          // composite weight wx·wy / s² (`comp_w`); the raw counts summed before counted a texel
+          // overhanging the frame whole (the 512-px 1 × 1 level of 480 × 300: 1.82×) and the
+          // off-frame part of a texel whose centre lies outside it
+          let full_sum = |pyr: &[u32]| -> f64 {
+            let mut counts = 0.0f64;
+            for (l, &(off, lw, lh)) in layout.levels.iter().enumerate() {
+              let s2 = ((1u64 << l) as f64).powi(2);
+              let (wx, wy) = &comp_w[l];
+              for ty in 0..lh {
+                for tx in 0..lw {
+                  let c = pyr[(off + (ty * lw + tx) * d::PYRAMID_TEXEL_WORDS) as usize];
+                  if c != 0 {
+                    counts += c as f64 * wx[tx as usize] * wy[ty as usize] / s2;
+                  }
+                }
+              }
+            }
+            counts
+          };
+          // sparse: the same sum over the touched texels only, in the same (word index) order —
+          // the full loop's terms are its nonzero texels in increasing index, so the f64 sum is
+          // the same bit for bit — then those rectangles cleared (every word of their texels)
+          let counts = if sparse {
+            d::set_touch_log(false);
+            d::take_touch_log(&mut ws.log);
+            ws.touched.clear();
+            let tw = d::PYRAMID_TEXEL_WORDS;
+            for &[off, lw, x0, x1, y0, y1] in ws.log.iter() {
+              let l = layout.levels.iter().position(|lv| lv.0 == off).expect("touch log: a level offset");
+              let lh = layout.levels[l].2;
+              for ty in y0..=y1.min(lh - 1) {
+                for tx in x0..=x1.min(lw - 1) {
+                  let ix = off + (ty * lw + tx) * tw;
+                  if pyr[ix as usize] != 0 {
+                    ws.touched.push([ix, l as u32, tx, ty]);
+                  }
+                }
+              }
+            }
+            ws.touched.sort_unstable_by_key(|t| t[0]);
+            ws.touched.dedup_by_key(|t| t[0]);
+            let mut counts = 0.0f64;
+            for &[ix, l, tx, ty] in ws.touched.iter() {
+              let s2 = ((1u64 << l) as f64).powi(2);
+              let (wx, wy) = &comp_w[l as usize];
+              let c = pyr[ix as usize];
+              counts += c as f64 * wx[tx as usize] * wy[ty as usize] / s2;
+            }
+            if verify {
+              let f = full_sum(pyr);
+              if f.to_bits() != counts.to_bits() {
+                verify_bad.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                println!("lab: probe verify: cluster {i} packet {pi}: sparse Σ {counts:e} ≠ full Σ {f:e}");
+              }
+            }
+            for &[off, lw, x0, x1, y0, y1] in ws.log.iter() {
+              let lh = layout.levels.iter().find(|lv| lv.0 == off).map_or(0, |lv| lv.2);
+              for ty in y0..=y1.min(lh - 1) {
+                let a = (off + (ty * lw + x0) * tw) as usize;
+                let b = (off + (ty * lw + x1.min(lw - 1)) * tw + tw) as usize;
+                if a < b {
+                  pyr[a..b].fill(0);
+                }
+              }
+            }
+            if verify && pyr[lvl0..].iter().any(|&v| v != 0) {
+              verify_bad.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+              println!("lab: probe verify: cluster {i} packet {pi}: a texel written outside its logged rectangles");
+              pyr[lvl0..].fill(0);
+            }
+            counts
+          } else {
+            full_sum(pyr)
+          };
           let drawn = counts / pc.inv_unit as f64;
+          if traced {
+            println!("lab: trace cluster {i} packet {pi}: drawn {drawn:.4e} (the composite's in-frame light)");
+          }
           // the MC's τ per pixel: the focal length in px squared per unit of its weight, measured
           // on the projection 1 km ahead (1 m across)
           let px_k = {
@@ -6643,6 +7031,7 @@ fn lab_packet_mc(tiers: &LabTiers, header: &[u32], w: u32, h: u32, k: usize, out
           let (cluster, next, fresh) = (&cluster, &next, &fresh);
           s.spawn(move || {
             let mut out = Vec::new();
+            let mut ws = ProbeScratch::default();
             loop {
               let b = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
               if b >= nb {
@@ -6650,7 +7039,7 @@ fn lab_packet_mc(tiers: &LabTiers, header: &[u32], w: u32, h: u32, k: usize, out
               }
               let mut a = fresh();
               for i in b * bsz..((b + 1) * bsz).min(n) {
-                cluster(i, &mut a);
+                cluster(i, &mut a, &mut ws);
               }
               out.push((b, a));
             }
@@ -6666,14 +7055,22 @@ fn lab_packet_mc(tiers: &LabTiers, header: &[u32], w: u32, h: u32, k: usize, out
     }
   }
   let LabMcAcc { img, rh, cat, sup, sup_cat, pk } = total;
+  if draw_cmp {
+    println!(
+      "lab: probe drawing on {threads} threads, {}{}",
+      if sparse { "sparse (the touched texels summed and cleared)" } else { "a fresh pyramid per packet" },
+      if verify { format!(", verified: {} mismatches", verify_bad.load(std::sync::atomic::Ordering::Relaxed)) } else { String::new() }
+    );
+  }
   if draw_cmp && !pk.is_empty() {
     let names = ["uncut, eye near (volume)", "uncut, split", "cut, eye near (volume, ray_kept)", "cut, truncated"];
     let (tm, td): (f64, f64) = pk.iter().fold((0.0, 0.0), |a, r| (a.0 + r[0], a.1 + r[1]));
     println!(
-      "lab: packets drawn alone: {} packets, MC Σ {tm:.4e}, drawn Σ {td:.4e} (drawn/MC {:.3}), speck shell {}",
+      "lab: packets drawn alone: {} packets, MC Σ {tm:.4e}, drawn Σ {td:.4e} (drawn/MC {:.3}), speck shell {}, volume deposits split above the per-add cap {}",
       pk.len(),
       td / tm.max(1e-300),
-      if pk.iter().any(|r| r[2] >= 10.0) { "on (the support cut is skipped)" } else { "off" }
+      if pk.iter().any(|r| r[2] >= 10.0) { "on (the support cut is skipped)" } else { "off" },
+      PROBE_SPLIT_ADDS.swap(0, std::sync::atomic::Ordering::Relaxed)
     );
     for (c, name) in names.iter().enumerate() {
       let rows: Vec<&[f64; 8]> = pk.iter().filter(|r| (r[2] as usize) % 10 == c).collect();
@@ -6837,6 +7234,12 @@ fn run_lab(dir: &Path, frame: u32, lab_truth: usize) -> i32 {
   // `OBSERVER_LAB_LOD=<px>`: the cluster level of detail's pixels per drawn segment (`d::PYR_LOD`)
   if let Some(v) = std::env::var("OBSERVER_LAB_LOD").ok().and_then(|v| v.trim().parse::<f32>().ok()) {
     header[d::PYR_LOD as usize] = v.max(0.0).to_bits();
+  }
+  // `OBSERVER_LAB_DEEP_CHORD=0|1`: the deep-chord bit (`d::DUST_FRAME_DEEP_CHORD` of `PYR_FLAGS`)
+  if let Some(n) = env_u32("OBSERVER_LAB_DEEP_CHORD") {
+    let f = d::PYR_FLAGS as usize;
+    header[f] = (header[f] & !d::DUST_FRAME_DEEP_CHORD) | if n & 1 != 0 { d::DUST_FRAME_DEEP_CHORD } else { 0 };
+    println!("lab: deep chord {}", d::deep_chord(&header));
   }
   println!(
     "lab: header split depth {} volume bias {} EWA bias {} lod {} px",
@@ -7016,6 +7419,75 @@ fn run_lab(dir: &Path, frame: u32, lab_truth: usize) -> i32 {
   // `OBSERVER_THREADS=<n>`: the replay's splat threads (default: the machine's parallelism; 1 =
   // the serial splat). The result is bit-identical for any count: compare the hash line.
   let threads = observer_threads();
+  // `OBSERVER_LAB_SPECKS=<d_max m>`: the CPU speck pass on the replayed tiers before the splat
+  // (as the frame runs it since 2026-10-16: its walk mask decides the splat's hand-over), with
+  // the shell radius given, the size law 50 µm / q 3.5, no fade; prints the walk's cost: the
+  // bins walked (the gate), the nodes, the nodes per walk and per speck, the truncated walks
+  if let Some(d_max) = std::env::var("OBSERVER_LAB_SPECKS").ok().and_then(|v| v.trim().parse::<f32>().ok()) {
+    use aethervk_core_rlib::scene::dust::specks as sp;
+    sp::SpeckHeader::write(&mut pyr, d_max, 1 << 24);
+    let t_sp = Instant::now();
+    let (mut walked, mut clusters_walked, mut stats_all) = (0u64, 0u64, sp::SpeckPassStats::default());
+    for (pc, flow, _tracer, render, moments) in tiers.iter_mut() {
+      let eye = [pc.eye_local[0], pc.eye_local[1], pc.eye_local[2]];
+      // the eye-relative mvp of the speck pass (`M (x − eye) + (M eye + t)`)
+      let mut mvp_rel = pc.mvp;
+      for r in 0..4 {
+        mvp_rel[12 + r] = (pc.mvp[12 + r] as f64
+          + pc.mvp[r] as f64 * eye[0] as f64
+          + pc.mvp[4 + r] as f64 * eye[1] as f64
+          + pc.mvp[8 + r] as f64 * eye[2] as f64) as f32;
+      }
+      let spc = sp::DustSpecksPushConstants {
+        moments: 0,
+        render: 0,
+        pyramid: 0,
+        live_count: pc.live_count,
+        size_fade: sp::pack_size_fade(50.0, 0.0),
+        exposure: pc.exposure,
+        inv_unit: pc.inv_unit,
+        color: sp::pack_color_q(pc.color, 3.5),
+        albedo: pc.albedo,
+        mvp: mvp_rel,
+        eye_local: pc.eye_local,
+      };
+      let st = sp::specks_tier(moments, render, &spc, flow, &layout, &mut pyr);
+      let n = (pc.live_count as usize).min(moments.len());
+      for m in &moments[..n] {
+        let bits = m.specks_mask().count_ones() as u64;
+        walked += bits;
+        clusters_walked += (bits > 0) as u64;
+      }
+      stats_all.enumerated += st.enumerated;
+      stats_all.drawn += st.drawn;
+      stats_all.overflow += st.overflow;
+      stats_all.nodes += st.nodes;
+      stats_all.truncated += st.truncated;
+      for k in 0..10 {
+        stats_all.start_levels[k] += st.start_levels[k];
+      }
+      for k in 0..4 {
+        stats_all.walks_by_found[k] += st.walks_by_found[k];
+        stats_all.nodes_by_found[k] += st.nodes_by_found[k];
+      }
+    }
+    println!(
+      "lab specks:   start levels (bands of 6) {:?}; walks by specks found (0 / 1–3 / 4–15 / ≥16) {:?}, their nodes {:?}",
+      stats_all.start_levels,
+      stats_all.walks_by_found,
+      stats_all.nodes_by_found
+    );
+    println!(
+      "lab specks: shell {d_max} m: {walked} bins walked in {clusters_walked} clusters, {} enumerated, {} drawn, {} nodes ({:.0} per walk, {:.0} per speck), {} walks truncated, {:.1} s",
+      stats_all.enumerated,
+      stats_all.drawn,
+      stats_all.nodes,
+      stats_all.nodes as f64 / walked.max(1) as f64,
+      stats_all.nodes as f64 / stats_all.drawn.max(1) as f64,
+      stats_all.truncated,
+      t_sp.elapsed().as_secs_f64()
+    );
+  }
   let t_splat = Instant::now();
   for (pc, flow, tracer, render, moments) in &tiers {
     d::splat_tier_parallel(moments, render, pc, flow, *tracer, &layout, &mut pyr, threads);
@@ -7029,7 +7501,13 @@ fn run_lab(dir: &Path, frame: u32, lab_truth: usize) -> i32 {
   );
   // `AETHERVK_DUST_WORK_LOG=1`: the splat's work per cluster (`d::take_work_log`): how it spreads
   // over the clusters (does a long tail of a few clusters carry the frame's GPU time?)
-  print_work_log(&d::take_work_log());
+  let work_log = d::take_work_log();
+  print_work_log(&work_log);
+  // `OBSERVER_LAB_CADENCE=1`: the temporal-reuse study on this frame (the per-cluster on-screen
+  // rate and the cadence classes' packet load per simulation speed and tolerance)
+  if std::env::var("OBSERVER_LAB_CADENCE").is_ok_and(|v| v.trim() == "1") {
+    lab_cadence_study(&tiers, &work_log, w, h);
+  }
   let Some(render) = tau_image_of_pyramid(&pyr, w, h) else {
     eprintln!("lab: the replayed pyramid has no τ image");
     return 2;
@@ -7157,6 +7635,42 @@ fn run_lab(dir: &Path, frame: u32, lab_truth: usize) -> i32 {
   let noise = (sn_j / sb2_j.max(1e-300)).sqrt();
   let rel_j = (se_j / sb2_j.max(1e-300)).sqrt();
   let judged = (rel_j * rel_j - noise * noise).max(0.0).sqrt();
+  // `OBSERVER_MC_W2_NOISE=1` with `--lab-truth`: the same judged rms with the weighted noise
+  // (per pixel, boxed: Σw² / (Σw)², the grains' τ weights), and over the whole region (core kept)
+  if mc_w2_on() {
+    let w2 = MC_W2.lock().unwrap().clone();
+    if w2.len() == wu * hu && truth.len() == wu * hu {
+      let (mw2, mt) = (mc_box(&w2, wu, hu, 2), mc_box(&truth, wu, hu, 2));
+      let rel2 = |i: usize| if mt[i] > 0.0 { mw2[i] / (25.0 * mt[i] * mt[i]) } else { 1.0 };
+      let (mut sn_w, mut sn_all, mut se_all, mut sb_all, mut sn_n_all) = (0.0, 0.0, 0.0, 0.0, 0.0);
+      for &i in &region {
+        let b2 = b[i].powi(2);
+        se_all += (a[i] - b[i]).powi(2);
+        sb_all += b2;
+        sn_all += b2 * rel2(i);
+        sn_n_all += b2 / (n5[i] * 25.0).max(1.0);
+        if !(core_unresolved && b[i] >= 0.01 * peak) {
+          sn_w += b2 * rel2(i);
+        }
+      }
+      let noise_w = (sn_w / sb2_j.max(1e-300)).sqrt();
+      let (rel_all, noise_all, noise_n_all) = (
+        (se_all / sb_all.max(1e-300)).sqrt(),
+        (sn_all / sb_all.max(1e-300)).sqrt(),
+        (sn_n_all / sb_all.max(1e-300)).sqrt(),
+      );
+      // the effective grain count Kish (Σw)² / Σw² over the frame, against the grains drawn
+      let (st, sw2): (f64, f64) = (truth.iter().sum(), w2.iter().sum());
+      println!(
+        "lab: w2 noise: judged {:.4} (raw {rel_j:.4}, weighted noise {noise_w:.4} vs count noise {noise:.4}); whole region (core kept) rel {rel_all:.4}, weighted noise {noise_all:.4} (count {noise_n_all:.4}), after weighted noise {:.4}; Kish effective grains {:.0}",
+        (rel_j * rel_j - noise_w * noise_w).max(0.0).sqrt(),
+        (rel_all * rel_all - noise_all * noise_all).max(0.0).sqrt(),
+        st * st / sw2.max(1e-300)
+      );
+    } else {
+      println!("lab: w2 noise: no per-pixel Σw² (needs --lab-truth N)");
+    }
+  }
   // the ratio by truth level and the light outside the truth's 5 % region (boxed, absolute)
   let tm = b.iter().cloned().fold(0.0f64, f64::max);
   let mut lv = [(0.0f64, 0.0f64); 4];

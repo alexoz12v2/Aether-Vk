@@ -905,6 +905,19 @@ impl SimulationContext {
       })
       .ok()
   }
+  /// `pe`'s last frame's volumetric deposits above the per-add cap, split into several adds
+  /// (`dust::DUST_VQUEUE_SPLIT_ADDS`); `None` without a view or a device. Waits for the GPU.
+  pub fn dust_volume_split_adds(&self, pe: crate::gpu::PresentationEngineHandle) -> Option<u32> {
+    use crate::gpu::WeakRenderFrontendExt;
+    let frontend = self.render_proxy.0.as_frontend()?;
+    frontend
+      .with_device(self.render_proxy.1, |device| {
+        let vulkan_device: &crate::gpu_backends::vulkan::device::Device =
+          device.as_any().downcast_ref().ok_or(crate::gpu_err!("not a Vulkan device"))?;
+        vulkan_device.dust_volume_split_adds(pe)
+      })
+      .ok()
+  }
   /// [`Self::dust_gpu_timings`] of the last frame that drew (not one that reused the previous
   /// image): the cost of a changing view
   pub fn dust_gpu_timings_drawn(

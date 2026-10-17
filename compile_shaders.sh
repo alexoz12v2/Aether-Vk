@@ -218,6 +218,12 @@ for file in assets/*.comp assets/sim/*.comp; do
                     compile_one "$file" comp "-DDUST_PROFILE=1 $vmm_flag" "${file%.comp}.comp.prof${vmm_infix}.spv"
                     compile_one "$file" comp "-DDUST_PROFILE=1 -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.prof${vmm_infix}.d.spv"
                     ;;
+                # the speck walk pass (a workgroup of 32 lanes per walked bin; the plain blob is
+                # the gate pass): `.walk` before the vmm infix, as mk!() rewrites the name
+                dust_specks.comp)
+                    compile_one "$file" comp "-DDUST_SPECKS_WALK=1 $vmm_flag" "${file%.comp}.comp.walk${vmm_infix}.spv"
+                    compile_one "$file" comp "-DDUST_SPECKS_WALK=1 -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.walk${vmm_infix}.d.spv"
+                    ;;
             esac
         fi
     done

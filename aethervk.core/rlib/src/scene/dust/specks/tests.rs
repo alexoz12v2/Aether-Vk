@@ -786,12 +786,46 @@ fn gauss_lcg(state: &mut u64) -> f64 {
 /// (`kepler_df_resolves_metre_scale_relative_motion`; the convergence tolerance 1.42e-14 × 8e11 m
 /// ≈ 1.1 cm per solve): 1 px at 45 m for a 60° view over 960 px. The 1 cm of the first version was
 /// below that floor: it failed at 3.5 cm on the moments' df64 noise, not on the speck transport.
-#[test]
-fn specks_follow_the_kepler_flow() {
+/// The speck transport's residuals against the Kepler flow for one cloud (`sigma_scale` on the
+/// stream's velocity dispersions: 1 is the test batch's, 13 km at 1 h), at `days` after
+/// emission and `dt_s` later: the f64 design term and the cloud's spread, and the pipeline's
+/// position, displacement and offset-displacement errors with the moments' own mean error
+/// ([`specks_follow_the_kepler_flow`] explains the terms).
+#[derive(Debug, Clone, Copy)]
+struct KeplerFlowResiduals {
+  spread: f64,
+  design: f64,
+  abs: f64,
+  delta: f64,
+  offset: f64,
+  mean: f64,
+  matched: usize,
+  /// `|δ₁ ξ|`: the pipeline's offset `L'₁ ξ` against the f64 factor's `L₁ ξ` at t₁
+  noise1: f64,
+  /// `|A₂ A₁⁻¹ δ₁ ξ|`: that noise carried by the flow to t₂
+  carried: f64,
+  /// `|δ₂ ξ|`: the factor noise at t₂
+  noise2: f64,
+  /// the offset error less the prediction (the design term and the nonlinearity)
+  residual: f64,
+  /// the design term on the matched specks' own ξ (`design` is on 64 Gaussian ξ)
+  design_specks: f64,
+  /// its bound: `8 ulp(|r|) (1 + t₂/t₁)` (the f64 secants) `+ (μ/r³) t₂ Δt · spread` (Q's drift)
+  design_bound: f64,
+  /// the cloud's spread at t₁ (`spread` scaled by t₁/t₂, the flow's linear growth)
+  spread1: f64,
+  /// `t₂ / t₁`, the flow's growth of a t₁ offset error
+  growth: f64,
+}
+
+fn kepler_flow_residuals(sigma_scale: f32, days: f64, dt_s: f64) -> KeplerFlowResiduals {
   let b = test_batch(64, 3600.0);
   let mut c = emit_cluster(&b, 5);
   // one size: the range factor's half-log is zero (keep the child id bits)
   c.misc[3] = pack_child_id(0.0, crate::scene::dust::child_id(c.misc[3]));
+  // the cloud's size: the stream's velocity dispersions scaled (13 km at 1 h as emitted)
+  c.misc[0] *= sigma_scale;
+  c.misc[1] *= sigma_scale;
   let (r0, v0) = (c.r0().to_f64(), c.v0().to_f64());
   let (sigma_lat, sigma_rad) = (c.sigma_lat() as f64, c.sigma_rad() as f64);
   let beta = c.beta() as f64;
@@ -836,108 +870,178 @@ fn specks_follow_the_kepler_flow() {
     }
     m
   };
-  let dt_s = 120.0;
   let mut rng = 0x5EC5u64;
+  let f1 = frame_after(days);
+  let f2 = frame_after(days + dt_s / 86400.0);
+  let (age1, age2) = (f1.t_now_s() - t0, f2.t_now_s() - t0);
+  // (1) the design term, f64
+  let (a1, a2) = (secants(age1), secants(age2));
+  let (l1, l2) = (chol64(aat(&a1)), chol64(aat(&a2)));
+  let mut worst_design = 0.0f64;
+  let mut spread = 0.0f64;
+  for _ in 0..64 {
+    let xi = [
+      gauss_lcg(&mut rng),
+      gauss_lcg(&mut rng),
+      gauss_lcg(&mut rng),
+    ];
+    let eta = solve3(&a1, mat_vec(&l1, xi));
+    let (p, g) = (mat_vec(&l2, xi), mat_vec(&a2, eta));
+    worst_design = worst_design.max(norm64([p[0] - g[0], p[1] - g[1], p[2] - g[2]]));
+    spread = spread.max(norm64(p));
+  }
+  // (2) the pipeline: the f32 moments and the specks
+  let (_, m1) = packet_moments(&c, 0, &f1);
+  let (_, m2) = packet_moments(&c, 0, &f2);
+  assert!(m1.flux() > 0.0 && m2.flux() > 0.0);
+  let s_ref = c.eject[3];
+  let mk = |m: &DustMoments| SpeckCluster::new(m, 0, [0.0; 3], 77, s_ref, 3.5, 1.0e9, 0.0);
+  let (s1, s2) = (mk(&m1), mk(&m2));
+  assert_eq!(
+    (s1.mant, s1.exp),
+    (s2.mant, s2.exp),
+    "the count is a constant of the cluster"
+  );
+  let (anchor1, anchor2) = (f1.anchor_m(), f2.anchor_m());
+  let rel = |g: V3, a: V3| [g[0] - a[0], g[1] - a[1], g[2] - a[2]];
+  let (ref1, _) = kepler::propagate_f64(r0, v0, mu, age1);
+  let (ref2, _) = kepler::propagate_f64(r0, v0, mu, age2);
+  // the design term's bound: the f64 secants' floor (a few ulps of |r| per solve, ×|η| ≤ 4 and
+  // twice, carried by the flow ×(1 + t₂/t₁)) plus the drift of `Q = L⁻¹A` itself, `O(t G Δt)`
+  // of the spread with |G| = μ/r³ (the struct's doc)
+  let r_helio = norm64(ref2);
+  let ulp64 = r_helio * f64::EPSILON;
+  let design_bound =
+    8.0 * ulp64 * (1.0 + age2 / age1) + mu / (r_helio * r_helio * r_helio) * age2 * (age2 - age1) * spread;
+  let (ref1, ref2) = (rel(ref1, anchor1), rel(ref2, anchor2));
+  let err =
+    |p: [f32; 3], t: V3| norm64([p[0] as f64 - t[0], p[1] as f64 - t[1], p[2] as f64 - t[2]]);
+  let mean_err = err(m1.mean(), ref1).max(err(m2.mean(), ref2));
+  let collect = |sc: &SpeckCluster| {
+    let mut v: alloc::vec::Vec<Speck> = alloc::vec::Vec::new();
+    sc.enumerate(sc.mean, 1.0e12, [0.0; 3], u32::MAX, &mut |s| {
+      v.push(*s);
+      v.len() < 64
+    });
+    v
+  };
+  let (specks1, specks2) = (collect(&s1), collect(&s2));
+  // the walks are centred on the bins' means: a speck's position is `mean + dp` (dp in df64)
+  let at = |s: &Speck, sc: &SpeckCluster| -> V3 {
+    [
+      sc.mean[0] as f64 + s.dp[0] as f64,
+      sc.mean[1] as f64 + s.dp[1] as f64,
+      sc.mean[2] as f64 + s.dp[2] as f64,
+    ]
+  };
+  let err64 = |p: V3, t: V3| norm64([p[0] - t[0], p[1] - t[1], p[2] - t[2]]);
+  let (mut worst_abs, mut worst_delta, mut worst_offset, mut matched) =
+    (0.0f64, 0.0f64, 0.0f64, 0);
+  let (mut worst_noise1, mut worst_carried, mut worst_noise2, mut worst_residual) =
+    (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+  let mut worst_design_specks = 0.0f64;
+  // the grain of a speck: A(t₁) η = L_moments(t₁) ξ, A from the f64 secants
+  let a1m = a1;
+  for p1 in &specks1 {
+    let Some(p2) = specks2.iter().find(|p| p.hash == p1.hash) else {
+      continue;
+    };
+    matched += 1;
+    assert_eq!(p1.w, p2.w, "the cube coordinates are the identity");
+    // the grain through the offset the speck draws (`dp`, the df64 `M c` rounded once): an f32
+    // re-product `chol_apply(L'₁, ξ)` rounds at the extent at t₁ (4 mm on the 13 km cloud's
+    // 52 km) and the flow carries that rounding ×(t₂/t₁) into the reference (13 cm at a day)
+    let lxi = p1.dp;
+    let eta = solve3(&a1m, [lxi[0] as f64, lxi[1] as f64, lxi[2] as f64]);
+    let (g1, _) = kepler::propagate_f64(r0, dv(eta), mu, age1);
+    let (g2, _) = kepler::propagate_f64(r0, dv(eta), mu, age2);
+    let (t1, t2) = (rel(g1, anchor1), rel(g2, anchor2));
+    let (q1, q2) = (at(p1, &s1), at(p2, &s2));
+    worst_abs = worst_abs.max(err64(q1, t1)).max(err64(q2, t2));
+    let d_speck = [q2[0] - q1[0], q2[1] - q1[1], q2[2] - q1[2]];
+    let d_truth = [t2[0] - t1[0], t2[1] - t1[1], t2[2] - t1[2]];
+    worst_delta = worst_delta.max(norm64([
+      d_speck[0] - d_truth[0],
+      d_speck[1] - d_truth[1],
+      d_speck[2] - d_truth[2],
+    ]));
+    // the offset term alone: the speck relative to the moments' mean vs the grain relative to
+    // the reference grain (the mean's own error removed)
+    let off_speck = [
+      p2.dp[0] as f64 - p1.dp[0] as f64,
+      p2.dp[1] as f64 - p1.dp[1] as f64,
+      p2.dp[2] as f64 - p1.dp[2] as f64,
+    ];
+    let off_truth = [
+      (t2[0] - ref2[0]) - (t1[0] - ref1[0]),
+      (t2[1] - ref2[1]) - (t1[1] - ref1[1]),
+      (t2[2] - ref2[2]) - (t1[2] - ref1[2]),
+    ];
+    let err_v = [
+      off_speck[0] - off_truth[0],
+      off_speck[1] - off_truth[1],
+      off_speck[2] - off_truth[2],
+    ];
+    worst_offset = worst_offset.max(norm64(err_v));
+    // the decomposition of that error: with the pipeline's `L' = L + δ` (L the f64 factor of
+    // the f64 secants), the grain is defined at t₁ through `L'₁ ξ`, so `δ₁ ξ` is carried by the
+    // flow to t₂ as `A₂ A₁⁻¹ δ₁ ξ` (≈ (t₂/t₁) δ₁ ξ: 25× from 1 h to 25 h), while the speck at t₂
+    // carries `δ₂ ξ`: the predicted error `δ₂ ξ − A₂ A₁⁻¹ δ₁ ξ`; what remains is the design
+    // term and the transport's nonlinearity
+    let xi64 = [p1.xi[0] as f64, p1.xi[1] as f64, p1.xi[2] as f64];
+    let (lx1, lx2) = (mat_vec(&l1, xi64), mat_vec(&l2, xi64));
+    let d1 = [
+      p1.dp[0] as f64 - lx1[0],
+      p1.dp[1] as f64 - lx1[1],
+      p1.dp[2] as f64 - lx1[2],
+    ];
+    let carried = mat_vec(&a2, solve3(&a1, d1));
+    let d2 = [
+      p2.dp[0] as f64 - lx2[0],
+      p2.dp[1] as f64 - lx2[1],
+      p2.dp[2] as f64 - lx2[2],
+    ];
+    let pred = [d2[0] - carried[0], d2[1] - carried[1], d2[2] - carried[2]];
+    // the design term of this speck's own ξ: `L₂ ξ − A₂ A₁⁻¹ L₁ ξ` (f64); the error less `pred`
+    // is exactly this less the transport's nonlinearity
+    let back = mat_vec(&a2, solve3(&a1, lx1));
+    worst_design_specks =
+      worst_design_specks.max(norm64([lx2[0] - back[0], lx2[1] - back[1], lx2[2] - back[2]]));
+    worst_noise1 = worst_noise1.max(norm64(d1));
+    worst_carried = worst_carried.max(norm64(carried));
+    worst_noise2 = worst_noise2.max(norm64(d2));
+    worst_residual = worst_residual.max(norm64([
+      err_v[0] - pred[0],
+      err_v[1] - pred[1],
+      err_v[2] - pred[2],
+    ]));
+  }
+  KeplerFlowResiduals {
+    spread,
+    design: worst_design,
+    abs: worst_abs,
+    delta: worst_delta,
+    offset: worst_offset,
+    mean: mean_err,
+    matched,
+    noise1: worst_noise1,
+    carried: worst_carried,
+    noise2: worst_noise2,
+    residual: worst_residual,
+    design_specks: worst_design_specks,
+    design_bound,
+    spread1: spread * age1 / age2,
+    growth: age2 / age1,
+  }
+}
+
+#[test]
+fn specks_follow_the_kepler_flow() {
+  let dt_s = 120.0;
   for (label, days) in [("1 h", 1.0 / 24.0), ("1 d", 1.0)] {
-    let f1 = frame_after(days);
-    let f2 = frame_after(days + dt_s / 86400.0);
-    let (age1, age2) = (f1.t_now_s() - t0, f2.t_now_s() - t0);
-    // (1) the design term, f64
-    let (a1, a2) = (secants(age1), secants(age2));
-    let (l1, l2) = (chol64(aat(&a1)), chol64(aat(&a2)));
-    let mut worst_design = 0.0f64;
-    let mut spread = 0.0f64;
-    for _ in 0..64 {
-      let xi = [
-        gauss_lcg(&mut rng),
-        gauss_lcg(&mut rng),
-        gauss_lcg(&mut rng),
-      ];
-      let eta = solve3(&a1, mat_vec(&l1, xi));
-      let (p, g) = (mat_vec(&l2, xi), mat_vec(&a2, eta));
-      worst_design = worst_design.max(norm64([p[0] - g[0], p[1] - g[1], p[2] - g[2]]));
-      spread = spread.max(norm64(p));
-    }
-    // (2) the pipeline: the f32 moments and the specks
-    let (_, m1) = packet_moments(&c, 0, &f1);
-    let (_, m2) = packet_moments(&c, 0, &f2);
-    assert!(m1.flux() > 0.0 && m2.flux() > 0.0);
-    let s_ref = c.eject[3];
-    let mk = |m: &DustMoments| SpeckCluster::new(m, 0, [0.0; 3], 77, s_ref, 3.5, 1.0e9, 0.0);
-    let (s1, s2) = (mk(&m1), mk(&m2));
-    assert_eq!(
-      (s1.mant, s1.exp),
-      (s2.mant, s2.exp),
-      "the count is a constant of the cluster"
-    );
-    let (anchor1, anchor2) = (f1.anchor_m(), f2.anchor_m());
-    let rel = |g: V3, a: V3| [g[0] - a[0], g[1] - a[1], g[2] - a[2]];
-    let (ref1, _) = kepler::propagate_f64(r0, v0, mu, age1);
-    let (ref2, _) = kepler::propagate_f64(r0, v0, mu, age2);
-    let (ref1, ref2) = (rel(ref1, anchor1), rel(ref2, anchor2));
-    let err =
-      |p: [f32; 3], t: V3| norm64([p[0] as f64 - t[0], p[1] as f64 - t[1], p[2] as f64 - t[2]]);
-    let mean_err = err(m1.mean(), ref1).max(err(m2.mean(), ref2));
-    let collect = |sc: &SpeckCluster| {
-      let mut v: alloc::vec::Vec<Speck> = alloc::vec::Vec::new();
-      sc.enumerate(sc.mean, 1.0e12, [0.0; 3], u32::MAX, &mut |s| {
-        v.push(*s);
-        v.len() < 64
-      });
-      v
-    };
-    let (specks1, specks2) = (collect(&s1), collect(&s2));
-    // the walks are centred on the bins' means: a speck's position is `mean + dp` (dp in df64)
-    let at = |s: &Speck, sc: &SpeckCluster| -> V3 {
-      [
-        sc.mean[0] as f64 + s.dp[0] as f64,
-        sc.mean[1] as f64 + s.dp[1] as f64,
-        sc.mean[2] as f64 + s.dp[2] as f64,
-      ]
-    };
-    let err64 = |p: V3, t: V3| norm64([p[0] - t[0], p[1] - t[1], p[2] - t[2]]);
-    let (mut worst_abs, mut worst_delta, mut worst_offset, mut matched) =
-      (0.0f64, 0.0f64, 0.0f64, 0);
-    // the grain of a speck: A(t₁) η = L_moments(t₁) ξ, A from the f64 secants
-    let a1m = a1;
-    for p1 in &specks1 {
-      let Some(p2) = specks2.iter().find(|p| p.hash == p1.hash) else {
-        continue;
-      };
-      matched += 1;
-      assert_eq!(p1.w, p2.w, "the cube coordinates are the identity");
-      let lxi = chol_apply(&s1.chol, p1.xi);
-      let eta = solve3(&a1m, [lxi[0] as f64, lxi[1] as f64, lxi[2] as f64]);
-      let (g1, _) = kepler::propagate_f64(r0, dv(eta), mu, age1);
-      let (g2, _) = kepler::propagate_f64(r0, dv(eta), mu, age2);
-      let (t1, t2) = (rel(g1, anchor1), rel(g2, anchor2));
-      let (q1, q2) = (at(p1, &s1), at(p2, &s2));
-      worst_abs = worst_abs.max(err64(q1, t1)).max(err64(q2, t2));
-      let d_speck = [q2[0] - q1[0], q2[1] - q1[1], q2[2] - q1[2]];
-      let d_truth = [t2[0] - t1[0], t2[1] - t1[1], t2[2] - t1[2]];
-      worst_delta = worst_delta.max(norm64([
-        d_speck[0] - d_truth[0],
-        d_speck[1] - d_truth[1],
-        d_speck[2] - d_truth[2],
-      ]));
-      // the offset term alone: the speck relative to the moments' mean vs the grain relative to
-      // the reference grain (the mean's own error removed)
-      let off_speck = [
-        p2.dp[0] as f64 - p1.dp[0] as f64,
-        p2.dp[1] as f64 - p1.dp[1] as f64,
-        p2.dp[2] as f64 - p1.dp[2] as f64,
-      ];
-      let off_truth = [
-        (t2[0] - ref2[0]) - (t1[0] - ref1[0]),
-        (t2[1] - ref2[1]) - (t1[1] - ref1[1]),
-        (t2[2] - ref2[2]) - (t1[2] - ref1[2]),
-      ];
-      worst_offset = worst_offset.max(norm64([
-        off_speck[0] - off_truth[0],
-        off_speck[1] - off_truth[1],
-        off_speck[2] - off_truth[2],
-      ]));
-    }
+    let r = kepler_flow_residuals(1.0, days, dt_s);
+    let (spread, worst_design, worst_abs, worst_delta, worst_offset, mean_err, matched) =
+      (r.spread, r.design, r.abs, r.delta, r.offset, r.mean, r.matched);
     std::println!(
       "[specks] {label}, Δt {dt_s} s: design |L(t₂)ξ − A(t₂)η| ≤ {worst_design:.2e} m (cloud ≤ {spread:.0} m); pipeline: {matched} specks matched, position error ≤ {worst_abs:.2e} m, displacement error ≤ {worst_delta:.2e} m, offset displacement error ≤ {worst_offset:.2e} m, the moments' mean error {mean_err:.2e} m"
     );
@@ -963,6 +1067,108 @@ fn specks_follow_the_kepler_flow() {
       worst_offset < floor,
       "{label}: offset displacement error {worst_offset} m (floor {floor} m)"
     );
+  }
+}
+
+/// The user's requirement (2026-10-16): a speck's position is the same function of simulation
+/// time to a millimetre. This is the matrix behind it: clouds of 13 m, 1.3 km and 13 km (the
+/// stream's dispersions scaled 1e-3, 0.1, 1 at 1 h) and steps of a frame at 60 fps, one second
+/// and a day, the residuals printed per term. What holds today (the floors this test asserts):
+/// the moments' mean within 5 mm (the df64 floor of a heliocentric solve), the offset term
+/// within 5 cm (the secants are differences of centimetre-resolution solves, whatever the
+/// cloud; the f32 `L` adds 2e-7 of the extent), carried by the flow over a long step (a day's
+/// step from an hour's age multiplies the hour's noise by t₂/t₁ = 25). The millimetre itself is
+/// [`specks_hold_to_a_millimetre_goal`], ignored until the df64 path (Σ from the Kepler
+/// state-transition partials, df64 `L` and offsets) lands.
+#[test]
+fn specks_hold_to_a_millimetre_floors() {
+  // the whole matrix first (every case printed), the floors after
+  let mut failures: alloc::vec::Vec<alloc::string::String> = alloc::vec::Vec::new();
+  for &(label, scale) in &[("13 m", 1.0e-3f32), ("1.3 km", 0.1), ("13 km", 1.0)] {
+    for &dt_s in &[1.0 / 60.0, 1.0, 86_400.0] {
+      let r = kepler_flow_residuals(scale, 1.0 / 24.0, dt_s);
+      std::println!(
+        "[specks mm] cloud {label} ({:.0} m at t₂), Δt {dt_s:.4} s: {} matched; design {:.2e} m; position {:.2e} m, displacement {:.2e} m, offset displacement {:.2e} m, the mean {:.2e} m",
+        r.spread, r.matched, r.design, r.abs, r.delta, r.offset, r.mean
+      );
+      std::println!(
+        "[specks mm]   the offset error's parts: factor noise |δ₁ξ| {:.2e} m at t₁, carried by the flow (×{:.2}) |A₂A₁⁻¹δ₁ξ| {:.2e} m, |δ₂ξ| {:.2e} m at t₂; the rest {:.2e} m (the specks' design term {:.2e} m)",
+        r.noise1, r.growth, r.carried, r.noise2, r.residual, r.design_specks
+      );
+      let mut check = |ok: bool, what: alloc::string::String| {
+        if !ok {
+          failures.push(alloc::format!("{label}, Δt {dt_s}: {what}"));
+        }
+      };
+      check(r.matched >= 32, alloc::format!("{} specks matched", r.matched));
+      // the f64 reference's own floor: a few ulps of 8e11 m per solve, more over a day's step
+      check(r.design < 0.1, alloc::format!("design term {} m", r.design));
+      check(r.mean < 5e-3, alloc::format!("the moments' mean error {} m (the df64 floor is ~4 mm)", r.mean));
+      // the offset term is the factor's noise: `L' = L + δ` with `|δ ξ|` ≤ 5 cm at any time
+      // (the secants are differences of df64 solves at the centimetre, whatever the cloud), and
+      // the grain a speck is at t₁ is the one through `L'₁ ξ`, so `δ₁ ξ` rides the flow to t₂
+      // as `A₂ A₁⁻¹ δ₁ ξ ≈ (t₂/t₁) δ₁ ξ`: the 0.5–0.8 m of a day's step from an hour's age
+      // (2026-10-16) is the hour's 2–3 cm times 25, no drift of its own. Asserted per part: the
+      // noise at both times, the error within the parts' sum (triangle inequality on
+      // `design + δ₂ξ − A₂A₁⁻¹δ₁ξ`, 1 mm for the transport's nonlinearity), the rest within the
+      // design term of the specks' own ξ (the remainder is exactly that less the nonlinearity
+      // once the reference grain is taken through the drawn `dp`; with an f32 re-product of
+      // `L'₁ ξ` it carried that product's rounding ×(t₂/t₁): 13 cm on the 13 km cloud at a day).
+      // The noise floor has two parts: the secants' 5 cm whatever the cloud, and the f32 factor
+      // and the once-rounded `dp`, a few ulps of the extent (4 ε |extent|: 16 cm at 334 km;
+      // measured 5.4 cm there, 2026-10-16). The millimetre needs `δ` itself at the millimetre
+      // (plan 1b (a0)).
+      let noise_floor = |extent: f64| 5e-2 + 4.0 * f32::EPSILON as f64 * extent;
+      let (nf1, nf2) = (noise_floor(r.spread1), noise_floor(r.spread));
+      check(r.noise1 < nf1, alloc::format!("factor noise at t₁ {} m (floor {nf1} m)", r.noise1));
+      check(r.noise2 < nf2, alloc::format!("factor noise at t₂ {} m (floor {nf2} m)", r.noise2));
+      check(
+        r.offset <= r.carried + r.noise2 + r.design_specks + 1e-3,
+        alloc::format!(
+          "offset displacement error {} m beyond its parts {} + {} + {} m",
+          r.offset, r.carried, r.noise2, r.design_specks
+        ),
+      );
+      check(
+        r.residual <= r.design_specks + 1e-3,
+        alloc::format!(
+          "the offset error less its parts {} m (the specks' design term {} m)",
+          r.residual, r.design_specks
+        ),
+      );
+      // the design term is physics plus the f64 reference's floor, not the pipeline: bounded by
+      // its model (`design_bound`); measured 2026-10-16 at 8.8 mm / 12 mm / 112 mm on the
+      // 13 m / 1.3 km / 13 km clouds at a day (≈ 3e-7 of the spread on the big cloud, the
+      // model's tGΔt 1.9e-6 of it; the 13 m cloud at the f64 floor, model 4 cm; ≤ 0.8 mm
+      // at the short steps, model 2.8 mm)
+      check(
+        r.design_specks < r.design_bound,
+        alloc::format!(
+          "the specks' design term {} m (bound {} m)",
+          r.design_specks, r.design_bound
+        ),
+      );
+      let off_floor = nf1 * r.growth + nf2 + r.design_specks + 1e-3;
+      check(r.offset < off_floor, alloc::format!("offset displacement error {} m (floor {off_floor} m)", r.offset));
+      let pos_floor = r.mean + off_floor;
+      check(r.abs < pos_floor, alloc::format!("position error {} m (floor {pos_floor} m)", r.abs));
+    }
+  }
+  assert!(failures.is_empty(), "the floors:\n{}", failures.join("\n"));
+}
+
+/// The millimetre goal of [`specks_hold_to_a_millimetre_floors`]: every term within 1 mm on
+/// every cloud and step. Ignored until the df64 speck path lands (plan 1b (a0)).
+#[test]
+#[ignore]
+fn specks_hold_to_a_millimetre_goal() {
+  for &(label, scale) in &[("13 m", 1.0e-3f32), ("1.3 km", 0.1), ("13 km", 1.0)] {
+    for &dt_s in &[1.0 / 60.0, 1.0, 86_400.0] {
+      let r = kepler_flow_residuals(scale, 1.0 / 24.0, dt_s);
+      assert!(r.abs < 1e-3 && r.delta < 1e-3 && r.offset < 1e-3 && r.mean < 1e-3,
+        "{label}, Δt {dt_s}: position {:.2e}, displacement {:.2e}, offset {:.2e}, mean {:.2e} m",
+        r.abs, r.delta, r.offset, r.mean);
+    }
   }
 }
 
@@ -1144,13 +1350,17 @@ fn specks_and_continuum_conserve_the_flux() {
   m.edges[SIZE_BINS as usize][3] = f.sqrt();
   m.edges[5][3] = 1.0; // r_h
   m.edges[8][3] = 1.0; // sun along +z
-  let moments = [m];
+  let mut moments = [m];
   let slot = 5u32;
   let render = [DustRenderCluster {
     pos_size: [300.0, 0.0, 0.0, 0.0],
     age_id_dbeta_flux: [
       3600.0,
-      f32::from_bits(crate::scene::dust::render_word(slot, 0)),
+      f32::from_bits(crate::scene::dust::render_word(
+        slot,
+        0,
+        crate::scene::dust::RENDER_SLOT_BITS,
+      )),
       0.0,
       flux,
     ],
@@ -1242,7 +1452,7 @@ fn specks_and_continuum_conserve_the_flux() {
   let t1 = total(&pyr1);
   let pc = pc_for(mvp, eye, inv_unit, 1, s_ref);
   let st = specks_tier(
-    &moments,
+    &mut moments,
     &render,
     &pc,
     &DustFlowUniform::default(),
@@ -1633,12 +1843,16 @@ fn perspective_specks_draw_the_physical_handed_tau() {
   m.edges[5][3] = 1.0;
   m.edges[8][3] = 1.0;
   let slot = 5u32;
-  let moments = [m];
+  let mut moments = [m];
   let render = [DustRenderCluster {
     pos_size: [300.0, 0.0, 0.0, 0.0],
     age_id_dbeta_flux: [
       3600.0,
-      f32::from_bits(crate::scene::dust::render_word(slot, 0)),
+      f32::from_bits(crate::scene::dust::render_word(
+        slot,
+        0,
+        crate::scene::dust::RENDER_SLOT_BITS,
+      )),
       0.0,
       flux,
     ],
@@ -1675,7 +1889,7 @@ fn perspective_specks_draw_the_physical_handed_tau() {
   let mut pyr = pyramid_with(&layout, d_max, 1 << 24);
   let pc = pc_for(mvp, eye, 1.0 / unit, 1, s_ref);
   let st = specks_tier(
-    &moments,
+    &mut moments,
     &render,
     &pc,
     &DustFlowUniform::default(),

@@ -51,6 +51,7 @@ fn frame_after(days: f64) -> DustFrame {
 }
 
 /// Copies `bytes` bytes of a device buffer into host memory (synchronous, graphics queue).
+#[allow(dead_code)] // (the tier records go through `test_dust::read_tier_records`, slot indexed)
 fn read_back(device: &Device, src: vk::Buffer, bytes: u64) -> alloc::vec::Vec<u8> {
   let allocator = device.res.read().allocator.allocator.as_allocator_view();
   let info = vk::BufferCreateInfo::default()
@@ -170,19 +171,24 @@ fn run_specks_parity(device: &Device, id: u64) {
   let ttl = 30.0 * 86400.0f32;
   let s_ref = 50.0f32;
   let q = 3.5f32;
+  // the slot-indexed GPU records in the CPU mirror's compact ring order
   let fetch = |device: &Device| {
-    let render: alloc::vec::Vec<dust::DustRenderCluster> = bytemuck::cast_slice(&read_back(
+    let render: alloc::vec::Vec<dust::DustRenderCluster> = super::test_dust::read_tier_records(
       device,
       render_buf,
-      batch.count as u64 * core::mem::size_of::<dust::DustRenderCluster>() as u64,
-    ))
-    .to_vec();
-    let moments: alloc::vec::Vec<dust::DustMoments> = bytemuck::cast_slice(&read_back(
+      0,
+      first_slot,
+      batch.count,
+      capacity - 1,
+    );
+    let moments: alloc::vec::Vec<dust::DustMoments> = super::test_dust::read_tier_records(
       device,
       moments_buf,
-      batch.count as u64 * core::mem::size_of::<dust::DustMoments>() as u64,
-    ))
-    .to_vec();
+      0,
+      first_slot,
+      batch.count,
+      capacity - 1,
+    );
     (render, moments)
   };
   // one frame of moments (no splat) to place the camera
@@ -263,8 +269,10 @@ fn run_specks_parity(device: &Device, id: u64) {
           let (render, moments) =
             device.cmd_dust_propagate(cmd, id, 0, capacity, first_slot, batch.count, &frame)?;
           device.cmd_dust_pre_splat_barrier(cmd);
-          device.cmd_dust_splat(cmd, pe, id, 0, render, moments, splat_pc)?;
-          device.cmd_dust_specks(cmd, pe, id, 0, render, moments, speck_pc)?;
+          // the specks before the splat: their walk mask decides the splat's hand-over
+          device.cmd_dust_specks(cmd, pe, id, 0, first_slot, capacity, render, moments, speck_pc)?;
+          device.cmd_dust_pre_splat_barrier(cmd);
+          device.cmd_dust_splat(cmd, pe, id, 0, first_slot, capacity, render, moments, splat_pc)?;
           device.cmd_dust_post_splat_barrier(cmd);
           device.cmd_dust_frame_end(cmd, pe)?;
           device.cmd_dust_system_end(id)?;
@@ -289,7 +297,7 @@ fn run_specks_parity(device: &Device, id: u64) {
     tries += 1;
   };
   let layout = device.dust_view_layout(pe).unwrap();
-  let (render, moments) = fetch(device);
+  let (render, mut moments) = fetch(device);
   // the CPU reference on the GPU's moments and the GPU frame's host-written words
   let mut cpu = alloc::vec![0u32; layout.total_words as usize];
   cpu[..dust::PYRAMID_HEADER_WORDS as usize].copy_from_slice(&layout.header());
@@ -306,7 +314,7 @@ fn run_specks_parity(device: &Device, id: u64) {
   assert_eq!(f32::from_bits(gpu[specks::PYR_SPECKS_DMAX as usize]), d_max);
   dust::splat_tier(&moments, &render, &splat_pc, &flow, 0, &layout, &mut cpu);
   let splat_only = cpu.clone();
-  let stats = specks::specks_tier(&moments, &render, &speck_pc, &flow, &layout, &mut cpu);
+  let stats = specks::specks_tier(&mut moments, &render, &speck_pc, &flow, &layout, &mut cpu);
   let word = |p: &[u32], k: u32| p[k as usize];
   let (dg, dc) = (
     word(&gpu, specks::PYR_SPECKS),
@@ -394,7 +402,7 @@ fn run_specks_parity(device: &Device, id: u64) {
     specks_only[k as usize] = 0;
   }
   specks::specks_tier(
-    &moments,
+    &mut moments,
     &render,
     &speck_pc,
     &flow,
@@ -405,6 +413,10 @@ fn run_specks_parity(device: &Device, id: u64) {
   // `scatter_speck` on a scratch pyramid) and the floor `speck_floor` (printed for information)
   let mut landing = alloc::vec![0u32; (lw * lh) as usize];
   let mut recs: alloc::vec::Vec<SpeckRec> = alloc::vec::Vec::new();
+  // every CPU speck's offset from the eye by hash, for the GPU's trace
+  // (with its coordinates and its cluster: the per-axis split and the map's own error)
+  let mut cpu_dp: std::collections::HashMap<u32, ([f32; 3], [f32; 3], [f32; 3], specks::SpeckCluster)> =
+    std::collections::HashMap::new();
   let f_px = (mvp_rel[0].abs() * 0.5 * w as f32).max(mvp_rel[5].abs() * 0.5 * h as f32);
   {
     let view = specks::SpeckView::new(&speck_pc, &layout);
@@ -416,13 +428,10 @@ fn run_specks_parity(device: &Device, id: u64) {
       if !(m.flux() > 0.0) {
         continue;
       }
-      let seg = match dust::streak_pred(&render, i) {
-        Some(p) => {
-          let (a, b) = (moments[p].mean(), m.mean());
-          [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-        }
-        None => [0.0; 3],
-      };
+      // the bins' time segments as both mirrors' passes form them (`bin_time_segment`: the bin
+      // edges' midpoints of the predecessor and the cluster; the cluster means' difference this
+      // used until 2026-10-16 is another leaf — the trace's metres and its unmatched specks)
+      let pred = dust::streak_pred(&render, i).map(|p| &moments[p]);
       let slot = dust::render_slot(render[i].age_id_dbeta_flux[1]);
       let exposure = speck_pc.exposure * dust::flow_factor(m.age(), &flow);
       let v = specks::SpeckView { exposure, ..view };
@@ -432,6 +441,11 @@ fn run_specks_parity(device: &Device, id: u64) {
         r_h_au: m.helio_au(),
       };
       for b in 0..dust::SIZE_BINS as usize {
+        // the walk gate (`DUST_SPECKS_WALK_MIN`): the bins the pass did not walk draw no speck
+        if !m.specks_walked(b) {
+          continue;
+        }
+        let seg = specks::bin_time_segment(m, pred, b);
         let sc = specks::SpeckCluster::new(m, b, seg, slot, s_ref, q, ttl, 0.0);
         sc.enumerate(
           eye,
@@ -446,6 +460,7 @@ fn run_specks_parity(device: &Device, id: u64) {
                 + mvp_rel[12 + r]
             };
             let cw = c(3);
+            cpu_dp.insert(sp.hash, (sp.dp, sp.xi, sp.w, sc));
             let dist = (sp.dp[0] * sp.dp[0] + sp.dp[1] * sp.dp[1] + sp.dp[2] * sp.dp[2]).sqrt();
             let (_, counts) = specks::scatter_speck(
               sp.dp,
@@ -462,6 +477,8 @@ fn run_specks_parity(device: &Device, id: u64) {
               let (px, py) = ((nx * 0.5 + 0.5) * w as f32, (ny * 0.5 + 0.5) * h as f32);
               let ddp = speck_floor(&sc, sp.xi);
               recs.push(SpeckRec {
+                cluster: i,
+                bin: b,
                 dist,
                 mu: [px, py],
                 counts,
@@ -473,6 +490,8 @@ fn run_specks_parity(device: &Device, id: u64) {
               }
             } else {
               recs.push(SpeckRec {
+                cluster: i,
+                bin: b,
                 dist,
                 mu: [f32::NAN; 2],
                 counts: 0,
@@ -589,6 +608,233 @@ fn run_specks_parity(device: &Device, id: u64) {
   // amplified by `‖L‖ / depth` (module doc of `dust::specks`). Centroid within 1.5 px (≈ 2× the
   // measured offset), τ within 3 % + 2 counts (each mirror rounds `⌊counts + u⌉` to ±1 count).
   // `speck_floor` (a worst-case bound, far looser) is printed for information.
+  // the GPU's speck positions against the CPU's, by hash (`dust_set_specks_trace`: one more
+  // frame at the shell with the walk pass recording every speck it draws): the cross-mirror
+  // offset of a speck is the mirrors' transcendental ulps through Φ⁻¹ and the quantile; the
+  // user's millimetre is a speck's consistency in time within a mirror, measured on the CPU
+  // (`specks_hold_to_a_millimetre_floors`), and this is the cross-mirror figure
+  device.dust_set_specks_trace(pe, true);
+  {
+    let mut cmds = device
+      .run_transient_commands(|cmd| {
+        device.cmd_dust_pre_propagate_barrier(cmd);
+        let view = device.cmd_dust_frame_begin(cmd, pe, [w, h], flags, flow)?;
+        splat_pc.inv_unit = 1.0 / view.unit;
+        speck_pc.inv_unit = 1.0 / view.unit;
+        device.cmd_dust_system_begin(id, flags, flow)?;
+        let (render, moments) =
+          device.cmd_dust_propagate(cmd, id, 0, capacity, first_slot, batch.count, &frame)?;
+        device.cmd_dust_pre_splat_barrier(cmd);
+        device.cmd_dust_specks(cmd, pe, id, 0, first_slot, capacity, render, moments, speck_pc)?;
+        device.cmd_dust_pre_splat_barrier(cmd);
+        device.cmd_dust_splat(cmd, pe, id, 0, first_slot, capacity, render, moments, splat_pc)?;
+        device.cmd_dust_post_splat_barrier(cmd);
+        device.cmd_dust_frame_end(cmd, pe)?;
+        device.cmd_dust_system_end(id)?;
+        Ok(())
+      })
+      .unwrap();
+    cmds.cleanup(&device.device);
+  }
+  device.dust_set_specks_trace(pe, false);
+  let records = device.download_dust_specks_trace_records(pe).unwrap();
+  let fb = |w: u32| f32::from_bits(w);
+  let trace: alloc::vec::Vec<(u32, [f32; 3])> =
+    records.iter().map(|w| (w[0], [fb(w[1]), fb(w[2]), fb(w[3])])).collect();
+  {
+    // the leaf identity per matched speck: the GPU's probabilities `w`, coordinates and κ
+    // against the CPU's (the same hash is the same node: `w` must agree to its fma ulp)
+    let (mut dprob, mut dcoord, mut dkap): (alloc::vec::Vec<f64>, alloc::vec::Vec<f64>, alloc::vec::Vec<f64>) =
+      Default::default();
+    let mut by_err: alloc::vec::Vec<(f64, usize)> = alloc::vec::Vec::new();
+    let mut unmatched_at: alloc::vec::Vec<usize> = alloc::vec::Vec::new();
+    let mut offs: alloc::vec::Vec<f64> = alloc::vec::Vec::new();
+    let mut unmatched = 0usize;
+    // per coordinate: |Δc_k| = |(M⁻¹ Δdp)_k| (the CPU's map: the GPU's own map differs by its
+    // ulps too, which shows as a Δc proportional to |c|), and its world share |Δc_k| ‖M_k‖
+    let mut dc: [alloc::vec::Vec<f64>; 3] = Default::default();
+    let mut dw: [alloc::vec::Vec<f64>; 3] = Default::default();
+    let mut worst = (0.0f64, [0.0f64; 3], [0.0f32; 3], 0.0f32);
+    let mut rel: alloc::vec::Vec<f64> = alloc::vec::Vec::new();
+    let (mut map_err, mut cond, mut edge): (alloc::vec::Vec<f64>, alloc::vec::Vec<f64>, alloc::vec::Vec<f64>) =
+      Default::default();
+    let mut worst_cond = (0.0f64, 0.0f64);
+    for (ti, (hash, dp)) in trace.iter().enumerate() {
+      match cpu_dp.get(hash) {
+        Some((c, xi, wc, sc)) => {
+          let (mi, cn, kappa) = (&sc.minv, &sc.col_norm, &sc.kappa);
+          let rec = &records[ti];
+          let (mut a, mut b) = (0.0f64, 0.0f64);
+          for k in 0..3 {
+            a = a.max((fb(rec[4 + k]) as f64 - wc[k] as f64).abs());
+            b = b.max((fb(rec[7 + k]) as f64 - xi[k] as f64).abs());
+          }
+          dprob.push(a);
+          dcoord.push(b);
+          dkap.push(((fb(rec[10]) as f64 - *kappa as f64) / (*kappa as f64).abs().max(1e-30)).abs());
+          // the CPU's own f32 map against the f64 map of the same f32 leaf: if the cross-mirror
+          // offset is the f32 factor's conditioning (a near rank-1 leaf: its small pivots are
+          // differences of the large), this error has the same size as the mirrors' |Δdp|
+          let m64 = leaf_map64(sc.leaf.cov, sc.leaf.seg);
+          let mut e = [0.0f64; 3];
+          for k in 0..3 {
+            for j in 0..3 {
+              e[k] += (sc.chol[j][k] as f64 - m64[j][k]) * xi[j] as f64;
+            }
+          }
+          map_err.push((e[0] * e[0] + e[1] * e[1] + e[2] * e[2]).sqrt());
+          let fro = (cn[0] as f64).hypot(cn[1] as f64).hypot(cn[2] as f64);
+          cond.push(fro / (sc.sigma_lo as f64).max(1e-30));
+          let d = [
+            (dp[0] - c[0]) as f64,
+            (dp[1] - c[1]) as f64,
+            (dp[2] - c[2]) as f64,
+          ];
+          let n = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+          offs.push(n);
+          by_err.push((n, ti));
+          // relative to the speck's own `‖M‖ (1 + |c|)` (an f32 ulp of the map or of the
+          // coordinates is 6e-8 of it; the tolerance 1e-5)
+          let cmax = cn[0].max(cn[1]).max(cn[2]) as f64;
+          let xmax = xi[0].abs().max(xi[1].abs()).max(xi[2].abs()) as f64;
+          rel.push(n / (cmax * (1.0 + xmax)).max(1e-30));
+          let mut dck = [0.0f64; 3];
+          for k in 0..3 {
+            dck[k] = mi[3 * k] as f64 * d[0] + mi[3 * k + 1] as f64 * d[1] + mi[3 * k + 2] as f64 * d[2];
+            dc[k].push(dck[k].abs());
+            dw[k].push(dck[k].abs() * cn[k] as f64);
+          }
+          if n > worst.0 {
+            worst = (n, dck, *xi, *kappa);
+            worst_cond = (*cond.last().unwrap(), *map_err.last().unwrap());
+          }
+        }
+        None => {
+          unmatched += 1;
+          // a different leaf, or a speck the CPU placed just outside the shell?
+          let r = ((dp[0] as f64).powi(2) + (dp[1] as f64).powi(2) + (dp[2] as f64).powi(2)).sqrt();
+          edge.push(r - d_max as f64);
+          unmatched_at.push(ti);
+        }
+      }
+    }
+    offs.sort_by(|a, b| a.total_cmp(b));
+    let pick = |v: &alloc::vec::Vec<f64>, p: f64| v.get(((v.len().saturating_sub(1)) as f64 * p) as usize).copied().unwrap_or(f64::NAN);
+    for k in 0..3 {
+      dc[k].sort_by(|a, b| a.total_cmp(b));
+      dw[k].sort_by(|a, b| a.total_cmp(b));
+      std::println!(
+        "[specks gpu] trace axis {k}: |Δc| p50 {:.2e} p99 {:.2e} max {:.2e}; world |Δc|‖M_k‖ p50 {:.2e} m p99 {:.2e} m max {:.2e} m",
+        pick(&dc[k], 0.5),
+        pick(&dc[k], 0.99),
+        pick(&dc[k], 1.0),
+        pick(&dw[k], 0.5),
+        pick(&dw[k], 0.99),
+        pick(&dw[k], 1.0)
+      );
+    }
+    for v in [&mut map_err, &mut cond, &mut edge] {
+      v.sort_by(|a, b| a.total_cmp(b));
+    }
+    std::println!(
+      "[specks gpu] trace map: CPU f32 M c vs f64 M c of the same leaf p50 {:.2e} m p90 {:.2e} m p99 {:.2e} m max {:.2e} m; cond ‖M‖‖M⁻¹‖ p50 {:.2e} p99 {:.2e} max {:.2e}; the worst speck's cond {:.2e}, its f32-map error {:.2e} m",
+      pick(&map_err, 0.5),
+      pick(&map_err, 0.9),
+      pick(&map_err, 0.99),
+      pick(&map_err, 1.0),
+      pick(&cond, 0.5),
+      pick(&cond, 0.99),
+      pick(&cond, 1.0),
+      worst_cond.0,
+      worst_cond.1
+    );
+    for v in [&mut dprob, &mut dcoord, &mut dkap] {
+      v.sort_by(|a, b| a.total_cmp(b));
+    }
+    std::println!(
+      "[specks gpu] trace leaf: max |Δw| p50 {:.2e} p99 {:.2e} max {:.2e} ({} of {} non-zero); max |Δcoord| p50 {:.2e} p99 {:.2e} max {:.2e}; |Δκ|/κ p50 {:.2e} p99 {:.2e} max {:.2e}",
+      pick(&dprob, 0.5),
+      pick(&dprob, 0.99),
+      pick(&dprob, 1.0),
+      dprob.iter().filter(|&&x| x > 0.0).count(),
+      dprob.len(),
+      pick(&dcoord, 0.5),
+      pick(&dcoord, 0.99),
+      pick(&dcoord, 1.0),
+      pick(&dkap, 0.5),
+      pick(&dkap, 0.99),
+      pick(&dkap, 1.0)
+    );
+    by_err.sort_by(|a, b| b.0.total_cmp(&a.0));
+    for &(n, ti) in by_err.iter().take(5) {
+      let rec = &records[ti];
+      let (_, xi, wc, sc) = &cpu_dp[&rec[0]];
+      std::println!(
+        "[specks gpu] trace worst {n:.2e} m: gpu w {:?} coord {:?} κ {} level {}; cpu w {:?} coord {:?} κ {} (bin {})",
+        [fb(rec[4]), fb(rec[5]), fb(rec[6])],
+        [fb(rec[7]), fb(rec[8]), fb(rec[9])],
+        fb(rec[10]),
+        rec[11],
+        wc,
+        xi,
+        sc.kappa,
+        sc.bin
+      );
+    }
+    for &ti in unmatched_at.iter().take(5) {
+      let rec = &records[ti];
+      let r = (fb(rec[1]).powi(2) + fb(rec[2]).powi(2) + fb(rec[3]).powi(2)).sqrt();
+      std::println!(
+        "[specks gpu] trace unmatched hash {:#010x}: gpu |dp| {r:.2} m (shell {d_max:.2}), w {:?} coord {:?} κ {} level {}",
+        rec[0],
+        [fb(rec[4]), fb(rec[5]), fb(rec[6])],
+        [fb(rec[7]), fb(rec[8]), fb(rec[9])],
+        fb(rec[10]),
+        rec[11]
+      );
+    }
+    std::println!(
+      "[specks gpu] trace unmatched: |dp_gpu| − d_max min {:.2e} m p50 {:.2e} m max {:.2e} m (of {} unmatched)",
+      pick(&edge, 0.0),
+      pick(&edge, 0.5),
+      pick(&edge, 1.0),
+      edge.len()
+    );
+    rel.sort_by(|a, b| a.total_cmp(b));
+    std::println!(
+      "[specks gpu] trace worst: |Δdp| {:.2e} m, Δc {:?}, ξ {:?}, κ {}; |Δdp| / (‖M‖(1+|c|)) p50 {:.2e} p99 {:.2e} max {:.2e}",
+      worst.0,
+      worst.1,
+      worst.2,
+      worst.3,
+      pick(&rel, 0.5),
+      pick(&rel, 0.99),
+      pick(&rel, 1.0)
+    );
+    let q = |p: f64| pick(&offs, p);
+    std::println!(
+      "[specks gpu] trace: {} specks recorded, {} matched by hash with the CPU's {} ({unmatched} unmatched); |Δdp| p50 {:.2e} m, p90 {:.2e} m, p99 {:.2e} m, max {:.2e} m",
+      trace.len(),
+      offs.len(),
+      cpu_dp.len(),
+      q(0.5),
+      q(0.9),
+      q(0.99),
+      q(1.0)
+    );
+    assert!(trace.len() >= 1000, "the trace recorded {} specks", trace.len());
+    assert!(unmatched <= trace.len() / 100, "{unmatched} GPU specks have no CPU speck of their hash");
+    // measured 2026-10-16 on this five-day scene (clouds of 10⁵–10⁶ m): every speck matched,
+    // identical `w`, |Δdp| p50 8.7 cm, p99 29 cm, max 1.5 m, relative to `‖M‖(1 + |c|)` p50
+    // 1.4e-7, p99 4.8e-7, max 1.7e-6 — the f32 coordinates and map (a few ulps of a 4e5 m
+    // column); the tail is the ζ quantile's upper tail (Δz 1–2e-5 at w ≈ 0.993: the CDF's f32
+    // absolute error over its small density). (The metres of the first version, p50 1.2 m and
+    // 26 unmatched, were this test's own reference: the cluster means' difference for the bins'
+    // time segment instead of `bin_time_segment`.) Bounded at 4× the measured relative p99 and
+    // max; centimetres on such clouds need the df64 placed-speck path (plan 1b (a0)).
+    assert!(pick(&rel, 0.99) < 2e-6, "cross-mirror relative p99 {}", pick(&rel, 0.99));
+    assert!(pick(&rel, 1.0) < 7e-6, "cross-mirror relative max {}", pick(&rel, 1.0));
+  }
   recs.sort_by(|a, b| a.dist.total_cmp(&b.dist));
   let on_screen = |r: &SpeckRec| {
     r.mu[0].is_finite()
@@ -606,6 +852,16 @@ fn run_specks_parity(device: &Device, id: u64) {
   // checked against every speck up to 1 m outside
   let margin = 1.0f32;
   let upto = |d: f32| recs.partition_point(|r| r.dist <= d);
+  // the walk gate (`DUST_SPECKS_WALK_MIN`) decides per bin and per shell: a candidate's bin must
+  // still be walked at the isolation shell, else neither mirror draws it there
+  let bin_walked = |cluster: usize, bin: usize, shell: f32| -> bool {
+    let m = &moments[cluster];
+    let pred = dust::streak_pred(&render, cluster).map(|p| &moments[p]);
+    let seg = specks::bin_time_segment(m, pred, bin);
+    let slot = dust::render_slot(render[cluster].age_id_dbeta_flux[1]);
+    let sc = specks::SpeckCluster::new(m, bin, seg, slot, s_ref, q, ttl, 0.0);
+    sc.expected_in_shell(&specks::ShellCut::new(eye, shell)) >= specks::DUST_SPECKS_WALK_MIN
+  };
   let candidates = |shell: f32| -> alloc::vec::Vec<usize> {
     let (n_in, n_all) = (upto(shell - margin), upto(shell + margin));
     (0..n_in)
@@ -614,6 +870,7 @@ fn run_specks_parity(device: &Device, id: u64) {
         on_screen(r)
           && footprint_inside(r)
           && r.counts >= 60
+          && bin_walked(r.cluster, r.bin, shell)
           && (0..n_all).all(|k| {
             k == j
               || !on_screen(&recs[k])
@@ -623,7 +880,9 @@ fn run_specks_parity(device: &Device, id: u64) {
       })
       .collect()
   };
-  let n_max = recs.len().min(4000);
+  // (the walk gate draws no lone speck of a bin expecting under a quarter grain, which were the
+  // easiest to isolate: the search may run over every enumerated speck)
+  let n_max = recs.len();
   let mut n = 1usize;
   let mut shell = recs[0].dist + margin;
   let mut chosen = candidates(shell);
@@ -653,8 +912,10 @@ fn run_specks_parity(device: &Device, id: u64) {
         let (render, moments) =
           device.cmd_dust_propagate(cmd, id, 0, capacity, first_slot, batch.count, &frame)?;
         device.cmd_dust_pre_splat_barrier(cmd);
-        device.cmd_dust_splat(cmd, pe, id, 0, render, moments, splat_pc)?;
-        device.cmd_dust_specks(cmd, pe, id, 0, render, moments, speck_pc)?;
+        // the specks before the splat: their walk mask decides the splat's hand-over
+        device.cmd_dust_specks(cmd, pe, id, 0, first_slot, capacity, render, moments, speck_pc)?;
+        device.cmd_dust_pre_splat_barrier(cmd);
+        device.cmd_dust_splat(cmd, pe, id, 0, first_slot, capacity, render, moments, splat_pc)?;
         device.cmd_dust_post_splat_barrier(cmd);
         device.cmd_dust_frame_end(cmd, pe)?;
         device.cmd_dust_system_end(id)?;
@@ -674,7 +935,8 @@ fn run_specks_parity(device: &Device, id: u64) {
     c[..dust::PYRAMID_HEADER_WORDS as usize]
       .copy_from_slice(&specks_only[..dust::PYRAMID_HEADER_WORDS as usize]);
     specks::SpeckHeader::write(&mut c, rk, gpu[specks::PYR_SPECKS_BUDGET as usize]);
-    specks::specks_tier(&moments, &render, &speck_pc, &flow, &layout, &mut c);
+    let mut mm = moments.clone();
+    specks::specks_tier(&mut mm, &render, &speck_pc, &flow, &layout, &mut c);
     (g, level0(&c))
   };
   let (g0, c0) = frame_pair(0.5 * recs[0].dist);
@@ -774,6 +1036,10 @@ struct SpeckRec {
   counts: u32,
   pred_px: f32,
   pred_amp: f32,
+  /// the speck's cluster (compact index) and size bin: the walk gate decides per bin and per
+  /// shell whether it is drawn at all (`SpeckCluster::expected_in_shell`)
+  cluster: usize,
+  bin: usize,
 }
 
 /// A worst-case cross-mirror uncertainty (m) of a speck's offset `L ξ` (printed only: its
@@ -787,6 +1053,53 @@ struct SpeckRec {
 /// `f_px · Δ / w` px (× (1 + |ndc|) off axis) and `2 Δ / w` of the amplitude: a speck 1 m from
 /// the eye in a cloud of 10⁵ m sits 1–10 px apart on the two mirrors. The same mirror is exact
 /// from frame to frame (same inputs, same ops): persistence is not affected.
+/// `specks::leaf_map` in f64 from the same f32 leaf (columns of `M`): the frame along `seg`,
+/// the Cholesky factor with `cholesky3`'s floor, mapped back. Only the map's `M`, not `κ`.
+fn leaf_map64(cov: [f32; 6], seg: [f32; 3]) -> [[f64; 3]; 3] {
+  let c: [f64; 6] = core::array::from_fn(|i| cov[i] as f64);
+  let chol = |s: [f64; 6]| -> [[f64; 3]; 3] {
+    let tr = s[0] + s[3] + s[5];
+    let fl = (tr * 1e-12).max(1e-20);
+    let (sxx, sxy, sxz, syy, syz, szz) = (s[0] + fl, s[1], s[2], s[3] + fl, s[4], s[5] + fl);
+    let l00 = sxx.max(0.0).sqrt();
+    let (l10, l20) = if l00 > 0.0 { (sxy / l00, sxz / l00) } else { (0.0, 0.0) };
+    let d1 = syy - l10 * l10;
+    let l11 = if d1 > 0.0 { d1.sqrt() } else { 0.0 };
+    let l21 = if l11 > 0.0 { (syz - l20 * l10) / l11 } else { 0.0 };
+    let d2 = szz - l20 * l20 - l21 * l21;
+    let l22 = if d2 > 0.0 { d2.sqrt() } else { 0.0 };
+    [[l00, l10, l20], [0.0, l11, l21], [0.0, 0.0, l22]]
+  };
+  let s: [f64; 3] = core::array::from_fn(|i| seg[i] as f64);
+  let slen = (s[0] * s[0] + s[1] * s[1] + s[2] * s[2]).sqrt();
+  if !(slen > 0.0) {
+    return chol(c);
+  }
+  let cross = |a: [f64; 3], b: [f64; 3]| {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+  };
+  let e3 = [s[0] / slen, s[1] / slen, s[2] / slen];
+  let a = if e3[0].abs() < 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
+  let e1 = cross(a, e3);
+  let n1 = (e1[0] * e1[0] + e1[1] * e1[1] + e1[2] * e1[2]).sqrt();
+  let e1 = [e1[0] / n1, e1[1] / n1, e1[2] / n1];
+  let e2 = cross(e3, e1);
+  let sv = |v: [f64; 3]| {
+    [
+      c[0] * v[0] + c[1] * v[1] + c[2] * v[2],
+      c[1] * v[0] + c[3] * v[1] + c[4] * v[2],
+      c[2] * v[0] + c[4] * v[1] + c[5] * v[2],
+    ]
+  };
+  let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  let (s1, s2, s3) = (sv(e1), sv(e2), sv(e3));
+  let lb = chol([dot(e1, s1), dot(e1, s2), dot(e1, s3), dot(e2, s2), dot(e2, s3), dot(e3, s3)]);
+  let world = |l: [f64; 3]| -> [f64; 3] {
+    core::array::from_fn(|k| e1[k] * l[0] + e2[k] * l[1] + e3[k] * l[2])
+  };
+  [world(lb[0]), world(lb[1]), world(lb[2])]
+}
+
 fn speck_floor(sc: &specks::SpeckCluster, xi: [f32; 3]) -> f32 {
   let mut d = 0.0f32;
   for k in 0..3 {

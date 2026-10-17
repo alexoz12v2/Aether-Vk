@@ -54,16 +54,20 @@ bool dust_emitting = false;
 uint dust_rec_count = 0u;
 uint dust_rec_at = 0u;
 uint dust_rec_cluster = 0u;
+// the tier's live range in ring slots (the volume queue header: DUST_VQUEUE_FIRST_SLOT; main)
+uint dust_first_slot = 0u;
+// the record's bin is walked for specks (dust_specks_mask): its shell mass is the specks'
+bool dust_rec_walked = false;
 #define DUST_SQUEUE_EMIT(mean_, S_, d_, flux_, exposure_, openStart_, openEnd_, rho_, segT_, color_) { \
     if (dust_emitting) { \
         DUST_SQUEUE_PUT(pc.pyramid, dust_squeue_records(dust_squeue_base(pc.pyramid)), dust_rec_at + dust_rec_count, \
                         mean_, S_, d_, flux_, exposure_, openStart_, openEnd_, rho_, segT_, color_, \
-                        dust_phot_support, dust_phot_has_origin, dust_phot_origin, dust_phot_sun, dust_phot_rh, dust_rec_cluster) \
+                        dust_phot_support, dust_phot_has_origin, dust_phot_origin, dust_phot_sun, dust_phot_rh, dust_rec_cluster, dust_rec_walked) \
     } \
     dust_rec_count++; \
 }
 
-// Sub-packet `sub` of cluster `i` (a warp per cluster, a lane per sub-packet: the slow end bin's
+// Sub-packet `sub` of the cluster in ring slot `i` (a warp per cluster, a lane per sub-packet: the slow end bin's
 // sub-bins, then a bin each, in the order the per-cluster loop ran them; a merged polyline's time
 // pieces one per lane): its packets (one per dust_project_split_scatter call of the per-cluster
 // thread) as records of the sub-packet queue, in that order, for dust_split.comp. Run twice by
@@ -78,7 +82,7 @@ void dust_splat_subpacket(uint i, uint sub) {
     float age = dust_mom.m[mi].cov_b_age_id.z;
     // the segment to the stream predecessor (the dust emitted between the two samples), and its
     // width (older: wider) for the cone pieces
-    int pred = dust_streak_pred(pc.render, i);
+    int pred = dust_streak_pred(pc.render, i, dust_first_slot, pc.liveCount);
     uint pi = pred >= 0 ? uint(pred) : mi;
     vec3 seg = pred >= 0 ? dust_mom.m[pi].mean_flux.xyz - dust_mom.m[mi].mean_flux.xyz : vec3(0.0);
     float ratio = dust_width_ratio(mi, pred >= 0, pi);
@@ -88,6 +92,22 @@ void dust_splat_subpacket(uint i, uint sub) {
     bool spiral = pred >= 0 && dust_spiral_of(mi, pi, spAxis, spOmega);
     float ageO = dust_mom.m[mi].cov_b_age_id.z, ageP = pred >= 0 ? dust_mom.m[pi].cov_b_age_id.z : ageO;
     uint nT = spiral ? DUST_TIME_PIECES_MAX : dust_time_pieces(ratio);
+    // the view direction of the split and the eye-plane cut (dust_view_forward)
+    bool perspective;
+    vec3 fwd = dust_view_forward(pc.mvp, pc.eyeLocal.xyz, perspective);
+    // the cluster level of detail (dust_lod_*, DUST_PYR_LOD; dust::subpackets_cells): the time
+    // pieces capped by the time segment on screen and no fewer than its depth span needs
+    // (dust_time_pieces_depth); the chord groups in the non-merged branch below; the sweeps step by
+    // the knob (dust_time_sweep). Perspective views only for the depth rule.
+    dust_lod_px = dust_lod_px_of(pc.pyramid);
+    dust_group = 1u;
+    float lodBinDepth = 0.0, lodNear = 0.0;
+    bool lodDepth = perspective && dust_polyline_depth(mi, pc.eyeLocal.xyz, fwd, lodBinDepth, lodNear);
+    float lodSpan = pred >= 0 ? dot(dust_mom.m[pi].mean_flux.xyz - dust_mom.m[mi].mean_flux.xyz, fwd) : 0.0;
+    uint depthMin = dust_time_pieces_depth(pred >= 0 && perspective, lodSpan, lodDepth, lodNear);
+    float tPx = 0.0;
+    bool hasT = pred >= 0 && dust_time_segment_px(mi, pi, pc.mvp, W, H, tPx);
+    nT = dust_time_pieces_lod(nT, hasT, tPx, dust_lod_px, depthMin);
     float exposure = pc.exposure;
     if ((pc.flags & DUST_VIEW_FLOW) != 0u) {
         exposure *= dust_flow_factor(age, uintBitsToFloat(pc.pyramid.v[DUST_PYR_T_HI]),
@@ -108,11 +128,11 @@ void dust_splat_subpacket(uint i, uint sub) {
     // neighbours, with the bin's time segment as a Gaussian (dust::subpackets_merged)
     bool predMerged = pred < 0 || dust_polyline_merged(pi, pc.mvp, W, H);
     // (perspective: neither the polylines nor the time segment between them may be deep)
+    // (and never pooled when the speck pass walks some of its bins: the hand-over is per bin)
     bool merged = dust_polyline_merged(mi, pc.mvp, W, H) && predMerged
-               && (pred < 0 || dust_time_shallow(mi, pi, pc.mvp));
-    // the view direction of the split and the eye-plane cut (dust_view_forward)
-    bool perspective;
-    vec3 fwd = dust_view_forward(pc.mvp, pc.eyeLocal.xyz, perspective);
+               && (pred < 0 || dust_time_shallow(mi, pi, pc.mvp))
+               && dust_specks_mask(mi) == 0u;
+    dust_rec_walked = false;
     // bits 0-7: the split depth limit; bits 8-15: the volume level bias (host-written)
     uint splitWord = pc.pyramid.v[DUST_PYR_SPLIT_DEPTH];
     uint splitDepth = min(splitWord & 0xFFu, DUST_SPLIT_DEPTH_MAX);
@@ -175,14 +195,25 @@ void dust_splat_subpacket(uint i, uint sub) {
             DUST_SQUEUE_EMIT(m0, St, s0, flux * (u1 - u0), exposure, false, false, vec2(1.0), vec3(0.0), color)
         }
     } else {
+        // the chord groups of the level of detail (dust_lod_group: a polyline whose bins are
+        // shorter than the knob on screen, never deeper than the split tolerates): g bins per
+        // packet, no sub-bins then (dust::subpackets_cells)
+        float ext = 0.0;
+        bool hasExt = dust_polyline_extent_px(mi, pc.mvp, W, H, ext);
+        // (a cluster with bins walked for specks keeps every bin: the hand-over is per bin)
+        uint g = dust_specks_mask(mi) != 0u ? 1u
+               : dust_lod_group(hasExt, ext, dust_lod_px, dust_lod_group_depth_cap(lodDepth, lodBinDepth, lodNear));
+        dust_group = g;
         // this lane's sub-packet (b, j) in the order the per-cluster loop ran them: the slow end
-        // bin's DUST_END_SUBBINS sub-bins (dust::subpackets_cells), then a bin each; lanes past
-        // the count idle
-        uint nj0 = dust_bin_subbins(0u);
-        uint b = sub < nj0 ? 0u : sub - nj0 + 1u;
+        // bin's DUST_END_SUBBINS sub-bins (dust::subpackets_cells), then a bin each (a group
+        // chord each with g > 1); lanes past the count idle
+        uint nj0 = g > 1u ? 1u : dust_bin_subbins(0u);
+        uint b = sub < nj0 ? 0u : (sub - nj0 + 1u) * g;
         uint j = sub < nj0 ? sub : 0u;
         if (b < DUST_SIZE_BINS) {
-          uint nj = dust_bin_subbins(b);
+          uint nj = g > 1u ? 1u : dust_bin_subbins(b);
+          // the bin's speck hand-over (dust::splat_cluster_inner: the per-bin shell)
+          dust_rec_walked = ((dust_specks_mask(mi) >> b) & 1u) != 0u;
           {
             vec3 ea, ec; float fa, fc;
             dust_sub_edges(mi, b, j, nj, ea, ec, fa, fc);
@@ -193,7 +224,7 @@ void dust_splat_subpacket(uint i, uint sub) {
                 dust_sub_edges(pi, b, j, nj, pa, pcc, pfa, pfc);
                 segT = 0.5 * (pa + pcc) - 0.5 * (ea + ec);
             }
-            bool openStart = b > 0u || j > 0u, openEnd = b + 1u < DUST_SIZE_BINS || j + 1u < nj;
+            bool openStart = b > 0u || j > 0u, openEnd = b + dust_group < DUST_SIZE_BINS || j + 1u < nj;
             // the longer of the bin's two axes is the exact capsule, the other a Gaussian
             // (dust::subpackets_merged)
             vec3 chordV = ec - ea;
@@ -291,6 +322,7 @@ void dust_splat_subpacket(uint i, uint sub) {
             }
           }
         }
+        dust_group = 1u;
     }
     DUST_PROF_END(subpk)
     DUST_PROF_BEGIN(tracer)
@@ -336,10 +368,14 @@ void main() {
     // a warp per cluster, a lane per sub-packet
     uint lane = gl_LocalInvocationID.x;
     uint sub = lane & 31u;
-    uint i = first + (gl_GlobalInvocationID.x >> 5u);
+    // the cluster's ring offset kr in the tier's live range and its ring slot i (the render and
+    // moments buffers are slot indexed; the header's ring words, Device::cmd_dust_splat)
+    uint kr = first + (gl_GlobalInvocationID.x >> 5u);
+    dust_first_slot = pc.pyramid.v[vbase + DUST_VQUEUE_FIRST_SLOT];
+    uint i = (dust_first_slot + kr) & pc.pyramid.v[vbase + DUST_VQUEUE_RING_MASK];
     // the moments every dust_common function reads by index (dust_mom.m[mi])
     dust_mom = pc.moments;
-    bool live = i < end && i < pc.liveCount && dust_mom.m[i].mean_flux.w > 0.0;
+    bool live = kr < end && kr < pc.liveCount && dust_mom.m[i].mean_flux.w > 0.0;
     // diagnostics (AETHERVK_DUST_DEBUG_STREAM / _SAMPLE_MOD): draw one stream, or one time
     // sample in every m, of the tier; the value sits in flag bits 20..27
     if (live && (pc.flags & (DUST_VIEW_DEBUG_STREAM | DUST_VIEW_DEBUG_SAMPLE)) != 0u) {
@@ -379,7 +415,7 @@ void main() {
         // happens, the records dropped)
         if (cb + total > DUST_SQUEUE_CAPACITY) { atomicAdd(pc.pyramid.v[sbase + 2u], total); total = 0u; }
         dust_cluster_base[lane >> 5u] = cb;
-        uint c = i - first;
+        uint c = kr - first;
         if (c < DUST_SQUEUE_CLUSTERS) {
             uint t = dust_squeue_table(sbase) + c * DUST_SQUEUE_TABLE_WORDS;
             pc.pyramid.v[t] = cb;

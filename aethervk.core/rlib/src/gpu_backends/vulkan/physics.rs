@@ -81,8 +81,11 @@ pub struct PhysicsPipelines {
   /// dispatched indirectly)
   pub dust_draw_queue: vk::Pipeline,
   /// per-frame physical specks of one tier into the view's pyramid (`dust_specks.comp`, wg 64,
-  /// one thread per cluster × size bin)
+  /// one thread per cluster × size bin: the gate pass, the density at the eye and the walk mask)
   pub dust_specks: vk::Pipeline,
+  /// the walk pass (`dust_specks.comp.walk.spv`, `-DDUST_SPECKS_WALK=1`): a workgroup of 32 lanes
+  /// per (cluster, size bin) the gate pass marked, walking the bin's tree from a shared stack
+  pub dust_specks_walk: vk::Pipeline,
   /// the shader-clock profiler variants of the splat and the queue draw (`dust_profile.glsl`;
   /// `None` without `VK_KHR_shader_clock` or the request, [`dust_profile_requested`])
   pub dust_splat_prof: Option<vk::Pipeline>,
@@ -521,6 +524,7 @@ impl PhysicsPipelines {
         dust_measure: mk!("dust_measure.comp.spv"),
         dust_draw_queue: mk!("dust_draw_queue.comp.spv"),
         dust_specks: mk!("dust_specks.comp.spv"),
+        dust_specks_walk: mk!("dust_specks.comp.walk.spv"),
         dust_splat_prof: if has_shader_clock && dust_profile_requested() {
           Some(mk!("dust_splat.comp.prof.spv"))
         } else {
@@ -584,6 +588,7 @@ impl PhysicsPipelines {
     discard_pool.discard_pipeline(self.dust_measure, timeline);
     discard_pool.discard_pipeline(self.dust_draw_queue, timeline);
     discard_pool.discard_pipeline(self.dust_specks, timeline);
+    discard_pool.discard_pipeline(self.dust_specks_walk, timeline);
     if let Some(p) = self.dust_splat_prof {
       discard_pool.discard_pipeline(p, timeline);
     }
@@ -610,7 +615,7 @@ impl PhysicsPipelines {
   pub fn log_pipeline_statistics(&self, instance: &ash::Instance, device: &ash::Device) {
     let ext = ash::khr::pipeline_executable_properties::Device::new(instance, device);
     let dir = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_PROFILE_DIR");
-    let named: [(&str, Option<vk::Pipeline>); 12] = [
+    let named: [(&str, Option<vk::Pipeline>); 13] = [
       ("dust_splat", Some(self.dust_splat)),
       ("dust_splat_prof", self.dust_splat_prof),
       ("dust_split", Some(self.dust_split)),
@@ -620,6 +625,7 @@ impl PhysicsPipelines {
       ("dust_draw_volume", Some(self.dust_draw_volume)),
       ("dust_draw_volume_prof", self.dust_draw_volume_prof),
       ("dust_specks", Some(self.dust_specks)),
+      ("dust_specks_walk", Some(self.dust_specks_walk)),
       ("dust_propagate", Some(self.dust_propagate)),
       ("dust_emit", Some(self.dust_emit)),
       ("dust_measure", Some(self.dust_measure)),

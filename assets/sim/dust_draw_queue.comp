@@ -32,8 +32,9 @@ void main() {
     DUST_PROF_BEGIN(qthread)
     DUST_PROF_BEGIN(qload)
     uint base = dust_queue_base(pc.pyramid);
-    uint r = gl_WorkGroupID.x;
-    if (r >= min(pc.pyramid.v[base], dust_queue_capacity(pc.pyramid, base))) return;
+    // two-dimensional (dust_queue_append: x at most DUST_QUEUE_DISPATCH_X), the last row partial
+    uint r = gl_WorkGroupID.y * DUST_QUEUE_DISPATCH_X + gl_WorkGroupID.x;
+    if (r >= dust_queue_held(pc.pyramid, base)) return;
     uint at = base + DUST_QUEUE_HEADER_WORDS + r * DUST_QUEUE_RECORD_WORDS;
     uint w0 = pc.pyramid.v[at];
     // the phase table rides in the header; the timing probe bits (plain_add) too
