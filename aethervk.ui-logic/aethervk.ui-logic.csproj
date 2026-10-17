@@ -188,7 +188,7 @@
       cargo build -p aethervk-core-cdylib -\-profile release -\-target aarch64-apple-darwin
       ```
      -->
-    <CargoArgs Condition="'$(Configuration)' == 'Release'">--profile release</CargoArgs>
+    <CargoArgs Condition="'$(Configuration)' == 'Release'">--locked --profile release</CargoArgs>
 
     <!-- Cargo Target Mapping for Cross-Platform Publishing -->
     <CargoTarget Condition="'$(ResolvedRID)' == 'linux-x64'">x86_64-unknown-linux-gnu</CargoTarget>

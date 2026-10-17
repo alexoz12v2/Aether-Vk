@@ -35,7 +35,7 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 echo "==== [HOST] Building Rust core cdylib ($TARGET_DIR) ===="
-cargo build -p aethervk-core-cdylib $CARGO_PROFILE_FLAG || { echo "Cargo build failed"; exit 1; }
+cargo build --locked -p aethervk-core-cdylib $CARGO_PROFILE_FLAG || { echo "Cargo build failed"; exit 1; }
 
 echo "==== [HOST] Building .NET App ($TARGET_DIR) ===="
 dotnet build aethervk.ui-app "${ORIG_ARGS[@]}" || { echo "Dotnet build failed"; exit 1; }

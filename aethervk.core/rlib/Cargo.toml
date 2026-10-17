@@ -37,8 +37,8 @@ objc2-foundation = "0.3.2"
 [dev-dependencies]
 aethervk-oshal-rlib = { path = "../../aethervk.oshal/rlib", default-features = false, features = ["console_log", "debug_gpu"] }
 image = "0.25.10"
-ntest = "*"
-approx = "*"
+ntest = "0.9.5"
+approx = "0.5.1"
 reqwest = { version = "0.11", features = ["blocking"] }
 base64 = "0.21"
 
@@ -99,7 +99,7 @@ vk-mem = { version = "0.5", path = "../../external/vk-mem", default-features = f
 vk-mem = { version = "0.5", path = "../../external/vk-mem", default-features = false, features = ["vma-debug"] }
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = ">=0.59, <=0.62.2", default-features = false, features = [
+windows = { version = "0.62.2", default-features = false, features = [
     "Win32_Foundation",
     "Win32_System_Memory",
     "Win32_System_ProcessStatus",

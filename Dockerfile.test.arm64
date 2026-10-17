@@ -66,11 +66,11 @@ ENV CARGO_HOME=/usr/local/cargo
 ENV PATH=/usr/local/cargo/bin:$PATH
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-    | sh -s -- -y --no-modify-path --default-toolchain stable \
-         --component rustfmt,llvm-tools-preview
+    | sh -s -- -y --no-modify-path --default-toolchain nightly-2026-09-26 --profile minimal \
+         --component rustfmt,clippy,llvm-tools-preview,rust-src
 
 # ── cargo-nextest (compiled for current arch — works on aarch64 + x86_64) ─────
-RUN cargo install --locked cargo-nextest
+RUN cargo install --locked cargo-nextest --version 0.9.137
 
 # ── Environment ───────────────────────────────────────────────────────────────
 ENV VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json

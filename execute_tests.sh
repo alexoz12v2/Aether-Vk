@@ -29,10 +29,10 @@ echo "         Running Rust Tests             "
 echo "========================================"
 if [ $SINGLE_THREAD -eq 1 ]; then
     echo "Mode: Single-threaded, No Capture"
-    cargo llvm-cov nextest --no-capture --test-threads 1
+    cargo llvm-cov nextest --locked --no-capture --test-threads 1
 else
     echo "Mode: Default"
-    cargo llvm-cov nextest
+    cargo llvm-cov nextest --locked
 fi
 
 echo ""
