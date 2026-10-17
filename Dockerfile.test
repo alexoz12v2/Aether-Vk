@@ -70,11 +70,11 @@ ENV CARGO_HOME=/usr/local/cargo
 ENV PATH=/usr/local/cargo/bin:$PATH
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-    | sh -s -- -y --no-modify-path --default-toolchain stable \
-         --component rustfmt,llvm-tools-preview
+    | sh -s -- -y --no-modify-path --default-toolchain nightly-2026-09-26 --profile minimal \
+         --component rustfmt,clippy,llvm-tools-preview,rust-src
 
 # ── cargo-nextest (prebuilt binary — avoids compiling nextest itself) ─────────
-RUN curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C /usr/local/cargo/bin
+RUN curl -LsSf https://get.nexte.st/0.9.137/linux | tar zxf - -C /usr/local/cargo/bin
 
 # ── Default environment (mirrors GitHub CI) ──────────────────────────────────
 # System Vulkan validation layers (installed via apt-get above).
@@ -109,7 +109,7 @@ CMD ["sh", "-c", "\
            /build-target/debug/incremental/aethervk* \
            /build-target/debug/.fingerprint/aethervk-core-rlib* 2>&1 | tail -5 && \
   echo '=== Starting cargo nextest ===' && \
-  xvfb-run -a cargo nextest run \
+  xvfb-run -a cargo nextest run --locked \
     --features collisions,shader_debug_sync \
     -E 'package(aethervk-core-rlib) and test(physics::vulkan_math_tests::tests)' \
     --no-fail-fast 2>&1"]

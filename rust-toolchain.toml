@@ -1,0 +1,6 @@
+# Pinned toolchain for reproducible builds: the nightly the project is developed on
+# (rustc 1.100.0-nightly 5ceaf6608 2026-09-25). CI and the test Dockerfiles use the same date.
+[toolchain]
+channel = "nightly-2026-09-26"
+components = ["rustfmt", "clippy", "llvm-tools-preview", "rust-src"]
+profile = "minimal"
