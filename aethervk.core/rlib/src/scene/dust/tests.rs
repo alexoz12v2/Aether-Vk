@@ -10403,15 +10403,30 @@ fn dust_queue_offsets_and_dispatch_are_portable() {
     // the sub-packet records' last word before the spill
     let srec = o.squeue + DUST_SQUEUE_HEADER_WORDS + DUST_SQUEUE_CLUSTERS * DUST_SQUEUE_TABLE_WORDS;
     assert_eq!(srec + DUST_SQUEUE_CAPACITY * DUST_SQUEUE_RECORD_WORDS, o.spill);
-    // the spill's slots and the trace end at the allocation's end
+    // the spill's slots and the trace end where the volume spill begins
     assert!((64..=DUST_SPILL_SLOTS).contains(&o.spill_slots), "{records}: {} slots", o.spill_slots);
-    assert_eq!(glsl_trace(o.spill, o.spill_slots) + DUST_SPECKS_TRACE_CAPACITY * DUST_SPECKS_TRACE_WORDS, o.end);
-    assert_eq!(o.end, o.spill + dust_spill_words(o.spill_slots));
+    assert_eq!(glsl_trace(o.spill, o.spill_slots) + DUST_SPECKS_TRACE_CAPACITY * DUST_SPECKS_TRACE_WORDS, o.vspill);
+    assert_eq!(o.vspill, o.spill + dust_spill_words(o.spill_slots));
+    // the volume spill: a quarter of the records, at least 64; placed by the main header's word
+    // 15 as the host writes it (`dust_vspill_base`: vqueue base + word 15)
+    assert_eq!(o.vspill_records, (records / 4).max(64), "{records}");
+    assert_eq!(dust_vspill_records(records), o.vspill_records, "{records}");
+    assert!(DUST_VQUEUE_LOST < DUST_VQUEUE_SPILL_OFFSET && DUST_VQUEUE_SPILL_OFFSET < DUST_VQUEUE_HEADER_WORDS as usize);
+    let word15 = o.vspill - o.vqueue;
+    assert_eq!(o.vqueue + word15, o.vspill, "{records}");
+    // its records (structure-of-arrays at its capacity's stride, at most its records) end at the
+    // allocation's end
+    for cap in [o.vspill_records, (o.vspill_records / 2).max(1), 1] {
+      let last = o.vspill + DUST_VQUEUE_HEADER_WORDS + (DUST_VQUEUE_RECORD_WORDS - 1) * cap + cap - 1;
+      assert!(last < o.end, "{records}: spill {cap}");
+    }
+    assert_eq!(o.end, o.vspill + DUST_VQUEUE_HEADER_WORDS + o.vspill_records * DUST_VQUEUE_RECORD_WORDS);
     // no u32 overflow in the word arithmetic (the host's u64 bytes from it)
     let wide = DUST_QUEUE_WORDS as u64
       + (DUST_VQUEUE_HEADER_WORDS + records * DUST_VQUEUE_RECORD_WORDS) as u64
       + DUST_SQUEUE_WORDS as u64
-      + dust_spill_words(o.spill_slots) as u64;
+      + dust_spill_words(o.spill_slots) as u64
+      + (DUST_VQUEUE_HEADER_WORDS + o.vspill_records * DUST_VQUEUE_RECORD_WORDS) as u64;
     assert_eq!(wide, o.end as u64);
   }
   // the full volume queue: the former constant placement; 0 in word 9 means the full capacity
@@ -10423,8 +10438,9 @@ fn dust_queue_offsets_and_dispatch_are_portable() {
   let small = dust_queue_offsets(16_384);
   assert!(small.end < full.end);
   std::println!(
-    "[queue offsets] full {} MiB, 16 384 records {} MiB, 64 records {} MiB",
+    "[queue offsets] full {} MiB (volume spill {} MiB), 16 384 records {} MiB, 64 records {} MiB",
     full.end as u64 * 4 >> 20,
+    (full.end - full.vspill) as u64 * 4 >> 20,
     small.end as u64 * 4 >> 20,
     dust_queue_offsets(64).end as u64 * 4 >> 20
   );
@@ -10489,4 +10505,2505 @@ fn dust_queue_offsets_and_dispatch_are_portable() {
     }
   }
   assert!(dust_vqueue_auto_chunk(16_384, 61.0) as f32 * 61.0 * 2.0 <= 16_384.0);
+}
+
+// ─── Temporal reuse, step 3: the cadence classes (`cadence.rs`) ─────────────
+
+/// Rodrigues rotation of `v` about the unit `axis` by `a` rad (f64)
+fn cad_rotate(v: V3, axis: V3, a: f64) -> V3 {
+  let (s, c) = (a.sin(), a.cos());
+  let d = v[0] * axis[0] + v[1] * axis[1] + v[2] * axis[2];
+  let x = cross64(axis, v);
+  [
+    v[0] * c + x[0] * s + axis[0] * d * (1.0 - c),
+    v[1] * c + x[1] * s + axis[1] * d * (1.0 - c),
+    v[2] * c + x[2] * s + axis[2] * d * (1.0 - c),
+  ]
+}
+
+/// A view matrix (column-major; rows right, up, −forward: view z points back) looking along the
+/// unit `fwd` with `up` (made orthogonal); the translation is the cadence view's eye, not here
+fn cad_view_rot(fwd: V3, up: V3) -> [f64; 16] {
+  let f = unit(fwd);
+  let r = unit(cross64(f, up));
+  let u = cross64(r, f);
+  let rows = [r, u, [-f[0], -f[1], -f[2]]];
+  let mut m = [0.0f64; 16];
+  for (ri, row) in rows.iter().enumerate() {
+    for c in 0..3 {
+      m[c * 4 + ri] = row[c];
+    }
+  }
+  m[15] = 1.0;
+  m
+}
+
+/// perspective projection (column-major): `fov_y` rad, `aspect` = w / h, clip w = −z_view (the
+/// depth along the view), z irrelevant to the splat
+fn cad_persp(fov_y: f64, aspect: f64) -> [f64; 16] {
+  let f = 1.0 / (0.5 * fov_y).tan();
+  let mut p = [0.0f64; 16];
+  p[0] = f / aspect;
+  p[5] = f;
+  p[10] = -1e-3;
+  p[11] = -1.0;
+  p
+}
+
+/// orthographic projection (column-major) of half extent `half` (layer units)
+fn cad_ortho(half: f64) -> [f64; 16] {
+  let mut p = [0.0f64; 16];
+  p[0] = 1.0 / half;
+  p[5] = 1.0 / half;
+  p[10] = 1e-12;
+  p[15] = 1.0;
+  p
+}
+
+/// The cadence tests' scene: the coma of `host_rasterizer_is_thread_count_independent` (three
+/// tiers of an 8 192-slot ring, 3 days of a 30-day TTL) with each tier's draw state.
+fn cad_scene() -> (alloc::vec::Vec<(DustDrawState, TierPackets)>, f64) {
+  let cfg = test_cfg(1.5e-3, 30.0 * 86400.0);
+  let cfg_at = move |_: &JetState| cfg;
+  let t = 3.0 * 86400.0;
+  let mut sys = DustSystemState::with_tiers(8_192, 3);
+  let mut seq = 0u64;
+  settle(&mut sys, t, &cfg_at, &mut seq);
+  let radius = sys.coma_radius_m().expect("coma");
+  let tiers: alloc::vec::Vec<(DustDrawState, TierPackets)> = sys
+    .tiers
+    .iter()
+    .filter_map(|host| {
+      let ds = host.draw_state()?.at_time(t);
+      let tp = tier_packets(host, &ds.frame);
+      Some((ds, tp))
+    })
+    .collect();
+  assert!(tiers.iter().any(|(_, (r, _))| !r.is_empty()), "nothing drawable");
+  (tiers, radius)
+}
+
+fn cad_pc(view: &super::cadence::CadenceView, anchor: V3, live: u32, inv_unit: f32) -> DustSplatPushConstants {
+  let e = view.eye_local(anchor);
+  DustSplatPushConstants {
+    moments: 0,
+    render: 0,
+    pyramid: 0,
+    live_count: live,
+    flags: 0,
+    exposure: 1.0,
+    inv_unit,
+    color: pack_color([1.0, 1.0, 1.0, 1.0]),
+    albedo: 0.0,
+    mvp: view.mvp(anchor),
+    eye_local: [e[0], e[1], e[2], 0.0],
+  }
+}
+
+/// Every tier of `tiers` (or the listed compact indices of one tier) into a fresh pyramid of
+/// `layout` seen by `view` at `inv_unit`
+/// The cadence tests' frame header: the layout's with the in-frame gates off. The gates are a
+/// function of the frame's running counters (past `DUST_FRAME_HARD_FACTOR` budgets a packet goes
+/// to the gate level), so they depend on what was drawn before in that pyramid: a cadenced frame
+/// counts only its fresh and build draws, a parallel draw's partial pyramids start their counters
+/// at zero (round 4: the serial draw of the 128-px scene tripped one and drew at level 5, the gate
+/// level `levels − 3`, what the parallel draw did not). Word-identity holds with the gates off.
+fn cad_header(layout: &PyramidLayout) -> [u32; PYRAMID_HEADER_WORDS as usize] {
+  let mut h = layout.header();
+  h[PYR_SPLIT_DEPTH as usize] |= 1 << DUST_FRAME_GATES_OFF_BIT;
+  h
+}
+
+fn cad_draw(
+  tiers: &[(DustDrawState, TierPackets)],
+  view: &super::cadence::CadenceView,
+  layout: &PyramidLayout,
+  inv_unit: f32,
+  only: Option<(usize, &[u32])>,
+) -> alloc::vec::Vec<u32> {
+  let mut pyr = alloc::vec![0u32; layout.total_words as usize];
+  pyr[..PYRAMID_HEADER_WORDS as usize].copy_from_slice(&cad_header(layout));
+  for (ti, (ds, (r, m))) in tiers.iter().enumerate() {
+    let pc = cad_pc(view, ds.anchor_m, r.len() as u32, inv_unit);
+    match only {
+      Some((t, list)) if t == ti => splat_tier_list(m, r, &pc, &Default::default(), 0, layout, &mut pyr, list),
+      Some(_) => {}
+            // parallel (round 5: word-identical to `splat_tier` with the gates off, `cad_header`)
+      None => cad_splat_parallel(m, r, &pc, layout, &mut pyr, test_threads()),
+    }
+  }
+  pyr
+}
+
+/// `splat_tier_parallel` for the cadence tests' full draws (their header has the in-frame gates
+/// off, `cad_header`): blocks of 8 clusters instead of 64 handed out dynamically (a frame of
+/// ~3 300 clusters is 52 blocks of 64 for 16 threads: the last block alone set the wall), each
+/// thread into its own partial with the counters zeroed, merged by `merge_pyramid` — the same
+/// order-free scheme, so word-identical to `splat_tier` (2026-10-18, track 8)
+fn cad_splat_parallel(
+  m: &[DustMoments],
+  r: &[DustRenderCluster],
+  pc: &DustSplatPushConstants,
+  layout: &PyramidLayout,
+  pyramid: &mut [u32],
+  threads: usize,
+) {
+  use std::sync::atomic::{AtomicUsize, Ordering};
+  // 2, not 8: the reference draw's tail (C3's profile)
+  const BLOCK: usize = 2;
+  let n = (pc.live_count as usize).min(m.len()).min(r.len());
+  let threads = threads.min(n.div_ceil(BLOCK)).max(1);
+  assert!(pyramid[PYR_SPLIT_DEPTH as usize] & (1 << DUST_FRAME_GATES_OFF_BIT) != 0, "cad_splat_parallel: the gates must be off");
+  if threads == 1 || std::env::var_os("AETHERVK_DUST_PROBE").is_some() {
+    splat_tier(m, r, pc, &Default::default(), 0, layout, pyramid);
+    return;
+  }
+  let hn = PYRAMID_HEADER_WORDS as usize;
+  let mut header = pyramid[..hn].to_vec();
+  for wd in [PYR_TAU_MAX, PYR_LEVEL_MASK, PYR_SPLIT_CHILDREN, PYR_VOLUME_EVALS, PYR_EWA_TEXELS, PYR_SPLIT_DROPPED_FLUX] {
+    header[wd as usize] = 0;
+  }
+  let (next, len) = (AtomicUsize::new(0), pyramid.len());
+  let parts: alloc::vec::Vec<alloc::vec::Vec<u32>> = std::thread::scope(|s| {
+    let handles: alloc::vec::Vec<_> = (0..threads)
+      .map(|_| {
+        let (header, next) = (&header, &next);
+        s.spawn(move || {
+          let mut p = alloc::vec![0u32; len];
+          p[..hn].copy_from_slice(header);
+          loop {
+            let lo = next.fetch_add(BLOCK, Ordering::Relaxed);
+            if lo >= n {
+              break;
+            }
+            splat_tier_range(m, r, pc, &Default::default(), 0, layout, &mut p, lo..(lo + BLOCK).min(n));
+          }
+          p
+        })
+      })
+      .collect();
+    handles.into_iter().map(|h| h.join().unwrap()).collect()
+  });
+  for p in &parts {
+    merge_pyramid(pyramid, p);
+  }
+}
+
+/// the near-lossless inverse unit of a draw: `1 / (τ_max · k)` from a unit-1 probe
+fn cad_inv_unit(
+  tiers: &[(DustDrawState, TierPackets)],
+  view: &super::cadence::CadenceView,
+  layout: &PyramidLayout,
+  only: Option<(usize, &[u32])>,
+  k: f32,
+) -> Option<f32> {
+  let probe = cad_draw(tiers, view, layout, 1.0, only);
+  let tau_max = f32::from_bits(probe[PYR_TAU_MAX as usize]);
+  (tau_max > 0.0 && tau_max.is_finite()).then(|| 1.0 / (tau_max * k))
+}
+
+/// the composite τ per pixel of a pyramid
+fn cad_image(layout: &PyramidLayout, pyr: &[u32], unit: f32) -> alloc::vec::Vec<f64> {
+  let mut img = alloc::vec::Vec::with_capacity((layout.width * layout.height) as usize);
+  for y in 0..layout.height {
+    for x in 0..layout.width {
+      img.push(composite_sample(layout, pyr, unit, x, y).0 as f64);
+    }
+  }
+  img
+}
+
+/// pixel → frozen pixel through `H`
+fn cad_map(h: &[f32; 9], x: f32, y: f32) -> Option<(f32, f32)> {
+  let hz = h[6] * x + h[7] * y + h[8];
+  (hz > 0.0).then(|| ((h[0] * x + h[1] * y + h[2]) / hz, (h[3] * x + h[4] * y + h[5]) / hz))
+}
+
+/// A frame drawn at the frozen view `V_s`, reprojected (`reproject_add`) to `V` = `V_s` rotated,
+/// against the full redraw at `V` (plan step 3). The region is the pixels whose frozen
+/// pre-image lies ≥ 4 px inside the frozen frame and within 0.45 of the frame width of the
+/// centre (no corners). Cases: perspective (60°, 256 px) yaw 1° / 5° / 15° and pitch 7° + roll
+/// 20°; orthographic roll 20° + pan 10 px + zoom 1.1; and the blur floor, an orthographic pan of
+/// half a pixel. The gate (production `Unit`): the 8 × 8-px block rel rms of composite τ ≤
+/// max(2 %, 1.5 × the floor's) and |Σ ratio − 1| ≤ 0.5 % on every case; 4 × 4 blocks, per pixel,
+/// per level and the levels' light shares printed, `SolidAngle` a printed control. The identity map
+/// is bit-identical below 2²⁴ counts.
+#[test]
+fn reprojection_is_exact_for_a_rotation() {
+  use super::cadence::{CadenceView, ReprojectFactor, ShownImage, reproject_add};
+  let (tiers, radius) = cad_scene();
+  let anchor = tiers[0].0.anchor_m;
+  let px = 256u32;
+  let layout = PyramidLayout::new(px, px);
+  let fwd0: V3 = unit([1.0, 0.3, -0.2]);
+  let up0: V3 = [0.0, 0.0, 1.0];
+  let dist = 3.0 * radius;
+  let persp = |fwd: V3, up: V3| CadenceView {
+    view_rot: cad_view_rot(fwd, up),
+    proj: cad_persp(60f64.to_radians(), 1.0),
+    eye_m: [anchor[0] - fwd0[0] * dist, anchor[1] - fwd0[1] * dist, anchor[2] - fwd0[2] * dist],
+    units_per_m: 1.0,
+    width: px,
+    height: px,
+  };
+  let half = 3.0 * radius;
+  let ortho = |fwd: V3, up: V3, half: f64, pan_m: V3| CadenceView {
+    view_rot: cad_view_rot(fwd, up),
+    proj: cad_ortho(half),
+    eye_m: [
+      anchor[0] - fwd0[0] * dist + pan_m[0],
+      anchor[1] - fwd0[1] * dist + pan_m[1],
+      anchor[2] - fwd0[2] * dist + pan_m[2],
+    ],
+    units_per_m: 1.0,
+    width: px,
+    height: px,
+  };
+  let right0 = unit(cross64(fwd0, up0));
+  let upv0 = cross64(right0, fwd0);
+  let rad = |d: f64| d.to_radians();
+  let mut cases: alloc::vec::Vec<(&str, CadenceView, CadenceView)> = alloc::vec::Vec::new();
+  let vs = persp(fwd0, up0);
+  for deg in [1.0f64, 5.0, 15.0] {
+    let f = cad_rotate(fwd0, upv0, rad(deg));
+    cases.push((["yaw 1°", "yaw 5°", "yaw 15°"][[1.0, 5.0, 15.0].iter().position(|&x| x == deg).unwrap()], vs, persp(f, up0)));
+  }
+  {
+    let f = cad_rotate(fwd0, right0, rad(7.0));
+    let u = cad_rotate(cad_rotate(upv0, right0, rad(7.0)), f, rad(20.0));
+    cases.push(("pitch 7° + roll 20°", vs, persp(f, u)));
+  }
+  {
+    let os = ortho(fwd0, up0, half, [0.0; 3]);
+    let u = cad_rotate(upv0, fwd0, rad(20.0));
+    let pan = 10.0 * 2.0 * half / px as f64;
+    let o = ortho(fwd0, u, half / 1.1, [right0[0] * pan, right0[1] * pan, right0[2] * pan]);
+    cases.push(("ortho roll 20° + pan 10 px + zoom 1.1", os, o));
+    // the blur floor: a pure half-pixel pan (no rotation, no zoom): what the bilinear gather of
+    // sub-pixel structure alone costs
+    let half_px = 0.5 * 2.0 * half / px as f64;
+    let o5 = ortho(fwd0, up0, half, [right0[0] * half_px, right0[1] * half_px, right0[2] * half_px]);
+    cases.insert(0, ("ortho pan 0.5 px (blur floor)", os, o5));
+  }
+  let inv_unit = cad_inv_unit(&tiers, &vs, &layout, None, 1e-3).expect("τ_max");
+  let unit_v = 1.0 / inv_unit;
+  let header = || {
+    let mut f = alloc::vec![0u32; layout.total_words as usize];
+    f[..PYRAMID_HEADER_WORDS as usize].copy_from_slice(&layout.header());
+    f
+  };
+
+  // the identity map: bit-identical (the f32 words exact below 2²⁴)
+  {
+    let img = cad_draw(&tiers, &vs, &layout, inv_unit, None);
+    let map = vs.map_from(&vs).expect("identity");
+    let mut frame = header();
+    reproject_add(&layout, &mut frame, &[ShownImage { words: &img, map, unit: unit_v, layout: None }], unit_v, 0x1234, ReprojectFactor::Unit);
+    let (lo, hi) = (PYRAMID_HEADER_WORDS as usize, layout.measure.0 as usize);
+    let (mut big, mut diff) = (0usize, 0usize);
+    for i in lo..hi {
+      if img[i] >= 1 << 24 {
+        big += 1;
+        continue;
+      }
+      if frame[i] != img[i] {
+        diff += 1;
+      }
+    }
+    std::println!("reprojection identity: {diff} words differ, {big} words ≥ 2^24 not compared");
+    assert_eq!(diff, 0, "the identity map is not exact");
+    assert_eq!(frame[PYR_TAU_MAX as usize], img[PYR_TAU_MAX as usize]);
+    assert_eq!(frame[PYR_LEVEL_MASK as usize], img[PYR_LEVEL_MASK as usize]);
+  }
+
+  let mut pass = [true, true];
+  // the blur floor's 8×8-block rms (the first case), the gate's floor
+  let mut floor8 = 0.0f64;
+  for (name, v_s, v) in cases.iter() {
+    let img = cad_draw(&tiers, v_s, &layout, inv_unit, None);
+    let redraw = cad_draw(&tiers, v, &layout, inv_unit, None);
+    let map = v.map_from(v_s).unwrap_or_else(|| panic!("{name}: no map"));
+    let b = cad_image(&layout, &redraw, unit_v);
+    // the region: pixels within 0.45 W of the centre whose composite taps, at every level either
+    // pyramid holds, sit on texels whose centres map inside the frozen level's grid (the
+    // reprojection takes nothing beyond it); the level-0 rule of round 1 (the pre-image ≥ 4 px
+    // inside the frozen frame) is counted for comparison
+    let mask = img[PYR_LEVEL_MASK as usize] | redraw[PYR_LEVEL_MASK as usize];
+    let mut region = alloc::vec![false; (px * px) as usize];
+    let (mut n_level0, mut n_disc) = (0usize, 0usize);
+    let c = 0.5 * px as f32;
+    for y in 0..px {
+      for x in 0..px {
+        let (xf, yf) = (x as f32 + 0.5, y as f32 + 0.5);
+        if (xf - c).hypot(yf - c) > 0.45 * px as f32 {
+          continue;
+        }
+        n_disc += 1;
+        if let Some((xs, ys)) = cad_map(&map, xf, yf)
+          && xs >= 4.0
+          && ys >= 4.0
+          && xs <= px as f32 - 4.0
+          && ys <= px as f32 - 4.0
+        {
+          n_level0 += 1;
+        }
+        // strictly inside at every level: the pixel's composite taps are unclamped texels of the
+        // current grid, and each of their centres maps to a frozen point whose own bilinear taps
+        // are unclamped texels of the frozen grid (a clamped tap reads a replicated edge texel)
+        let mut ok = true;
+        for (l, &(_, w, h)) in layout.levels.iter().enumerate() {
+          if mask & (1 << l) == 0 {
+            continue;
+          }
+          let s = (1u32 << l) as f32;
+          let (fx, fy) = (xf / s - 0.5, yf / s - 0.5);
+          let (x0, y0) = (fx.floor() as i64, fy.floor() as i64);
+          if x0 < 0 || y0 < 0 || x0 + 1 > w as i64 - 1 || y0 + 1 > h as i64 - 1 {
+            ok = false;
+            continue;
+          }
+          for (dx, dy) in [(0i64, 0i64), (1, 0), (0, 1), (1, 1)] {
+            let (tx, ty) = ((x0 + dx) as f32, (y0 + dy) as f32);
+            match cad_map(&map, (tx + 0.5) * s, (ty + 0.5) * s) {
+              Some((xs, ys)) => {
+                let (gx, gy) = ((xs / s - 0.5).floor() as i64, (ys / s - 0.5).floor() as i64);
+                if gx < 0 || gy < 0 || gx + 1 > w as i64 - 1 || gy + 1 > h as i64 - 1 {
+                  ok = false;
+                }
+              }
+              None => ok = false,
+            }
+          }
+        }
+        region[(y * px + x) as usize] = ok;
+      }
+    }
+    let n_region = region.iter().filter(|&&r| r).count();
+    std::println!(
+      "reprojection {name}: region {n_region} px of {n_disc} in the disc (the level-0 rule kept {n_level0}: the strict-taps rule removes {})",
+      n_level0 as i64 - n_region as i64
+    );
+    for (vi, factor) in [ReprojectFactor::Unit, ReprojectFactor::SolidAngle].into_iter().enumerate() {
+      let mut frame = header();
+      reproject_add(&layout, &mut frame, &[ShownImage { words: &img, map, unit: unit_v, layout: None }], unit_v, 0x5eed, factor);
+      let a = cad_image(&layout, &frame, unit_v);
+      let (mut num, mut den, mut sa, mut sb) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+      for i in 0..a.len() {
+        if region[i] {
+          num += (a[i] - b[i]) * (a[i] - b[i]);
+          den += b[i] * b[i];
+          sa += a[i];
+          sb += b[i];
+        }
+      }
+      assert!(sb > 0.0 && n_region > 1000, "{name}: an empty region ({n_region} px)");
+      let rms_px = (num / den).sqrt();
+      let ratio = sa / sb;
+      // blocks of composite τ wholly inside the region: 4 × 4 px (printed) and 8 × 8 px (the gate)
+      let block_rms = |bs: u32| -> (f64, usize) {
+        let (mut bn, mut bd, mut blocks) = (0.0f64, 0.0f64, 0usize);
+        for by in 0..px / bs {
+          for bx in 0..px / bs {
+            let (mut ta, mut tb, mut inside) = (0.0f64, 0.0f64, true);
+            for y in by * bs..by * bs + bs {
+              for x in bx * bs..bx * bs + bs {
+                let i = (y * px + x) as usize;
+                inside &= region[i];
+                ta += a[i];
+                tb += b[i];
+              }
+            }
+            if inside {
+              bn += (ta - tb) * (ta - tb);
+              bd += tb * tb;
+              blocks += 1;
+            }
+          }
+        }
+        ((bn / bd.max(1e-300)).sqrt(), blocks)
+      };
+      let (rms4, blocks4) = block_rms(4);
+      let (rms, blocks) = block_rms(8);
+      // the levels' shares of the light, frozen image vs redraw (a packet changing level between
+      // the two draws makes the per-level figures meaningless while the composite holds)
+      let mut shares = alloc::string::String::new();
+      {
+        let (li, lr) = (super::cadence::pyramid_light(&layout, &img), super::cadence::pyramid_light(&layout, &redraw));
+        for (l, &(off, w, h)) in layout.levels.iter().enumerate() {
+          let (mut si, mut sr) = (0.0f64, 0.0f64);
+          for i in 0..(w * h) {
+            let wi = (off + i * PYRAMID_TEXEL_WORDS) as usize;
+            si += img[wi] as f64;
+            sr += redraw[wi] as f64;
+          }
+          if si + sr > 0.0 {
+            shares += &alloc::format!(" L{l} {:.4}/{:.4}", si / li.max(1e-300), sr / lr.max(1e-300));
+          }
+        }
+      }
+      // per level: the counts of the texels whose centre lies in the region
+      let mut per_level = alloc::string::String::new();
+      for (l, &(off, w, h)) in layout.levels.iter().enumerate() {
+        let s = 1u32 << l;
+        let (mut n2, mut d2) = (0.0f64, 0.0f64);
+        for ty in 0..h {
+          for tx in 0..w {
+            let (x, y) = ((tx * s + s / 2).min(px - 1), (ty * s + s / 2).min(px - 1));
+            if !region[(y * px + x) as usize] {
+              continue;
+            }
+            let i = (off + (ty * w + tx) * PYRAMID_TEXEL_WORDS) as usize;
+            let (fa, fb) = (frame[i] as f64, redraw[i] as f64);
+            n2 += (fa - fb) * (fa - fb);
+            d2 += fb * fb;
+          }
+        }
+        if d2 > 0.0 {
+          per_level += &alloc::format!(" L{l} {:.4}", (n2 / d2).sqrt());
+        }
+      }
+      let floor_case = name.contains("blur floor");
+      if floor_case && vi == 0 {
+        floor8 = rms;
+      }
+      let gate = 0.02f64.max(1.5 * floor8);
+      let ok = floor_case || (rms <= gate && (ratio - 1.0).abs() <= 0.005);
+      pass[vi] &= ok;
+      std::println!(
+        "reprojection {name} [{factor:?}]: 8×8-block rel rms {rms:.4} over {blocks} blocks (gate {gate:.4}), 4×4-block {rms4:.4} over {blocks4}, Σ ratio {ratio:.5} ({}); per-pixel rel rms {rms_px:.4}; per level rel rms:{per_level}; level light shares frozen/redraw:{shares}",
+        if floor_case { "the floor" } else if ok { "pass" } else { "FAIL" }
+      );
+    }
+  }
+  // the half-texel convention, per level (after the cases: a diagnostic never aborts them): at
+  // yaw 5° the brightest cluster wholly inside the frozen frame (footprint rule) drawn alone, its
+  // τ centroid of each level in the frozen image mapped back through H⁻¹ against the redraw's
+  {
+    let (name, v_s, v) = &cases[2];
+    let map = v.map_from(v_s).expect("map");
+    let pick = tiers
+      .iter()
+      .enumerate()
+      .flat_map(|(ti, (ds, (r, m)))| {
+        let mvp = v_s.mvp(ds.anchor_m);
+        (0..r.len())
+          .filter(move |&i| m[i].flux() > 0.0 && super::cadence::footprint_inside(&m[i], streak_pred(r, i).map(|q| &m[q]), &mvp, px, px))
+          .map(move |i| (ti, i, m[i].flux()))
+      })
+      .max_by(|a, b| a.2.partial_cmp(&b.2).unwrap());
+    match pick {
+      None => std::println!("reprojection {name}: no cluster wholly inside the frozen frame for the centroid diagnostic"),
+      Some((ti, i, _)) => {
+        let list = [i as u32];
+        match cad_inv_unit(&tiers, v_s, &layout, Some((ti, &list)), 1e-4) {
+          None => std::println!("reprojection {name}: the diagnostic cluster (tier {ti}, index {i}) drew nothing"),
+          Some(inv) => {
+            let fz = cad_draw(&tiers, v_s, &layout, inv, Some((ti, &list)));
+            let rd = cad_draw(&tiers, v, &layout, inv, Some((ti, &list)));
+            let h: [f64; 9] = core::array::from_fn(|k| map[k] as f64);
+            let det = h[0] * (h[4] * h[8] - h[5] * h[7]) - h[1] * (h[3] * h[8] - h[5] * h[6]) + h[2] * (h[3] * h[7] - h[4] * h[6]);
+            let hi = [
+              (h[4] * h[8] - h[5] * h[7]) / det,
+              (h[2] * h[7] - h[1] * h[8]) / det,
+              (h[1] * h[5] - h[2] * h[4]) / det,
+              (h[5] * h[6] - h[3] * h[8]) / det,
+              (h[0] * h[8] - h[2] * h[6]) / det,
+              (h[2] * h[3] - h[0] * h[5]) / det,
+              (h[3] * h[7] - h[4] * h[6]) / det,
+              (h[1] * h[6] - h[0] * h[7]) / det,
+              (h[0] * h[4] - h[1] * h[3]) / det,
+            ];
+            let mut line = alloc::format!("reprojection {name}: brightest inside cluster (tier {ti}, index {i}) centroid per level, frozen→H⁻¹ vs redraw (px):");
+            for (l, &(off, w, hh)) in layout.levels.iter().enumerate() {
+              let s = (1u32 << l) as f64;
+              let cent = |p: &[u32]| -> Option<[f64; 3]> {
+                let (mut t, mut x, mut y) = (0.0f64, 0.0f64, 0.0f64);
+                for ty in 0..hh {
+                  for tx in 0..w {
+                    let c = p[(off + (ty * w + tx) * PYRAMID_TEXEL_WORDS) as usize] as f64;
+                    t += c;
+                    x += c * (tx as f64 + 0.5) * s;
+                    y += c * (ty as f64 + 0.5) * s;
+                  }
+                }
+                (t > 0.0).then(|| [x / t, y / t, t])
+              };
+              if let (Some(a), Some(b)) = (cent(&fz), cent(&rd)) {
+                let z = hi[6] * a[0] + hi[7] * a[1] + hi[8];
+                let m = [(hi[0] * a[0] + hi[1] * a[1] + hi[2]) / z, (hi[3] * a[0] + hi[4] * a[1] + hi[5]) / z];
+                line += &alloc::format!(
+                  " L{l} ({:.2},{:.2}) vs ({:.2},{:.2}) Δ {:.3} [counts {:.3e} / {:.3e}]",
+                  m[0], m[1], b[0], b[1], ((m[0] - b[0]).powi(2) + (m[1] - b[1]).powi(2)).sqrt(), a[2], b[2]
+                );
+              }
+            }
+            std::println!("{line}");
+          }
+        }
+      }
+    }
+  }
+  std::println!("reprojection: Unit passes every case: {}, SolidAngle (control): {}", pass[0], pass[1]);
+  // production is Unit (decided 2026-10-17 by this test's Σ: SolidAngle lost 1–17 % of the light)
+  assert_eq!(ReprojectFactor::default(), ReprojectFactor::Unit);
+  assert!(pass[0], "the Unit reprojection misses 2 % block rms / 0.5 % Σ on a case (lines above)");
+}
+
+/// The rate rule bounds the reprojection's error (plan step 3): with Δt = 0 the eye translates
+/// laterally by D and by D / 5 (no rotation: the reprojection is the frozen image itself); each
+/// of 1 024 sampled clusters (≥ 64 measured) drawn alone moves on screen (τ centroid, redraw vs the frozen image) by at most the
+/// rule's δ for Δeye = D (+ 0.05 px), the bound is not vacuous (median measured / predicted ≥ 0.3),
+/// and the clusters the rule admits at ε = 1 px in class N = 8 for Δeye = D / 16 land within ε.
+/// A cloud enclosing the eye (the eye ½ σ_max off its mean, D = 0.02 σ_min): the relative rms
+/// change of its image is at most the rule's relative change |D| / σ_min.
+#[test]
+fn reprojection_error_follows_the_rate_rule() {
+  use super::cadence::{CadenceView, RateInputs, cadence_rate, cadence_rate_near};
+  let (tiers, radius) = cad_scene();
+  let anchor = tiers[0].0.anchor_m;
+  let px = 256u32;
+  let layout = PyramidLayout::new(px, px);
+  let fwd0: V3 = unit([1.0, 0.3, -0.2]);
+  let up0: V3 = [0.0, 0.0, 1.0];
+  let right0 = unit(cross64(fwd0, up0));
+  let dist = 3.0 * radius;
+  let d_m = 0.02 * radius;
+  let eye0 = [anchor[0] - fwd0[0] * dist, anchor[1] - fwd0[1] * dist, anchor[2] - fwd0[2] * dist];
+  let view_at = |eye: V3| CadenceView {
+    view_rot: cad_view_rot(fwd0, up0),
+    proj: cad_persp(60f64.to_radians(), 1.0),
+    eye_m: eye,
+    units_per_m: 1.0,
+    width: px,
+    height: px,
+  };
+  let vs = view_at(eye0);
+  let v = view_at([eye0[0] + right0[0] * d_m, eye0[1] + right0[1] * d_m, eye0[2] + right0[2] * d_m]);
+  let v5 = view_at([
+    eye0[0] + right0[0] * 0.2 * d_m,
+    eye0[1] + right0[1] * 0.2 * d_m,
+    eye0[2] + right0[2] * 0.2 * d_m,
+  ]);
+  let d_eye = [(right0[0] * d_m) as f32, (right0[1] * d_m) as f32, (right0[2] * d_m) as f32];
+  // the estimator's calibration: the frozen eye with the view yawed by an angle whose pixel
+  // shift is ~0.4 px (f_px = (W / 2) / tan 30°), no parallax; the exact image of every point is
+  // the rotation's map, so |centroid − H⁻¹(frozen centroid)| is the estimator's own error
+  let yaw = 0.4 / (0.5 * px as f64 / 30f64.to_radians().tan());
+  let upv0 = cross64(right0, fwd0);
+  let v_yaw = CadenceView {
+    view_rot: cad_view_rot(cad_rotate(fwd0, upv0, yaw), up0),
+    ..vs
+  };
+  let h_yaw = v_yaw.map_from(&vs).expect("the yaw map");
+  // H⁻¹ (frozen px → yawed px), f64
+  let h_inv = {
+    let h: [f64; 9] = core::array::from_fn(|k| h_yaw[k] as f64);
+    let det = h[0] * (h[4] * h[8] - h[5] * h[7]) - h[1] * (h[3] * h[8] - h[5] * h[6]) + h[2] * (h[3] * h[7] - h[4] * h[6]);
+    [
+      (h[4] * h[8] - h[5] * h[7]) / det,
+      (h[2] * h[7] - h[1] * h[8]) / det,
+      (h[1] * h[5] - h[2] * h[4]) / det,
+      (h[5] * h[6] - h[3] * h[8]) / det,
+      (h[0] * h[8] - h[2] * h[6]) / det,
+      (h[2] * h[3] - h[0] * h[5]) / det,
+      (h[3] * h[7] - h[4] * h[6]) / det,
+      (h[1] * h[6] - h[0] * h[7]) / det,
+      (h[0] * h[4] - h[1] * h[3]) / det,
+    ]
+  };
+  let map_inv = |c: [f64; 2]| -> [f64; 2] {
+    let z = h_inv[6] * c[0] + h_inv[7] * c[1] + h_inv[8];
+    [(h_inv[0] * c[0] + h_inv[1] * c[1] + h_inv[2]) / z, (h_inv[3] * c[0] + h_inv[4] * c[1] + h_inv[5]) / z]
+  };
+  let centroid = |img: &[f64]| -> Option<([f64; 2], f64)> {
+    let (mut s, mut sx, mut sy, mut edge) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    for y in 0..px {
+      for x in 0..px {
+        let t = img[(y * px + x) as usize];
+        s += t;
+        sx += t * (x as f64 + 0.5);
+        sy += t * (y as f64 + 0.5);
+        if x < 4 || y < 4 || x >= px - 4 || y >= px - 4 {
+          edge += t;
+        }
+      }
+    }
+    // no light within 4 px of the border (round 4: a 1e-3 share there still let an 85-px cluster's
+    // clipped light move its centroid without parallax)
+    (s > 0.0 && edge <= 1e-6 * s).then(|| ([sx / s, sy / s], s))
+  };
+  let inputs = |d: [f32; 3]| RateInputs {
+    dt_s: 0.0,
+    d_eye_m: d,
+    a_w_m: [0.0; 3],
+    eps_px: 1.0,
+    frame_px: px as f32,
+  };
+  // 1 024 clusters spread over the tiers' compact ranges, outside the eye's cloud, each at two
+  // shifts: D (≈ 1–5 px) and D / 5 (sub-pixel, where the class rule admits clusters)
+  let total: usize = tiers.iter().map(|(_, (r, _))| r.len()).sum();
+  let stride = (total / 1024).max(1);
+  let (mut ratios, mut worst, mut admitted, mut admitted_worst, mut tested) =
+    (alloc::vec::Vec::new(), 0.0f64, 0usize, 0.0f64, 0usize);
+  // skip reasons: no flux, enclosing, infinite δ, no τ_max, light at the border / empty image
+  let mut skips = [0usize; 5];
+  // measurements skipped for light at the border in the shifted draw
+  let mut skip_shifted = 0usize;
+  // measurements whose two draws differ in pieces (the renderer's discretisation changed)
+  let (mut diff_pieces, mut worst_diff) = (0usize, 0.0f64);
+  // same pieces, by the across-streak σ: < 1 px (thin, the sampling bound) and ≥ 1 px
+  let (mut n_thin, mut worst_thin, mut n_thick) = (0usize, 0.0f64, 0usize);
+  // the estimator's calibrated floors (px) and the worst excess beyond 0.05 + 2 · floor
+  let mut floors: alloc::vec::Vec<f64> = alloc::vec::Vec::new();
+  let mut worst_cal = f64::NEG_INFINITY;
+  let mut deltas: alloc::vec::Vec<f64> = alloc::vec::Vec::new();
+  let mut deltas16: alloc::vec::Vec<f64> = alloc::vec::Vec::new();
+  let (mut worst0, mut ratios0, mut outlier) = (0.0f64, alloc::vec::Vec::<f64>::new(), (0.0f64, alloc::string::String::new()));
+  // the lone draws (the expensive part: five pyramids per cluster) computed first, in parallel
+  // over the clusters (`test_threads()`), each a pure function of the cluster: its τ_max probe,
+  // the frozen draw (its image's centroid, its nearest depth word, work, level shares), the yawed
+  // draw's centroid and the two shifted draws (work, level shares, centroid) — stopping where the
+  // loop below stops; the loop then reads them in its own order, so every sum, maximum and
+  // first-wins outlier is formed as before (2026-10-18, track 8: same printed lines)
+  struct LoneDraw {
+    key: (usize, usize),
+    inv: Option<f32>,
+    near_m: f64,
+    work_a: (u32, u32, u32, u32),
+    shares_a: alloc::string::String,
+    ca: Option<[f64; 2]>,
+    cy: Option<[f64; 2]>,
+    shifts: alloc::vec::Vec<((u32, u32, u32, u32), alloc::string::String, Option<[f64; 2]>)>,
+  }
+  // the renderer's discretisation of the two lone draws: split children and the level mask
+  // equal = the same pieces (the evaluations and EWA texels follow the footprint, printed)
+  let work = |p: &[u32]| {
+    (
+      p[PYR_SPLIT_CHILDREN as usize],
+      p[PYR_LEVEL_MASK as usize],
+      p[PYR_VOLUME_EVALS as usize],
+      p[PYR_EWA_TEXELS as usize],
+    )
+  };
+  let shares = |p: &[u32]| -> alloc::string::String {
+    let tot = super::cadence::pyramid_light(&layout, p).max(1e-300);
+    let mut out = alloc::string::String::new();
+    for (l, &(off, w, h)) in layout.levels.iter().enumerate() {
+      let sl: f64 = (0..(w * h)).map(|i| pa_or(p, off, i)).sum();
+      if sl > 0.0 {
+        out += &alloc::format!(" L{l} {:.4}", sl / tot);
+      }
+    }
+    out
+  };
+  let lone_draw = |ti: usize, i: usize| -> LoneDraw {
+    let list = [i as u32];
+    let mut d = LoneDraw {
+      key: (ti, i),
+      inv: None,
+      near_m: f64::NAN,
+      work_a: (0, 0, 0, 0),
+      shares_a: alloc::string::String::new(),
+      ca: None,
+      cy: None,
+      shifts: alloc::vec::Vec::new(),
+    };
+    let Some(inv) = cad_inv_unit(&tiers, &vs, &layout, Some((ti, &list)), 1e-4) else {
+      return d;
+    };
+    d.inv = Some(inv);
+    let unit_c = 1.0 / inv;
+    let pa = cad_draw(&tiers, &vs, &layout, inv, Some((ti, &list)));
+    let a = cad_image(&layout, &pa, unit_c);
+    // the drawn light's nearest distance (m): the minimum depth word over the levels (AU)
+    d.near_m = {
+      let mut dmin = u32::MAX;
+      for &(off, w, h) in &layout.levels {
+        for i in 0..(w * h) {
+          let d = pa[(off + i * PYRAMID_TEXEL_WORDS + 4) as usize];
+          if d != 0 {
+            dmin = dmin.min(d);
+          }
+        }
+      }
+      if dmin == u32::MAX { f64::NAN } else { f32::from_bits(dmin) as f64 * 1.495_978_707e11 }
+    };
+    d.work_a = work(&pa);
+    d.shares_a = shares(&pa);
+    let Some((ca, _)) = centroid(&a) else {
+      return d;
+    };
+    d.ca = Some(ca);
+    // the cluster's calibrated floor (its yawed lone draw against the exact map)
+    let c = cad_image(&layout, &cad_draw(&tiers, &v_yaw, &layout, inv, Some((ti, &list))), unit_c);
+    let Some((cy, _)) = centroid(&c) else {
+      return d;
+    };
+    d.cy = Some(cy);
+    for view_d in [&v, &v5] {
+      let pb = cad_draw(&tiers, view_d, &layout, inv, Some((ti, &list)));
+      let b = cad_image(&layout, &pb, unit_c);
+      d.shifts.push((work(&pb), shares(&pb), centroid(&b).map(|x| x.0)));
+    }
+    d
+  };
+  // the clusters the loop below draws: its cheap filters (stride, flux, enclosing, finite δ)
+  let mut cands: alloc::vec::Vec<(usize, usize)> = alloc::vec::Vec::new();
+  {
+    let mut gi = 0usize;
+    for (ti, (ds, (r, m))) in tiers.iter().enumerate() {
+      let pc = cad_pc(&vs, ds.anchor_m, r.len() as u32, 1.0);
+      let eye = [pc.eye_local[0], pc.eye_local[1], pc.eye_local[2]];
+      for i in 0..r.len() {
+        gi += 1;
+        if gi % stride != 0 || !(m[i].flux() > 0.0) {
+          continue;
+        }
+        let pred = streak_pred(r, i).map(|q| &m[q]);
+        let rate = cadence_rate(&m[i], pred, &pc.mvp, eye, px, px, &[8], &inputs(d_eye));
+        if rate.enclosing || !rate.delta_px[0].is_finite() {
+          continue;
+        }
+        cands.push((ti, i));
+      }
+    }
+  }
+  let t_lone = std::time::Instant::now();
+  let lone_threads = test_threads().min(cands.len()).max(1);
+  let lones: alloc::vec::Vec<LoneDraw> = {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let next = AtomicUsize::new(0);
+    let (cands, lone_draw, next) = (&cands, &lone_draw, &next);
+    let parts: alloc::vec::Vec<alloc::vec::Vec<(usize, LoneDraw)>> = std::thread::scope(|s| {
+      let handles: alloc::vec::Vec<_> = (0..lone_threads)
+        .map(|_| {
+          s.spawn(move || {
+            let mut out = alloc::vec::Vec::new();
+            loop {
+              let k = next.fetch_add(1, Ordering::Relaxed);
+              if k >= cands.len() {
+                break;
+              }
+              let (ti, i) = cands[k];
+              out.push((k, lone_draw(ti, i)));
+            }
+            out
+          })
+        })
+        .collect();
+      handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    let mut slots: alloc::vec::Vec<Option<LoneDraw>> = (0..cands.len()).map(|_| None).collect();
+    for part in parts {
+      for (k, d) in part {
+        slots[k] = Some(d);
+      }
+    }
+    slots.into_iter().map(|d| d.expect("every lone draw computed")).collect()
+  };
+  std::eprintln!(
+    "[t8 time] rate rule: lone draws of {} clusters on {lone_threads} threads: {:.1} s",
+    cands.len(),
+    t_lone.elapsed().as_secs_f64()
+  );
+  let mut lone_it = lones.into_iter();
+  let mut gi = 0usize;
+  for (ti, (ds, (r, m))) in tiers.iter().enumerate() {
+    let pc = cad_pc(&vs, ds.anchor_m, r.len() as u32, 1.0);
+    let eye = [pc.eye_local[0], pc.eye_local[1], pc.eye_local[2]];
+    for i in 0..r.len() {
+      gi += 1;
+      if gi % stride != 0 {
+        continue;
+      }
+      if !(m[i].flux() > 0.0) {
+        skips[0] += 1;
+        continue;
+      }
+      let pred = streak_pred(r, i).map(|q| &m[q]);
+      let rate = cadence_rate(&m[i], pred, &pc.mvp, eye, px, px, &[8], &inputs(d_eye));
+      if rate.enclosing {
+        skips[1] += 1;
+        continue;
+      }
+      if !rate.delta_px[0].is_finite() {
+        skips[2] += 1;
+        continue;
+      }
+      let lone = lone_it.next().expect("a lone draw per drawn cluster");
+      assert_eq!(lone.key, (ti, i), "the lone draws follow the loop's clusters");
+      if lone.inv.is_none() {
+        skips[3] += 1;
+        continue;
+      }
+      let drawn_near_m = lone.near_m;
+      let Some(ca) = lone.ca else {
+        skips[4] += 1;
+        continue;
+      };
+      // the cluster's calibrated floor (its yawed lone draw against the exact map)
+      let floor = {
+        match lone.cy {
+          Some(cy) => {
+            let ex = map_inv(ca);
+            ((cy[0] - ex[0]).powi(2) + (cy[1] - ex[1]).powi(2)).sqrt()
+          }
+          None => {
+            skips[4] += 1;
+            continue;
+          }
+        }
+      };
+      floors.push(floor);
+      for (si, shift_m) in [1.0f32, 0.2f32].into_iter().enumerate() {
+        let (wb, shares_b, cb) = &lone.shifts[si];
+        let (wa, wb) = (lone.work_a, *wb);
+        // same pieces: equal split children, level mask, volume evaluations and EWA units (round 7:
+        // one EWA packet more in one draw — a packet at a visibility or budget threshold —
+        // moved the centroid with no parallax)
+        let same_pieces = wa == wb;
+        // the across-streak σ (px) at the frozen view: √λ_min of J Σ Jᵀ + the pixel filter at
+        // the mean (a thin line sampled at texel centres moves its centroid with the sub-texel
+        // phase by a fraction of a texel)
+        let sigma_across = {
+          let mvp = &pc.mvp;
+          let mm = |rr: usize, c: usize| mvp[c * 4 + rr];
+          let row = |rr: usize| [mm(rr, 0), mm(rr, 1), mm(rr, 2)];
+          let p = m[i].mean();
+          let d = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+          let w = d(row(3), p) + mm(3, 3);
+          let nx = (d(row(0), p) + mm(0, 3)) / w;
+          let ny = (d(row(1), p) + mm(1, 3)) / w;
+          let (r0, r1, r3) = (row(0), row(1), row(3));
+          let k = 0.5 * px as f32 / w;
+          let jx = [(r0[0] - r3[0] * nx) * k, (r0[1] - r3[1] * nx) * k, (r0[2] - r3[2] * nx) * k];
+          let jy = [(r1[0] - r3[0] * ny) * k, (r1[1] - r3[1] * ny) * k, (r1[2] - r3[2] * ny) * k];
+          let c = m[i].cov_v();
+          let sv = |v: [f32; 3]| [c[0] * v[0] + c[1] * v[1] + c[2] * v[2], c[1] * v[0] + c[3] * v[1] + c[4] * v[2], c[2] * v[0] + c[4] * v[1] + c[5] * v[2]];
+          let (xx, xy, yy) = (d(jx, sv(jx)) + DUST_PIXEL_FILTER_VAR, d(jx, sv(jy)), d(jy, sv(jy)) + DUST_PIXEL_FILTER_VAR);
+          let half = 0.5 * (xx + yy);
+          let dd = (0.25 * (xx - yy) * (xx - yy) + xy * xy).sqrt();
+          ((half - dd).max(0.0) as f64).sqrt()
+        };
+        let thin = sigma_across < 1.0;
+        let Some(cb) = *cb else {
+          skip_shifted += 1;
+          continue;
+        };
+        let dd = [d_eye[0] * shift_m, d_eye[1] * shift_m, d_eye[2] * shift_m];
+        let rate = cadence_rate(&m[i], pred, &pc.mvp, eye, px, px, &[8], &inputs(dd));
+        tested += 1;
+        let shift = ((ca[0] - cb[0]).powi(2) + (ca[1] - cb[1]).powi(2)).sqrt();
+        let pred_px = rate.delta_px[0] as f64;
+        // the 3σ near point (round 2) as a printed control
+        let r0 = cadence_rate_near(&m[i], pred, &pc.mvp, eye, px, px, &[8], &inputs(dd), 3.0);
+        let p0 = r0.delta_px[0] as f64;
+        worst0 = worst0.max(shift - p0);
+        if p0 > 0.05 {
+          ratios0.push(shift / p0);
+        }
+        if shift / pred_px.max(1e-9) > outlier.0 {
+          let work_line = alloc::format!(
+            "calibrated floor {floor:.4} px (allowance {:.4} px); across-streak σ {sigma_across:.3} px ({}); work frozen / shifted: children {} / {}, level mask {:#x} / {:#x}, volume evals {} / {}, EWA units {} / {} (same pieces {same_pieces}); level light shares frozen:{} shifted:{}",
+            0.05 + 2.0 * floor,
+            if thin { "thin: the sampling bound" } else { "≥ 1 px" },
+            wa.0, wb.0, wa.1, wb.1, wa.2, wb.2, wa.3, wb.3, lone.shares_a, shares_b
+          );
+          let depth = polyline_depth(&m[i], eye, SplitView::of(&pc.mvp, eye).fwd).map_or(f32::NAN, |d| d.1);
+          let dist = |q: [f32; 3]| (((q[0] - eye[0]) as f64).powi(2) + ((q[1] - eye[1]) as f64).powi(2) + ((q[2] - eye[2]) as f64).powi(2)).sqrt();
+          let near_edge_m = (0..SIZE_EDGES as usize).map(|j| dist(m[i].edge(j))).fold(f64::INFINITY, f64::min);
+          let pred_m = pred.map_or(f64::NAN, |q| dist(q.mean()));
+          let sig_max = super::cadence::sym3_eigen_range(m[i].cov_v()).1.max(0.0).sqrt();
+          let pxf = |q: [f32; 3]| project_point(q, &pc.mvp, px, px);
+          let ext = polyline_extent_px(&m[i], &pxf).unwrap_or(f32::NAN);
+          let tseg = time_segment_px(&m[i], pred, &pxf).unwrap_or(0.0);
+          outlier = (
+            shift / pred_px.max(1e-9),
+            alloc::format!(
+              "tier {ti} index {i}: measured {shift:.4} px, predicted (nearest edge) {pred_px:.4} px, predicted (near − 3σ_max) {p0:.4} px; near-edge depth {depth:.1} m, σ_max {sig_max:.1} m, 3σ_max / depth {:.4}; extent {ext:.2} px, time segment {tseg:.2} px ({} decides the extent); predecessor passed {}, its mean at {pred_m:.1} m; nearest edge at {near_edge_m:.1} m, the drawn light's nearest depth word {drawn_near_m:.1} m",
+              3.0 * sig_max / depth,
+              if tseg > ext { "the time segment" } else { "the polyline" },
+              pred.is_some()
+            ) + "; " + &work_line,
+          );
+        }
+        deltas.push(pred_px);
+        if same_pieces {
+          if thin {
+            n_thin += 1;
+            worst_thin = worst_thin.max(shift - pred_px);
+          } else {
+            n_thick += 1;
+            worst = worst.max(shift - pred_px);
+            // the excess beyond its calibrated allowance 0.05 px + 2 · floor
+            worst_cal = worst_cal.max(shift - pred_px - 0.05 - 2.0 * floor);
+          }
+        } else {
+          diff_pieces += 1;
+          worst_diff = worst_diff.max(shift - pred_px);
+        }
+        if pred_px > 0.05 {
+          ratios.push(shift / pred_px);
+        }
+        // the class rule at ε = 1 px, N = 8, the step dd / 16 per frame (16 = 2N frames make dd)
+        let step = [dd[0] / 16.0, dd[1] / 16.0, dd[2] / 16.0];
+        let r8 = cadence_rate(&m[i], pred, &pc.mvp, eye, px, px, &[8], &inputs(step));
+        deltas16.push(r8.delta_px[0] as f64 * 16.0);
+        if r8.class == 1 {
+          admitted += 1;
+          admitted_worst = admitted_worst.max(shift);
+        }
+      }
+    }
+  }
+  assert!(lone_it.next().is_none(), "a lone draw the loop did not read");
+  ratios.sort_by(|a, b| a.partial_cmp(b).unwrap());
+  deltas.sort_by(|a, b| a.partial_cmp(b).unwrap());
+  deltas16.sort_by(|a, b| a.partial_cmp(b).unwrap());
+  let qv = |v: &[f64], p: f64| v.get(((v.len().saturating_sub(1)) as f64 * p) as usize).copied().unwrap_or(f64::NAN);
+  let q = |p: f64| qv(&ratios, p);
+  std::println!(
+    "rate rule: {tested} measurements ({} clusters × 2 shifts); skipped: no flux {}, enclosing {}, infinite δ {}, no τ_max {}, border light {} (frozen draw) and {skip_shifted} measurements (shifted draw)",
+    tested / 2,
+    skips[0],
+    skips[1],
+    skips[2],
+    skips[3],
+    skips[4]
+  );
+  std::println!(
+    "rate rule: predicted δ px p10 {:.3} p50 {:.3} p90 {:.3} max {:.3}; δ(step / 16) · 16 px p10 {:.3} p50 {:.3} p90 {:.3} (admitted at ε 1 px when ≤ 1)",
+    qv(&deltas, 0.1),
+    qv(&deltas, 0.5),
+    qv(&deltas, 0.9),
+    qv(&deltas, 1.0),
+    qv(&deltas16, 0.1),
+    qv(&deltas16, 0.5),
+    qv(&deltas16, 0.9)
+  );
+  std::println!(
+    "rate rule: measured − predicted max {worst:.4} px; measured / predicted p10 {:.3} p50 {:.3} p90 {:.3} max {:.3} ({} with δ > 0.05 px); admitted at ε 1 px N 8: {admitted}, largest shift {admitted_worst:.4} px",
+    q(0.1),
+    q(0.5),
+    q(0.9),
+    q(1.0),
+    ratios.len()
+  );
+  ratios0.sort_by(|a, b| a.partial_cmp(b).unwrap());
+  std::println!(
+    "rate rule (control, the near point 3σ_max nearer): measured − predicted max {worst0:.4} px; measured / predicted p10 {:.3} p50 {:.3} p90 {:.3} max {:.3}",
+    qv(&ratios0, 0.1),
+    qv(&ratios0, 0.5),
+    qv(&ratios0, 0.9),
+    qv(&ratios0, 1.0)
+  );
+  std::println!("rate rule: the largest measured / predicted: {}", outlier.1);
+  assert!(tested >= 128, "too few measurements ({tested})");
+  std::println!(
+    "rate rule: {diff_pieces} measurements with different pieces in their two draws, their largest excess {worst_diff:.4} px (bound: the LOD's {} px); same pieces: largest excess {worst:.4} px",
+    DUST_LOD_PX_DEFAULT
+  );
+  std::println!(
+    "rate rule: same pieces, across-streak σ ≥ 1 px: {n_thick} measurements, largest excess {worst:.4} px (bound 0.05); σ < 1 px: {n_thin}, largest excess {worst_thin:.4} px (bound 0.5, half a level-0 texel)"
+  );
+  floors.sort_by(|a, b| a.partial_cmp(b).unwrap());
+  std::println!(
+    "rate rule: calibrated floors (yaw {:.3e} rad ≈ 0.4 px) p50 {:.4} p90 {:.4} max {:.4} px over {} clusters; same pieces, σ ≥ 1 px: largest excess beyond 0.05 + 2 · floor {worst_cal:.4} px",
+    yaw,
+    qv(&floors, 0.5),
+    qv(&floors, 0.9),
+    qv(&floors, 1.0),
+    floors.len()
+  );
+  assert!(worst_cal <= 0.0, "a cluster of across-streak σ ≥ 1 px drawn with the same pieces moved {worst_cal:.4} px beyond 0.05 px + 2 × its calibrated floor");
+  assert!(worst_thin <= 0.5, "a thin cluster moved {worst_thin:.4} px beyond the rule's δ + half a texel");
+  assert!(worst_diff <= DUST_LOD_PX_DEFAULT as f64, "a re-pieced cluster moved {worst_diff:.4} px beyond δ + the LOD's pixel rule");
+  assert!(q(0.5) >= 0.3, "the rule's δ is vacuous: median measured / predicted {:.3}", q(0.5));
+  assert!(admitted >= 16, "the class rule admitted only {admitted} measurements: the ε check is vacuous");
+  assert!(admitted_worst <= 1.05, "an admitted cluster moved {admitted_worst:.4} px > ε");
+
+  // a cloud enclosing the eye
+  let (ds, (r, m)) = &tiers[0];
+  let (i, lam) = (0..r.len())
+    .filter(|&i| m[i].flux() > 0.0)
+    .map(|i| (i, super::cadence::sym3_eigen_range(m[i].cov_v())))
+    .filter(|&(_, (lo, _))| lo > 1.0)
+    .max_by(|a, b| a.1.0.partial_cmp(&b.1.0).unwrap())
+    .expect("a cloud");
+  let (sig_min, sig_max) = ((lam.0 as f64).sqrt(), (lam.1 as f64).sqrt());
+  let mean = m[i].mean();
+  let eye_in = [
+    ds.anchor_m[0] + mean[0] as f64 - fwd0[0] * 0.5 * sig_max,
+    ds.anchor_m[1] + mean[1] as f64 - fwd0[1] * 0.5 * sig_max,
+    ds.anchor_m[2] + mean[2] as f64 - fwd0[2] * 0.5 * sig_max,
+  ];
+  let dd = 0.02 * sig_min;
+  let w_s = view_at(eye_in);
+  let w = view_at([eye_in[0] + right0[0] * dd, eye_in[1] + right0[1] * dd, eye_in[2] + right0[2] * dd]);
+  let list = [i as u32];
+  let inv = cad_inv_unit(&tiers, &w_s, &layout, Some((0, &list)), 1e-4).expect("τ_max inside");
+  let a = cad_image(&layout, &cad_draw(&tiers, &w_s, &layout, inv, Some((0, &list))), 1.0 / inv);
+  let b = cad_image(&layout, &cad_draw(&tiers, &w, &layout, inv, Some((0, &list))), 1.0 / inv);
+  let (mut num, mut den) = (0.0f64, 0.0f64);
+  for k in 0..a.len() {
+    num += (a[k] - b[k]).powi(2);
+    den += b[k] * b[k];
+  }
+  let rel = (num / den.max(1e-300)).sqrt();
+  let pc = cad_pc(&w_s, ds.anchor_m, r.len() as u32, 1.0);
+  let d_in = [(right0[0] * dd) as f32, (right0[1] * dd) as f32, (right0[2] * dd) as f32];
+  let rate = cadence_rate(&m[i], streak_pred(r, i).map(|q| &m[q]), &pc.mvp, [pc.eye_local[0], pc.eye_local[1], pc.eye_local[2]], px, px, &[8], &inputs(d_in));
+  let predicted = dd / sig_min;
+  std::println!(
+    "rate rule, enclosing: σ_min {sig_min:.1} m σ_max {sig_max:.1} m, D {dd:.3} m: relative rms change {rel:.5}, rule |D| / σ_min {predicted:.5} (enclosing {}, δ {:.2} px)",
+    rate.enclosing,
+    rate.delta_px[0]
+  );
+  assert!(rate.enclosing, "the eye's cloud is not rated as enclosing");
+  assert!(rel <= predicted, "the enclosing cloud changed by {rel:.5} > |D| / σ_min {predicted:.5}");
+}
+
+/// One cadence frame of the tests with every tier's moments current (`tiers` mutable: the mask
+/// lanes): the frame's header (`specks`: the shell radius and budget, plus the speck push
+/// constants), `begin`, `finish`. Tier keys are the tier indices; `edit` adjusts a tier's meta (the
+/// reset triggers).
+#[allow(clippy::too_many_arguments)]
+fn cad_cadence_frame(
+  st: &mut super::cadence::DustCadenceState,
+  fm: &super::cadence::FrameMeta,
+  tiers: &mut [(DustDrawState, TierPackets)],
+  layout: &PyramidLayout,
+  inv_unit: f32,
+  specks: Option<(f32, u32)>,
+  edit: &dyn Fn(usize, &mut super::cadence::TierMeta<'_>),
+) -> (alloc::vec::Vec<u32>, super::cadence::CadencePlan, super::cadence::CadenceReport) {
+  use super::cadence::{TierDraw, TierMeta};
+  use super::specks::{DustSpecksPushConstants, SpeckHeader, pack_size_fade};
+  let mut frame = alloc::vec![0u32; layout.total_words as usize];
+  let mut header = cad_header(layout);
+  if let Some((d, b)) = specks {
+    SpeckHeader::write(&mut header, d, b);
+  }
+  frame[..header.len()].copy_from_slice(&header);
+  let plan = {
+    let metas: alloc::vec::Vec<TierMeta<'_>> = tiers
+      .iter()
+      .enumerate()
+      .map(|(ti, (ds, (r, _)))| {
+        let mut t = TierMeta {
+          key: ti as u64,
+          first_slot: ds.first_slot,
+          capacity: ds.capacity,
+          live_count: r.len() as u32,
+          emitted: ds.compute_wait,
+          rewritten_from: r.len() as u32,
+          anchor_m: ds.anchor_m,
+          render: r,
+        };
+        edit(ti, &mut t);
+        t
+      })
+      .collect();
+    st.begin(fm, &metas, layout)
+  };
+  let rel = fm.view.mvp_eye_relative();
+  let mut draws: alloc::vec::Vec<TierDraw<'_>> = tiers
+    .iter_mut()
+    .map(|(ds, (r, m))| {
+      let pc = cad_pc(&fm.view, ds.anchor_m, r.len() as u32, inv_unit);
+      let specks_pc = specks.map(|_| DustSpecksPushConstants {
+        moments: 0,
+        render: 0,
+        pyramid: 0,
+        live_count: r.len() as u32,
+        size_fade: pack_size_fade(50.0, 0.0),
+        exposure: 1.0,
+        inv_unit,
+        color: pack_color([1.0, 1.0, 1.0, 1.0]),
+        albedo: 0.0,
+        mvp: rel,
+        eye_local: pc.eye_local,
+      });
+      TierDraw { moments: m.as_mut_slice(), render: r.as_slice(), pc, flow: Default::default(), specks_pc, stamp: 0 }
+    })
+    .collect();
+  let rep = st.finish(&mut draws, layout, &mut frame);
+  (frame, plan, rep)
+}
+
+/// the texel words of two pyramids (levels only) and their τ_max / level mask: equal?
+fn cad_levels_equal(layout: &PyramidLayout, a: &[u32], b: &[u32]) -> (usize, bool) {
+  let (lo, hi) = (PYRAMID_HEADER_WORDS as usize, layout.measure.0 as usize);
+  let diff = (lo..hi).filter(|&i| a[i] != b[i]).count();
+  (diff, a[PYR_TAU_MAX as usize] == b[PYR_TAU_MAX as usize] && a[PYR_LEVEL_MASK as usize] == b[PYR_LEVEL_MASK as usize])
+}
+
+/// where two pyramids differ: the differing words per level and word kind (count, r, g, b,
+/// depth), the first differing word (level, texel, kind, values) and the differing header words
+fn cad_first_diff(layout: &PyramidLayout, a: &[u32], b: &[u32]) -> alloc::string::String {
+  let mut out = alloc::string::String::new();
+  let mut first: Option<alloc::string::String> = None;
+  for (l, &(off, w, h)) in layout.levels.iter().enumerate() {
+    let mut kinds = [0usize; 5];
+    for i in 0..(w * h) {
+      for k in 0..5u32 {
+        let wi = (off + i * PYRAMID_TEXEL_WORDS + k) as usize;
+        if a[wi] != b[wi] {
+          kinds[k as usize] += 1;
+          if first.is_none() {
+            first = Some(alloc::format!(
+              "first at level {l} texel ({}, {}) word {k}: {} vs {}",
+              i % w,
+              i / w,
+              a[wi],
+              b[wi]
+            ));
+          }
+        }
+      }
+    }
+    if kinds.iter().any(|&c| c > 0) {
+      out += &alloc::format!(" L{l} {kinds:?}");
+    }
+  }
+  let hdr: alloc::vec::Vec<(usize, u32, u32)> =
+    (0..PYRAMID_HEADER_WORDS as usize).filter(|&i| a[i] != b[i]).map(|i| (i, a[i], b[i])).collect();
+  alloc::format!(
+    "differing words per level [count, r, g, b, depth]:{out}; {}; header words (index, a, b) {hdr:?}",
+    first.unwrap_or_else(|| "no texel differs".into())
+  )
+}
+
+/// the count word of texel `i` of the level at `off`
+fn pa_or(p: &[u32], off: u32, i: u32) -> f64 {
+  p[(off + i * PYRAMID_TEXEL_WORDS) as usize] as f64
+}
+
+/// a cadence state drawing on the tests' threads (`splat_tier_list_parallel`)
+fn cad_state(cfg: super::cadence::CadenceConfig) -> super::cadence::DustCadenceState {
+  let mut st = super::cadence::DustCadenceState::new(cfg);
+  st.threads = test_threads();
+  st
+}
+
+fn cad_frame_meta(view: super::cadence::CadenceView, t: f64, nucleus: V3, unit: f32) -> super::cadence::FrameMeta {
+  super::cadence::FrameMeta {
+    view,
+    t_now_s: t,
+    speed: 1.0,
+    nucleus_m: nucleus,
+    flags: 0,
+    fingerprint: 1,
+    reused: false,
+    unit_now: unit,
+  }
+}
+
+/// the scene's static perspective view (as T1's frozen view, `px` px)
+fn cad_static_view(anchor: V3, radius: f64, px: u32, dist_r: f64) -> super::cadence::CadenceView {
+  let fwd0: V3 = unit([1.0, 0.3, -0.2]);
+  let dist = dist_r * radius;
+  super::cadence::CadenceView {
+    view_rot: cad_view_rot(fwd0, [0.0, 0.0, 1.0]),
+    proj: cad_persp(60f64.to_radians(), 1.0),
+    eye_m: [anchor[0] - fwd0[0] * dist, anchor[1] - fwd0[1] * dist, anchor[2] - fwd0[2] * dist],
+    units_per_m: 1.0,
+    width: px,
+    height: px,
+  }
+}
+
+/// the monotonic ring index of the cluster now in `slot` of `host`'s ring (its life), if live
+fn cad_life(host: &DustHostState, slot: u32) -> Option<u64> {
+  let mask = host.ring.mask() as u64;
+  for b in &host.ring.batches {
+    let o = (slot as u64).wrapping_sub(b.first & mask) & mask;
+    if o < b.count as u64 {
+      return Some(b.first + o);
+    }
+  }
+  None
+}
+
+/// The cadence keeps the light (plan step 3). **Run A** (static: Δt 0, a still eye, no reuse,
+/// 230 frames — every class-64 phase swaps twice with content): the frame equals the full draw
+/// word for word every frame (each cluster drawn once, fresh or in one shown image, same view,
+/// moments and unit; the identity map is exact). **Run B** (moving: 60 s of simulation per frame
+/// on the 3-day coma, the eye slowly orbiting the nucleus and following it, 270 frames — every
+/// pair swaps ≥ 2 times with content; births and deaths): every frame each live cluster (life =
+/// its ring index) is drawn exactly once (fresh or in exactly one shown image), the owner bytes
+/// are backed by the lists (`check_owner_bytes`), a ghost (a dead life in a shown image) lasts ≤
+/// 2N frames, every drawn cluster and its predecessor were propagated this frame (a lazy,
+/// slot-indexed propagate driven by the plan: the shown clusters keep stale moments), and
+/// Σ frame / Σ full draw is within 1 % + the ghost light's share; each class receives ≥ 1 % of
+/// the classified clusters. Prints per frame the fresh / shown counts, the D3 rejections, the Σ
+/// ratio and the ghost share.
+#[test]
+fn cadence_keeps_the_light() {
+  use super::cadence::CadenceConfig;
+  let px = 128u32;
+  let layout = PyramidLayout::new(px, px);
+  // ── Run A
+  {
+    let (mut tiers, radius) = cad_scene();
+    let anchor = tiers[0].0.anchor_m;
+    let view = cad_static_view(anchor, radius, px, 3.0);
+    let inv_unit = cad_inv_unit(&tiers, &view, &layout, None, 1e-2).expect("τ_max");
+    let unit = 1.0 / inv_unit;
+    let reference = cad_draw(&tiers, &view, &layout, inv_unit, None);
+    // run A compares word for word: today's rule (no margin; with one the image draws through a
+    // rescaled f32 mvp and is equal only to rounding — `cadence_image_projection_offsets_the_viewport`)
+    let mut st = cad_state(CadenceConfig { margin_frac: 0.0, ..CadenceConfig::full() });
+    let t = tiers[0].0.frame.ps_r_t_hi[3] as f64;
+    let mut swaps_with_content = 0usize;
+    let mut d3_seen_a: alloc::vec::Vec<(usize, bool)> = alloc::vec::Vec::new();
+    for f in 0..230 {
+      let t_frame = std::time::Instant::now();
+      let fm = cad_frame_meta(view, t, anchor, unit);
+      let (frame, _plan, rep) = cad_cadence_frame(&mut st, &fm, &mut tiers, &layout, inv_unit, None, &|_, _| {});
+      std::eprintln!("[t8 time] cadence A {f}: cadence frame {:.3} s", t_frame.elapsed().as_secs_f64());
+      st.check_owner_bytes().unwrap_or_else(|e| panic!("run A frame {f}: {e}"));
+      for (k, accepted, line) in &rep.d3_samples {
+        if !d3_seen_a.contains(&(*k, *accepted)) {
+          d3_seen_a.push((*k, *accepted));
+          std::println!("cadence A {f}: D3 first {} entry of class {k}: {line}", if *accepted { "accepted" } else { "rejected" });
+        }
+      }
+      let (diff, hdr) = cad_levels_equal(&layout, &frame, &reference);
+      let fresh: usize = rep.fresh.iter().map(|v| v.len()).sum();
+      let shown: usize = st.tiers.values().map(|t| t.lists.iter().flatten().map(|l| l[0].len()).sum::<usize>()).sum();
+      swaps_with_content += rep.swaps.len() * (shown > 0) as usize;
+      std::println!(
+        "cadence A {f}: mode {:?} reset {:?} fresh {fresh} shown {shown} images {} built {} d3 {} classified {:?}: {diff} words differ",
+        rep.mode,
+        rep.reset,
+        rep.images_shown,
+        rep.drawn_build.len(),
+        rep.d3_rejected,
+        rep.classified
+      );
+      assert!(diff == 0 && hdr, "run A frame {f}: the cadenced frame differs from the full draw ({diff} words, header {hdr}): {}", cad_first_diff(&layout, &frame, &reference));
+    }
+    assert!(swaps_with_content >= 4, "run A: the classes never showed an image ({swaps_with_content})");
+  }
+  // ── Run B at 3 R: the light and the coverage (the coma fills the frame: D3 rejects most build
+  // entries, so the scenario asserts are evaluated at 6 R, `cadence_keeps_the_light_whole_clusters`)
+  cad_run_b(3.0, 270, false, "B");
+}
+
+/// T3's run B (see `cadence_keeps_the_light`): 60 s of simulation per frame on the 3-day coma, the
+/// eye orbiting the nucleus at `dist_r` coma radii (0.002° per frame) and following it, `frames`
+/// frames; every frame's invariants asserted, the coverage printed at each cycle start; with
+/// `scenario` also the scenario's asserts (births and deaths, every class ≥ 1 % of the
+/// classifications, every pair ≥ 2 swaps with content).
+fn cad_run_b(dist_r: f64, frames: usize, scenario: bool, tag: &str) {
+  use super::cadence::CadenceConfig;
+  let px = 128u32;
+  let layout = PyramidLayout::new(px, px);
+  let cfg = test_cfg(1.5e-3, 30.0 * 86400.0);
+  let cfg_at = move |_: &JetState| cfg;
+  let t0 = 3.0 * 86400.0;
+  let dt = 60.0;
+  let mut sys = DustSystemState::with_tiers(8_192, 3);
+  let mut seq = 0u64;
+  settle(&mut sys, t0, &cfg_at, &mut seq);
+  let radius = sys.coma_radius_m().expect("coma");
+  let mut st = cad_state(CadenceConfig::full());
+  st.trace_light = true;
+  let fwd0: V3 = unit([1.0, 0.3, -0.2]);
+  let up0: V3 = [0.0, 0.0, 1.0];
+  // the lazy propagate's slot store per tier index: (moments, stamp)
+  let mut store: alloc::vec::Vec<alloc::vec::Vec<Option<DustMoments>>> = alloc::vec::Vec::new();
+  let mut inv_unit = 0.0f32;
+  // the images' contents by (tier index, life), the light each drew, and the deaths
+  let n_pairs = 3 * 2;
+  let mut build_content: alloc::vec::Vec<alloc::vec::Vec<((usize, u64), f64)>> = alloc::vec![alloc::vec::Vec::new(); n_pairs];
+  let mut shown_content: alloc::vec::Vec<alloc::vec::Vec<((usize, u64), f64)>> = alloc::vec![alloc::vec::Vec::new(); n_pairs];
+  let mut death: std::collections::HashMap<(usize, u64), usize> = std::collections::HashMap::new();
+  let mut prev_live: std::collections::HashSet<(usize, u64)> = std::collections::HashSet::new();
+  let (mut births, mut deaths) = (0usize, 0usize);
+  let mut swaps_content = alloc::vec![0usize; n_pairs];
+  let mut hist = [0u64; 4];
+  let mut prev_emitted: alloc::vec::Vec<u64> = alloc::vec::Vec::new();
+  let mut resets = 0usize;
+  let mut sigma_violations: alloc::vec::Vec<(usize, f64, f64)> = alloc::vec::Vec::new();
+  let mut d3_seen: alloc::vec::Vec<(usize, bool)> = alloc::vec::Vec::new();
+  // the anchors per frame and tier (a stamp s is frame s − 1), and the stale positions checked
+  let mut anchor_log: alloc::vec::Vec<alloc::vec::Vec<[f64; 3]>> = alloc::vec::Vec::new();
+  let (mut shift_checked, mut shift_worst) = (0usize, 0.0f64);
+  for f in 0..frames {
+    let t_frame = std::time::Instant::now();
+    let t = t0 + f as f64 * dt;
+    settle(&mut sys, t, &cfg_at, &mut seq);
+    let t_settle = t_frame.elapsed().as_secs_f64();
+    let nucleus = orbit_jet(t).expect("jet").r_m;
+    let th = (0.002f64 * f as f64).to_radians();
+    let dir = cad_rotate(fwd0, up0, th);
+    let dist = dist_r * radius;
+    let view = super::cadence::CadenceView {
+      view_rot: cad_view_rot(dir, up0),
+      proj: cad_persp(60f64.to_radians(), 1.0),
+      eye_m: [nucleus[0] - dir[0] * dist, nucleus[1] - dir[1] * dist, nucleus[2] - dir[2] * dist],
+      units_per_m: 1.0,
+      width: px,
+      height: px,
+    };
+    let hosts: alloc::vec::Vec<&DustHostState> = sys.tiers.iter().filter(|h| h.draw_state().is_some()).collect();
+    let mut tiers: alloc::vec::Vec<(DustDrawState, TierPackets)> = hosts
+      .iter()
+      .map(|h| {
+        let ds = h.draw_state().unwrap().at_time(t);
+        let tp = tier_packets(h, &ds.frame);
+        (ds, tp)
+      })
+      .collect();
+    if store.len() < tiers.len() {
+      store.resize(tiers.len(), alloc::vec::Vec::new());
+    }
+    if f == 0 {
+      inv_unit = cad_inv_unit(&tiers, &view, &layout, None, 1e-2).expect("τ_max");
+    }
+    let unit_v = 1.0 / inv_unit;
+    let t_packets = t_frame.elapsed().as_secs_f64();
+    let reference = cad_draw(&tiers, &view, &layout, inv_unit, None);
+    let t_reference = t_frame.elapsed().as_secs_f64();
+    let fm = super::cadence::FrameMeta { flags: 0, ..cad_frame_meta(view, t, nucleus, unit_v) };
+    // begin: the plan's propagate list
+    let plan = {
+      let metas: alloc::vec::Vec<super::cadence::TierMeta<'_>> = tiers
+        .iter()
+        .enumerate()
+        .map(|(ti, (ds, (r, _)))| {
+          // the host's rewritten offset: the first live batch emitted (or re-emitted: the
+          // provisional open window) since the previous frame's emission value
+          let mask = ds.capacity - 1;
+          let prev = prev_emitted.get(ti).copied().unwrap_or(0);
+          let rewritten_from = hosts[ti]
+            .ring
+            .batches
+            .iter()
+            .find(|b| b.ready > prev)
+            .map(|b| ((b.first as u32 & mask).wrapping_sub(ds.first_slot) & mask).min(r.len() as u32))
+            .unwrap_or(r.len() as u32);
+          super::cadence::TierMeta {
+            key: ti as u64,
+            first_slot: ds.first_slot,
+            capacity: ds.capacity,
+            live_count: r.len() as u32,
+            emitted: ds.compute_wait,
+            rewritten_from,
+            anchor_m: ds.anchor_m,
+            render: r,
+          }
+        })
+        .collect();
+      if f > 0 {
+        let p = st.begin(&fm, &metas, &layout);
+        if p.reset.is_some() {
+          for (ti, m) in metas.iter().enumerate() {
+            std::println!(
+              "cadence {tag} {f}: reset {:?}: tier {ti} first {} live {} emitted {} rewritten_from {}",
+              p.reset, m.first_slot, m.live_count, m.emitted, m.rewritten_from
+            );
+          }
+        }
+        p
+      } else {
+        st.begin(&fm, &metas, &layout)
+      }
+    };
+    prev_emitted = tiers.iter().map(|(ds, _)| ds.compute_wait).collect();
+    // the lazy propagate: the listed offsets get this frame's moments and stamp, the rest keep
+    // what they last had (by slot)
+    let stamp = f32::from_bits(f as u32 + 1);
+    for (ti, (ds, (_, m))) in tiers.iter_mut().enumerate() {
+      let cap = ds.capacity as usize;
+      if store[ti].len() != cap {
+        store[ti] = alloc::vec![None; cap];
+      }
+      let mask = ds.capacity - 1;
+      let listed: std::collections::HashSet<u32> = plan.propagate[ti].iter().copied().collect();
+      for (o, mo) in m.iter_mut().enumerate() {
+        let s = (ds.first_slot.wrapping_add(o as u32) & mask) as usize;
+        if listed.contains(&(o as u32)) {
+          mo.edges[12][3] = stamp;
+          store[ti][s] = Some(*mo);
+        } else if let Some(old) = store[ti][s] {
+          *mo = old;
+        } else {
+          mo.edges[12][3] = stamp;
+          store[ti][s] = Some(*mo);
+        }
+      }
+    }
+    let mut frame = alloc::vec![0u32; layout.total_words as usize];
+    frame[..PYRAMID_HEADER_WORDS as usize].copy_from_slice(&cad_header(&layout));
+    let t_begin = t_frame.elapsed().as_secs_f64();
+    let rep = {
+      let mut draws: alloc::vec::Vec<super::cadence::TierDraw<'_>> = tiers
+        .iter_mut()
+        .map(|(ds, (r, m))| super::cadence::TierDraw {
+          moments: m.as_mut_slice(),
+          render: r.as_slice(),
+          pc: cad_pc(&view, ds.anchor_m, r.len() as u32, inv_unit),
+          flow: Default::default(),
+          specks_pc: None,
+          stamp: f as u32 + 1,
+        })
+        .collect();
+      st.finish(&mut draws, &layout, &mut frame)
+    };
+    let t_finish = t_frame.elapsed().as_secs_f64();
+    st.check_owner_bytes().unwrap_or_else(|e| panic!("run B frame {f}: {e}"));
+    anchor_log.push(tiers.iter().map(|(ds, _)| ds.anchor_m).collect());
+    // a stale slot is classified at its propagated position, re-expressed against this frame's
+    // anchor: local_used + anchor_now = local_then + anchor_then within the f32 rounding of the
+    // shifted coordinate
+    for &(ti, o, stamp, used) in &rep.classified_at {
+      let (ds, _) = &tiers[ti];
+      let s = (ds.first_slot.wrapping_add(o) & (ds.capacity - 1)) as usize;
+      let Some(old) = store[ti][s] else { continue };
+      assert_eq!(old.propagate_stamp(), stamp, "frame {f}: the classified stamp is not the stored one");
+      let then = anchor_log[stamp as usize - 1][ti];
+      let now = ds.anchor_m;
+      let om = old.mean();
+      for c in 0..3 {
+        let helio_then = om[c] as f64 + then[c];
+        let helio_used = used[c] + now[c];
+        let tol = used[c].abs() * 1.2e-7 + om[c].abs() as f64 * 1.2e-7 + 1e-3;
+        let err = (helio_then - helio_used).abs();
+        shift_worst = shift_worst.max(err / tol);
+        assert!(err <= tol, "frame {f}: tier {ti} offset {o} (stamp {stamp}): classified {:.3} m off its propagated position (tolerance {tol:.3} m)", err);
+      }
+      shift_checked += 1;
+    }
+    for (k, c) in rep.class_hist.iter().enumerate() {
+      hist[k] += *c as u64;
+    }
+    // the images' contents: aborts, swaps, then this frame's draws
+    for a in &rep.aborts {
+      if a.list == 1 {
+        build_content[a.k * 2 + a.p].clear();
+      }
+    }
+    for &(k, p) in &rep.swaps {
+      let i = k * 2 + p;
+      shown_content[i] = core::mem::take(&mut build_content[i]);
+      if !shown_content[i].is_empty() {
+        swaps_content[i] += 1;
+      }
+    }
+    for d in &rep.drawn_build {
+      let (ds, _) = &tiers[d.tier];
+      let s = ds.first_slot.wrapping_add(d.offset) & (ds.capacity - 1);
+      let life = cad_life(hosts[d.tier], s).expect("a drawn cluster is live");
+      build_content[d.k * 2 + d.p].push(((d.tier, life), d.light));
+    }
+    // the stamps of the drawn clusters and their predecessors
+    for (ti, (_, (r, m))) in tiers.iter().enumerate() {
+      let drawn = rep.fresh[ti]
+        .iter()
+        .copied()
+        .chain(rep.drawn_build.iter().filter(|d| d.tier == ti).map(|d| d.offset));
+      for o in drawn {
+        let o = o as usize;
+        if !(m[o].flux() > 0.0) {
+          continue;
+        }
+        assert_eq!(m[o].edges[12][3].to_bits(), f as u32 + 1, "frame {f}: tier {ti} offset {o} drawn with stale moments");
+        if let Some(q) = streak_pred(r, o) {
+          assert_eq!(m[q].edges[12][3].to_bits(), f as u32 + 1, "frame {f}: tier {ti} offset {o}'s predecessor {q} is stale");
+        }
+      }
+    }
+    // exactly once, by life
+    let mut live_now: std::collections::HashSet<(usize, u64)> = std::collections::HashSet::new();
+    let mut in_shown: std::collections::HashMap<(usize, u64), usize> = std::collections::HashMap::new();
+    for c in &shown_content {
+      for (l, _) in c {
+        *in_shown.entry(*l).or_insert(0) += 1;
+      }
+    }
+    for (ti, (ds, (r, m))) in tiers.iter().enumerate() {
+      let fresh: std::collections::HashSet<u32> = rep.fresh[ti].iter().copied().collect();
+      for o in 0..r.len() {
+        let s = ds.first_slot.wrapping_add(o as u32) & (ds.capacity - 1);
+        let Some(life) = cad_life(hosts[ti], s) else { continue };
+        live_now.insert((ti, life));
+        if !(m[o].flux() > 0.0) || !render_live(r[o].age_id_dbeta_flux[1]) {
+          continue;
+        }
+        let n = fresh.contains(&(o as u32)) as usize + in_shown.get(&(ti, life)).copied().unwrap_or(0);
+        assert_eq!(n, 1, "frame {f}: tier {ti} offset {o} (life {life}) drawn {n} times");
+      }
+    }
+    births += live_now.difference(&prev_live).count() * (f > 0) as usize;
+    for l in prev_live.difference(&live_now) {
+      death.entry(*l).or_insert(f);
+      deaths += 1;
+    }
+    prev_live = live_now.clone();
+    // ghosts: dead lives in shown images, their age and light
+    let mut ghost_light = 0.0f64;
+    for (i, c) in shown_content.iter().enumerate() {
+      let n = [8usize, 16, 64][i / 2];
+      for (l, light) in c {
+        if live_now.contains(l) {
+          continue;
+        }
+        let age = f - death.get(l).copied().unwrap_or(f);
+        assert!(age <= 2 * n, "frame {f}: a ghost of class {n} lasted {age} frames");
+        ghost_light += light * st.images[i].shown_unit as f64;
+      }
+    }
+    let lf = super::cadence::pyramid_light(&layout, &frame) * unit_v as f64;
+    let lr = super::cadence::pyramid_light(&layout, &reference) * unit_v as f64;
+    let ratio = lf / lr.max(1e-300);
+    let ghost = ghost_light / lr.max(1e-300);
+    let fresh: usize = rep.fresh.iter().map(|v| v.len()).sum();
+    let shown: usize = st.tiers.values().map(|t| t.lists.iter().flatten().map(|l| l[0].len()).sum::<usize>()).sum();
+    resets += (f > 0 && rep.reset.is_some()) as usize;
+    for a in &rep.aborts {
+      std::println!(
+        "cadence {tag} {f}: abort class {} phase {} list {} reason {} ({} entries)",
+        a.k, a.p, a.list, ["rate", "budget", "prediction", "coverage"][a.reason as usize], a.entries
+      );
+    }
+    std::println!(
+      "cadence {tag} {f}: admitted {:?} mode {:?} reset {:?} fresh {fresh} shown {shown} images {} built {} d3 {} (at classify {}, unshifted stale {}) aborts {} swaps {:?} classified {:?}: Σ ratio {ratio:.5} ghost share {ghost:.5}; frozen eye − nucleus (world-frozen / nucleus-frozen / current) max {:.1} / {:.1} / {:.1} m",
+      rep.admitted,
+      rep.mode,
+      rep.reset,
+      rep.images_shown,
+      rep.drawn_build.len(),
+      rep.d3_rejected,
+      rep.d3_at_classify,
+      rep.unshifted_stale,
+      rep.aborts.len(),
+      rep.swaps,
+      rep.classified,
+      rep.frozen_eye.iter().map(|e| e.2).fold(0.0f64, f64::max),
+      rep.frozen_eye.iter().map(|e| e.3).fold(0.0f64, f64::max),
+      rep.frozen_eye.iter().map(|e| e.4).fold(0.0f64, f64::max)
+    );
+    for (k, accepted, line) in &rep.d3_samples {
+      let key = (*k, *accepted);
+      if !d3_seen.contains(&key) {
+        d3_seen.push(key);
+        std::println!("cadence {tag} {f}: D3 first {} entry of class {k}: {line}", if *accepted { "accepted" } else { "rejected" });
+      }
+    }
+    for c in &rep.cycles {
+      std::println!(
+        "cadence {tag} {f}: cycle class {} phase {}: the ended build's D3 rejected {} of {} ({:.1} %); the shown images hold {:.2} % of the frame's light",
+        c.k,
+        c.p,
+        c.d3_rejected,
+        c.d3_rejected + c.drawn,
+        100.0 * c.d3_rejected as f64 / (c.d3_rejected + c.drawn).max(1) as f64,
+        100.0 * c.shown_light_share
+      );
+    }
+    if (ratio - 1.0).abs() > 0.01 + ghost {
+      sigma_violations.push((f, ratio, ghost));
+    }
+    let t_all = t_frame.elapsed().as_secs_f64();
+    std::eprintln!(
+      "[t8 time] cadence {tag} {f}: settle {t_settle:.3} s, packets {:.3} s, reference {:.3} s, begin + propagate {:.3} s, finish {:.3} s, checks {:.3} s (frame {t_all:.3} s)",
+      t_packets - t_settle,
+      t_reference - t_packets,
+      t_begin - t_reference,
+      t_finish - t_begin,
+      t_all - t_finish
+    );
+  }
+  std::println!(
+    "cadence {tag}: stale classify positions checked {shift_checked}, worst error / tolerance {shift_worst:.3}"
+  );
+  // (a run whose classes never show content has no stale slot: the 3 R run has them)
+  assert!(
+    shift_checked > 0 || swaps_content.iter().sum::<usize>() == 0,
+    "run {tag}: images were shown but no stale slot was classified: the shift is untested"
+  );
+  let tot: u64 = hist.iter().sum();
+  std::println!(
+    "cadence {tag}: births {births} deaths {deaths}; classified fresh / N8 / N16 / N64 {:?} of {tot}; swaps with content per pair {swaps_content:?}",
+    hist
+  );
+  assert_eq!(resets, 0, "run B reset after its first frame ({resets} times)");
+  std::println!(
+    "cadence {tag}: Σ-ratio violations (|ratio − 1| > 1 % + ghost share): {} of {frames} frames; worst {:?}",
+    sigma_violations.len(),
+    sigma_violations.iter().max_by(|a, b| (a.1 - 1.0).abs().partial_cmp(&(b.1 - 1.0).abs()).unwrap())
+  );
+  assert!(sigma_violations.is_empty(), "run {tag}: {} frames beyond the 1 % light bound (first {:?})", sigma_violations.len(), sigma_violations.first());
+  if !scenario {
+    return;
+  }
+  assert!(births > 0 && deaths > 0, "run B saw no births ({births}) or no deaths ({deaths})");
+  for k in 1..4 {
+    assert!(hist[k] as f64 >= 0.01 * tot as f64, "run B: class {k} received {} of {tot} classifications", hist[k]);
+  }
+  assert!(swaps_content.iter().all(|&n| n >= 2), "run B: a pair swapped fewer than twice with content: {swaps_content:?}");
+}
+
+/// T3's run B with whole clusters in the frame (the camera at 6 R, 128 px, 60°): the per-frame
+/// invariants of `cadence_keeps_the_light` and its scenario asserts (births and deaths, every class
+/// ≥ 1 % of the classifications, every (class, phase) ≥ 2 swaps with content).
+#[test]
+fn cadence_keeps_the_light_whole_clusters() {
+  cad_run_b(6.0, 270, true, "B6");
+}
+
+/// The resets and aborts (plan step 3). From a warm state (the static scene, one class of 8
+/// frames in two phases, 24 frames: both phases show an image) every trigger resets: a speed
+/// change, a fov change, a viewport change, the flow marks or tracers (the cadence off), a changed
+/// fingerprint, a re-emission at an unchanged range, a head moving back, a capacity change, a tier
+/// removed; on that frame no list is shown or built, no image is shown, and (where the tier set
+/// and ranges are those of the full draw) the frame equals it word for word. A perspective
+/// rotation keeps the lists; on an orthographic warm state a roll + pan + zoom 1.1 keeps them,
+/// a rotation off the view axis and a zoom of 1.3 reset. A reused frame changes no state. The
+/// abort: after 24 still frames the eye steps 0.2 R per frame; exactly the lists whose
+/// `|Δe − Δe_c| · g_max` exceeds `3ε / 2N` abort; each aborted build's shown image is replaced
+/// at its scheduled swap by an empty one within the printed ghost frames (≤ N).
+#[test]
+fn cadence_resets_and_aborts() {
+  use super::cadence::{CadenceConfig, CadenceMode, CadenceReset, CadenceView, DustCadenceState, OWN_BUILD, OWN_SHOWN};
+  let px = 128u32;
+  let layout = PyramidLayout::new(px, px);
+  let (mut tiers, radius) = cad_scene();
+  let anchor = tiers[0].0.anchor_m;
+  let t = tiers[0].0.frame.ps_r_t_hi[3] as f64;
+  let view = cad_static_view(anchor, radius, px, 3.0);
+  let inv_unit = cad_inv_unit(&tiers, &view, &layout, None, 1e-2).expect("τ_max");
+  let unit_v = 1.0 / inv_unit;
+  let cfg = CadenceConfig { classes: alloc::vec![8], phases: 2, eps_px: 1.0, margin_frac: 0.0 };
+  let warm = |tiers: &mut [(DustDrawState, TierPackets)], view: CadenceView| -> DustCadenceState {
+    let mut st = cad_state(cfg.clone());
+    for _ in 0..24 {
+      let fm = cad_frame_meta(view, t, anchor, unit_v);
+      cad_cadence_frame(&mut st, &fm, tiers, &layout, inv_unit, None, &|_, _| {});
+    }
+    st
+  };
+  let shown_count = |st: &DustCadenceState| -> usize {
+    st.tiers.values().map(|tc| tc.owner.iter().filter(|&&b| b & OWN_SHOWN != 0).count()).sum()
+  };
+  let st0 = warm(&mut tiers, view);
+  assert!(shown_count(&st0) > 0, "the warm state shows nothing");
+  let reference = cad_draw(&tiers, &view, &layout, inv_unit, None);
+  let after_reset = |st: &DustCadenceState, name: &str| {
+    for tc in st.tiers.values() {
+      assert!(tc.owner.iter().all(|&b| b & (OWN_SHOWN | OWN_BUILD) == 0), "{name}: a slot shown or built after the reset");
+    }
+    assert!(st.images.iter().all(|im| im.shown_view.is_none()), "{name}: an image shown after the reset");
+  };
+  // the triggers on the perspective warm state
+  let base = cad_frame_meta(view, t, anchor, unit_v);
+  let mut fov = view;
+  fov.proj = cad_persp(61f64.to_radians(), 1.0);
+  type Edit = alloc::boxed::Box<dyn Fn(usize, &mut super::cadence::TierMeta<'_>)>;
+  let cases: alloc::vec::Vec<(&str, super::cadence::FrameMeta, Edit, Option<CadenceReset>, bool)> = alloc::vec![
+    ("speed", super::cadence::FrameMeta { speed: 2.0, ..base }, alloc::boxed::Box::new(|_, _| {}), Some(CadenceReset::Speed), true),
+    ("fov", super::cadence::FrameMeta { view: fov, ..base }, alloc::boxed::Box::new(|_, _| {}), Some(CadenceReset::Projection), false),
+    ("flow", super::cadence::FrameMeta { flags: DUST_VIEW_FLOW, ..base }, alloc::boxed::Box::new(|_, _| {}), Some(CadenceReset::Flags), true),
+    ("tracers", super::cadence::FrameMeta { flags: DUST_VIEW_TRACERS, ..base }, alloc::boxed::Box::new(|_, _| {}), Some(CadenceReset::Flags), false),
+    ("fingerprint", super::cadence::FrameMeta { fingerprint: 2, ..base }, alloc::boxed::Box::new(|_, _| {}), Some(CadenceReset::Fingerprint), true),
+    ("re-emission", base, alloc::boxed::Box::new(|ti, m| if ti == 0 { m.emitted += 1 }), Some(CadenceReset::Reemit(0)), true),
+    ("provisional re-emission (control)", base, alloc::boxed::Box::new(|ti, m| if ti == 0 {
+      m.emitted += 1;
+      m.rewritten_from = m.live_count - 16;
+    }), None, false),
+    ("head back", base, alloc::boxed::Box::new(|ti, m| if ti == 0 { m.live_count -= 16 }), Some(CadenceReset::Range(0)), false),
+    ("capacity", base, alloc::boxed::Box::new(|ti, m| if ti == 0 { m.capacity *= 2 }), Some(CadenceReset::Capacity(0)), false),
+    ("rotation (control)", super::cadence::FrameMeta {
+      view: CadenceView { view_rot: cad_view_rot(cad_rotate(unit([1.0, 0.3, -0.2]), [0.0, 0.0, 1.0], 5f64.to_radians()), [0.0, 0.0, 1.0]), ..view },
+      ..base
+    }, alloc::boxed::Box::new(|_, _| {}), None, false),
+  ];
+  for (name, fm, edit, expect, exact) in &cases {
+    let mut st = st0.clone();
+    let (frame, plan, rep) = cad_cadence_frame(&mut st, fm, &mut tiers, &layout, inv_unit, None, edit.as_ref());
+    st.check_owner_bytes().unwrap_or_else(|e| panic!("{name}: {e}"));
+    std::println!("reset {name}: plan {:?} mode {:?}, shown after {}, images {}", plan.reset, rep.mode, shown_count(&st), rep.images_shown);
+    assert_eq!(plan.reset, *expect, "{name}: the reset");
+    match expect {
+      Some(_) => {
+        after_reset(&st, name);
+        if *exact {
+          let (diff, hdr) = cad_levels_equal(&layout, &frame, &reference);
+          assert!(diff == 0 && hdr, "{name}: the reset frame differs from the full draw ({diff} words): {}", cad_first_diff(&layout, &frame, &reference));
+        }
+        if *name == "flow" {
+          assert_eq!(rep.mode, Some(CadenceMode::Off), "{name}: the cadence is not off");
+        }
+      }
+      None => {
+        assert!(shown_count(&st) > 0, "{name}: the lists were dropped");
+        if name.starts_with("provisional") {
+          // the 16 rewritten slots of tier 0: fresh (no class), the rest kept
+          let tc = &st.tiers[&0];
+          let (ds, (r, _)) = &tiers[0];
+          for o in (r.len() - 16)..r.len() {
+            let s = (ds.first_slot.wrapping_add(o as u32) & (ds.capacity - 1)) as usize;
+            assert!(tc.owner[s] & (OWN_SHOWN | OWN_BUILD) == 0, "{name}: rewritten offset {o} still shown or built");
+          }
+        }
+      }
+    }
+  }
+  // a viewport change and a tier removed (their own frame sizes / tier sets)
+  {
+    let mut st = st0.clone();
+    let v2 = CadenceView { width: 120, height: 120, ..view };
+    let layout2 = PyramidLayout::new(120, 120);
+    let fm = cad_frame_meta(v2, t, anchor, unit_v);
+    let (frame, plan, _) = cad_cadence_frame(&mut st, &fm, &mut tiers, &layout2, inv_unit, None, &|_, _| {});
+    assert_eq!(plan.reset, Some(CadenceReset::Viewport));
+    after_reset(&st, "viewport");
+    let r2 = cad_draw(&tiers, &v2, &layout2, inv_unit, None);
+    let (diff, hdr) = cad_levels_equal(&layout2, &frame, &r2);
+    std::println!("reset viewport: {diff} words differ");
+    assert!(diff == 0 && hdr, "viewport: the reset frame differs from the full draw: {}", cad_first_diff(&layout2, &frame, &r2));
+    let mut st = st0.clone();
+    let mut fewer: alloc::vec::Vec<(DustDrawState, TierPackets)> = tiers[..tiers.len() - 1].to_vec();
+    let (_, plan, _) = cad_cadence_frame(&mut st, &base, &mut fewer, &layout, inv_unit, None, &|_, _| {});
+    assert_eq!(plan.reset, Some(CadenceReset::TierSet));
+    after_reset(&st, "tier set");
+  }
+  // a reused frame changes nothing
+  {
+    let mut st = st0.clone();
+    let d0 = st.state_digest();
+    let fm = super::cadence::FrameMeta { reused: true, ..base };
+    let (_, plan, _) = cad_cadence_frame(&mut st, &fm, &mut tiers, &layout, inv_unit, None, &|_, _| {});
+    assert_eq!(plan.mode, Some(CadenceMode::Paused));
+    assert_eq!(st.state_digest(), d0, "a reused frame changed the state");
+  }
+  // orthographic: roll + pan + zoom 1.1 keeps the lists; off-axis rotation and zoom 1.3 reset
+  {
+    let fwd0: V3 = unit([1.0, 0.3, -0.2]);
+    let up0: V3 = [0.0, 0.0, 1.0];
+    let half = 3.0 * radius;
+    let ov = CadenceView { view_rot: cad_view_rot(fwd0, up0), proj: cad_ortho(half), ..view };
+    let o_inv = cad_inv_unit(&tiers, &ov, &layout, None, 1e-2).expect("τ_max ortho");
+    let mut st_o = cad_state(cfg.clone());
+    for _ in 0..24 {
+      let fm = cad_frame_meta(ov, t, anchor, 1.0 / o_inv);
+      cad_cadence_frame(&mut st_o, &fm, &mut tiers, &layout, o_inv, None, &|_, _| {});
+    }
+    assert!(shown_count(&st_o) > 0, "the orthographic warm state shows nothing");
+    let right0 = unit(cross64(fwd0, up0));
+    let upv0 = cross64(right0, fwd0);
+    let pan = 10.0 * 2.0 * half / px as f64;
+    let cases_o: [(&str, CadenceView, Option<CadenceReset>); 3] = [
+      (
+        "ortho roll + pan + zoom 1.1",
+        CadenceView {
+          view_rot: cad_view_rot(fwd0, cad_rotate(upv0, fwd0, 20f64.to_radians())),
+          proj: cad_ortho(half / 1.1),
+          eye_m: [ov.eye_m[0] + right0[0] * pan, ov.eye_m[1] + right0[1] * pan, ov.eye_m[2] + right0[2] * pan],
+          ..ov
+        },
+        None,
+      ),
+      ("ortho off-axis rotation", CadenceView { view_rot: cad_view_rot(cad_rotate(fwd0, upv0, 5f64.to_radians()), up0), ..ov }, Some(CadenceReset::OrthoDirection)),
+      ("ortho zoom 1.3", CadenceView { proj: cad_ortho(half / 1.3), ..ov }, Some(CadenceReset::OrthoZoom)),
+    ];
+    for (name, v, expect) in cases_o {
+      let mut st = st_o.clone();
+      let fm = cad_frame_meta(v, t, anchor, 1.0 / o_inv);
+      let (_, plan, _) = cad_cadence_frame(&mut st, &fm, &mut tiers, &layout, o_inv, None, &|_, _| {});
+      std::println!("reset {name}: plan {:?}, shown after {}", plan.reset, shown_count(&st));
+      assert_eq!(plan.reset, expect, "{name}");
+      if expect.is_none() {
+        assert!(shown_count(&st) > 0, "{name}: the lists were dropped");
+      } else {
+        after_reset(&st, name);
+      }
+    }
+  }
+  // the abort
+  {
+    let mut st = st0.clone();
+    let fwd0: V3 = unit([1.0, 0.3, -0.2]);
+    let right0 = unit(cross64(fwd0, [0.0, 0.0, 1.0]));
+    let step = 0.2 * radius;
+    let bound = (super::cadence::DUST_CADENCE_ABORT_FACTOR - 1.0) * cfg.eps_px / (2.0 * 8.0);
+    // the expected aborts from the state before the step: (k, p, list)
+    let mut expected: alloc::vec::Vec<(usize, usize, u8)> = alloc::vec::Vec::new();
+    for p in 0..2 {
+      for list in [1usize, 2] {
+        let (mut n, mut g) = (0usize, 0.0f32);
+        for tc in st.tiers.values() {
+          n += tc.lists[0][p][list].len();
+          g = g.max(tc.meta[0][p][list].g_max);
+        }
+        // Δe − Δe_c = the step (the still frames' Δe and Δe_c are 0)
+        if n > 0 && step as f32 * g > bound {
+          expected.push((0, p, list as u8));
+        }
+      }
+    }
+    assert!(!expected.is_empty(), "the step aborts nothing: the test does not reach the rule");
+    let mut ghosts: alloc::vec::Vec<(usize, u32)> = alloc::vec::Vec::new();
+    for j in 1..=10usize {
+      let e = [
+        view.eye_m[0] + right0[0] * step * j as f64,
+        view.eye_m[1] + right0[1] * step * j as f64,
+        view.eye_m[2] + right0[2] * step * j as f64,
+      ];
+      let fm = cad_frame_meta(CadenceView { eye_m: e, ..view }, t, anchor, unit_v);
+      let (_, plan, rep) = cad_cadence_frame(&mut st, &fm, &mut tiers, &layout, inv_unit, None, &|_, _| {});
+      st.check_owner_bytes().unwrap_or_else(|e| panic!("abort frame {j}: {e}"));
+      assert_eq!(plan.reset, None, "abort frame {j}: an eye translation reset");
+      if j == 1 {
+        let got: alloc::vec::Vec<(usize, usize, u8)> = rep.aborts.iter().map(|a| (a.k, a.p, a.list)).collect();
+        for a in &rep.aborts {
+          std::println!(
+            "abort: class {} phase {} list {} ({} entries): excess {:.4} px > bound {:.4} px (g_max {:.4e} px/m); the shown image ({} entries) is the ghost for {} more frames",
+            a.k, a.p, a.list, a.entries, a.excess_px, a.bound_px, a.g_max, a.shown_entries, a.ghost_frames_left
+          );
+          if a.list == 1 {
+            ghosts.push((a.p, a.ghost_frames_left));
+          }
+        }
+        assert_eq!(got, expected, "the aborted lists");
+        for &(k, p, list) in &expected {
+          for tc in st.tiers.values() {
+            assert!(tc.lists[k][p][list as usize].is_empty(), "class {k} phase {p} list {list} not emptied");
+          }
+        }
+      }
+      // an aborted build's shown image leaves at its swap
+      for &(p, left) in &ghosts {
+        assert!(left <= 8, "a ghost of {left} frames > N");
+        // `left` counts from the abort frame (j = 1): the swap is drawn at j = left + 1
+        if j as u32 == left + 1 {
+          for tc in st.tiers.values() {
+            assert!(tc.lists[0][p][0].is_empty(), "phase {p}: the aborted build's swap still shows {} entries", tc.lists[0][p][0].len());
+          }
+        }
+      }
+    }
+  }
+}
+
+/// The density at the eye counts every cluster (plan item 6, D5): with specks on (the eye inside
+/// the coma, a shell) and a warm cadence (some clusters shown), the cadenced speck pass's `n_eye`
+/// words equal a plain speck pass's over the same moments; a shown cluster's walk mask is 0, a
+/// fresh cluster's equals the plain pass's; no list holds a cluster the shell rule forbids. Prints
+/// the clusters the shell rule kept fresh and the specks drawn.
+#[test]
+fn specks_n_eye_counts_every_cluster() {
+  use super::cadence::{CadenceConfig, OWN_BUILD, OWN_PENDING, OWN_SHOWN, shell_capable};
+  use super::specks::{DustSpecksPushConstants, PYR_N_EYE, PYR_N_EYE_HI, PYR_SPECKS, SpeckHeader, pack_size_fade, specks_tier};
+  let px = 128u32;
+  let layout = PyramidLayout::new(px, px);
+  let (mut tiers, radius) = cad_scene();
+  let anchor = tiers[0].0.anchor_m;
+  let t = tiers[0].0.frame.ps_r_t_hi[3] as f64;
+  // the eye 0.02 R from the nucleus (round 3 at 0.3 R read n_eye 0 on both passes: vacuous)
+  let view = cad_static_view(anchor, radius, px, 0.02);
+  let inv_unit = cad_inv_unit(&tiers, &view, &layout, None, 1e-2).expect("τ_max");
+  let unit_v = 1.0 / inv_unit;
+  let d_max = (2e-3 * radius) as f32;
+  let budget = 1u32 << 16;
+  let mut st = cad_state(CadenceConfig { classes: alloc::vec![8], phases: 2, eps_px: 1.0, margin_frac: 0.0 });
+  let mut shell_forced = 0u32;
+  for _ in 0..24 {
+    let fm = cad_frame_meta(view, t, anchor, unit_v);
+    let (_, _, rep) = cad_cadence_frame(&mut st, &fm, &mut tiers, &layout, inv_unit, Some((d_max, budget)), &|_, _| {});
+    shell_forced = shell_forced.max(rep.shell_forced);
+  }
+  // the checked frame: the moments as the cadence receives them, kept for the plain pass
+  let before: alloc::vec::Vec<alloc::vec::Vec<DustMoments>> = tiers.iter().map(|(_, (_, m))| m.clone()).collect();
+  let fm = cad_frame_meta(view, t, anchor, unit_v);
+  let (frame, _, rep) = cad_cadence_frame(&mut st, &fm, &mut tiers, &layout, inv_unit, Some((d_max, budget)), &|_, _| {});
+  st.check_owner_bytes().unwrap_or_else(|e| panic!("{e}"));
+  let mut plain = alloc::vec![0u32; layout.total_words as usize];
+  let mut header = cad_header(&layout);
+  SpeckHeader::write(&mut header, d_max, budget);
+  plain[..header.len()].copy_from_slice(&header);
+  let rel = view.mvp_eye_relative();
+  let (mut shown, mut fresh_cmp, mut drawn_plain) = (0usize, 0usize, 0u32);
+  for (ti, (ds, (r, m))) in tiers.iter().enumerate() {
+    let mut copy = before[ti].clone();
+    let pc = cad_pc(&view, ds.anchor_m, r.len() as u32, inv_unit);
+    let spc = DustSpecksPushConstants {
+      moments: 0,
+      render: 0,
+      pyramid: 0,
+      live_count: r.len() as u32,
+      size_fade: pack_size_fade(50.0, 0.0),
+      exposure: 1.0,
+      inv_unit,
+      color: pack_color([1.0, 1.0, 1.0, 1.0]),
+      albedo: 0.0,
+      mvp: rel,
+      eye_local: pc.eye_local,
+    };
+    let s0 = plain[PYR_SPECKS as usize];
+    specks_tier(&mut copy, r, &spc, &DustFlowUniform::default(), &layout, &mut plain);
+    drawn_plain += plain[PYR_SPECKS as usize] - s0;
+    let tc = &st.tiers[&(ti as u64)];
+    let eye = [pc.eye_local[0], pc.eye_local[1], pc.eye_local[2]];
+    for o in 0..r.len() {
+      let s = (ds.first_slot.wrapping_add(o as u32) & (ds.capacity - 1)) as usize;
+      let b = tc.owner[s];
+      if b & OWN_SHOWN != 0 {
+        shown += 1;
+        assert_eq!(m[o].specks_mask(), 0, "tier {ti} offset {o}: a shown cluster was walked");
+      } else {
+        fresh_cmp += 1;
+        assert_eq!(m[o].specks_mask(), copy[o].specks_mask(), "tier {ti} offset {o}: a fresh cluster's walk mask differs");
+      }
+      if b & (OWN_SHOWN | OWN_BUILD | OWN_PENDING) != 0 {
+        assert!(!shell_capable(&before[ti][o], eye, d_max), "tier {ti} offset {o}: a class holds a cluster the shell may walk");
+      }
+    }
+  }
+  std::println!(
+    "specks n_eye: cadence {:#010x}{:08x} plain {:#010x}{:08x}; shown {shown} fresh {fresh_cmp}; shell-forced fresh {} (max over the warm frames {shell_forced}); specks drawn cadence {} plain {drawn_plain}",
+    frame[PYR_N_EYE_HI as usize],
+    frame[PYR_N_EYE as usize],
+    plain[PYR_N_EYE_HI as usize],
+    plain[PYR_N_EYE as usize],
+    rep.shell_forced,
+    frame[PYR_SPECKS as usize]
+  );
+  assert!(shown > 0, "no cluster shown: the test does not reach the cadence");
+  assert!(plain[PYR_N_EYE as usize] != 0 || plain[PYR_N_EYE_HI as usize] != 0, "n_eye is 0: the equality is vacuous");
+  assert_eq!(frame[PYR_N_EYE as usize], plain[PYR_N_EYE as usize], "n_eye (low word)");
+  assert_eq!(frame[PYR_N_EYE_HI as usize], plain[PYR_N_EYE_HI as usize], "n_eye (high word)");
+}
+
+/// The bisect of the cadence's fresh pass against the full draw (round 3: the first cadenced frame,
+/// nothing shown, differed from the tests' reference by 976 words): one static frame of the
+/// cadence scene drawn by `splat_tier` (serial, the reference), `splat_tier_parallel` (the tests'
+/// `cad_draw`), `splat_tier_list` over the identity list, and the cadence's first frame
+/// (`begin` + `finish`), then the same with the speck shell on; every pair against the serial
+/// draw, the differing words per level and kind, the first one and the header words printed.
+/// The traced build draw (`draw_list_traced`, run B's `trace_light`) on the tests' threads equals
+/// the serial one cluster after another: every word of the pyramid (gates off, `cad_header`) and
+/// every entry's light to the bit, on 256 clusters of the cadence scene spread over tier 0, drawn
+/// into a pyramid already holding the rest of the tier (as a build image after its first chunk).
+#[test]
+fn cadence_traced_build_draw_matches_serial() {
+  let px = 128u32;
+  let layout = PyramidLayout::new(px, px);
+  let (tiers, radius) = cad_scene();
+  let anchor = tiers[0].0.anchor_m;
+  let view = cad_static_view(anchor, radius, px, 3.0);
+  let inv_unit = cad_inv_unit(&tiers, &view, &layout, None, 1e-2).expect("τ_max");
+  let (ds, (r, m)) = &tiers[0];
+  let pc = cad_pc(&view, ds.anchor_m, r.len() as u32, inv_unit);
+  let n = r.len();
+  let stride = (n / 256).max(1);
+  let list: alloc::vec::Vec<u32> = (0..n).step_by(stride).take(256).map(|i| i as u32).collect();
+  let rest: alloc::vec::Vec<u32> = (0..n as u32).filter(|o| !list.contains(o)).take(512).collect();
+  let mut base = alloc::vec![0u32; layout.total_words as usize];
+  base[..PYRAMID_HEADER_WORDS as usize].copy_from_slice(&cad_header(&layout));
+  splat_tier_list(m, r, &pc, &Default::default(), 0, &layout, &mut base, &rest);
+  let (mut serial, mut parallel) = (base.clone(), base);
+  let ls = super::cadence::draw_list_traced(1, m, r, &pc, &Default::default(), &layout, &mut serial, &list);
+  let threads = test_threads().max(2);
+  let lp = super::cadence::draw_list_traced(threads, m, r, &pc, &Default::default(), &layout, &mut parallel, &list);
+  let diff = (0..serial.len()).filter(|&i| serial[i] != parallel[i]).count();
+  let light_diff = ls.iter().zip(&lp).filter(|(a, b)| a.to_bits() != b.to_bits()).count();
+  let total: f64 = ls.iter().sum();
+  std::println!(
+    "traced build draw: {} entries on {threads} threads: {diff} words differ, {light_diff} lights differ; Σ light {total:.1} of the pyramid's {:.1}",
+    list.len(),
+    super::cadence::pyramid_light(&layout, &serial)
+  );
+  assert!(total > 0.0, "the traced entries drew nothing");
+  assert_eq!(diff, 0, "the parallel traced draw differs: {}", cad_first_diff(&layout, &parallel, &serial));
+  assert_eq!(light_diff, 0, "the parallel traced lights differ");
+}
+
+#[test]
+fn cadence_fresh_pass_matches_the_full_draw() {
+  use super::cadence::CadenceConfig;
+  use super::specks::SpeckHeader;
+  let px = 128u32;
+  let layout = PyramidLayout::new(px, px);
+  let (mut tiers, radius) = cad_scene();
+  let anchor = tiers[0].0.anchor_m;
+  let t = tiers[0].0.frame.ps_r_t_hi[3] as f64;
+  let view = cad_static_view(anchor, radius, px, 3.0);
+  let inv_unit = cad_inv_unit(&tiers, &view, &layout, None, 1e-2).expect("τ_max");
+  let fresh_pyr = |shell: Option<f32>, gates: bool| {
+    let mut p = alloc::vec![0u32; layout.total_words as usize];
+    let mut header = if gates { layout.header() } else { cad_header(&layout) };
+    if let Some(d) = shell {
+      SpeckHeader::write(&mut header, d, 1 << 16);
+    }
+    p[..header.len()].copy_from_slice(&header);
+    p
+  };
+  let mut all_equal = true;
+  for (shell, gates) in [(None, true), (None, false), (Some((2e-3 * radius) as f32), false)] {
+    let mut serial = fresh_pyr(shell, gates);
+    let mut parallel = fresh_pyr(shell, gates);
+    let mut list = fresh_pyr(shell, gates);
+    let mut listp = fresh_pyr(shell, gates);
+    for (ds, (r, m)) in &tiers {
+      let pc = cad_pc(&view, ds.anchor_m, r.len() as u32, inv_unit);
+      // with the shell: the speck pass first (as the frame does), its walk masks into the moments
+      // the splat reads, its specks into each target
+      let mut mm = m.clone();
+      if shell.is_some() {
+        let spc = super::specks::DustSpecksPushConstants {
+          moments: 0,
+          render: 0,
+          pyramid: 0,
+          live_count: r.len() as u32,
+          size_fade: super::specks::pack_size_fade(50.0, 0.0),
+          exposure: 1.0,
+          inv_unit,
+          color: pack_color([1.0, 1.0, 1.0, 1.0]),
+          albedo: 0.0,
+          mvp: view.mvp_eye_relative(),
+          eye_local: pc.eye_local,
+        };
+        for target in [&mut serial, &mut parallel, &mut list, &mut listp] {
+          let mut c = m.clone();
+          super::specks::specks_tier(&mut c, r, &spc, &Default::default(), &layout, target);
+          mm = c;
+        }
+      }
+      splat_tier(&mm, r, &pc, &Default::default(), 0, &layout, &mut serial);
+      splat_tier_parallel(&mm, r, &pc, &Default::default(), 0, &layout, &mut parallel, test_threads());
+      let ids: alloc::vec::Vec<u32> = (0..r.len() as u32).collect();
+      splat_tier_list(&mm, r, &pc, &Default::default(), 0, &layout, &mut list, &ids);
+      splat_tier_list_parallel(&mm, r, &pc, &Default::default(), 0, &layout, &mut listp, &ids, test_threads());
+    }
+    // the cadence's frame header has the gates off: it is compared only in the gates-off runs
+    let cadenced = (!gates).then(|| {
+      let mut st = cad_state(CadenceConfig::full());
+      let fm = cad_frame_meta(view, t, anchor, 1.0 / inv_unit);
+      cad_cadence_frame(&mut st, &fm, &mut tiers, &layout, inv_unit, shell.map(|d| (d, 1 << 16)), &|_, _| {}).0
+    });
+    let mut cmp: alloc::vec::Vec<(&str, &alloc::vec::Vec<u32>, bool)> =
+      alloc::vec![
+        ("splat_tier_parallel", &parallel, !gates),
+        ("splat_tier_list", &list, true),
+        ("splat_tier_list_parallel", &listp, !gates),
+      ];
+    if let Some(c) = cadenced.as_ref() {
+      cmp.push(("the cadence's first frame", c, true));
+    }
+    for (name, p, asserted) in cmp {
+      let (diff, hdr) = cad_levels_equal(&layout, p, &serial);
+      std::println!(
+        "fresh-pass bisect (shell {shell:?}, gates {}): {name} vs splat_tier: {diff} words differ, τ_max/mask equal {hdr}{}; {}",
+        if gates { "on" } else { "off" },
+        if asserted { "" } else { " (printed: the gates depend on the draw order)" },
+        cad_first_diff(&layout, p, &serial)
+      );
+      if asserted {
+        all_equal &= diff == 0 && hdr;
+      }
+    }
+  }
+  assert!(all_equal, "a fresh-pass draw differs from the serial full draw (lines above)");
+}
+
+/// The class image's projection (the margin): the scene drawn at the viewport view and at its image
+/// view (`CadenceView::image_view`, M = 0.2 → a 64-px margin at 256 px) agree in the composite over
+/// the pixels 32 px inside the viewport's edge, by the reprojection gate (8 × 8-block rel rms of
+/// composite τ ≤ 2 %, Σ within 0.5 %). Not texel for texel per level: a volume piece's level is the
+/// finest at which its in-frame range fits its texel share (`volume_share_level`), and a piece cut by
+/// the viewport's edge has fewer in-frame texels there than in the larger image, so the two draws put
+/// the same light on different levels (round 14: 0.35 % vs 10 % of the light on L3). The per-level
+/// rel rms, Σ ratios and light shares are printed. The map to the image of an unchanged view is the
+/// exact translation by the margin.
+#[test]
+fn cadence_image_projection_offsets_the_viewport() {
+  use super::cadence::{CadenceConfig, MAP_IDENTITY};
+  let px = 256u32;
+  let layout = PyramidLayout::new(px, px);
+  let (tiers, radius) = cad_scene();
+  let anchor = tiers[0].0.anchor_m;
+  let view = cad_static_view(anchor, radius, px, 3.0);
+  let geom = CadenceConfig::full().image_geom(px, px);
+  assert_eq!(geom.margin, [64, 64], "the margin of 0.2 × 256 px, ceil to 64");
+  assert_eq!(geom.layout.width, px + 128);
+  let map = view.map_to_image(&view, &geom).expect("map");
+  let mut t = MAP_IDENTITY;
+  t[2] = 64.0;
+  t[5] = 64.0;
+  assert_eq!(map, t, "an unchanged view maps by the exact translation");
+  let inv_unit = cad_inv_unit(&tiers, &view, &layout, None, 1e-2).expect("τ_max");
+  let pa = cad_draw(&tiers, &view, &layout, inv_unit, None);
+  let pb = cad_draw(&tiers, &view.image_view(&geom), &geom.layout, inv_unit, None);
+  let (la, lb) = (super::cadence::pyramid_light(&layout, &pa), super::cadence::pyramid_light(&geom.layout, &pb));
+  let mut worst = (0.0f64, 0.0f64);
+  for (l, &(off, w, h)) in layout.levels.iter().enumerate() {
+    let s = 1u32 << l;
+    let area = 1.0f64;
+    let Some(&(offb, wb, _)) = geom.layout.levels.get(l) else { continue };
+    let (sa_tot, sb_tot): (f64, f64) = (
+      (0..(w * h)).map(|i| pa[(off + i * PYRAMID_TEXEL_WORDS) as usize] as f64 * area).sum(),
+      (0..geom.layout.levels[l].1 * geom.layout.levels[l].2).map(|i| pb[(offb + i * PYRAMID_TEXEL_WORDS) as usize] as f64 * area).sum(),
+    );
+    let aligned = 64 % s == 0;
+    let (mut num, mut den, mut sa, mut sb) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    let mut first: Option<alloc::string::String> = None;
+    if aligned {
+      let d = 64 / s;
+      let lo = 32u32.div_ceil(s);
+      let hi = (px - 32) / s;
+      for ty in lo..hi.min(h) {
+        for tx in lo..hi.min(w) {
+          let va = pa[(off + (ty * w + tx) * PYRAMID_TEXEL_WORDS) as usize] as f64;
+          let vb = pb[(offb + ((ty + d) * wb + tx + d) * PYRAMID_TEXEL_WORDS) as usize] as f64;
+          num += (va - vb) * (va - vb);
+          den += va * va;
+          sa += va;
+          sb += vb;
+          if first.is_none() && va != vb {
+            first = Some(alloc::format!("first differing texel ({tx}, {ty}): {va} vs {vb}"));
+          }
+        }
+      }
+    }
+    let rms = (num / den.max(1e-300)).sqrt();
+    let ratio = if sa > 0.0 { sb / sa } else { 1.0 };
+    std::println!(
+      "image projection L{l}: light share viewport {:.4} / image {:.4}{}",
+      sa_tot / la.max(1e-300),
+      sb_tot / lb.max(1e-300),
+      if aligned {
+        alloc::format!(", aligned: rel rms {rms:.3e}, Σ image / viewport {ratio:.6}; {}", first.unwrap_or_else(|| "no texel differs".into()))
+      } else {
+        ", not aligned (offset 64 px is not a multiple of the texel): not compared".into()
+      }
+    );
+    if aligned && den > 0.0 {
+      worst.0 = worst.0.max(rms);
+      worst.1 = worst.1.max((ratio - 1.0).abs());
+    }
+  }
+  std::println!("image projection: per-level worst rel rms {:.3e}, Σ {:.3e} (printed only)", worst.0, worst.1);
+  // the guarantee: the composite of the image draw, offset by the margin, against the viewport's
+  let unit = 1.0 / inv_unit;
+  let (ia, ib) = (cad_image(&layout, &pa, unit), cad_image(&geom.layout, &pb, unit));
+  let wb = geom.layout.width;
+  let (lo, hi) = (32u32, px - 32);
+  let (mut num, mut den, mut sa, mut sb, mut blocks) = (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0u32);
+  for by in (lo..hi).step_by(8) {
+    for bx in (lo..hi).step_by(8) {
+      let (mut ba, mut bb) = (0.0f64, 0.0f64);
+      for y in by..(by + 8).min(hi) {
+        for x in bx..(bx + 8).min(hi) {
+          ba += ia[(y * px + x) as usize];
+          bb += ib[((y + 64) * wb + x + 64) as usize];
+        }
+      }
+      num += (ba - bb) * (ba - bb);
+      den += ba * ba;
+      sa += ba;
+      sb += bb;
+      blocks += 1;
+    }
+  }
+  let rms = (num / den.max(1e-300)).sqrt();
+  let ratio = if sa > 0.0 { sb / sa } else { 1.0 };
+  std::println!("image projection composite: 8×8-block rel rms {rms:.4} over {blocks} blocks, Σ image / viewport {ratio:.5}");
+  assert!(sa > 0.0, "the viewport's interior is empty");
+  assert!(rms <= 0.02, "the image view's composite differs from the viewport's by 8×8-block rel rms {rms:.4}");
+  assert!((ratio - 1.0).abs() <= 5e-3, "the image view's composite Σ differs by {:.3e}", ratio - 1.0);
+}
+
+/// The margin's edge (plan step 3, the margin): a class image drawn at the frozen view with a 0.2
+/// margin (64 px at 256 px) is reprojected to the view yawed so that the viewport's edge moves 28
+/// px (inside the budget m − G = 32 px): the whole viewport is covered (`image_covers`, every
+/// pixel's pre-image inside the image), with no hole: 8×8-block rel rms ≤ max(2 %, 1.5 × the blur
+/// floor of `reprojection_is_exact_for_a_rotation`, 0.0319) and Σ within 0.5 % over the full viewport
+/// against the redraw. Just beyond (an edge motion of 70 px > m), `image_covers` is false.
+#[test]
+fn reprojection_reads_the_margin() {
+  use super::cadence::{CadenceConfig, CadenceView, ReprojectFactor, ShownImage, corner_motion, image_covers, reproject_add};
+  let px = 256u32;
+  let layout = PyramidLayout::new(px, px);
+  let (tiers, radius) = cad_scene();
+  let anchor = tiers[0].0.anchor_m;
+  let vs = cad_static_view(anchor, radius, px, 3.0);
+  let geom = CadenceConfig::full().image_geom(px, px);
+  let fwd0: V3 = unit([1.0, 0.3, -0.2]);
+  let up0: V3 = [0.0, 0.0, 1.0];
+  let right0 = unit(cross64(fwd0, up0));
+  let upv0 = cross64(right0, fwd0);
+  let inv_unit = cad_inv_unit(&tiers, &vs, &layout, None, 1e-3).expect("τ_max");
+  let unit_v = 1.0 / inv_unit;
+  let iv = vs.image_view(&geom);
+  let img = cad_draw(&tiers, &iv, &geom.layout, inv_unit, None);
+  // the yaw whose corner motion is `target` px (bisection on the exact corner motion)
+  let yawed = |target: f32| -> CadenceView {
+    let (mut lo, mut hi) = (0.0f64, 0.5f64);
+    for _ in 0..60 {
+      let mid = 0.5 * (lo + hi);
+      let v = CadenceView { view_rot: cad_view_rot(cad_rotate(fwd0, upv0, mid), up0), ..vs };
+      let d = corner_motion(&v.map_from(&vs).unwrap(), px, px);
+      if d[0].max(d[1]) < target { lo = mid } else { hi = mid }
+    }
+    CadenceView { view_rot: cad_view_rot(cad_rotate(fwd0, upv0, lo), up0), ..vs }
+  };
+  let v = yawed(28.0);
+  let map = v.map_to_image(&vs, &geom).expect("map");
+  assert!(image_covers(&map, px, px, &geom.layout), "a 28-px motion is not covered by a 64-px margin");
+  let mut frame = alloc::vec![0u32; layout.total_words as usize];
+  frame[..PYRAMID_HEADER_WORDS as usize].copy_from_slice(&cad_header(&layout));
+  reproject_add(&layout, &mut frame, &[ShownImage { words: &img, map, unit: unit_v, layout: Some(&geom.layout) }], unit_v, 0x5eed, ReprojectFactor::Unit);
+  let a = cad_image(&layout, &frame, unit_v);
+  let b = cad_image(&layout, &cad_draw(&tiers, &v, &layout, inv_unit, None), unit_v);
+  // no hole: every viewport pixel's pre-image lies inside the image
+  let mut holes = 0usize;
+  for y in 0..px {
+    for x in 0..px {
+      match cad_map(&map, x as f32 + 0.5, y as f32 + 0.5) {
+        Some((xs, ys)) if xs >= 0.0 && ys >= 0.0 && xs <= geom.layout.width as f32 && ys <= geom.layout.height as f32 => {}
+        _ => holes += 1,
+      }
+    }
+  }
+  let (mut bn, mut bd, mut sa, mut sb) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+  for by in 0..px / 8 {
+    for bx in 0..px / 8 {
+      let (mut ta, mut tb) = (0.0f64, 0.0f64);
+      for y in by * 8..by * 8 + 8 {
+        for x in bx * 8..bx * 8 + 8 {
+          let i = (y * px + x) as usize;
+          ta += a[i];
+          tb += b[i];
+        }
+      }
+      bn += (ta - tb) * (ta - tb);
+      bd += tb * tb;
+      sa += ta;
+      sb += tb;
+    }
+  }
+  let rms = (bn / bd.max(1e-300)).sqrt();
+  let ratio = sa / sb.max(1e-300);
+  std::println!("margin edge (28 px): holes {holes}, 8×8-block rel rms {rms:.4}, Σ ratio {ratio:.5} over the whole viewport");
+  assert_eq!(holes, 0, "pixels without an image pre-image inside the budget");
+  assert!(rms <= 0.0319 && (ratio - 1.0).abs() <= 0.005, "the margin's light: block rms {rms:.4}, Σ {ratio:.5}");
+  let beyond = yawed(70.0);
+  let map_b = beyond.map_to_image(&vs, &geom).expect("map");
+  std::println!("margin beyond (70 px): covered {}", image_covers(&map_b, px, px, &geom.layout));
+  assert!(!image_covers(&map_b, px, px, &geom.layout), "a 70-px motion is reported covered by a 64-px margin");
+}
+
+/// The motion budget (plan step 3, the margin): with M = 0.2 at 128 px (a 64-px margin, budget
+/// m − G = 32 px) and one class of 8 frames in two phases, a still warm state (24 frames) shows
+/// images in both phases; one rotation step of 40 px of corner motion (beyond the budget at once)
+/// makes the class not admitted (its builds and pending lists abort, reason budget), drops every
+/// shown image that frame (reason coverage: its corners leave the guarded interior) and stops the
+/// classify; the view then stays still, and the class is admitted again once the window of 2N = 16
+/// frames no longer holds the step, and classifies at its next cycle.
+#[test]
+fn cadence_budget_aborts_and_readmits() {
+  use super::cadence::{ABORT_BUDGET, ABORT_COVERAGE, CadenceConfig, CadenceView, corner_motion};
+  let px = 128u32;
+  let layout = PyramidLayout::new(px, px);
+  let (mut tiers, radius) = cad_scene();
+  let anchor = tiers[0].0.anchor_m;
+  let t = tiers[0].0.frame.ps_r_t_hi[3] as f64;
+  let view = cad_static_view(anchor, radius, px, 3.0);
+  let inv_unit = cad_inv_unit(&tiers, &view, &layout, None, 1e-2).expect("τ_max");
+  let unit_v = 1.0 / inv_unit;
+  let mut st = cad_state(CadenceConfig { classes: alloc::vec![8], phases: 2, eps_px: 1.0, margin_frac: 0.2 });
+  for _ in 0..24 {
+    let fm = cad_frame_meta(view, t, anchor, unit_v);
+    cad_cadence_frame(&mut st, &fm, &mut tiers, &layout, inv_unit, None, &|_, _| {});
+  }
+  let shown_pairs = |st: &super::cadence::DustCadenceState| -> usize {
+    (0..2).filter(|&p| st.tiers.values().any(|tc| !tc.lists[0][p][0].is_empty())).count()
+  };
+  let shown = |st: &super::cadence::DustCadenceState| -> usize {
+    st.tiers.values().map(|tc| tc.lists[0].iter().map(|l| l[0].len()).sum::<usize>()).sum()
+  };
+  let pairs0 = shown_pairs(&st);
+  std::println!("budget: warm state: {} shown in {pairs0} phases, margin {:?}", shown(&st), st.geom.as_ref().unwrap().margin);
+  assert!(pairs0 > 0, "the warm state shows nothing");
+  assert_eq!(st.geom.as_ref().unwrap().margin, [64, 64]);
+  // the yaw whose corner motion is 40 px
+  let fwd0: V3 = unit([1.0, 0.3, -0.2]);
+  let up0: V3 = [0.0, 0.0, 1.0];
+  let upv0 = cross64(unit(cross64(fwd0, up0)), fwd0);
+  let angle = {
+    let (mut lo, mut hi) = (0.0f64, 0.5f64);
+    for _ in 0..60 {
+      let mid = 0.5 * (lo + hi);
+      let v = CadenceView { view_rot: cad_view_rot(cad_rotate(fwd0, upv0, mid), up0), ..view };
+      let d = corner_motion(&v.map_from(&view).unwrap(), px, px);
+      if d[0].max(d[1]) < 40.0 { lo = mid } else { hi = mid }
+    }
+    hi
+  };
+  let v = CadenceView { view_rot: cad_view_rot(cad_rotate(fwd0, upv0, angle), up0), ..view };
+  let fm = cad_frame_meta(v, t, anchor, unit_v);
+  let (_, plan, rep) = cad_cadence_frame(&mut st, &fm, &mut tiers, &layout, inv_unit, None, &|_, _| {});
+  st.check_owner_bytes().unwrap_or_else(|e| panic!("the step: {e}"));
+  for a in &rep.aborts {
+    std::println!("budget: the step: abort phase {} list {} reason {} ({} entries)", a.p, a.list, a.reason, a.entries);
+  }
+  let budget_aborts = rep.aborts.iter().filter(|a| a.reason == ABORT_BUDGET).count();
+  let coverage_aborts = rep.aborts.iter().filter(|a| a.reason == ABORT_COVERAGE).count();
+  assert_eq!(plan.reset, None, "a rotation reset");
+  assert_eq!(rep.admitted, alloc::vec![false], "the class is admitted over its budget");
+  assert!(budget_aborts > 0, "no budget abort");
+  assert!(coverage_aborts >= pairs0, "a shown image was not dropped by the 40-px step ({coverage_aborts} coverage aborts, {pairs0} phases shown)");
+  assert_eq!(shown(&st), 0, "a shown image survived the step");
+  assert_eq!(rep.classified.iter().map(|c| c.2).sum::<u32>(), 0, "the class classified over its budget");
+  // still again: re-admitted when the window of 16 frames no longer holds the step
+  let mut readmitted_at = None;
+  let mut classified_after = 0u32;
+  let mut classified_while = 0u32;
+  for j in 1..=40usize {
+    let (_, _, rep) = cad_cadence_frame(&mut st, &fm, &mut tiers, &layout, inv_unit, None, &|_, _| {});
+    if readmitted_at.is_none() && rep.admitted == alloc::vec![true] {
+      readmitted_at = Some(j);
+    }
+    let c = rep.classified.iter().map(|c| c.2).sum::<u32>();
+    if readmitted_at.is_some() {
+      classified_after += c;
+    } else {
+      classified_while += c;
+    }
+  }
+  std::println!("budget: re-admitted at still frame {readmitted_at:?}, classified before {classified_while} / after {classified_after}, shown at the end {}", shown(&st));
+  let r = readmitted_at.expect("never re-admitted");
+  // the step's frame and 15 still frames fill the 16-frame window: re-admitted at the 16th
+  assert_eq!(r, 16, "re-admitted at still frame {r}, not when the 2N window forgets the step");
+  assert_eq!(classified_while, 0, "the class classified before its re-admission");
+  assert!(classified_after > 0, "the re-admitted class never classified");
+}
+
+/// The fold (the lab's path check, 2026-10-18): with every class rate-admitting at N = 64 (a still
+/// eye, Δt = 0) but the view turning 0.5 px of corner motion per frame (M = 0.2 at 128 px: budget
+/// m − G = 32 px; 2 · 64 · 0.5 = 64 > 32 denies class 64, 2 · 16 · 0.5 = 16 admits class 16), the
+/// clusters land in class 16, the largest class both admit — not fresh — and class 64 and class 8
+/// classify none; the owner bytes stay backed by the lists.
+#[test]
+fn cadence_folds_into_the_largest_admitted_class() {
+  use super::cadence::{CadenceConfig, CadenceView, corner_motion};
+  let px = 128u32;
+  let layout = PyramidLayout::new(px, px);
+  let (mut tiers, radius) = cad_scene();
+  let anchor = tiers[0].0.anchor_m;
+  let t = tiers[0].0.frame.ps_r_t_hi[3] as f64;
+  let view = cad_static_view(anchor, radius, px, 3.0);
+  let inv_unit = cad_inv_unit(&tiers, &view, &layout, None, 1e-2).expect("τ_max");
+  let unit_v = 1.0 / inv_unit;
+  let mut st = cad_state(CadenceConfig::full());
+  let fwd0: V3 = unit([1.0, 0.3, -0.2]);
+  let up0: V3 = [0.0, 0.0, 1.0];
+  let upv0 = cross64(unit(cross64(fwd0, up0)), fwd0);
+  let step = {
+    let (mut lo, mut hi) = (0.0f64, 0.1f64);
+    for _ in 0..60 {
+      let mid = 0.5 * (lo + hi);
+      let v = CadenceView { view_rot: cad_view_rot(cad_rotate(fwd0, upv0, mid), up0), ..view };
+      let d = corner_motion(&v.map_from(&view).unwrap(), px, px);
+      if d[0].max(d[1]) < 0.5 { lo = mid } else { hi = mid }
+    }
+    lo
+  };
+  let mut by_class = [0u32; 3];
+  let mut hist = [0u64; 4];
+  for f in 0..48usize {
+    let v = CadenceView { view_rot: cad_view_rot(cad_rotate(fwd0, upv0, step * f as f64), up0), ..view };
+    let fm = cad_frame_meta(v, t, anchor, unit_v);
+    let (_, _, rep) = cad_cadence_frame(&mut st, &fm, &mut tiers, &layout, inv_unit, None, &|_, _| {});
+    st.check_owner_bytes().unwrap_or_else(|e| panic!("frame {f}: {e}"));
+    for &(k, _, n) in &rep.classified {
+      by_class[k] += n;
+    }
+    for (k, c) in rep.class_hist.iter().enumerate() {
+      hist[k] += *c as u64;
+    }
+    if f >= 2 {
+      assert_eq!(rep.admitted, alloc::vec![true, true, false], "frame {f}: the budget's admission");
+    }
+  }
+  std::println!("fold: classified per class 8 / 16 / 64 {by_class:?}; rate classes fresh / 8 / 16 / 64 {hist:?}");
+  assert!(hist[3] > hist[0] + hist[1] + hist[2], "the rate does not admit N = 64 for most clusters: the test misses its regime");
+  assert!(by_class[1] > 0, "nothing folded into class 16");
+  assert_eq!(by_class[2], 0, "class 64 classified over its budget");
+  // class 8 takes only clusters whose rate caps them at N = 8 (none in this still scene)
+  assert!(by_class[0] as u64 <= hist[1], "a cluster folded below the largest admitted class ({} into class 8, {} rate-capped at 8)", by_class[0], hist[1]);
+}
+
+/// The time reset (the GPU track's finding, 2026-10-18: a frame one simulated day after 15 still
+/// frames kept the day-old class images, an area ratio of 3.48 at 5 000 km). From a warm state
+/// (the static scene, one class of 8 frames in two phases, 24 frames at a still time: Δt = 0, images
+/// shown): a day's step resets with CadenceReset::Time (no slot shown or built, no image shown, the
+/// frame word for word the full draw); controls on a running state (Δt = 60 s per frame): ±20 %
+/// jitter keeps the classes, a pause (Δt = 0) keeps them, a step of 5 × the previous resets, a
+/// negative step resets, a 3 × step keeps them. The report carries Δt.
+#[test]
+fn cadence_resets_on_a_time_jump() {
+  use super::cadence::{CadenceConfig, CadenceReset, OWN_BUILD, OWN_SHOWN};
+  let px = 128u32;
+  let layout = PyramidLayout::new(px, px);
+  let (mut tiers, radius) = cad_scene();
+  let anchor = tiers[0].0.anchor_m;
+  let t0 = tiers[0].0.frame.ps_r_t_hi[3] as f64;
+  let view = cad_static_view(anchor, radius, px, 3.0);
+  let inv_unit = cad_inv_unit(&tiers, &view, &layout, None, 1e-2).expect("τ_max");
+  let unit_v = 1.0 / inv_unit;
+  let cfg = CadenceConfig { classes: alloc::vec![8], phases: 2, eps_px: 1.0, margin_frac: 0.0 };
+  let shown = |st: &super::cadence::DustCadenceState| -> usize {
+    st.tiers.values().map(|tc| tc.owner.iter().filter(|&&b| b & OWN_SHOWN != 0).count()).sum()
+  };
+  let built = |st: &super::cadence::DustCadenceState| -> usize {
+    st.tiers.values().map(|tc| tc.owner.iter().filter(|&&b| b & (OWN_SHOWN | OWN_BUILD) != 0).count()).sum()
+  };
+  // the still series, then a day's step
+  let mut st = cad_state(cfg.clone());
+  for _ in 0..24 {
+    cad_cadence_frame(&mut st, &cad_frame_meta(view, t0, anchor, unit_v), &mut tiers, &layout, inv_unit, None, &|_, _| {});
+  }
+  assert!(shown(&st) > 0, "the still warm state shows nothing");
+  let reference = cad_draw(&tiers, &view, &layout, inv_unit, None);
+  let (frame, plan, rep) = cad_cadence_frame(&mut st, &cad_frame_meta(view, t0 + 86400.0, anchor, unit_v), &mut tiers, &layout, inv_unit, None, &|_, _| {});
+  std::println!("time jump: a day after the still series: reset {:?}, Δt {} s, shown after {}", plan.reset, rep.dt_s, shown(&st));
+  assert_eq!(plan.reset, Some(CadenceReset::Time), "a day's step after a still series");
+  assert_eq!(rep.dt_s, 86400.0);
+  assert_eq!(built(&st), 0, "a slot shown or built after the time reset");
+  assert!(st.images.iter().all(|im| im.shown_view.is_none()), "an image shown after the time reset");
+  let (diff, hdr) = cad_levels_equal(&layout, &frame, &reference);
+  assert!(diff == 0 && hdr, "the time-reset frame differs from the full draw ({diff} words): {}", cad_first_diff(&layout, &frame, &reference));
+  // a running state at 60 s per frame (the moments stay those of t0: the test is about the rule)
+  let mut st = cad_state(cfg.clone());
+  let mut t = t0;
+  for f in 0..24 {
+    t += 60.0;
+    let (_, plan, _) = cad_cadence_frame(&mut st, &cad_frame_meta(view, t, anchor, unit_v), &mut tiers, &layout, inv_unit, None, &|_, _| {});
+    assert!(f == 0 || plan.reset.is_none(), "frame {f}: a constant step reset ({:?})", plan.reset);
+  }
+  let warm = st.clone();
+  let cases: [(&str, f64, Option<CadenceReset>); 5] = [
+    ("jitter +20 %", 72.0, None),
+    ("pause", 0.0, None),
+    ("3 × step", 180.0, None),
+    ("5 × step", 300.0, Some(CadenceReset::Time)),
+    ("backwards", -60.0, Some(CadenceReset::Time)),
+  ];
+  for (name, dt, expect) in cases {
+    let mut st = warm.clone();
+    let (_, plan, rep) = cad_cadence_frame(&mut st, &cad_frame_meta(view, t + dt, anchor, unit_v), &mut tiers, &layout, inv_unit, None, &|_, _| {});
+    std::println!("time jump: {name}: Δt {} s → reset {:?}", rep.dt_s, plan.reset);
+    assert_eq!(plan.reset, expect, "{name}");
+  }
+  // a resume after a pause resets; jitter −20 % after the pause's 0 is a resume as well
+  let mut st = warm.clone();
+  cad_cadence_frame(&mut st, &cad_frame_meta(view, t, anchor, unit_v), &mut tiers, &layout, inv_unit, None, &|_, _| {});
+  let (_, plan, _) = cad_cadence_frame(&mut st, &cad_frame_meta(view, t + 48.0, anchor, unit_v), &mut tiers, &layout, inv_unit, None, &|_, _| {});
+  std::println!("time jump: resume after a pause: reset {:?}", plan.reset);
+  assert_eq!(plan.reset, Some(CadenceReset::Time), "a resume after a pause");
 }

@@ -43,13 +43,19 @@ layout(push_constant, std430) uniform CompositePush {
     uint  isOrthographic;   // 24: 1 = orthographic (linear depth), 0 = perspective
     float dustSoftening;    // 28: asinh stretch softening s (dust::display_stretch), 0 = linear
     float dustBlackPoint;   // 32: dust::DUST_BLACK_POINT (0 with AETHERVK_DUST_EXPOSURE=fixed)
-    uint  _pad0;            // 36
+    uint  layerRefLo;       // 36: LayerRefs address, low word (0 = no references)
     DustPyramid dustPyramid;// 40: the view's pyramid (0 = no dust)
     float dustWhite;        // 48: white point (exposure-scaled tau per px^2)
     uint  dustLevels;       // 52
     float dustUnit;         // 56: tau x px^2 per count
-    uint  _pad1;            // 60
+    uint  layerRefHi;       // 60: LayerRefs address, high word
     vec4  layerUnitAu[2];   // 64: AU per global-depth unit of layers 0..7
+};
+
+// Distance reference of each depth layer (layer units, 0 = absolute): micro meshes write their
+// global depth as |c + u| - refDist[layer] (rteDistanceOffset), restored below before the dust.
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer LayerRefs {
+    float refDist[8];
 };
 
 // Mirror: dust::display_stretch. Opacity of a dust optical depth `tau` relative to the view's
@@ -113,12 +119,37 @@ void main() {
         // Macro layer is empty, use Micro
         outColor = cMicro;
         finalGlobalDepth = gdMicro;
+    } else if (gdMacro.x >= 15.5 && gdMicro.x >= 0.5
+               && int(gdMicro.x + 0.5) == int(gdMacro.x + 0.5) - 16) {
+        // An anchored macro track piece (tag 16 + m) over a mesh of the micro layer m it is
+        // anchored to: both global depths are offsets from the same host f64 reference
+        // (|o_m| = D_m * layerUnitAu[m]), formed from small f32 values only, ~1 m at any distance
+        // (composite precision plan §2.4). The linearised depths above are ~60 km * D/AU coarse.
+        int m = clamp(int(gdMicro.x + 0.5), 0, 7);
+        if (gdMacro.y <= gdMicro.y * layerUnitAu[m >> 2][m & 3]) {
+            outColor = cMacro;
+            finalGlobalDepth = gdMacro;
+        } else {
+            outColor = cMicro;
+            finalGlobalDepth = gdMicro;
+        }
     } else if (distMacro <= distMicro) {
         outColor = cMacro;
         finalGlobalDepth = gdMacro;
     } else {
         outColor = cMicro;
         finalGlobalDepth = gdMicro;
+    }
+
+    // Global depth back to its meaning (layer, absolute local distance) or the sentinel: anchored
+    // tracks are not occluders / pick targets (as before), micro offsets get their reference back
+    // (f32: the ~ulp(D) granularity the readback always had).
+    if (finalGlobalDepth.x >= 15.5) {
+        finalGlobalDepth = vec2(-1.0, -1.0);
+    } else if (finalGlobalDepth.x >= 0.5 && (layerRefLo | layerRefHi) != 0u) {
+        LayerRefs refs = LayerRefs(uvec2(layerRefLo, layerRefHi));
+        int li = clamp(int(finalGlobalDepth.x + 0.5), 0, 7);
+        finalGlobalDepth.y += refs.refDist[li];
     }
 
     // Dust last, over everything. The pyramid's levels summed at this pixel (mirror of

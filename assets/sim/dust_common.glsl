@@ -53,6 +53,8 @@ const uint  DUST_VIEW_TRACERS        = 1u;
 const uint  DUST_VIEW_FLOW           = 2u;
 const uint  DUST_VIEW_DEBUG_STREAM = 1u << 16u;  // diagnostics: one stream (dust::DUST_VIEW_DEBUG_STREAM)
 const uint  DUST_VIEW_DEBUG_SAMPLE = 1u << 17u;  // diagnostics: one time sample in every m
+// host-internal (dust::DUST_VIEW_VOLUME_SPILL): dust_draw_volume.comp drains the volume spill
+const uint  DUST_VIEW_VOLUME_SPILL = 1u << 28u;
 const uint  DUST_TRACER_EVERY        = 256u;
 const uint  DUST_TRACER_CHILD        = 1023u;
 const float DUST_TRACER_PX           = 2.0;
@@ -87,6 +89,7 @@ const uint  DUST_PYR_MEASURE          = 12u;  // the white-point measurement gri
 const uint  DUST_PYR_UNIT             = 15u;  // f32 bits: the fixed-point unit of this frame's counts (host-written, for dump readers)
 const uint  DUST_WHITE_LEVEL          = 4u;
 const uint  DUST_PYR_TABLE            = 16u;  // per level: offset (words), width, height
+const uint  DUST_PYR_QUEUE_BASE       = 58u;  // the view's queue start in words from this pyramid (host-written; dust::PYR_QUEUE_BASE)
 const float DUST_SPLAT_SIGMA_TEXELS   = 2.0;
 const float DUST_PIXEL_FILTER_VAR     = 0.25;
 const float DUST_SPLAT_SIGMAS         = 3.0;
@@ -1030,10 +1033,13 @@ const uint DUST_SUPPORT_TRUNC_SLABS = 4u;
 float dust_support_slab_edge(uint e) { return e == 0u ? 0.5 : (e == 1u ? 1.2 : 2.2); }
 float dust_npdf(float z) { return exp(-0.5 * z * z) * 0.3989423; }
 float dust_nupper(float z) { return 0.5 * (1.0 - dust_erf(z * 0.7071067811865476)); }
-// the sub-chords' bounds (dust::support_truncated)
-void dust_support_trunc_bounds(DustPacket p, vec4 s, float v0, out float bounds[DUST_SUPPORT_TRUNC_PIECES + 1u]) {
-    float k = float(DUST_SUPPORT_TRUNC_PIECES);
-    for (uint j = 0u; j <= DUST_SUPPORT_TRUNC_PIECES; ++j) bounds[j] = float(j) / k;
+// the sub-chords' bounds (dust::support_truncated) as a closed form: (za, zb, before, inner) with
+// inner = 0 when the bounds are uniform; dust_trunc_bound(j) is the former bounds[j], the same
+// expressions (no array: the former bounds[9] was indexed by j = it / slabs)
+struct DustTruncBounds { float za; float zb; uint before; uint inner; };
+DustTruncBounds dust_support_trunc_bounds(DustPacket p, vec4 s, float v0) {
+    DustTruncBounds tb;
+    tb.za = 0.0; tb.zb = 1.0; tb.before = 0u; tb.inner = 0u;
     float dn = dot(s.xyz, p.seg);
     if (abs(dn) > 0.0) {
         float half_ = 3.0 * sqrt(v0) / abs(dn);
@@ -1041,12 +1047,20 @@ void dust_support_trunc_bounds(DustPacket p, vec4 s, float v0, out float bounds[
         float za = max(ux - half_, 0.0), zb = min(ux + half_, 1.0);
         if (zb > za && (za > 0.0 || zb < 1.0)) {
             uint before = za > 0.0 ? 1u : 0u, after = zb < 1.0 ? 1u : 0u;
-            uint inner = DUST_SUPPORT_TRUNC_PIECES - before - after;
-            bounds[0] = 0.0;
-            for (uint i = 0u; i <= inner; ++i) bounds[before + i] = za + (zb - za) * float(i) / float(inner);
-            bounds[DUST_SUPPORT_TRUNC_PIECES] = 1.0;
+            tb.za = za; tb.zb = zb; tb.before = before;
+            tb.inner = DUST_SUPPORT_TRUNC_PIECES - before - after;
         }
     }
+    return tb;
+}
+float dust_trunc_bound(DustTruncBounds tb, uint j) {
+    float k = float(DUST_SUPPORT_TRUNC_PIECES);
+    if (tb.inner == 0u) return float(j) / k;
+    // the former fill's order: uniform, then bounds[0] = 0, the inner run, bounds[PIECES] = 1
+    if (j == DUST_SUPPORT_TRUNC_PIECES) return 1.0;
+    if (j >= tb.before && j - tb.before <= tb.inner)
+        return tb.za + (tb.zb - tb.za) * float(j - tb.before) / float(tb.inner);
+    return 0.0;  // j == 0 with before == 1 (the only index the inner run leaves)
 }
 // slab e of sub-chord j (dust::support_truncated): false when it holds nothing; q the slab's
 // packet, w its kept flux (before the renormalisation over the packet)
@@ -1827,19 +1841,22 @@ bool dust_band_columns(DustBand B, float yc, float s, uint w, out int x0, out in
 // The fraction u1 - u0 of the screen segment mu + u seg, u in [0, 1], inside the frame
 // [-ex, w + ex] x [-ey, h + ey] (Liang-Barsky; 0 when it misses it): the drawable length of a
 // chord for the texel estimate of the scatter valve (dust::visible_fraction)
+// one Liang-Barsky edge (p, q) of dust_visible_fraction: false when the segment misses it
+// (scalars: the former pk[4] / qk[4] loop was the splitter's only dynamically indexed float pair)
+bool dust_lb_edge(float p, float q, inout float u0, inout float u1) {
+    if (p == 0.0) return !(q < 0.0);
+    float t = q / p;
+    if (p < 0.0) u0 = max(u0, t);
+    else u1 = min(u1, t);
+    return true;
+}
 float dust_visible_fraction(vec2 mu, vec2 seg, float ex, float ey, float w, float h) {
     float u0 = 0.0, u1 = 1.0;
-    float pk[4] = float[4](-seg.x, seg.x, -seg.y, seg.y);
-    float qk[4] = float[4](mu.x + ex, w + ex - mu.x, mu.y + ey, h + ey - mu.y);
-    for (int k = 0; k < 4; ++k) {
-        if (pk[k] == 0.0) {
-            if (qk[k] < 0.0) return 0.0;
-        } else {
-            float t = qk[k] / pk[k];
-            if (pk[k] < 0.0) u0 = max(u0, t);
-            else u1 = min(u1, t);
-        }
-    }
+    // the edges in the former loop's order k = 0..3
+    if (!dust_lb_edge(-seg.x, mu.x + ex, u0, u1)) return 0.0;
+    if (!dust_lb_edge(seg.x, w + ex - mu.x, u0, u1)) return 0.0;
+    if (!dust_lb_edge(-seg.y, mu.y + ey, u0, u1)) return 0.0;
+    if (!dust_lb_edge(seg.y, h + ey - mu.y, u0, u1)) return 0.0;
     return u1 > u0 ? u1 - u0 : 0.0;
 }
 

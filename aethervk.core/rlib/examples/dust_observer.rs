@@ -288,6 +288,34 @@ struct Args {
   /// `--lab-truth N`: the lab draws its own truth (N grains) from `truth_NNN.bin` instead of
   /// reading `mc_NNN_truth.f32`; `OBSERVER_LAB_AGE=lo,hi` (s) then gates both sides by age
   lab_truth: usize,
+  /// `--path-frames N` (`--pose inside`): the camera path of temporal reuse step 4 — N frames
+  /// from the settled frame 0, one hold-step each (see the path block in `main`); 0 = off
+  path_frames: u32,
+  /// `--path-fps F`: the frame rate the path models (Δt per frame = speed / F; ω per frame)
+  path_fps: f64,
+  /// `--path-dt-s T`: simulation seconds per path frame (`--path-speed X` sets it to X / F)
+  path_dt_s: f64,
+  path_speed: Option<f64>,
+  /// `--orbit-deg-per-s W`: the orbit about the nucleus (degrees per second at `path_fps`)
+  orbit_deg_per_s: f64,
+  /// `--eye-step-m S`: the orbit by its arc per frame instead (m)
+  eye_step_m: Option<f64>,
+  /// `--dolly-m-per-frame D`: the eye's approach to the nucleus per frame (m)
+  dolly_m_per_frame: f64,
+  /// `--path-keep 0,31`: the path frames whose pyramid / PNG / truth inputs (/ snapshot) are kept
+  path_keep: Vec<u32>,
+  /// `--lab-path N` (with `--lab`): the CPU mirror's cadence along a Δt = 0 orbit of N frames
+  lab_path: u32,
+  /// `--lab-path-eps 1,2,4,16`: the tolerances (px) the CPU path runs
+  lab_path_eps: Vec<f32>,
+  /// `--lab-score DIR --against FULL`: score a path capture's frame against the full frame's truth
+  lab_score: Option<PathBuf>,
+  lab_against: Option<PathBuf>,
+  /// `--lab-label L`: the variant's name in the score lines and the table
+  lab_label: Option<String>,
+  /// `--lab-table T.tsv`: append the scored row; `--lab-table-md T.tsv`: print the tables
+  lab_table: Option<PathBuf>,
+  lab_table_md: Option<PathBuf>,
   /// `--view-flags F`: dust view flags (`DUST_VIEW_TRACERS` 1, `DUST_VIEW_FLOW` 2; default 0, the
   /// plain optical depth, what the Monte-Carlo truth compares with and the app's default)
   view_flags: u32,
@@ -308,7 +336,10 @@ fn usage() -> ! {
      \x20      [--half-height-km KM] [--fov-deg DEG] [--inside-m D | --inside-km D] [--lat DEG --lon DEG --elev M] [--sky-image-check] [--start YYYY-MM-DD] [--spk FILE.bsp]\n\
      \x20      [--quiet] [--settle-frames N] [--no-jet] [--hide-sun] [--full-teardown] [--no-sheet]\n\
      \x20      [--ignite-days D] [--prestart] [--ripple-max R] [--spin-hours H] [--mc N] [--mc-max R] [--mc-age-min S] [--view-flags F]\n\
-     \x20      [--afrho-aperture-km R] [--isotropic]"
+     \x20      [--afrho-aperture-km R] [--isotropic]\n\
+     \x20      [--path-frames N [--path-fps 60] [--path-speed X | --path-dt-s T] [--orbit-deg-per-s 10 | --eye-step-m S] [--dolly-m-per-frame D] [--path-keep 0,31]]\n\
+     \x20      [--lab DIR [--lab-frame N] [--lab-truth N] [--lab-path N [--lab-path-eps 1,2,4,16]] [--lab-table T.tsv]]\n\
+     \x20      [--lab-score DIR --against FULL --lab-frame N --lab-truth N [--lab-label L] [--lab-table T.tsv]] [--lab-table-md T.tsv]"
   );
   std::process::exit(2);
 }
@@ -357,6 +388,21 @@ fn parse_args() -> Args {
     lab: None,
     lab_frame: 1,
     lab_truth: 0,
+    path_frames: 0,
+    path_fps: 60.0,
+    path_dt_s: 0.0,
+    path_speed: None,
+    orbit_deg_per_s: 10.0,
+    eye_step_m: None,
+    dolly_m_per_frame: 0.0,
+    path_keep: Vec::new(),
+    lab_path: 0,
+    lab_path_eps: vec![1.0],
+    lab_score: None,
+    lab_against: None,
+    lab_label: None,
+    lab_table: None,
+    lab_table_md: None,
   };
   let argv: Vec<String> = std::env::args().skip(1).collect();
   let mut i = 0;
@@ -408,6 +454,25 @@ fn parse_args() -> Args {
       "--lab" => a.lab = Some(PathBuf::from(next(&mut i))),
       "--lab-frame" => a.lab_frame = next(&mut i).parse().unwrap_or_else(|_| usage()),
       "--lab-truth" => a.lab_truth = next(&mut i).parse().unwrap_or_else(|_| usage()),
+      "--path-frames" => a.path_frames = next(&mut i).parse().unwrap_or_else(|_| usage()),
+      "--path-fps" => a.path_fps = next(&mut i).parse().unwrap_or_else(|_| usage()),
+      "--path-dt-s" => a.path_dt_s = next(&mut i).parse().unwrap_or_else(|_| usage()),
+      "--path-speed" => a.path_speed = Some(next(&mut i).parse().unwrap_or_else(|_| usage())),
+      "--orbit-deg-per-s" => a.orbit_deg_per_s = next(&mut i).parse().unwrap_or_else(|_| usage()),
+      "--eye-step-m" => a.eye_step_m = Some(next(&mut i).parse().unwrap_or_else(|_| usage())),
+      "--dolly-m-per-frame" => a.dolly_m_per_frame = next(&mut i).parse().unwrap_or_else(|_| usage()),
+      "--path-keep" => {
+        a.path_keep = next(&mut i).split(',').map(|v| v.trim().parse().unwrap_or_else(|_| usage())).collect()
+      }
+      "--lab-path" => a.lab_path = next(&mut i).parse().unwrap_or_else(|_| usage()),
+      "--lab-path-eps" => {
+        a.lab_path_eps = next(&mut i).split(',').map(|v| v.trim().parse().unwrap_or_else(|_| usage())).collect()
+      }
+      "--lab-score" => a.lab_score = Some(PathBuf::from(next(&mut i))),
+      "--against" => a.lab_against = Some(PathBuf::from(next(&mut i))),
+      "--lab-label" => a.lab_label = Some(next(&mut i)),
+      "--lab-table" => a.lab_table = Some(PathBuf::from(next(&mut i))),
+      "--lab-table-md" => a.lab_table_md = Some(PathBuf::from(next(&mut i))),
       "--probe" => {
         a.probe = next(&mut i)
           .split(';')
@@ -455,6 +520,23 @@ fn parse_args() -> Args {
       }
     }
     i += 1;
+  }
+  if let Some(x) = a.path_speed {
+    a.path_dt_s = x / a.path_fps;
+  }
+  if a.path_frames > 0 {
+    if a.pose != Pose::Inside {
+      eprintln!("--path-frames needs --pose inside (the nucleus-relative camera path)");
+      usage();
+    }
+    if !(a.path_fps > 0.0 && a.path_dt_s >= 0.0 && a.path_dt_s.is_finite()) {
+      eprintln!("--path-fps must be positive and the path's Δt finite and ≥ 0");
+      usage();
+    }
+    if let Some(k) = a.path_keep.iter().find(|&&k| k >= a.path_frames) {
+      eprintln!("--path-keep {k}: beyond the path's {} frames", a.path_frames);
+      usage();
+    }
   }
   if a.out.as_os_str().is_empty() {
     eprintln!("--out DIR is required");
@@ -1442,6 +1524,10 @@ fn dust_profile_report(
       d::DUST_PROF_K1C_NAMES.iter().zip(&k1c).map(|(n, c)| format!("{n} {c}")).collect::<Vec<_>>().join(", ")
     ));
   }
+  let (sm_fast, sm_edge) = (p.word(d::DUST_PROF_SMALL_PATHS), p.word(d::DUST_PROF_SMALL_PATHS + 1));
+  if sm_fast > 0 || sm_edge > 0 {
+    out.push(format!("[observer]   small pieces by one projection a slice {sm_fast}, by 4 sigma points {sm_edge}"));
+  }
   // the queue draw
   let q: Vec<u64> = (0..4).map(|k| p.qstage(k)).collect();
   let qrecords = p.word(d::DUST_PROF_QRECORDS) as u64;
@@ -1797,8 +1883,20 @@ fn luminance_stats(rgba: &[u8]) -> (f64, f64, f64) {
 
 fn main() {
   let args = parse_args();
+  if let Some(t) = args.lab_table_md.clone() {
+    // the score table as Markdown (no GPU)
+    std::process::exit(lab_table_markdown(&t));
+  }
+  if args.lab_score.is_some() {
+    // a camera-path capture's frame and the full frame against one truth (no GPU)
+    std::process::exit(run_lab_score(&args));
+  }
   if let Some(dir) = args.lab.clone() {
     // the offline replay lab: no GPU, no simulation
+    if args.lab_path > 0 {
+      // the CPU mirror's cadence along a camera path (temporal reuse step 4)
+      std::process::exit(run_lab_path(&dir, &args));
+    }
     std::process::exit(run_lab(&dir, args.lab_frame, args.lab_truth));
   }
   std::fs::create_dir_all(&args.out).expect("create --out");
@@ -1811,7 +1909,12 @@ fn main() {
   LOG_ECHO.store(!args.quiet, Ordering::Relaxed);
   let t_run = Instant::now();
 
-  let n_frames = ((args.days * 24.0 / args.step_hours).round() as u32).max(1) + 1;
+  // the camera path (`--path-frames`) runs from the one settled epoch
+  let n_frames = if args.path_frames > 0 {
+    1
+  } else {
+    ((args.days * 24.0 / args.step_hours).round() as u32).max(1) + 1
+  };
   let step = Duration::from_seconds(args.step_hours * 3600.0);
   let start = args.start;
   let range_days = (args.days + 1.0).max(31.0);
@@ -2522,10 +2625,14 @@ fn main() {
       ));
     }
     // the volume packet queue of the last drawn frame (`dust::DUST_VQUEUE_*`): what the consumer
-    // drew, what overflowed into the producers' threads, the chunks
+    // drew from the queue, what overflowed it into the volume spill (drawn from the spill, or
+    // lost: refused by the spill too, not drawn), the chunks
     if let Some((drawn, overflowed, chunks)) = ctx.dust_vqueue_counts(pe) {
+      let (spilled, lost) = ctx
+        .dust_vqueue_spill_counts(pe)
+        .map_or(("?".to_string(), "?".to_string()), |(s, l)| (s.to_string(), l.to_string()));
       log_line(&format!(
-        "[observer] dust volume queue: {drawn} packets drawn by the consumer, {overflowed} overflowed (drawn in-thread), {chunks} chunks; {} volume deposits split above the per-add cap",
+        "[observer] dust volume queue: {drawn} packets drawn by the consumer, {overflowed} overflowed → {spilled} spilled / {lost} lost, {chunks} chunks; {} volume deposits split above the per-add cap",
         ctx.dust_volume_split_adds(pe).map_or("?".to_string(), |n| n.to_string())
       ));
     }
@@ -3023,6 +3130,349 @@ fn main() {
       t_frame.elapsed().as_secs_f64()
     ));
     records.push(rec);
+  }
+
+  // ───── camera path (`--path-frames N`: temporal reuse step 4, the lab with cadence) ─────
+  // Path frame 0 is the settled frame above. Every later frame is one hold-step: the render budget
+  // holds the view (`set_render_budget(.., Some(0))`: no frame is sent), the clock seeks (paused)
+  // to t₀ + k·Δt, the tiers catch up, the camera moves to nucleus(t_k) + rel_k (rel₀ turned by k·ω
+  // about the orbit axis, nucleus-relative in fixed world axes), then exactly one frame is
+  // released (`Some(1)`): the renderer draws Δeye and Δt together, once, as at 60 fps. The frame
+  // ledger (`dust_frame_ledger`) proves it: one drawn frame per step, its eye − nucleus and its
+  // simulation time the intended ones; `--check` fails otherwise.
+  if args.path_frames > 1 && !DEVICE_LOST.load(Ordering::Relaxed) {
+    use aethervk_core_rlib::scene::dust as d;
+    let au_m = d::AU_M;
+    let nf = args.path_frames;
+    let dt = args.path_dt_s;
+    let tan_h = persp_tan_h.unwrap_or(1.0);
+    let comet_p0 = comet_position_au(&ctx, scene_id, comet_body).unwrap_or([0.0; 3]);
+    let (cam_p0, cam_q0) = camera_pose(&ctx, scene_id, cam).unwrap_or(([0.0; 3], [0.0, 0.0, 0.0, 1.0]));
+    let rel0 = sub(cam_p0, comet_p0);
+    let r0_m = norm(rel0) * au_m;
+    let axis = path_axis(rel0);
+    let omega = match args.eye_step_m {
+      Some(s) => s / r0_m,
+      None => args.orbit_deg_per_s.to_radians() / args.path_fps,
+    };
+    let dolly_au = args.dolly_m_per_frame / au_m;
+    let epoch0 = current_epoch(&ctx, scene_id).unwrap_or(start);
+    let keep: Vec<u32> = if args.path_keep.is_empty() { vec![0, nf - 1] } else { args.path_keep.clone() };
+    let env_s = |k: &str| std::env::var(k).unwrap_or_else(|_| "unset".into());
+    let variant = std::env::var("OBSERVER_PATH_VARIANT").unwrap_or_else(|_| {
+      if std::env::var("AETHERVK_DUST_CADENCE").is_ok_and(|v| v.trim() == "0") {
+        "full".into()
+      } else {
+        format!("eps{}", std::env::var("AETHERVK_DUST_CADENCE_EPS").unwrap_or_else(|_| "default".into()))
+      }
+    });
+    let pose_label = if args.inside_m >= 1e3 { format!("{:.0}km", args.inside_m / 1e3) } else { format!("{:.0}m", args.inside_m) };
+    let speed = dt * args.path_fps;
+    log_line(&format!(
+      "[observer] camera path: {nf} frames at {} fps, Δt {dt} s per frame (speed {speed}×), orbit {:.4}° per frame ({:.4} m per frame at {:.3} m from the nucleus centre) about {:?}, dolly {} m per frame, keep {:?}, variant {variant}",
+      args.path_fps,
+      omega.to_degrees(),
+      omega * r0_m,
+      r0_m,
+      axis,
+      args.dolly_m_per_frame,
+      keep
+    ));
+    write_kv(
+      &args.out.join("path.txt"),
+      &[
+        ("pose", "inside".into()),
+        ("pose_label", pose_label.clone()),
+        ("inside_m", format!("{}", args.inside_m)),
+        ("width", args.width.to_string()),
+        ("height", args.height.to_string()),
+        ("frames", nf.to_string()),
+        ("fps", format!("{}", args.path_fps)),
+        ("dt_s", format!("{dt}")),
+        ("speed", format!("{speed}")),
+        ("omega_deg_per_frame", format!("{:.9}", omega.to_degrees())),
+        ("eye_step_m", format!("{:.6}", omega * r0_m)),
+        ("dolly_m_per_frame", format!("{}", args.dolly_m_per_frame)),
+        ("axis", format!("{:.9},{:.9},{:.9}", axis[0], axis[1], axis[2])),
+        ("rel0_m", format!("{:.6},{:.6},{:.6}", rel0[0] * au_m, rel0[1] * au_m, rel0[2] * au_m)),
+        ("epoch0", format!("{epoch0}")),
+        ("variant", variant.clone()),
+        ("AETHERVK_DUST_CADENCE", env_s("AETHERVK_DUST_CADENCE")),
+        ("AETHERVK_DUST_CADENCE_EPS", env_s("AETHERVK_DUST_CADENCE_EPS")),
+        ("AETHERVK_DUST_CADENCE_PHASES", env_s("AETHERVK_DUST_CADENCE_PHASES")),
+        ("AETHERVK_DUST_NO_REUSE", env_s("AETHERVK_DUST_NO_REUSE")),
+      ],
+    );
+    // the truth's view of path frame 0 (the frame loop's McView with the far plane of frame 0,
+    // kept for the whole path: a moving far plane would change the projection, a cadence reset)
+    let base_view = {
+      let (px0, py0, depth0) = project_px(cam_p0, cam_q0, comet_p0, args.width, args.height, tan_h);
+      let mpp = 2.0 * depth0.max(1e-12) * au_m * tan_h / args.height as f64;
+      McView {
+        width: args.width,
+        height: args.height,
+        cam_pos: cam_p0,
+        cam_q: cam_q0,
+        half_height_au,
+        m_per_px_nucleus: mpp,
+        aspect,
+        perspective_tan_h: persp_tan_h,
+        near_au: inside_truth_near_au,
+        far_au: inside_far_now,
+        comet_au: comet_p0,
+        nucleus_px: (px0, py0),
+        mc_tier: args.mc_tier,
+        mc_age_max: args.mc_age_max,
+        mc_age_min: args.mc_age_min,
+        nucleus_px_radius: NUCLEUS_RADIUS_KM as f64 * 1e3 / mpp,
+        hue_ray: HueRay { from: (px0, py0), dir: (1.0, 0.0), r0: 14.0 },
+        stream: [jet_color[0] as f32, jet_color[1] as f32, jet_color[2] as f32],
+        ttl_s: JET_TTL_US as f64 * 1e-6,
+        afrho_aperture_km: args.afrho_aperture_km,
+        afrho_in_cm: {
+          let p = jet_params(7, args.isotropic);
+          let r_h = norm(comet_p0) as f32;
+          (p.afrho_0_cm * r_h.powf(-p.afrho_power)).min(p.afrho_max_value_cm) as f64
+        },
+        isotropic: args.isotropic,
+      }
+    };
+    // the hue ray and the nucleus scale as `mc_view_reposed` gives them for every kept frame
+    let view_t0 = mc_view_reposed(&base_view, cam_p0, cam_q0, comet_p0);
+    let layout = d::PyramidLayout::new(args.width, args.height);
+    let light_of = |pyr: &[u32]| -> f64 {
+      let unit = f32::from_bits(pyr.get(d::PYR_UNIT as usize).copied().unwrap_or(0)) as f64;
+      d::cadence::pyramid_light(&layout, pyr) * unit
+    };
+    let mut path_problems: Vec<String> = Vec::new();
+    let mut timings: std::collections::BTreeMap<u64, aethervk_core_rlib::gpu_backends::vulkan::device::dust::DustGpuTimings> =
+      std::collections::BTreeMap::new();
+    let poll_timings = |m: &mut std::collections::BTreeMap<u64, aethervk_core_rlib::gpu_backends::vulkan::device::dust::DustGpuTimings>| {
+      if let Some(t) = ctx.dust_gpu_timings(pe) {
+        m.insert(t.frame, t);
+      }
+    };
+    // hold, and let the frames already queued drain (their state is frame 0's)
+    ctx.set_render_budget(scene_id, pe, Some(0));
+    let last_seq = |ctx: &SimulationContext| ctx.dust_frame_ledger(pe, 0).last().map(|e| e.seq);
+    {
+      let t_d = Instant::now();
+      let mut last = last_seq(&ctx);
+      let mut since = Instant::now();
+      while since.elapsed().as_secs_f64() < 0.6 && t_d.elapsed().as_secs_f64() < 30.0 {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let now = last_seq(&ctx);
+        if now != last {
+          last = now;
+          since = Instant::now();
+        }
+      }
+    }
+    poll_timings(&mut timings);
+    let ledger0 = ctx.dust_frame_ledger(pe, 0);
+    let base = ledger0.iter().rev().find(|e| !e.reused).copied();
+    let mut prev_seq = ledger0.last().map(|e| e.seq).unwrap_or(0);
+    let t_base = base.map(|e| e.t_now_s);
+    match base {
+      Some(b) => log_line(&format!(
+        "[observer] camera path frame 0: the last drawn frame (ledger seq {}) at t {:.3} s, eye − nucleus {:?} m ({} frames reused after it)",
+        b.seq,
+        b.t_now_s,
+        b.nucleus_m.map(|n| [b.eye_m[0] - n[0], b.eye_m[1] - n[1], b.eye_m[2] - n[2]]),
+        ledger0.iter().filter(|e| e.seq > b.seq).count()
+      )),
+      None => path_problems.push("camera path: no drawn frame in the ledger before the path".into()),
+    }
+    if keep.contains(&0) {
+      save_truth_inputs(&ctx, scene_id, &view_t0, &args.out.join("truth_000.bin"));
+    }
+    if let Some(pyr) = ctx.download_dust_pyramid(pe) {
+      let _ = writeln!(
+        stats,
+        "{{\"path_frame\":0,\"t_rel_s\":0,\"theta_deg\":0,\"light\":{:.6e},\"variant\":\"{variant}\"}}",
+        light_of(&pyr)
+      );
+    }
+    log_line("[observer] dust cadence: no GPU cadence telemetry (not built yet): the cadenced columns are n/a");
+    let mut steps_done = 0u32;
+    for k in 1..nf {
+      if DEVICE_LOST.load(Ordering::Relaxed) {
+        path_problems.push(format!("camera path frame {k}: GPU device lost"));
+        break;
+      }
+      let t_step = Instant::now();
+      // time (paused seek: the same incremental tier tick as play)
+      if dt > 0.0 {
+        let target = epoch0 + Duration::from_seconds(k as f64 * dt);
+        let mut ok = ctx.seek_epoch_sync(scene_id, target);
+        if !ok {
+          let caught = wait_caught_up(&ctx, scene_id, 120.0);
+          let now = current_epoch(&ctx, scene_id);
+          ok = caught && now.map(|e| (e - target).abs() < Duration::from_seconds(1e-3)).unwrap_or(false);
+        }
+        if !ok {
+          path_problems.push(format!("camera path frame {k}: seek to {target} failed"));
+          break;
+        }
+      }
+      if !wait_caught_up(&ctx, scene_id, 120.0) {
+        path_problems.push(format!("camera path frame {k}: the tiers never caught up"));
+      }
+      // the camera: nucleus-relative, fixed world axes
+      let comet_k = comet_position_au(&ctx, scene_id, comet_body).unwrap_or([0.0; 3]);
+      let rel_k = path_rel(rel0, axis, omega, dolly_au, k);
+      if norm(rel_k) * au_m <= NUCLEUS_RADIUS_KM as f64 * 1e3 + 1.0 {
+        path_problems.push(format!("camera path frame {k}: the dolly reached the nucleus surface"));
+        break;
+      }
+      let cam_pk = [comet_k[0] + rel_k[0], comet_k[1] + rel_k[1], comet_k[2] + rel_k[2]];
+      let cam_qk = earth_observer::look_at_origin_from(rel_k, Some(axis));
+      set_camera_pose(&ctx, scene_id, cam, cam_pk, cam_qk);
+      // release exactly one frame
+      ctx.set_render_budget(scene_id, pe, Some(1));
+      let dl = wait_and_download(&ctx, args.width, args.height, 1, 120_000);
+      let Some((mut rgba, _tid)) = dl else {
+        path_problems.push(format!("camera path frame {k}: the released frame never arrived"));
+        break;
+      };
+      // the ledger: exactly one new entry, drawn, with this step's inputs
+      let mut entries = ctx.dust_frame_ledger(pe, prev_seq + 1);
+      let t_l = Instant::now();
+      while entries.is_empty() && t_l.elapsed().as_secs_f64() < 5.0 {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        entries = ctx.dust_frame_ledger(pe, prev_seq + 1);
+      }
+      let mut t_err = f64::NAN;
+      let mut eye_err = f64::NAN;
+      match entries.as_slice() {
+        [e] => {
+          prev_seq = e.seq;
+          if e.reused {
+            path_problems.push(format!("camera path frame {k}: the released frame reused the previous image"));
+          }
+          if let Some(tb) = t_base {
+            t_err = (e.t_now_s - tb) - k as f64 * dt;
+            if !(t_err.abs() <= 1e-3) {
+              path_problems.push(format!("camera path frame {k}: drawn at t₀ + {:.6} s, not + {:.6} s", e.t_now_s - tb, k as f64 * dt));
+            }
+          }
+          match e.nucleus_m {
+            Some(n) => {
+              let er = [e.eye_m[0] - n[0], e.eye_m[1] - n[1], e.eye_m[2] - n[2]];
+              let want = [rel_k[0] * au_m, rel_k[1] * au_m, rel_k[2] * au_m];
+              eye_err = norm(sub(er, want));
+              if !(eye_err <= 1e-3 + 1e-12 * norm(want)) {
+                path_problems.push(format!("camera path frame {k}: drawn with eye − nucleus {eye_err:.6} m off the path"));
+              }
+            }
+            None => path_problems.push(format!("camera path frame {k}: the ledger has no nucleus")),
+          }
+        }
+        es => {
+          path_problems.push(format!("camera path frame {k}: {} dust frames for one step (one expected)", es.len()));
+          if let Some(e) = es.last() {
+            prev_seq = e.seq;
+          }
+        }
+      }
+      poll_timings(&mut timings);
+      steps_done += 1;
+      let pyr = ctx.download_dust_pyramid(pe);
+      let light = pyr.as_ref().map(|p| light_of(p)).unwrap_or(f64::NAN);
+      if keep.contains(&k) {
+        if let Some(p) = pyr.as_ref() {
+          let words: Vec<u8> = p.iter().flat_map(|w| w.to_le_bytes()).collect();
+          let _ = std::fs::write(args.out.join(format!("frame_{k:03}.pyr")), &words);
+          if args.save_snapshot {
+            save_snapshot(&ctx, pe, p, &args, k as usize);
+          }
+        }
+        bgra_to_rgba(&mut rgba);
+        let _ = image::save_buffer(args.out.join(format!("frame_{k:03}.png")), &rgba, args.width, args.height, image::ColorType::Rgba8);
+        let view_k = mc_view_reposed(&view_t0, cam_pk, cam_qk, comet_k);
+        save_truth_inputs(&ctx, scene_id, &view_k, &args.out.join(format!("truth_{k:03}.bin")));
+      }
+      let tiers_k = tiers_now(&ctx, scene_id);
+      let _ = writeln!(
+        stats,
+        "{{\"path_frame\":{k},\"epoch\":\"{}\",\"t_rel_s\":{},\"theta_deg\":{:.9},\"eye_rel_m\":[{:.6},{:.6},{:.6}],\"ledger\":{{\"seq\":{prev_seq},\"entries\":{},\"t_err_s\":{},\"eye_err_m\":{}}},\"light\":{:.6e},\"tiers_live\":[{}],\"wall_ms\":{:.1},\"variant\":\"{variant}\"}}",
+        current_epoch(&ctx, scene_id).map(|e| e.to_string()).unwrap_or_default(),
+        k as f64 * dt,
+        (omega * k as f64).to_degrees(),
+        rel_k[0] * au_m,
+        rel_k[1] * au_m,
+        rel_k[2] * au_m,
+        entries.len(),
+        json_f(t_err),
+        json_f(eye_err),
+        light,
+        tiers_k.iter().map(|t| t.live.to_string()).collect::<Vec<_>>().join(","),
+        t_step.elapsed().as_secs_f64() * 1e3
+      );
+      let _ = stats.flush();
+      log_line(&format!(
+        "[observer] camera path frame {k}: θ {:.4}°, Δt {:.0} s, ledger entries {}, t err {t_err:.2e} s, eye err {eye_err:.2e} m, light {light:.6e}, {:.0} ms",
+        (omega * k as f64).to_degrees(),
+        k as f64 * dt,
+        entries.len(),
+        t_step.elapsed().as_secs_f64() * 1e3
+      ));
+    }
+    // flush the timestamps (the readback lags DUST_READBACK_SLOTS frames): a few released frames
+    // of the unchanged last view (reused images)
+    for _ in 0..aethervk_core_rlib::gpu_backends::vulkan::device::dust::DUST_READBACK_SLOTS + 2 {
+      ctx.set_render_budget(scene_id, pe, Some(1));
+      if wait_and_download(&ctx, args.width, args.height, 1, 60_000).is_none() {
+        break;
+      }
+      poll_timings(&mut timings);
+    }
+    ctx.set_render_budget(scene_id, pe, None);
+    // the path's drawn frames are the last `steps_done` drawn ones measured (nothing else drew
+    // while the budget held the view)
+    let drawn: Vec<f64> = timings.values().filter(|t| !t.reused).map(|t| t.total_ms).collect();
+    let path_ms: Vec<f64> = drawn.iter().rev().take(steps_done as usize).rev().copied().collect();
+    let mut sorted = path_ms.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(core::cmp::Ordering::Equal));
+    let (ms_mean, ms_p90, ms_max) = if sorted.is_empty() {
+      (f64::NAN, f64::NAN, f64::NAN)
+    } else {
+      (
+        sorted.iter().sum::<f64>() / sorted.len() as f64,
+        sorted[((sorted.len() as f64 * 0.9).ceil() as usize).clamp(1, sorted.len()) - 1],
+        sorted[sorted.len() - 1],
+      )
+    };
+    if (path_ms.len() as u32) < steps_done {
+      log_line(&format!(
+        "[observer] camera path: GPU timings for {} of {steps_done} path frames (a poll missed some)",
+        path_ms.len()
+      ));
+    }
+    let clean = path_problems.is_empty() && steps_done + 1 == nf;
+    log_line(&format!(
+      "[observer] camera path: {steps_done} of {} steps, clean {clean}, GPU ms per path frame mean {ms_mean:.2} p90 {ms_p90:.2} max {ms_max:.2} ({} frames measured)",
+      nf - 1,
+      path_ms.len()
+    ));
+    write_kv(
+      &args.out.join("path_summary.txt"),
+      &[
+        ("clean", format!("{}", clean as u8)),
+        ("steps", steps_done.to_string()),
+        ("problems", path_problems.len().to_string()),
+        ("gpu_frames", path_ms.len().to_string()),
+        ("ms_mean", format!("{ms_mean:.3}")),
+        ("ms_p90", format!("{ms_p90:.3}")),
+        ("ms_max", format!("{ms_max:.3}")),
+        ("gpu_ms", path_ms.iter().map(|m| format!("{m:.3}")).collect::<Vec<_>>().join(",")),
+        ("cadence", "n/a".into()),
+      ],
+    );
+    if steps_done + 1 != nf && path_problems.is_empty() {
+      path_problems.push(format!("camera path: {steps_done} of {} steps done", nf - 1));
+    }
+    problems.extend(path_problems);
   }
 
   // ───── contact sheet ─────
@@ -7705,5 +8155,1083 @@ fn run_lab(dir: &Path, frame: u32, lab_truth: usize) -> i32 {
     (tot_t - in_t) / tot_t.max(1e-300),
     t0.elapsed().as_secs_f64()
   );
+  // the same comparison by `lab_score` (the camera path's scorer): equal numbers prove it is this
+  // arithmetic; and its 60-px block rms
+  {
+    let s = lab_score(&render64, &truth, &counts, wu, hu);
+    println!(
+      "lab: score check: lab_score judged {:.4} (above {judged:.4}), Σ render/truth {:.4} (above {abs_ratio:.4}); block{LAB_BLOCK_PX} rms {:.4} (shape only {:.4}, the truth's count noise {:.4}) over {} blocks",
+      s.judged, s.sum_ratio, s.block, s.block_shape, s.block_noise, s.blocks
+    );
+  }
   0
+}
+
+// ───────────────────── temporal reuse step 4: the camera path and the image score ─────────────────────
+
+/// the side of the score's blocks (px): the 60-px block rms of [`lab_score`]
+const LAB_BLOCK_PX: usize = 60;
+/// a block enters the block rms when its truth (or reference) light is at least this share of the
+/// brightest block's
+const LAB_BLOCK_REL: f64 = 0.05;
+
+/// One frame scored against a truth ([`lab_score`]): the observer's judgement (`run_lab`'s
+/// arithmetic), the Σ ratio, the ratio by truth level, the light outside the truth's region and
+/// the 60-px block rms (absolute, shape only, and the truth's count noise at that scale).
+#[derive(Debug, Clone, Copy, Default)]
+struct LabScore {
+  sum_ratio: f64,
+  rel_rms: f64,
+  judged: f64,
+  noise: f64,
+  core_px: usize,
+  region_px: usize,
+  levels: [f64; 4],
+  out_render: f64,
+  out_truth: f64,
+  block: f64,
+  block_shape: f64,
+  block_noise: f64,
+  blocks: usize,
+}
+
+/// `img` summed over `px × px` blocks (the last row and column partial): `(sums, columns, rows)`
+fn block_sums(img: &[f64], w: usize, h: usize, px: usize) -> (Vec<f64>, usize, usize) {
+  let (bw, bh) = (w.div_ceil(px), h.div_ceil(px));
+  let mut s = vec![0.0f64; bw * bh];
+  for y in 0..h {
+    for x in 0..w {
+      s[(y / px) * bw + x / px] += img[y * w + x];
+    }
+  }
+  (s, bw, bh)
+}
+
+/// The block rms of `render` against `truth` (absolute images, the same units): over the blocks
+/// whose truth is ≥ [`LAB_BLOCK_REL`] of the brightest, `sqrt(Σ (R_B − T_B)² / Σ T_B²)` (the
+/// absolute one: the Σ error counts), the same with `R` scaled to the truth's Σ (the shape only),
+/// and the truth's count noise at the block scale `sqrt(Σ_B Σ_px t² / n_px / Σ T_B²)` (0 without
+/// counts; like the pixel score's noise term it ignores the grains' weights). Returns
+/// `(absolute, shape, noise, blocks)`.
+fn block_rms(render: &[f64], truth: &[f64], counts: &[f64], w: usize, h: usize, px: usize) -> (f64, f64, f64, usize) {
+  let (rb, bw, bh) = block_sums(render, w, h, px);
+  let (tb, _, _) = block_sums(truth, w, h, px);
+  let mut nv = vec![0.0f64; bw * bh];
+  if counts.len() == w * h {
+    for y in 0..h {
+      for x in 0..w {
+        let i = y * w + x;
+        nv[(y / px) * bw + x / px] += truth[i] * truth[i] / counts[i].max(1.0);
+      }
+    }
+  }
+  let tmax = tb.iter().cloned().fold(0.0f64, f64::max);
+  let scale = truth.iter().sum::<f64>() / render.iter().sum::<f64>().max(1e-300);
+  let (mut se, mut ss, mut st, mut sn, mut n) = (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0usize);
+  for b in 0..bw * bh {
+    if tmax > 0.0 && tb[b] >= LAB_BLOCK_REL * tmax {
+      se += (rb[b] - tb[b]).powi(2);
+      ss += (rb[b] * scale - tb[b]).powi(2);
+      st += tb[b] * tb[b];
+      sn += nv[b];
+      n += 1;
+    }
+  }
+  let st = st.max(1e-300);
+  ((se / st).sqrt(), (ss / st).sqrt(), (sn / st).sqrt(), n)
+}
+
+/// A frame's τ image `render` against the truth `truth` (+ grains per pixel `counts`): the
+/// arithmetic of `run_lab`'s comparison (5×5-boxed unit-sum images, the region at
+/// `MC_REGION_REL` of the truth's peak, the unresolved-core rule, the count noise subtracted:
+/// the judged value; the ratio by truth level and the light outside the region), plus the 60-px
+/// block rms ([`block_rms`]). `run_lab` prints both and they agree (its `score check` line).
+fn lab_score(render: &[f64], truth: &[f64], counts: &[f64], w: usize, h: usize) -> LabScore {
+  let abs_ratio = render.iter().sum::<f64>() / truth.iter().sum::<f64>().max(1e-300);
+  let norm = |v: &[f64]| -> Vec<f64> {
+    let s: f64 = v.iter().sum();
+    v.iter().map(|x| x / s.max(1e-300)).collect()
+  };
+  let a = mc_box(&norm(render), w, h, 2);
+  let b = mc_box(&norm(truth), w, h, 2);
+  let peak = b.iter().cloned().fold(0.0f64, f64::max);
+  let region: Vec<usize> = (0..w * h).filter(|&i| b[i] >= MC_REGION_REL * peak).collect();
+  let core_px = region.iter().filter(|&&i| b[i] >= 0.01 * peak).count();
+  let core_unresolved = core_px < MC_CORE_RESOLVED_PX;
+  let n5 = if counts.len() == w * h { mc_box(counts, w, h, 2) } else { vec![1e9; w * h] };
+  let (mut se, mut sb2, mut se_j, mut sb2_j, mut sn_j) = (0.0, 0.0, 0.0, 0.0, 0.0);
+  for &i in &region {
+    let d2 = (a[i] - b[i]).powi(2);
+    se += d2;
+    sb2 += b[i].powi(2);
+    if !(core_unresolved && b[i] >= 0.01 * peak) {
+      se_j += d2;
+      sb2_j += b[i].powi(2);
+      sn_j += b[i].powi(2) / (n5[i] * 25.0).max(1.0);
+    }
+  }
+  let noise = (sn_j / sb2_j.max(1e-300)).sqrt();
+  let rel_j = (se_j / sb2_j.max(1e-300)).sqrt();
+  let judged = (rel_j * rel_j - noise * noise).max(0.0).sqrt();
+  let mut lv = [(0.0f64, 0.0f64); 4];
+  let (mut in_r, mut in_t) = (0.0f64, 0.0f64);
+  for i in 0..w * h {
+    let (ra, tb) = (a[i] * abs_ratio, b[i]);
+    let f = tb / peak.max(1e-300);
+    let k = if f >= 0.6 { 3 } else if f >= 0.3 { 2 } else if f >= 0.1 { 1 } else if f >= 0.05 { 0 } else { 9 };
+    if k < 4 {
+      lv[k].0 += ra;
+      lv[k].1 += tb;
+      in_r += ra;
+      in_t += tb;
+    }
+  }
+  let tot_r: f64 = a.iter().sum::<f64>() * abs_ratio;
+  let tot_t: f64 = b.iter().sum();
+  let (block, block_shape, block_noise, blocks) = block_rms(render, truth, counts, w, h, LAB_BLOCK_PX);
+  LabScore {
+    sum_ratio: abs_ratio,
+    rel_rms: (se / sb2.max(1e-300)).sqrt(),
+    judged,
+    noise,
+    core_px,
+    region_px: region.len(),
+    levels: [0, 1, 2, 3].map(|k| lv[k].0 / lv[k].1.max(1e-300)),
+    out_render: (tot_r - in_r) / tot_r.max(1e-300),
+    out_truth: (tot_t - in_t) / tot_t.max(1e-300),
+    block,
+    block_shape,
+    block_noise,
+    blocks,
+  }
+}
+
+fn print_lab_score(tag: &str, s: &LabScore) {
+  println!(
+    "{tag}: rel rms {:.4} (judged {:.4} after noise {:.4}, core {} px) over {} px, Σ render/truth {:.4}",
+    s.rel_rms, s.judged, s.noise, s.core_px, s.region_px, s.sum_ratio
+  );
+  println!(
+    "{tag}: ratio by truth level 0.05-0.1 {:.3}, 0.1-0.3 {:.3}, 0.3-0.6 {:.3}, 0.6-1 {:.3} | outside the truth's 5 % region: render {:.4}, truth {:.4}",
+    s.levels[0], s.levels[1], s.levels[2], s.levels[3], s.out_render, s.out_truth
+  );
+  println!(
+    "{tag}: block{LAB_BLOCK_PX} rms {:.4} (shape only {:.4}, the truth's count noise {:.4}) over {} blocks",
+    s.block, s.block_shape, s.block_noise, s.blocks
+  );
+}
+
+/// A frame against a reference frame of the same view (no truth, no noise): the Σ ratio, the
+/// shape rel rms of the 5×5-boxed unit-sum images over the truth's region, the absolute 60-px
+/// block rms against the reference's blocks (≥ [`LAB_BLOCK_REL`] of its brightest) and the worst
+/// block `x_B / y_B − 1` with its block coordinates.
+#[derive(Debug, Clone, Copy, Default)]
+struct DirectCmp {
+  sum_ratio: f64,
+  rel_rms: f64,
+  block: f64,
+  worst: f64,
+  worst_at: (usize, usize),
+  grid: (usize, usize),
+}
+
+fn direct_compare(x: &[f64], y: &[f64], truth: &[f64], w: usize, h: usize) -> DirectCmp {
+  let norm = |v: &[f64]| -> Vec<f64> {
+    let s: f64 = v.iter().sum();
+    v.iter().map(|q| q / s.max(1e-300)).collect()
+  };
+  let (sx, sy): (f64, f64) = (x.iter().sum(), y.iter().sum());
+  let bt = mc_box(&norm(truth), w, h, 2);
+  let peak = bt.iter().cloned().fold(0.0f64, f64::max);
+  let (a, b) = (mc_box(&norm(x), w, h, 2), mc_box(&norm(y), w, h, 2));
+  let (mut se, mut sb) = (0.0f64, 0.0f64);
+  for i in 0..w * h {
+    if bt[i] >= MC_REGION_REL * peak {
+      se += (a[i] - b[i]).powi(2);
+      sb += b[i] * b[i];
+    }
+  }
+  let (xb, bw, bh) = block_sums(x, w, h, LAB_BLOCK_PX);
+  let (yb, _, _) = block_sums(y, w, h, LAB_BLOCK_PX);
+  let ymax = yb.iter().cloned().fold(0.0f64, f64::max);
+  let (mut be, mut bs) = (0.0f64, 0.0f64);
+  let (mut worst, mut worst_at) = (0.0f64, (0usize, 0usize));
+  for k in 0..bw * bh {
+    if ymax > 0.0 && yb[k] >= LAB_BLOCK_REL * ymax {
+      be += (xb[k] - yb[k]).powi(2);
+      bs += yb[k] * yb[k];
+      let r = xb[k] / yb[k] - 1.0;
+      if r.abs() > worst.abs() {
+        worst = r;
+        worst_at = (k % bw, k / bw);
+      }
+    }
+  }
+  DirectCmp {
+    sum_ratio: sx / sy.max(1e-300),
+    rel_rms: (se / sb.max(1e-300)).sqrt(),
+    block: (be / bs.max(1e-300)).sqrt(),
+    worst,
+    worst_at,
+    grid: (bw, bh),
+  }
+}
+
+fn write_f64_file(path: &Path, v: &[f64]) -> std::io::Result<()> {
+  let b: Vec<u8> = v.iter().flat_map(|x| x.to_le_bytes()).collect();
+  std::fs::write(path, b)
+}
+
+fn read_f64_file(path: &Path) -> Option<Vec<f64>> {
+  let b = std::fs::read(path).ok()?;
+  if b.len() % 8 != 0 {
+    return None;
+  }
+  Some(b.chunks_exact(8).map(|c| f64::from_le_bytes(c.try_into().unwrap())).collect())
+}
+
+/// `key value` lines (`path.txt`, `path_summary.txt`: the camera path's facts for the score)
+fn write_kv(path: &Path, kv: &[(&str, String)]) {
+  let mut s = String::new();
+  for (k, v) in kv {
+    s.push_str(&format!("{k} {v}\n"));
+  }
+  if let Err(e) = std::fs::write(path, s) {
+    log_line(&format!("[observer] {}: {e}", path.display()));
+  }
+}
+
+fn read_kv(path: &Path) -> Vec<(String, String)> {
+  std::fs::read_to_string(path)
+    .map(|s| {
+      s.lines()
+        .filter_map(|l| l.split_once(' ').map(|(k, v)| (k.to_string(), v.trim().to_string())))
+        .collect()
+    })
+    .unwrap_or_default()
+}
+
+fn kv_get<'a>(kv: &'a [(String, String)], key: &str) -> Option<&'a str> {
+  kv.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+}
+
+/// the rotation by `angle` (rad) about the unit `axis` (Rodrigues), row-major
+fn rot_axis(axis: V3, angle: f64) -> [[f64; 3]; 3] {
+  let (s, c) = angle.sin_cos();
+  let t = 1.0 - c;
+  let [x, y, z] = axis;
+  [
+    [c + t * x * x, t * x * y - s * z, t * x * z + s * y],
+    [t * x * y + s * z, c + t * y * y, t * y * z - s * x],
+    [t * x * z - s * y, t * y * z + s * x, c + t * z * z],
+  ]
+}
+
+fn mat3_apply(m: &[[f64; 3]; 3], v: V3) -> V3 {
+  [dot(m[0], v), dot(m[1], v), dot(m[2], v)]
+}
+
+/// The camera path's orbit axis: the ecliptic north's component across the start offset `rel0`
+/// (eye − nucleus), unit; the camera keeps it as its up, so the orbit never rolls the view
+fn path_axis(rel0: V3) -> V3 {
+  let r = normalize(rel0);
+  let z = [0.0, 0.0, 1.0];
+  let d = dot(z, r);
+  let a = [z[0] - d * r[0], z[1] - d * r[1], z[2] - d * r[2]];
+  if norm(a) > 1e-9 { normalize(a) } else { normalize(cross(r, [1.0, 0.0, 0.0])) }
+}
+
+/// The camera path's eye offset from the nucleus at path frame `k` (the units of `rel0`): `rel0`
+/// turned by `k·ω` about `axis`, its length less `k·dolly` (same units)
+fn path_rel(rel0: V3, axis: V3, omega: f64, dolly: f64, k: u32) -> V3 {
+  let r = mat3_apply(&rot_axis(axis, omega * k as f64), rel0);
+  let n0 = norm(rel0);
+  let s = (n0 - dolly * k as f64) / n0.max(1e-300);
+  [r[0] * s, r[1] * s, r[2] * s]
+}
+
+/// The pixel of `target` (AU, heliocentric) and its depth along the view (AU) for a perspective
+/// camera at `cam_pos` with orientation `cam_q` (the frame loop's own projection)
+fn project_px(cam_pos: V3, cam_q: Q, target: V3, w: u32, h: u32, tan_h: f64) -> (f64, f64, f64) {
+  let aspect = w as f64 / h as f64;
+  let (right, forward, up) = camera_axes(cam_q);
+  let d = sub(target, cam_pos);
+  let (sx, sy, depth) = (dot(d, right), dot(d, up), dot(d, forward));
+  (
+    w as f64 / 2.0 * (1.0 + sx / depth.max(1e-12) / (tan_h * aspect)),
+    h as f64 / 2.0 * (1.0 - sy / depth.max(1e-12) / tan_h),
+    depth,
+  )
+}
+
+/// `v0` seen from another camera (`cam_pos`, `cam_q`, AU) with the comet centre at `comet_au`:
+/// the nucleus pixel, the metres per pixel at the nucleus, the nucleus radius on screen and the
+/// hue ray follow the camera; every other field (planes, gates, photometry) is `v0`'s
+/// (perspective views only)
+fn mc_view_reposed(v0: &McView, cam_pos: V3, cam_q: Q, comet_au: V3) -> McView {
+  let tan_h = v0.perspective_tan_h.unwrap_or(1.0);
+  let (px, py, depth) = project_px(cam_pos, cam_q, comet_au, v0.width, v0.height, tan_h);
+  let m_per_px = 2.0 * depth.max(1e-12) * aethervk_core_rlib::scene::dust::AU_M * tan_h / v0.height as f64;
+  let (right, _, up) = camera_axes(cam_q);
+  let anti = normalize(comet_au);
+  let dv = (dot(anti, right), -dot(anti, up));
+  let dn = (dv.0 * dv.0 + dv.1 * dv.1).sqrt();
+  let nucleus_px_radius = NUCLEUS_RADIUS_KM as f64 * 1e3 / m_per_px;
+  McView {
+    width: v0.width,
+    height: v0.height,
+    cam_pos,
+    cam_q,
+    half_height_au: v0.half_height_au,
+    m_per_px_nucleus: m_per_px,
+    aspect: v0.aspect,
+    perspective_tan_h: v0.perspective_tan_h,
+    near_au: v0.near_au,
+    far_au: v0.far_au,
+    comet_au,
+    nucleus_px: (px, py),
+    mc_tier: v0.mc_tier,
+    mc_age_max: v0.mc_age_max,
+    mc_age_min: v0.mc_age_min,
+    nucleus_px_radius,
+    afrho_aperture_km: v0.afrho_aperture_km,
+    afrho_in_cm: v0.afrho_in_cm,
+    isotropic: v0.isotropic,
+    hue_ray: HueRay {
+      from: (px, py),
+      dir: if dn > 1e-6 { (dv.0 / dn, dv.1 / dn) } else { (1.0, 0.0) },
+      r0: (2.0 * nucleus_px_radius + 3.0).max(14.0),
+    },
+    stream: v0.stream,
+    ttl_s: v0.ttl_s,
+  }
+}
+
+/// the columns of the score table (`--lab-table FILE.tsv`, one row per scored frame)
+const LAB_TABLE_COLUMNS: &[&str] = &[
+  "source", "speed", "pose", "variant", "frame", "truth_grains", "judged", "judged_full", "sum_rt", "sum_rt_full", "sum_x_full",
+  "lvl_005_01", "lvl_01_03", "lvl_03_06", "lvl_06_1", "block60", "block60_full", "direct_rel", "direct_block60", "worst_block",
+  "fresh", "d3_share", "shown_light", "ghost", "ms_mean", "ms_p90", "ms_max", "clean",
+];
+
+/// one row of the score table, in [`LAB_TABLE_COLUMNS`] order (missing values `n/a`)
+fn lab_table_append(path: &Path, row: &[(&str, String)]) {
+  let new = !path.exists();
+  let mut s = String::new();
+  if new {
+    s.push_str(&LAB_TABLE_COLUMNS.join("\t"));
+    s.push('\n');
+  }
+  let cells: Vec<String> = LAB_TABLE_COLUMNS
+    .iter()
+    .map(|c| row.iter().find(|(k, _)| k == c).map(|(_, v)| v.clone()).unwrap_or_else(|| "n/a".into()))
+    .collect();
+  s.push_str(&cells.join("\t"));
+  s.push('\n');
+  match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+    Ok(mut f) => {
+      let _ = f.write_all(s.as_bytes());
+    }
+    Err(e) => eprintln!("table {}: {e}", path.display()),
+  }
+}
+
+/// `--lab-table-md FILE.tsv`: the score table as Markdown, one table per (source, speed), rows by
+/// pose then variant (full, aa, eps…, fb), with the cadence's columns against the full frame
+fn lab_table_markdown(path: &Path) -> i32 {
+  let Ok(text) = std::fs::read_to_string(path) else {
+    eprintln!("table: cannot read {}", path.display());
+    return 2;
+  };
+  let mut lines = text.lines();
+  let Some(head) = lines.next() else {
+    return 2;
+  };
+  let cols: Vec<&str> = head.split('\t').collect();
+  let rows: Vec<Vec<&str>> = lines.filter(|l| !l.trim().is_empty()).map(|l| l.split('\t').collect()).collect();
+  let col = |r: &Vec<&str>, name: &str| -> String {
+    cols.iter().position(|c| *c == name).and_then(|i| r.get(i)).map(|s| s.to_string()).unwrap_or_else(|| "n/a".into())
+  };
+  let variant_rank = |v: &str| -> (u32, String) {
+    match v {
+      "full" => (0, String::new()),
+      "aa" => (1, String::new()),
+      "fb" => (3, String::new()),
+      v => (2, format!("{:>12}", v)),
+    }
+  };
+  let mut groups: Vec<(String, String)> = Vec::new();
+  for r in &rows {
+    let g = (col(r, "source"), col(r, "speed"));
+    if !groups.contains(&g) {
+      groups.push(g);
+    }
+  }
+  for (src, speed) in groups {
+    println!("\n### {src}, speed {speed} (frame scored against the same truth as the full frame)\n");
+    println!(
+      "| pose | variant | frame | judged (Δ full) | Σ render/truth | Σ x/full | ratio by level 0.05–0.1 / 0.1–0.3 / 0.3–0.6 / 0.6–1 | block60 (Δ full) | direct vs full: rel / block60 / worst block | fresh | D3 share | shown light | ghost | ms mean / p90 / max | clean |"
+    );
+    println!("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
+    let mut sel: Vec<&Vec<&str>> = rows.iter().filter(|r| col(r, "source") == src && col(r, "speed") == speed).collect();
+    sel.sort_by(|a, b| {
+      (col(a, "pose"), variant_rank(&col(a, "variant")), col(a, "frame"))
+        .cmp(&(col(b, "pose"), variant_rank(&col(b, "variant")), col(b, "frame")))
+    });
+    let num = |s: &str| s.parse::<f64>().ok();
+    for r in sel {
+      let d = |a: &str, b: &str| match (num(&col(r, a)), num(&col(r, b))) {
+        (Some(x), Some(y)) => format!("{x:.4} ({:+.4})", x - y),
+        _ => col(r, a),
+      };
+      println!(
+        "| {} | {} | {} | {} | {} | {} | {} / {} / {} / {} | {} | {} / {} / {} | {} | {} | {} | {} | {} / {} / {} | {} |",
+        col(r, "pose"),
+        col(r, "variant"),
+        col(r, "frame"),
+        d("judged", "judged_full"),
+        col(r, "sum_rt"),
+        col(r, "sum_x_full"),
+        col(r, "lvl_005_01"),
+        col(r, "lvl_01_03"),
+        col(r, "lvl_03_06"),
+        col(r, "lvl_06_1"),
+        d("block60", "block60_full"),
+        col(r, "direct_rel"),
+        col(r, "direct_block60"),
+        col(r, "worst_block"),
+        col(r, "fresh"),
+        col(r, "d3_share"),
+        col(r, "shown_light"),
+        col(r, "ghost"),
+        col(r, "ms_mean"),
+        col(r, "ms_p90"),
+        col(r, "ms_max"),
+        col(r, "clean"),
+      );
+    }
+  }
+  0
+}
+
+/// `--lab-score DIR --against FULL --lab-frame F --lab-truth N`: the frame `F` of a camera-path
+/// capture (`DIR/frame_FFF.pyr`, the GPU pyramid: the composite's words) and the fully drawn
+/// frame of the same path (`FULL`) scored against ONE truth: `FULL/truth_FFF.bin`'s inputs drawn
+/// once at N grains and cached as `FULL/truthN_FFF.f64` (+ `_counts.f64`), both runs' truth
+/// inputs byte-equal (else exit 2: not the same frame). Prints both scores ([`lab_score`]), the
+/// direct comparison ([`direct_compare`]) and the path's facts (`path.txt`,
+/// `path_summary.txt`); `--lab-table T.tsv` appends the row; `--check` fails when either path is
+/// not clean or `|Σ x / Σ full − 1| > 1 % + the ghost share` (0 without the cadence's telemetry).
+fn run_lab_score(args: &Args) -> i32 {
+  let dir = args.lab_score.clone().unwrap_or_default();
+  let full = args.lab_against.clone().unwrap_or_else(|| dir.clone());
+  let f = args.lab_frame;
+  let n = args.lab_truth;
+  if n == 0 {
+    eprintln!("score: --lab-truth N is required (the truth's grain count is part of its name)");
+    return 2;
+  }
+  let tpath = full.join(format!("truth_{f:03}.bin"));
+  let Ok(tb_full) = std::fs::read(&tpath) else {
+    eprintln!("score: no {}", tpath.display());
+    return 2;
+  };
+  if dir != full {
+    match std::fs::read(dir.join(format!("truth_{f:03}.bin"))) {
+      Ok(b) if b == tb_full => println!("score: truth inputs of frame {f} byte-equal in both runs ({} bytes): the same frame", b.len()),
+      Ok(b) => {
+        let first = b.iter().zip(&tb_full).position(|(x, y)| x != y).unwrap_or(b.len().min(tb_full.len()));
+        eprintln!(
+          "score: {} and {} are not the same frame: truth inputs {} vs {} bytes, first difference at byte {first}",
+          dir.display(),
+          full.display(),
+          b.len(),
+          tb_full.len()
+        );
+        return 2;
+      }
+      Err(_) => {
+        eprintln!("score: no truth_{f:03}.bin in {}", dir.display());
+        return 2;
+      }
+    }
+  }
+  let Some((inputs, view)) = load_truth_inputs(&tpath) else {
+    eprintln!("score: cannot parse {}", tpath.display());
+    return 2;
+  };
+  let (w, h) = (view.width, view.height);
+  let (wu, hu) = (w as usize, h as usize);
+  let load_pyr = |d: &Path| -> Option<Vec<u32>> {
+    let b = std::fs::read(d.join(format!("frame_{f:03}.pyr"))).ok()?;
+    Some(b.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
+  };
+  let (Some(pyr_full), Some(pyr_x)) = (load_pyr(&full), load_pyr(&dir)) else {
+    eprintln!("score: frame_{f:03}.pyr missing in {} or {}", full.display(), dir.display());
+    return 2;
+  };
+  let tc = full.join(format!("truth{n}_{f:03}.f64"));
+  let cc = full.join(format!("truth{n}_{f:03}_counts.f64"));
+  let (truth, counts) = match (read_f64_file(&tc), read_f64_file(&cc)) {
+    (Some(t), Some(c)) if t.len() == wu * hu && c.len() == wu * hu => {
+      println!("score: truth {} (cached, {n} grains)", tc.display());
+      (t, c)
+    }
+    _ => {
+      let t1 = Instant::now();
+      let Some((rec, _, _, t, c)) = monte_carlo_truth_from(&pyr_full, &inputs, &view, n) else {
+        eprintln!("score: the truth draw returned nothing");
+        return 2;
+      };
+      if let Err(e) = write_f64_file(&tc, &t).and_then(|_| write_f64_file(&cc, &c)) {
+        eprintln!("score: cannot cache the truth: {e}");
+      }
+      println!(
+        "score: drew the truth: {} grains, {} batches, {:.1} s → {}",
+        rec.grains,
+        rec.batches,
+        t1.elapsed().as_secs_f64(),
+        tc.display()
+      );
+      (t, c)
+    }
+  };
+  let img = |p: &[u32]| tau_image_of_pyramid(p, w, h).map(|v| v.iter().map(|&x| x as f64).collect::<Vec<f64>>());
+  let (Some(rf), Some(rx)) = (img(&pyr_full), img(&pyr_x)) else {
+    eprintln!("score: a pyramid has no τ image");
+    return 2;
+  };
+  let (pk_x, ps_x) = (read_kv(&dir.join("path.txt")), read_kv(&dir.join("path_summary.txt")));
+  let (pk_f, ps_f) = (read_kv(&full.join("path.txt")), read_kv(&full.join("path_summary.txt")));
+  let label = args
+    .lab_label
+    .clone()
+    .or_else(|| kv_get(&pk_x, "variant").map(String::from))
+    .unwrap_or_else(|| dir.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default());
+  let sf = lab_score(&rf, &truth, &counts, wu, hu);
+  let sx = lab_score(&rx, &truth, &counts, wu, hu);
+  print_lab_score(&format!("score frame {f} full"), &sf);
+  print_lab_score(&format!("score frame {f} {label}"), &sx);
+  let dc = direct_compare(&rx, &rf, &truth, wu, hu);
+  println!(
+    "score frame {f} {label} vs full: Σ {:.5}, shape rel rms {:.4}, block{LAB_BLOCK_PX} rms {:.4}, worst block {:+.4} at ({}, {}) of {}×{}",
+    dc.sum_ratio, dc.rel_rms, dc.block, dc.worst, dc.worst_at.0, dc.worst_at.1, dc.grid.0, dc.grid.1
+  );
+  let clean = |s: &[(String, String)]| kv_get(s, "clean") == Some("1");
+  let ghost: Option<f64> = kv_get(&ps_x, "ghost_share").and_then(|v| v.parse().ok());
+  for (tag, s) in [("full", &ps_f), (label.as_str(), &ps_x)] {
+    println!(
+      "score: {tag}: path clean {} ({} steps), GPU ms per path frame mean {} p90 {} max {} over {} frames, cadence {}",
+      kv_get(s, "clean").unwrap_or("?"),
+      kv_get(s, "steps").unwrap_or("?"),
+      kv_get(s, "ms_mean").unwrap_or("n/a"),
+      kv_get(s, "ms_p90").unwrap_or("n/a"),
+      kv_get(s, "ms_max").unwrap_or("n/a"),
+      kv_get(s, "gpu_frames").unwrap_or("0"),
+      kv_get(s, "cadence").unwrap_or("n/a")
+    );
+  }
+  let mut fails: Vec<String> = Vec::new();
+  // the same path: every parameter that moves the camera or the clock equal in both runs
+  for key in ["pose", "inside_m", "width", "height", "frames", "fps", "dt_s", "omega_deg_per_frame", "dolly_m_per_frame", "axis", "rel0_m", "epoch0"] {
+    if kv_get(&pk_x, key) != kv_get(&pk_f, key) {
+      fails.push(format!("not the same path: {key} {:?} vs full {:?}", kv_get(&pk_x, key), kv_get(&pk_f, key)));
+    }
+  }
+  if !clean(&ps_x) || !clean(&ps_f) {
+    fails.push(format!("a camera path is not clean (full {}, {label} {})", clean(&ps_f), clean(&ps_x)));
+  }
+  let bound = 0.01 + ghost.unwrap_or(0.0);
+  if !((dc.sum_ratio - 1.0).abs() <= bound) {
+    fails.push(format!("Σ {label} / Σ full {:.5} beyond 1 % + the ghost share ({bound:.4})", dc.sum_ratio));
+  }
+  println!(
+    "check lab_cadence_score frame {f} {label}: {} (Σ ratio {:.5} within ±{bound:.4}{})",
+    if fails.is_empty() { "PASS" } else { "FAIL" },
+    dc.sum_ratio,
+    if ghost.is_none() { "; ghost n/a: no cadence telemetry, 0 used" } else { "" }
+  );
+  for e in &fails {
+    println!("  - {e}");
+  }
+  if let Some(t) = &args.lab_table {
+    let s = |k: &str| kv_get(&ps_x, k).unwrap_or("n/a").to_string();
+    lab_table_append(
+      t,
+      &[
+        ("source", "GPU".into()),
+        ("speed", kv_get(&pk_x, "speed").unwrap_or("?").into()),
+        ("pose", kv_get(&pk_x, "pose_label").unwrap_or("?").into()),
+        ("variant", label.clone()),
+        ("frame", f.to_string()),
+        ("truth_grains", n.to_string()),
+        ("judged", format!("{:.4}", sx.judged)),
+        ("judged_full", format!("{:.4}", sf.judged)),
+        ("sum_rt", format!("{:.4}", sx.sum_ratio)),
+        ("sum_rt_full", format!("{:.4}", sf.sum_ratio)),
+        ("sum_x_full", format!("{:.5}", dc.sum_ratio)),
+        ("lvl_005_01", format!("{:.3}", sx.levels[0])),
+        ("lvl_01_03", format!("{:.3}", sx.levels[1])),
+        ("lvl_03_06", format!("{:.3}", sx.levels[2])),
+        ("lvl_06_1", format!("{:.3}", sx.levels[3])),
+        ("block60", format!("{:.4}", sx.block)),
+        ("block60_full", format!("{:.4}", sf.block)),
+        ("direct_rel", format!("{:.4}", dc.rel_rms)),
+        ("direct_block60", format!("{:.4}", dc.block)),
+        ("worst_block", format!("{:+.4}@{},{}", dc.worst, dc.worst_at.0, dc.worst_at.1)),
+        ("fresh", s("fresh_fraction")),
+        ("d3_share", s("d3_share")),
+        ("shown_light", s("shown_light_share")),
+        ("ghost", s("ghost_share")),
+        ("ms_mean", s("ms_mean")),
+        ("ms_p90", s("ms_p90")),
+        ("ms_max", s("ms_max")),
+        ("clean", format!("{}", clean(&ps_x) as u8)),
+      ],
+    );
+  }
+  if args.check && !fails.is_empty() { 1 } else { 0 }
+}
+
+/// `--lab DIR --lab-frame F --lab-path N --lab-truth M [--lab-path-eps 1,2,4,16]`: the CPU mirror
+/// of the cadence (`scene::dust::cadence`) along a camera path of N frames from the captured view
+/// of `snapshot_FFF.bin` — Δt = 0 (the snapshot's moments hold for every frame), the eye orbiting
+/// the nucleus at `--orbit-deg-per-s` (or `--eye-step-m`) at `--path-fps`, as `--path-frames`
+/// does on the GPU. The path's projection comes from the captured mvp itself: with
+/// `Q = [M₀(3×3) | M₀ col3 + M₀(3×3)·eye_local]` (the projection·view of the capture, metres)
+/// every frame's mvp is `Q·ΔRᵀ·[I | anchor − eye_k]` (`CadenceView` with `proj = Q`,
+/// `view_rot = ΔRᵀ`, units 1), checked against every tier's captured mvp at frame 0. Every frame
+/// the full parallel splat is drawn too (shared by every ε) and per ε the cadence's frame; the
+/// last frame of both is scored against the truth drawn at the last view (M grains). The check
+/// `lab_cadence_scores_the_path` (`--check`): frame 0 word-identical to the full draw (with the
+/// in-frame gates off, `OBSERVER_LAB_GATES_OFF=1`; printed otherwise), every frame
+/// `|Σ cadence / Σ full − 1| ≤ 1 %` (the CPU test's bound; no deaths at Δt = 0, so no ghost),
+/// the owner bytes consistent every frame, at least one class image shown (else vacuous).
+fn run_lab_path(dir: &Path, args: &Args) -> i32 {
+  use aethervk_core_rlib::scene::dust as d;
+  use d::cadence as cad;
+  let t_all = Instant::now();
+  let frame = args.lab_frame;
+  let nf = args.lab_path as usize;
+  if args.lab_truth == 0 || nf < 2 {
+    eprintln!("lab path: needs --lab-truth N and --lab-path ≥ 2");
+    return 2;
+  }
+  let Some((w, h, header, tiers)) = load_snapshot(&dir.join(format!("snapshot_{frame:03}.bin"))) else {
+    eprintln!("lab path: no snapshot_{frame:03}.bin in {}", dir.display());
+    return 2;
+  };
+  let Some((inputs, view0)) = load_truth_inputs(&dir.join(format!("truth_{frame:03}.bin"))) else {
+    eprintln!("lab path: no truth_{frame:03}.bin in {}", dir.display());
+    return 2;
+  };
+  let Some(tan_h) = view0.perspective_tan_h else {
+    eprintln!("lab path: perspective captures only (the inside pose)");
+    return 2;
+  };
+  let layout = d::PyramidLayout::new(w, h);
+  let hn = d::PYRAMID_HEADER_WORDS as usize;
+  // the frame header: the snapshot's with the frame's counters zeroed (as `run_lab`), the gates
+  // and the level of detail by the lab's knobs
+  let mut hdr = header.clone();
+  {
+    use aethervk_core_rlib::scene::dust::specks as sp;
+    for wd in [
+      d::PYR_TAU_MAX,
+      d::PYR_LEVEL_MASK,
+      d::PYR_SPLIT_CHILDREN,
+      d::PYR_VOLUME_EVALS,
+      d::PYR_EWA_TEXELS,
+      d::PYR_SPLIT_DROPPED_FLUX,
+      sp::PYR_SPECKS,
+      sp::PYR_SPECKS_OVERFLOW,
+      sp::PYR_SPECKS_TRUNCATED,
+      sp::PYR_N_EYE,
+      sp::PYR_N_EYE_HI,
+      sp::PYR_SPECKS_NODES,
+      sp::PYR_SPECKS_COUNTS,
+    ] {
+      hdr[wd as usize] = 0;
+    }
+  }
+  let sd = d::PYR_SPLIT_DEPTH as usize;
+  let env_u32 = |k: &str| std::env::var(k).ok().and_then(|v| v.trim().parse::<u32>().ok());
+  if let Some(n) = env_u32("OBSERVER_LAB_GATES_OFF") {
+    hdr[sd] = (hdr[sd] & !(1 << d::DUST_FRAME_GATES_OFF_BIT)) | ((n & 1) << d::DUST_FRAME_GATES_OFF_BIT);
+  }
+  if let Some(v) = std::env::var("OBSERVER_LAB_LOD").ok().and_then(|v| v.trim().parse::<f32>().ok()) {
+    hdr[d::PYR_LOD as usize] = v.max(0.0).to_bits();
+  }
+  let gates_off = (hdr[sd] >> d::DUST_FRAME_GATES_OFF_BIT) & 1 == 1;
+  println!(
+    "lab path: {} frames at {}×{} from {} frame {frame}; header split depth {} volume bias {} lod {} px, in-frame gates {}",
+    nf,
+    w,
+    h,
+    dir.display(),
+    hdr[sd] & 0xFF,
+    (hdr[sd] >> 8) & 0xFF,
+    d::lod_px(&hdr),
+    if gates_off { "off" } else { "on" }
+  );
+  let au = d::AU_M;
+  let eye0 = [view0.cam_pos[0] * au, view0.cam_pos[1] * au, view0.cam_pos[2] * au];
+  let nuc = [view0.comet_au[0] * au, view0.comet_au[1] * au, view0.comet_au[2] * au];
+  println!(
+    "lab path: nucleus (the view's comet centre) − the truth's r_centre_now {:.3} m",
+    norm(sub(nuc, inputs.r_centre_now))
+  );
+  let r0 = sub(eye0, nuc);
+  let r0n = norm(r0);
+  let axis = path_axis(r0);
+  let omega = match args.eye_step_m {
+    Some(s) => s / r0n,
+    None => args.orbit_deg_per_s.to_radians() / args.path_fps,
+  };
+  println!(
+    "lab path: eye {:.3} m from the nucleus centre, orbit {:.4}° per frame ({:.3} m per frame) about the axis {:?}, Δt 0",
+    r0n,
+    omega.to_degrees(),
+    omega * r0n,
+    axis
+  );
+  // the capture's projection·view in metres (see the doc comment), from tier 0
+  let pc0 = &tiers[0].0;
+  let m0: Vec<f64> = pc0.mvp.iter().map(|&v| v as f64).collect();
+  let el0 = [pc0.eye_local[0] as f64, pc0.eye_local[1] as f64, pc0.eye_local[2] as f64];
+  let mut q = [0.0f64; 16];
+  q.copy_from_slice(&m0);
+  for r in 0..4 {
+    q[12 + r] = m0[12 + r] + m0[r] * el0[0] + m0[4 + r] * el0[1] + m0[8 + r] * el0[2];
+  }
+  let anchors: Vec<[f64; 3]> = tiers
+    .iter()
+    .map(|t| {
+      let e = t.0.eye_local;
+      [eye0[0] - e[0] as f64, eye0[1] - e[1] as f64, eye0[2] - e[2] as f64]
+    })
+    .collect();
+  let view_at = |k: usize| -> (cad::CadenceView, [f64; 3], [[f64; 3]; 3]) {
+    let dr = rot_axis(axis, omega * k as f64);
+    let rk = mat3_apply(&dr, r0);
+    let eye = [nuc[0] + rk[0], nuc[1] + rk[1], nuc[2] + rk[2]];
+    // ΔRᵀ, column-major 4×4
+    let mut vr = [0.0f64; 16];
+    for c in 0..3 {
+      for r in 0..3 {
+        vr[c * 4 + r] = dr[c][r];
+      }
+    }
+    vr[15] = 1.0;
+    (cad::CadenceView { view_rot: vr, proj: q, eye_m: eye, units_per_m: 1.0, width: w, height: h }, eye, dr)
+  };
+  // the reconstruction against every tier's captured mvp
+  {
+    let (v, _, _) = view_at(0);
+    let mut worst = 0.0f64;
+    for (ti, t) in tiers.iter().enumerate() {
+      let m = v.mvp(anchors[ti]);
+      let scale = t.0.mvp.iter().map(|x| x.abs() as f64).fold(0.0f64, f64::max).max(1e-300);
+      let err = m.iter().zip(&t.0.mvp).map(|(a, b)| (*a as f64 - *b as f64).abs()).fold(0.0f64, f64::max) / scale;
+      println!("lab path: tier {ti} anchor − nucleus {:.3} m, mvp reconstructed to {err:.2e} of its largest entry", norm(sub(anchors[ti], nuc)));
+      worst = worst.max(err);
+    }
+    if !(worst <= 1e-6) {
+      eprintln!("lab path: the path's projection does not reproduce the captured mvp ({worst:.2e} > 1e-6): no score");
+      return 2;
+    }
+  }
+  // the truth's camera: the engine's look-at from the orbit's offset with the axis as up; its
+  // forward must be the orbit's rotation of the captured forward
+  let cam_at = |k: usize| -> (V3, Q) {
+    let rk = path_rel(sub(view0.cam_pos, view0.comet_au), axis, omega, 0.0, k as u32);
+    let pos = [view0.comet_au[0] + rk[0], view0.comet_au[1] + rk[1], view0.comet_au[2] + rk[2]];
+    (pos, earth_observer::look_at_origin_from(rk, Some(axis)))
+  };
+  {
+    let (_, f0, _) = camera_axes(view0.cam_q);
+    let (_, fa, _) = camera_axes(cam_at(0).1);
+    let (_, fl, _) = camera_axes(cam_at(nf - 1).1);
+    let (_, _, drl) = view_at(nf - 1);
+    let fr = mat3_apply(&drl, f0);
+    let e0 = norm(sub(f0, fa));
+    let el = norm(sub(fl, fr));
+    println!("lab path: the truth's camera: forward at frame 0 off the capture's by {e0:.2e}, at frame {} off the rotated one by {el:.2e}", nf - 1);
+    if !(e0 <= 1e-9 && el <= 1e-9) {
+      eprintln!("lab path: the truth's camera does not follow the path: no score");
+      return 2;
+    }
+  }
+  let n_t: Vec<usize> = tiers.iter().map(|t| (t.0.live_count as usize).min(t.3.len()).min(t.4.len())).collect();
+  let live_total: usize = n_t.iter().sum();
+  let threads = observer_threads();
+  let pcs_at = |v: &cad::CadenceView| -> Vec<d::DustSplatPushConstants> {
+    tiers
+      .iter()
+      .enumerate()
+      .map(|(ti, t)| {
+        let mut p = t.0;
+        p.mvp = v.mvp(anchors[ti]);
+        let e = v.eye_local(anchors[ti]);
+        p.eye_local = [e[0], e[1], e[2], t.0.eye_local[3]];
+        p.live_count = n_t[ti] as u32;
+        p
+      })
+      .collect()
+  };
+  let fresh_pyr = || {
+    let mut p = vec![0u32; layout.total_words as usize];
+    p[..hn].copy_from_slice(&hdr);
+    p
+  };
+  let levels_end = layout.measure.0 as usize;
+  let words_differ = |a: &[u32], b: &[u32]| a[hn..levels_end].iter().zip(&b[hn..levels_end]).filter(|(x, y)| x != y).count();
+  // the full draws (every ε compares with them)
+  let mut full_light: Vec<f64> = Vec::with_capacity(nf);
+  let mut full0: Vec<u32> = Vec::new();
+  let mut full_last: Vec<u32> = Vec::new();
+  for k in 0..nf {
+    let t1 = Instant::now();
+    let (v, _, _) = view_at(k);
+    let pcs = pcs_at(&v);
+    let mut p = fresh_pyr();
+    for (ti, t) in tiers.iter().enumerate() {
+      d::splat_tier_parallel(&t.4[..n_t[ti]], &t.3[..n_t[ti]], &pcs[ti], &t.1, t.2, &layout, &mut p, threads);
+    }
+    full_light.push(cad::pyramid_light(&layout, &p));
+    println!("lab path full {k}: Σ {:.6e} (counts × px²), {:.1} s", full_light[k], t1.elapsed().as_secs_f64());
+    if k == 0 {
+      full0 = p.clone();
+    }
+    if k == nf - 1 {
+      full_last = p;
+    }
+  }
+  // the truth at the last view
+  let (cam_l, q_l) = cam_at(nf - 1);
+  let view_l = mc_view_reposed(&view0, cam_l, q_l, view0.comet_au);
+  println!(
+    "lab path: the last view: nucleus px ({:.2}, {:.2}), {:.4} m/px at the nucleus (tan_h {tan_h:.4})",
+    view_l.nucleus_px.0, view_l.nucleus_px.1, view_l.m_per_px_nucleus
+  );
+  let t1 = Instant::now();
+  let Some((rec, _, _, truth, counts)) = monte_carlo_truth_from(&full_last, &inputs, &view_l, args.lab_truth) else {
+    eprintln!("lab path: the truth draw returned nothing");
+    return 2;
+  };
+  println!(
+    "lab path: drew the truth at frame {}: {} grains, {} batches, {:.1} s",
+    nf - 1,
+    rec.grains,
+    rec.batches,
+    t1.elapsed().as_secs_f64()
+  );
+  let (wu, hu) = (w as usize, h as usize);
+  let img = |p: &[u32]| tau_image_of_pyramid(p, w, h).map(|v| v.iter().map(|&x| x as f64).collect::<Vec<f64>>());
+  let Some(rf) = img(&full_last) else {
+    eprintln!("lab path: the full pyramid has no τ image");
+    return 2;
+  };
+  let sf = lab_score(&rf, &truth, &counts, wu, hu);
+  print_lab_score(&format!("lab path frame {} full", nf - 1), &sf);
+  let pose_label = {
+    let dm = r0n - NUCLEUS_RADIUS_KM as f64 * 1e3;
+    if dm >= 1e3 { format!("{:.0}km", dm / 1e3) } else { format!("{:.0}m", dm) }
+  };
+  let mut all_fail = false;
+  for &eps in &args.lab_path_eps {
+    let t_eps = Instant::now();
+    // the production configuration (every class, two phases, the default image margin M = 0.2)
+    // at this ε; `AETHERVK_DUST_CADENCE_MARGIN=<fraction>` as the device reads it (0 = the
+    // footprint rule). Frame 0 is a First frame (everything fresh into the viewport pyramid), so
+    // its word-identity with the full draw holds at any margin; the reconstruction check compares
+    // the viewport mvp (`CadenceView::mvp`), never `mvp_image`
+    let mut cfg = cad::CadenceConfig::full();
+    cfg.eps_px = eps;
+    if let Some(mf) = std::env::var("AETHERVK_DUST_CADENCE_MARGIN").ok().and_then(|v| v.trim().parse::<f32>().ok())
+      && mf >= 0.0
+      && mf.is_finite()
+    {
+      cfg.margin_frac = mf;
+    }
+    println!(
+      "lab path ε {eps}: classes {:?} × {} phases, image margin {} of the viewport per side",
+      cfg.classes, cfg.phases, cfg.margin_frac
+    );
+    let mut st = cad::DustCadenceState::new(cfg);
+    st.threads = threads;
+    let mut moments: Vec<Vec<d::DustMoments>> = tiers.iter().enumerate().map(|(ti, t)| t.4[..n_t[ti]].to_vec()).collect();
+    let mut fails: Vec<String> = Vec::new();
+    let mut last: Vec<u32> = Vec::new();
+    let mut shown_frames = 0usize;
+    let (mut last_fresh, mut last_d3, mut last_built, mut last_share) = (0usize, 0u32, 0usize, f64::NAN);
+    let unit_now = 1.0 / tiers[0].0.inv_unit;
+    for k in 0..nf {
+      let (v, _, _) = view_at(k);
+      let pcs = pcs_at(&v);
+      let fm = cad::FrameMeta {
+        view: v,
+        t_now_s: inputs.t_now,
+        speed: 0.0,
+        nucleus_m: nuc,
+        flags: 0,
+        fingerprint: 1,
+        reused: false,
+        unit_now,
+      };
+      {
+        let metas: Vec<cad::TierMeta<'_>> = tiers
+          .iter()
+          .enumerate()
+          .map(|(ti, t)| cad::TierMeta {
+            key: ti as u64,
+            first_slot: 0,
+            capacity: (n_t[ti].max(1)).next_power_of_two() as u32,
+            live_count: n_t[ti] as u32,
+            emitted: 1,
+            rewritten_from: n_t[ti] as u32,
+            anchor_m: anchors[ti],
+            render: &t.3[..n_t[ti]],
+          })
+          .collect();
+        // Δt = 0: every slot's moments are the snapshot's, so the plan's propagate list is moot
+        let _plan = st.begin(&fm, &metas, &layout);
+      }
+      let mut fp = fresh_pyr();
+      let rep = {
+        let mut draws: Vec<cad::TierDraw<'_>> = moments
+          .iter_mut()
+          .enumerate()
+          .map(|(ti, m)| cad::TierDraw {
+            moments: m.as_mut_slice(),
+            render: &tiers[ti].3[..n_t[ti]],
+            pc: pcs[ti],
+            flow: tiers[ti].1,
+            specks_pc: None,
+            // Δt = 0 on the snapshot: no propagate ran, the generation stays 0 (the CPU device
+            // path's value; `cadence::TierDraw::stamp`)
+            stamp: 0,
+          })
+          .collect();
+        st.finish(&mut draws, &layout, &mut fp)
+      };
+      if let Err(e) = st.check_owner_bytes() {
+        fails.push(format!("frame {k}: owner bytes: {e}"));
+      }
+      let lf = cad::pyramid_light(&layout, &fp);
+      let ratio = lf / full_light[k].max(1e-300);
+      let fresh: usize = rep.fresh.iter().map(|v| v.len()).sum();
+      let shown: usize = st.tiers.values().map(|t| t.lists.iter().flatten().map(|l| l[0].len()).sum::<usize>()).sum();
+      shown_frames += (rep.images_shown > 0) as usize;
+      println!(
+        "lab path ε {eps} {k}: mode {:?} reset {:?} fresh {fresh} ({:.1} % of {live_total}) shown {shown} images {} built {} d3 {} aborts {} swaps {:?} classified {:?} hist {:?}: Σ ratio {ratio:.5}",
+        rep.mode,
+        rep.reset,
+        100.0 * fresh as f64 / live_total.max(1) as f64,
+        rep.images_shown,
+        rep.drawn_build.len(),
+        rep.d3_rejected,
+        rep.aborts.len(),
+        rep.swaps,
+        rep.classified,
+        rep.class_hist
+      );
+      for c in &rep.cycles {
+        println!(
+          "lab path ε {eps} {k}: cycle class {} phase {}: the ended build's D3 rejected {} of {} ({:.1} %); the shown images hold {:.2} % of the frame's light",
+          c.k,
+          c.p,
+          c.d3_rejected,
+          c.d3_rejected + c.drawn,
+          100.0 * c.d3_rejected as f64 / (c.d3_rejected + c.drawn).max(1) as f64,
+          100.0 * c.shown_light_share
+        );
+        last_share = c.shown_light_share;
+      }
+      if k == 0 {
+        let diff = words_differ(&fp, &full0);
+        println!("lab path ε {eps} 0: the cadence's first frame against the full draw: {diff} level words differ (gates {})", if gates_off { "off" } else { "on" });
+        if gates_off && diff > 0 {
+          fails.push(format!("frame 0: {diff} level words differ from the full draw with the gates off"));
+        }
+      }
+      if !((ratio - 1.0).abs() <= 0.01) {
+        fails.push(format!("frame {k}: Σ ratio {ratio:.5} beyond 1 % (no ghost at Δt = 0)"));
+      }
+      if k == nf - 1 {
+        last_fresh = fresh;
+        last_d3 = rep.d3_rejected;
+        last_built = rep.drawn_build.len();
+        last = fp;
+      }
+    }
+    if shown_frames == 0 {
+      fails.push("vacuous: no class image was shown on any frame (D3 or the rate kept everything fresh)".into());
+    }
+    let Some(rx) = img(&last) else {
+      eprintln!("lab path: the cadence's last pyramid has no τ image");
+      return 2;
+    };
+    let sx = lab_score(&rx, &truth, &counts, wu, hu);
+    print_lab_score(&format!("lab path frame {} ε {eps}", nf - 1), &sx);
+    let dc = direct_compare(&rx, &rf, &truth, wu, hu);
+    println!(
+      "lab path frame {} ε {eps} vs full: Σ {:.5}, shape rel rms {:.4}, block{LAB_BLOCK_PX} rms {:.4}, worst block {:+.4} at ({}, {}) of {}×{}; judged {:.4} vs {:.4}; {:.1} s",
+      nf - 1,
+      dc.sum_ratio,
+      dc.rel_rms,
+      dc.block,
+      dc.worst,
+      dc.worst_at.0,
+      dc.worst_at.1,
+      dc.grid.0,
+      dc.grid.1,
+      sx.judged,
+      sf.judged,
+      t_eps.elapsed().as_secs_f64()
+    );
+    println!(
+      "check lab_cadence_scores_the_path ε {eps}: {} ({} shown frames of {nf})",
+      if fails.is_empty() { "PASS" } else { "FAIL" },
+      shown_frames
+    );
+    for e in &fails {
+      println!("  - {e}");
+    }
+    all_fail |= !fails.is_empty();
+    if let Some(t) = &args.lab_table {
+      lab_table_append(
+        t,
+        &[
+          ("source", "CPU mirror".into()),
+          ("speed", "0".into()),
+          ("pose", pose_label.clone()),
+          ("variant", format!("eps{eps}")),
+          ("frame", (nf - 1).to_string()),
+          ("truth_grains", args.lab_truth.to_string()),
+          ("judged", format!("{:.4}", sx.judged)),
+          ("judged_full", format!("{:.4}", sf.judged)),
+          ("sum_rt", format!("{:.4}", sx.sum_ratio)),
+          ("sum_rt_full", format!("{:.4}", sf.sum_ratio)),
+          ("sum_x_full", format!("{:.5}", dc.sum_ratio)),
+          ("lvl_005_01", format!("{:.3}", sx.levels[0])),
+          ("lvl_01_03", format!("{:.3}", sx.levels[1])),
+          ("lvl_03_06", format!("{:.3}", sx.levels[2])),
+          ("lvl_06_1", format!("{:.3}", sx.levels[3])),
+          ("block60", format!("{:.4}", sx.block)),
+          ("block60_full", format!("{:.4}", sf.block)),
+          ("direct_rel", format!("{:.4}", dc.rel_rms)),
+          ("direct_block60", format!("{:.4}", dc.block)),
+          ("worst_block", format!("{:+.4}@{},{}", dc.worst, dc.worst_at.0, dc.worst_at.1)),
+          ("fresh", format!("{:.4}", last_fresh as f64 / live_total.max(1) as f64)),
+          ("d3_share", format!("{:.4}", last_d3 as f64 / (last_d3 as usize + last_built).max(1) as f64)),
+          ("shown_light", if last_share.is_finite() { format!("{last_share:.4}") } else { "n/a".into() }),
+          ("ghost", "0".into()),
+          ("clean", format!("{}", fails.is_empty() as u8)),
+        ],
+      );
+    }
+  }
+  println!("lab path: done in {:.1} s", t_all.elapsed().as_secs_f64());
+  if args.check && all_fail { 1 } else { 0 }
 }

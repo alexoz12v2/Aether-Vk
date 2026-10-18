@@ -970,6 +970,9 @@ pub mod test_composite_render;
 pub mod test_trajectory_occlusion_render;
 
 #[cfg(test)]
+pub mod test_composite_precision_render;
+
+#[cfg(test)]
 pub mod test_lca_render;
 
 #[cfg(test)]

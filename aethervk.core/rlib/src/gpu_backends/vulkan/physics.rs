@@ -98,6 +98,12 @@ pub struct PhysicsPipelines {
   /// (`dust_split.comp`, wg 64; the leaf path of the former per-cluster splat thread)
   pub dust_split: vk::Pipeline,
   pub dust_split_prof: Option<vk::Pipeline>,
+  /// the cadence's per-slot passes (`dust_classify.comp`: classify, transitions, marks, chunks)
+  pub dust_classify: vk::Pipeline,
+  /// the cadence's list compaction and control pass (`dust_compact.comp`)
+  pub dust_compact: vk::Pipeline,
+  /// the reprojection of the shown class images into the frame (`dust_reproject.comp`)
+  pub dust_reproject: vk::Pipeline,
 
   /// SPIR-V-reflected push constant block size per pipeline.
   /// Used by `debug_assert!` in dispatch helpers to catch size mismatches
@@ -542,6 +548,9 @@ impl PhysicsPipelines {
           None
         },
         dust_split: mk!("dust_split.comp.spv"),
+        dust_classify: mk!("dust_classify.comp.spv"),
+        dust_compact: mk!("dust_compact.comp.spv"),
+        dust_reproject: mk!("dust_reproject.comp.spv"),
         dust_split_prof: if has_shader_clock && dust_profile_requested() {
           Some(mk!("dust_split.comp.prof.spv"))
         } else {
@@ -600,6 +609,9 @@ impl PhysicsPipelines {
       discard_pool.discard_pipeline(p, timeline);
     }
     discard_pool.discard_pipeline(self.dust_split, timeline);
+    discard_pool.discard_pipeline(self.dust_classify, timeline);
+    discard_pool.discard_pipeline(self.dust_compact, timeline);
+    discard_pool.discard_pipeline(self.dust_reproject, timeline);
     if let Some(p) = self.dust_split_prof {
       discard_pool.discard_pipeline(p, timeline);
     }
@@ -615,7 +627,10 @@ impl PhysicsPipelines {
   pub fn log_pipeline_statistics(&self, instance: &ash::Instance, device: &ash::Device) {
     let ext = ash::khr::pipeline_executable_properties::Device::new(instance, device);
     let dir = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_PROFILE_DIR");
-    let named: [(&str, Option<vk::Pipeline>); 13] = [
+    let named: [(&str, Option<vk::Pipeline>); 16] = [
+      ("dust_reproject", Some(self.dust_reproject)),
+      ("dust_classify", Some(self.dust_classify)),
+      ("dust_compact", Some(self.dust_compact)),
       ("dust_splat", Some(self.dust_splat)),
       ("dust_splat_prof", self.dust_splat_prof),
       ("dust_split", Some(self.dust_split)),

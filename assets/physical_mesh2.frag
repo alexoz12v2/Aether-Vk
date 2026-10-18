@@ -13,6 +13,7 @@ layout(location = 1) in vec2 inUV;
 layout(location = 2) in vec3 inNormal;
 layout(location = 3) in vec3 inTangent;
 layout(location = 4) in vec3 inBitangent;
+layout(location = 5) in vec3 inLocalOffset; // mat3(model) * v, layer units (physical_mesh2.vert)
 
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec2 outGlobalDepth; // MRT: (layer_index_f32, local_distance)
@@ -222,9 +223,12 @@ void main() {
 
     outColor = vec4(diffuse * lightColor * ao + ambient + emission, 1.0);
 
-    // MRT depth map: write (layer_index, distance from camera) for solid geometry.
-    // inWorldPos is in RTE coordinates (same frame as view); length() gives
-    // the precise distance from the RTE camera origin in this layer's units.
-    float localDist = length(inWorldPos);
+    // MRT depth map: write (layer_index, distance from camera - D_ref) for solid geometry, in this
+    // layer's units. length(inWorldPos) carried the f32 rounding of the RTE translation (~9 km at
+    // 1 AU); the distance is formed from the host's f64 centre reference and the small local
+    // offset instead (rteDistanceOffset, common.glsl), per fragment (exact, no interpolation of a
+    // non-linear function). D_ref = 0 gives the absolute distance (layer 0; every layer until the
+    // per-layer references land).
+    float localDist = rteDistanceOffset(push.object.centerDist, push.object.invCenterLen, inLocalOffset);
     outGlobalDepth = vec2(float(push.layerIndex), localDist);
 }

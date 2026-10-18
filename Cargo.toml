@@ -3,8 +3,8 @@ members = [
     "aethervk.core/cdylib",
     "aethervk.core/rlib",
     "aethervk.oshal/rlib", "aethervk.utils/avkscene", "aethervk.utils/spktool", "aethervk.utils/tpc2pca",
-    "aethervk.ui-logic-rs",
-    "aethervk.ui-app-rs",
+    # "aethervk.ui-logic-rs",
+    # "aethervk.ui-app-rs",
 ]
 default-members = [
     "aethervk.core/cdylib",

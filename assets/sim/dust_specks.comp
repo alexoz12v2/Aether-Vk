@@ -774,6 +774,12 @@ void main() {
     uint firstSlot = pc.pyramid.v[ringHdr + 4u];
     uint i = (firstSlot + kr) & pc.pyramid.v[ringHdr + 5u];
     uint mi = i;
+#ifndef DUST_SPECKS_WALK
+    // the gate owns its bin's bit of the walk mask: cleared here, set below when the bin is walked
+    // (the propagate zeroes the lane, but a cached propagate is skipped while the eye moves; the
+    // CPU mirror's specks_tier clears the lane per cluster). Bins own disjoint bits: order-free.
+    atomicAnd(DustUintBuffer(uvec2(pc.moments)).v[mi * DUST_MOMENTS_WORDS + DUST_MOMENTS_SPECKS_MASK_WORD], ~(1u << b));
+#endif
     if (!(dust_mom.m[mi].mean_flux.w > 0.0)) return;
 #ifdef DUST_SPECKS_WALK
     // the gate pass decided (dust_specks_mask): every lane of the workgroup returns together
@@ -835,7 +841,11 @@ void main() {
     // that hands the mass over); its bit in the cluster's mask (dust_specks_mask, read by the
     // splat after this pass) hands its shell mass over
     bool walk = false;
-    if (dMax > 0.0 && cq.x != 0u) {
+    // the cadence's owner bytes (spill header words 6-7; 0: none): a SHOWN cluster is drawn by its
+    // class image without hand-over, so it is never walked (cadence::finish, F5)
+    uvec2 ownAddr = uvec2(pc.pyramid.v[ringHdr + 6u], pc.pyramid.v[ringHdr + 7u]);
+    bool shown = ownAddr != uvec2(0u) && ((DustUintBuffer(ownAddr).v[i >> 2u] >> ((i & 3u) * 8u)) & 4u) != 0u;
+    if (!shown && dMax > 0.0 && cq.x != 0u) {
         DustPacket lp;
         lp.mean = mean; lp.seg = seg; lp.flux = flux; lp.openStart = false; lp.openEnd = false; lp.rho = rho; lp.segT = vec3(0.0);
         for (int k = 0; k < 6; ++k) lp.S[k] = S[k];

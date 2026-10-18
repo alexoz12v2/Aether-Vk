@@ -2283,6 +2283,23 @@ pub fn specks_tier(
   layout: &PyramidLayout,
   pyramid: &mut [u32],
 ) -> SpeckPassStats {
+  specks_tier_walking(moments, render, pc, flow, layout, pyramid, &|_| true)
+}
+
+/// [`specks_tier`] walking only the clusters `walk(i)` admits (compact index `i`): every live
+/// cluster still adds its density at the eye to `PYR_N_EYE` (the shell radius's input counts the
+/// whole ring), a refused cluster keeps a zero walk mask (its continuum gives up no shell mass)
+/// and draws no speck. The temporal reuse's speck pass (`cadence`): the clusters a shown class
+/// image holds are refused. `walk = |_| true` is [`specks_tier`], word for word.
+pub fn specks_tier_walking(
+  moments: &mut [DustMoments],
+  render: &[DustRenderCluster],
+  pc: &DustSpecksPushConstants,
+  flow: &DustFlowUniform,
+  layout: &PyramidLayout,
+  pyramid: &mut [u32],
+  walk: &dyn Fn(usize) -> bool,
+) -> SpeckPassStats {
   let n = (pc.live_count as usize).min(moments.len()).min(render.len());
   let hdr = SpeckHeader::read(pyramid);
   let view = SpeckView::new(pc, layout);
@@ -2313,6 +2330,7 @@ pub fn specks_tier(
     };
     let color = age_color(stream, m.age(), ttl);
     let v = SpeckView { exposure, ..view };
+    let walked = walk(i);
     for b in 0..SIZE_BINS as usize {
       let seg_t = bin_time_segment(m, pred, b);
       let sc = SpeckCluster::new(m, b, seg_t, slot, s_ref, q, ttl, fade_ratio);
@@ -2325,7 +2343,8 @@ pub fn specks_tier(
       let dens = sc.density_count_rel(me);
       n_eye_add(pyramid, n_eye_counts(dens));
       // the walk gate ([`DUST_SPECKS_WALK_MIN`]): the bins expecting a grain in the shell
-      if !(hdr.d_max > 0.0)
+      if !walked
+        || !(hdr.d_max > 0.0)
         || sc.mant == 0
         || !(sc.expected_in_shell(&cut) >= DUST_SPECKS_WALK_MIN)
       {

@@ -3,25 +3,28 @@
 // The leaf path of the dust splat (dust_split.comp: a workgroup per cluster, its sub-packet
 // records from dust_splat.comp's queue): the perspective split of a packet, its EWA leaves
 // (scatter: in-thread rows and the EWA queue) and its volumetric packets (dust_volume_emit: the
-// volume queue, or dust_volume_draw in-thread). The rounding seeds (dust_next_packet_seed) are
-// drawn in the order the per-cluster thread drew them: the splitter's counting pass
+// volume queue, or the volume spill; drawn by dust_draw_volume.comp). The rounding seeds
+// (dust_next_packet_seed) are drawn in the order the per-cluster thread drew them: the splitter's counting pass
 // (dust_counting) and its prefix give every record its ordinal base. Include after the
-// push-constant block `pc` (dust::DustSplatPushConstants) and dust_volume_draw.glsl.
+// push-constant block `pc` (dust::DustSplatPushConstants) and dust_frame_gates.glsl.
 
 // the volume packet queue is on this frame (PYR_FLAGS bit DUST_FRAME_VQUEUE_OFF clear; set in main)
 bool dust_vqueue_on = false;
 
 // A volumetric packet of this cluster: its rounding seed drawn first (in the thread's packet
-// order, so every seed is what it was: dust::volume_scatter), then emitted to the chunk's volume
-// queue (dust_vqueue_append; drawn by dust_draw_volume.comp with that seed) or, with the queue
-// off or full, drawn here (dust_volume_draw): the pyramid is the same either way.
+// order, so every seed is what it was: dust::volume_scatter), then emitted with it to the chunk's
+// volume queue (dust_vqueue_append) or, when that refuses it (full, or off: DUST_FRAME_VQUEUE_OFF),
+// to the volume spill (dust_vspill_base); dust_draw_volume.comp draws both, so the pyramid is the
+// same whichever queue held it. Never drawn here. A record the spill refuses too is dropped: the
+// spill drain counts it (DUST_VQUEUE_LOST, the spill's raw appends past its capacity) and the host
+// logs it. (levels, W, H, bias, axis: the consumer reads them from the frame words.)
 void dust_volume_emit(DustPacket p, float exposure, vec3 color, uint levels, float W, float H, uint bias, uint axis) {
     if (dust_counting) { dust_seed_count++; return; }
     DUST_PROF_COUNT(volume, 1u)
     uint seed = dust_next_packet_seed();
     if (dust_probe() == 3u) return;
+    DUST_PROF_BEGIN(vemit)
     if (dust_vqueue_on) {
-        DUST_PROF_BEGIN(vemit)
         uint vbase = dust_vqueue_base(pc.pyramid);
         uint r = dust_vqueue_append(pc.pyramid, vbase);
         if (r != 0xFFFFFFFFu) {
@@ -30,9 +33,14 @@ void dust_volume_emit(DustPacket p, float exposure, vec3 color, uint levels, flo
             DUST_PROF_END(vemit)
             return;
         }
-        DUST_PROF_END(vemit)
     }
-    dust_volume_draw(p, seed, exposure, color, levels, W, H, bias, axis);
+    uint sbase = dust_vspill_base(pc.pyramid);
+    uint rs = dust_vqueue_append(pc.pyramid, sbase);
+    if (rs != 0xFFFFFFFFu) {
+        uint scap = dust_vqueue_capacity(pc.pyramid, sbase);
+        DUST_VQUEUE_PUT(pc.pyramid, sbase, scap, rs, p, seed, exposure, color, dust_phot_support, dust_phot_sun, dust_phot_rh)
+    }
+    DUST_PROF_END(vemit)
 }
 
 
@@ -257,7 +265,8 @@ void dust_project_split_scatter_one(vec3 mean, float S[6], vec3 d, float flux, f
         }
         trunc = true;
     }
-    float bounds[DUST_SUPPORT_TRUNC_PIECES + 1u];
+    DustTruncBounds bounds;
+    bounds.za = 0.0; bounds.zb = 1.0; bounds.before = 0u; bounds.inner = 0u;
     vec3 sn = vec3(0.0);
     float v0 = 0.0;
     if (trunc) {
@@ -265,13 +274,13 @@ void dust_project_split_scatter_one(vec3 mean, float S[6], vec3 d, float flux, f
                   S[1] * sup.x + S[3] * sup.y + S[4] * sup.z,
                   S[2] * sup.x + S[4] * sup.y + S[5] * sup.z);
         v0 = max(dot(sup.xyz, sn), 0.0);
-        dust_support_trunc_bounds(p0, sup, v0, bounds);
+        bounds = dust_support_trunc_bounds(p0, sup, v0);
         // the kept shares, renormalised over the packet (floor DUST_SUPPORT_MASS_MIN)
         float total = 0.0;
         for (uint it = 0u; it < DUST_SUPPORT_TRUNC_PIECES * DUST_SUPPORT_TRUNC_SLABS; ++it) {
             uint j = it / DUST_SUPPORT_TRUNC_SLABS, e = it % DUST_SUPPORT_TRUNC_SLABS;
             DustPacket q; float w;
-            if (dust_support_trunc_piece(p0, sup, sn, v0, bounds[j], bounds[j + 1u], j, e, q, w)) total += w;
+            if (dust_support_trunc_piece(p0, sup, sn, v0, dust_trunc_bound(bounds, j), dust_trunc_bound(bounds, j + 1u), j, e, q, w)) total += w;
         }
         renorm = p0.flux > 0.0 ? 1.0 / max(total / p0.flux, DUST_SUPPORT_MASS_MIN) : 0.0;
         dust_phot_support = vec4(0.0);
@@ -290,7 +299,7 @@ void dust_project_split_scatter_one(vec3 mean, float S[6], vec3 d, float flux, f
     } else if (trunc) {
         uint j = it / DUST_SUPPORT_TRUNC_SLABS, e = it % DUST_SUPPORT_TRUNC_SLABS;
         float w;
-        if (!dust_support_trunc_piece(p0, sup, sn, v0, bounds[j], bounds[j + 1u], j, e, stack[0], w)) continue;
+        if (!dust_support_trunc_piece(p0, sup, sn, v0, dust_trunc_bound(bounds, j), dust_trunc_bound(bounds, j + 1u), j, e, stack[0], w)) continue;
         stack[0].flux = w * renorm;
     } else {
         stack[0] = p0;

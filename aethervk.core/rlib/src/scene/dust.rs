@@ -19,6 +19,7 @@
 //! - grain radius in µm, density in g/cm³, mass in grams
 #![allow(clippy::excessive_precision)]
 
+pub mod cadence;
 pub mod df;
 pub mod phase;
 pub mod specks;
@@ -2264,7 +2265,16 @@ pub struct DustDrawState {
   /// speck pass's defaults)
   pub s_ref_um: f32,
   pub size_q: f32,
+  /// the newest live batches (newest first, at most [`DUST_READY_TAIL`]): their first slot's
+  /// offset in the drawn range and their ready value, so the renderer's cadence can name the
+  /// slots emitted or re-emitted (the provisional window) since its previous frame
+  /// (`cadence::TierMeta::rewritten_from`)
+  pub ready_tail: [(u32, u64); DUST_READY_TAIL],
+  pub ready_tail_len: u8,
 }
+
+/// batches [`DustDrawState::ready_tail`] holds
+pub const DUST_READY_TAIL: usize = 16;
 
 impl DustDrawState {
   /// Evaluation at `t_s` (the time of the scene snapshot the camera comes from), same anchor and
@@ -2687,6 +2697,13 @@ impl DustHostState {
     // the anchor is the nucleus centre at the tick (the jet site less its rotated offset): the
     // splat's spiral interpolation of a sample's time segment turns about the local origin
     let centre = jet.centre_m();
+    let mut ready_tail = [(0u32, 0u64); DUST_READY_TAIL];
+    let mut ready_tail_len = 0u8;
+    let mask = self.ring.capacity - 1;
+    for b in self.ring.batches.iter().rev().take(DUST_READY_TAIL) {
+      ready_tail[ready_tail_len as usize] = (((b.first as u32) & mask).wrapping_sub(first_slot) & mask, b.ready);
+      ready_tail_len += 1;
+    }
     Some(DustDrawState {
       anchor_m: centre,
       tier: 0,
@@ -2703,6 +2720,8 @@ impl DustHostState {
       ttl_s: self.ttl_s as f32,
       s_ref_um: 0.0,
       size_q: 0.0,
+      ready_tail,
+      ready_tail_len,
     })
   }
 }

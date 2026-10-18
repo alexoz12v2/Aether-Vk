@@ -37,7 +37,16 @@ layout(buffer_reference, std430, buffer_reference_align = 8) readonly buffer Obj
     mat4 model;
     // P*V*center composed in f64 on the CPU; all zero = compute it here (f32)
     vec4 centerClip;
+    // 80: (c_hat.xyz, |c| - D_ref) in the layer's units, c = the RTE centre (host f64), D_ref =
+    // the layer's reference distance (0 on layer 0); see rteDistanceOffset
+    vec4 centerDist;
+    float invCenterLen; // 96: 1 / |c|, 0 = |c| is 0 (or the host did not fill the fields)
+    float _padD0;       // 100
+    float _padD1;       // 104
+    float _padD2;       // 108 (total 112)
 };
+
+#include "rte_distance.glsl"
 
 // Total Size: 32 bytes (three 64-bit BDA pointers + uvec2 layer info)
 layout(push_constant, std430) uniform Push {

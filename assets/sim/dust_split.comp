@@ -4,8 +4,8 @@
 // DUST_SQUEUE_*, filled by dust_splat.comp with the cluster's packets in its sub-packet order),
 // the lanes sharing the cluster's records. Every record goes through the leaf path of the former
 // per-cluster thread (dust_leaf.glsl: the perspective split, the EWA leaves in-thread or to the
-// EWA queue, the volumetric packets to the volume queue): a counting pass finds the rounding
-// seeds each record draws, a shared-memory prefix in record order gives it its ordinal base, and
+// EWA queue, the volumetric packets to the volume queue or its spill): a counting pass finds the
+// rounding seeds each record draws, a shared-memory prefix in record order gives it its ordinal base, and
 // the drawing pass draws with the seed the per-cluster thread drew, so the pyramid is the same
 // word for word. The same push constants as the splat (dust::DustSplatPushConstants). No CPU
 // mirror: dust::splat_tier is the same drawing.
@@ -35,7 +35,9 @@ layout(push_constant, std430) uniform PushConstants {
     vec4  eyeLocal;             // 112
 } pc;                           // 128 bytes
 
-#include "dust_volume_draw.glsl"
+// the frame words the leaf path reads (the splitter draws no volumetric packet: dust_volume_emit
+// queues every one, to the volume queue or its spill, for dust_draw_volume.comp)
+#include "dust_frame_gates.glsl"
 #include "dust_leaf.glsl"
 
 // the speck shell's radius word (dust_splat.comp defines it too; the include guards keep it out

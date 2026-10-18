@@ -12,10 +12,18 @@ layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Seg
 };
 
 struct Trajectory {
-    SegmentArray segmentsPtr;
-    vec4 color;
-    float lineWidth;
-    uint textureId;
+    SegmentArray segmentsPtr; // 0
+    vec4 color;               // 16
+    float lineWidth;          // 32
+    uint textureId;           // 36
+    // anchored pieces (cp.w == 0, control points relative to a micro frame origin o_m, host f64;
+    // composite precision plan §2.3): P*V*(o_m, 1) composed in f64, and the distance reference
+    vec4 anchorClip;          // 48
+    vec4 anchorDist;          // 64: (o_hat, |o_m| - |o_m| = 0), AU
+    float invAnchorLen;       // 80: 1 / |o_m| (0: |o_m| == 0)
+    uint anchorLayer;         // 84: micro layer m, 0xFFFFFFFF = not anchored
+    uint _padA;               // 88
+    uint _padB;               // 92 (stride 96, gpu::TrajectoryGpu)
 };
 
 layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer TrajectoryArray {
@@ -43,6 +51,11 @@ layout(location = 0) out vec4 vColor;
 layout(location = 1) out vec2 vUV;
 layout(location = 2) out flat float vLineWidth;
 layout(location = 3) out flat uint vTexId;
+// anchored pieces only: the local offset u from o_m (AU, small) and the distance reference
+layout(location = 4) out vec3 vAnchorU;
+layout(location = 5) out flat uint vAnchorLayer;
+layout(location = 6) out flat vec4 vAnchorDist;
+layout(location = 7) out flat float vInvAnchorLen;
 
 void main() {
     uint mapIdx = gl_InstanceIndex;
@@ -67,6 +80,12 @@ void main() {
     float lineWidth = pc.trajPtr.trajectories[trajId].lineWidth;
     vec4 color = pc.trajPtr.trajectories[trajId].color;
     uint textureId = pc.trajPtr.trajectories[trajId].textureId;
+    vec4 anchorClip = pc.trajPtr.trajectories[trajId].anchorClip;
+    vec4 anchorDist = pc.trajPtr.trajectories[trajId].anchorDist;
+    float invAnchorLen = pc.trajPtr.trajectories[trajId].invAnchorLen;
+    uint anchorLayer = pc.trajPtr.trajectories[trajId].anchorLayer;
+    // the host gives all four control points of a segment the same w
+    bool anchored = (cp0.w == 0.0);
 
     float t = float(stepIdx) / float(validSubdivisions);
     float omt = 1.0 - t;
@@ -87,6 +106,9 @@ void main() {
     vec4 v3 = pc.viewProj * cp3;
 
     vec4 vClip = v0 * b0 + v1 * b1 + v2 * b2 + v3 * b3;
+    // w = 0: viewProj * (u_i, 0) is the linear part only; sum(b_i) = 1 restores the translation
+    // through the f64-composed clip position of o_m (dvClip needs nothing: sum(db_i) = 0)
+    if (anchored) vClip += anchorClip;
     vec4 dvClip = v0 * db0 + v1 * db1 + v2 * db2 + v3 * db3;
 
     float w2 = max(vClip.w * vClip.w, 1e-6);
@@ -127,4 +149,8 @@ void main() {
     vUV = vec2(t, lateral);
     vLineWidth = lineWidth;
     vTexId = textureId;
+    vAnchorU = anchored ? (cp0.xyz * b0 + cp1.xyz * b1 + cp2.xyz * b2 + cp3.xyz * b3) : vec3(0.0);
+    vAnchorLayer = anchored ? anchorLayer : 0xFFFFFFFFu;
+    vAnchorDist = anchorDist;
+    vInvAnchorLen = invAnchorLen;
 }

@@ -552,16 +552,9 @@ struct DustSmallPoint {
     float m;
 };
 
-// One depth point q (0: the centre, 1: -sqrt3, 2: +sqrt3) of a small piece (the loop body of
-// dust::volume_small_points; mean, g, lat1, lat2, mass x the radiance weight precomputed by the
-// caller): through the 4 lateral sigma points of its slice when the piece's box crosses the
-// frame's edge, else one projection with the screen Jacobian's lateral covariance
-DustSmallPoint dust_volume_small_point(uint q, bool five, vec3 mean, vec3 g, vec3 lat1, vec3 lat2, float massW,
-                                       bool edge, vec3 r0, vec3 r1, vec3 r3, vec3 t, float W, float H, vec3 eye,
-                                       vec3 meanRef) {
-    DustSmallPoint o;
-    o.mx = 0.0; o.my = 0.0; o.ix = 0.0; o.iy = 0.0; o.rho = 0.0; o.m = 0.0;
-    // 3 Gauss-Hermite points, or 5 for a piece deep along the view (dust::volume_small_points)
+// The depth node (in sigma) and Gauss-Hermite weight of point q of a small piece (0: the centre;
+// 3 points 1: -sqrt3, 2: +sqrt3; 5 points 1, 2: -+n1, 3, 4: -+n2; dust::volume_small_points)
+vec2 dust_small_node(uint q, bool five) {
     float off, wq;
     if (five) {
         off = q == 0u ? 0.0 : (q == 1u ? -DUST_GH5_N1 : (q == 2u ? DUST_GH5_N1 : (q == 3u ? -DUST_GH5_N2 : DUST_GH5_N2)));
@@ -570,90 +563,190 @@ DustSmallPoint dust_volume_small_point(uint q, bool five, vec3 mean, vec3 g, vec
         off = q == 0u ? 0.0 : (q == 1u ? -DUST_GH3_NODE : DUST_GH3_NODE);
         wq = q == 0u ? 2.0 / 3.0 : 1.0 / 6.0;
     }
-    vec3 xq = mean + g * off;
-    float sj, mx, my, cxx, cyy, rhoRaw;
-    if (edge) {
-        float tj = 0.0, sx = 0.0, sy = 0.0, sxx = 0.0, syy = 0.0, sxy = 0.0;
-        float ox = 0.0, oy = 0.0;
-        bool haveO = false;
-        for (uint j = 0u; j < 4u; ++j) {
-            vec3 d = j == 0u ? lat1 * (-DUST_UT2_NODE) : (j == 1u ? lat1 * DUST_UT2_NODE
-                   : (j == 2u ? lat2 * (-DUST_UT2_NODE) : lat2 * DUST_UT2_NODE));
-            vec3 x = xq + d;
-            float w = dot(r3, x) + t.z;
-            if (!(w > 0.0)) continue;
-            float ndx = (dot(r0, x) + t.x) / w;
-            float ndy = (dot(r1, x) + t.y) / w;
-            vec3 c = cross(r0 - r3 * ndx, r1 - r3 * ndy);
-            float j3 = 0.25 * (0.25 * W * H * sqrt(dot(c, c)) / (w * w));
-            float sxp = (ndx * 0.5 + 0.5) * W, syp = (ndy * 0.5 + 0.5) * H;
-            if (!haveO) { ox = sxp; oy = syp; haveO = true; }
-            float px = sxp - ox, py = syp - oy;
-            tj += j3;
-            sx += j3 * px;
-            sy += j3 * py;
-            sxx += j3 * px * px;
-            syy += j3 * py * py;
-            sxy += j3 * px * py;
-        }
-        if (!(tj > 0.0)) return o;
-        float dx = sx / tj, dy = sy / tj;
-        sj = tj;
-        mx = ox + dx;
-        my = oy + dy;
-        cxx = max(sxx / tj - dx * dx, 1e-6);
-        cyy = max(syy / tj - dy * dy, 1e-6);
-        rhoRaw = (sxy / tj - dx * dy) / sqrt(cxx * cyy);
-    } else {
-        float w = dot(r3, xq) + t.z;
-        if (!(w > 0.0)) return o;
-        float ndx = (dot(r0, xq) + t.x) / w;
-        float ndy = (dot(r1, xq) + t.y) / w;
-        vec3 a = r0 - r3 * ndx, b = r1 - r3 * ndy;
-        vec3 c = cross(a, b);
-        sj = 0.25 * W * H * sqrt(dot(c, c)) / (w * w);
-        vec3 px = a * (0.5 * W / w), py = b * (0.5 * H / w);
-        float a1 = dot(px, lat1), a2 = dot(px, lat2), b1 = dot(py, lat1), b2 = dot(py, lat2);
-        mx = (ndx * 0.5 + 0.5) * W;
-        my = (ndy * 0.5 + 0.5) * H;
-        cxx = max(a1 * a1 + a2 * a2, 1e-6);
-        cyy = max(b1 * b1 + b2 * b2, 1e-6);
-        rhoRaw = (a1 * b1 + a2 * b2) / sqrt(cxx * cyy);
-    }
+    return vec2(off, wq);
+}
+
+// The radiance weights of a small piece's depth slices (dust::volume_small_points' weight_at;
+// 1 without albedo), computed before the slices' projections. Final round A2: the Sun's direction
+// and r_h of the centre slice x0 serve every slice (dust_volume_weight's arithmetic at x0; the
+// slices lie <= 2.9 sigma_depth from it against r_h AU); each slice has its own phase angle
+// (dust_radiance_weight's arithmetic) and its own interpolation of the phase table, whose two
+// entries are read once when the slices share the degree index (a slice in another degree reads
+// its own). The centre's weight is bit-identical to dust_volume_weight's
+// the Sun's direction (unit, from the dust to the Sun) and r_h (AU) at x
+void dust_small_sun(vec3 x, vec3 meanRef, out vec3 sunDir, out float rAu) {
+    vec3 rVec = dust_phot_sun * (-dust_phot_rh * DUST_AU_M) + (x - meanRef);
+    float rn = max(sqrt(dot(rVec, rVec)), 1.0);
+    sunDir = rVec * (-1.0 / rn);
+    rAu = rn / DUST_AU_M;
+}
+// the phase angle (degrees, clamped to 0..180) of the dust at xq seen from the eye
+float dust_small_phase_deg(vec3 xq, vec3 eye, vec3 sunDir) {
+    vec3 dd = xq - eye;
+    vec3 toEye = -(dd * (1.0 / sqrt(dot(dd, dd))));
+    float n = dot(toEye, toEye);
+    float cosA = n > 0.0 ? dot(sunDir, toEye) / sqrt(n) : 1.0;
+    float alpha = acos(clamp(cosA, -1.0, 1.0));
+    return clamp(alpha * (180.0 / DUST_PI_F32), 0.0, 180.0);
+}
+float dust_small_lut(uint i) { return uintBitsToFloat(dust_phot_lut.v[DUST_PYR_PHASE_LUT + i]); }
+// one slice's weight from its phase angle (its own table entries)
+float dust_small_weight_deg(float deg, float r2) {
+    uint i = min(uint(deg), 179u);
+    float a = dust_small_lut(i), b = dust_small_lut(i + 1u);
+    return dust_phot_albedo * (a + (b - a) * (deg - float(i))) / r2;
+}
+// the three slices' weights (x0 the centre); the table entries shared when the degree matches
+void dust_small_weights(vec3 x0, vec3 x1, vec3 x2, vec3 eye, vec3 meanRef, out float wr0, out float wr1,
+                        out float wr2, out vec3 sun0, out float r20) {
+    wr0 = 1.0; wr1 = 1.0; wr2 = 1.0; sun0 = vec3(0.0); r20 = 1.0;
+    if (!(dust_phot_albedo > 0.0)) return;
+    vec3 sun1, sun2;
+    float rAu0, rAu1, rAu2;
+    dust_small_sun(x0, meanRef, sun0, rAu0);
+    // (A2b: the centre's Sun geometry for every slice)
+    sun1 = sun0; sun2 = sun0; rAu1 = rAu0; rAu2 = rAu0;
+    float r0_ = max(rAu0, 1e-6), r1_ = max(rAu1, 1e-6), r2_ = max(rAu2, 1e-6);
+    r20 = r0_ * r0_;
+    float g0 = dust_small_phase_deg(x0, eye, sun0);
+    float g1 = dust_small_phase_deg(x1, eye, sun1);
+    float g2 = dust_small_phase_deg(x2, eye, sun2);
+    uint i0 = min(uint(g0), 179u), i1 = min(uint(g1), 179u), i2 = min(uint(g2), 179u);
+    float a0 = dust_small_lut(i0), b0 = dust_small_lut(i0 + 1u);
+    float a1 = a0, b1 = b0, a2 = a0, b2 = b0;
+    if (i1 != i0) { a1 = dust_small_lut(i1); b1 = dust_small_lut(i1 + 1u); }
+    if (i2 != i0) { a2 = dust_small_lut(i2); b2 = dust_small_lut(i2 + 1u); }
+    wr0 = dust_phot_albedo * (a0 + (b0 - a0) * (g0 - float(i0))) / r20;
+    wr1 = dust_phot_albedo * (a1 + (b1 - a1) * (g1 - float(i1))) / (r1_ * r1_);
+    wr2 = dust_phot_albedo * (a2 + (b2 - a2) * (g2 - float(i2))) / (r2_ * r2_);
+}
+// a further slice's weight (the 5-point lab rule's nodes 3, 4) with the centre's Sun geometry
+float dust_small_weight_more(vec3 xq, vec3 eye, vec3 meanRef, vec3 sun0, float r20) {
+    if (!(dust_phot_albedo > 0.0)) return 1.0;
+    return dust_small_weight_deg(dust_small_phase_deg(xq, eye, sun0), r20);
+}
+
+// 1 / sqrt2 (dust::volume_small_points' finish: ix = 1 / (sigma sqrt2) by inversesqrt)
+const float DUST_SMALL_INV_SQRT2 = 0.70710678118654752;
+
+// A small point from its slice's moments (dust::volume_small_points' finish): the correlation
+// clamped, the mass wq massW sj wr; none (m = 0) unless ok and the mass is positive and finite.
+// Branch-free (selects), so the three fast slices stay one straight-line block
+DustSmallPoint dust_small_finish(bool ok, float wq, float massW, float wr, float sj, float mx, float my,
+                                 float cxx, float cyy, float rhoRaw) {
     float rho = (isnan(rhoRaw) || isinf(rhoRaw)) ? 0.0 : clamp(rhoRaw, -DUST_SMALL_RHO_MAX, DUST_SMALL_RHO_MAX);
     float wgt = wq * massW * sj;
     // the radiance weight per depth point (dust::volume_small_points: one a piece cost 2.5 % of
     // the 1-10 d split class and is off in production)
-    if (dust_phot_albedo > 0.0) {
-        vec3 dd = xq - eye;
-        wgt *= dust_volume_weight(meanRef, xq, dd * (1.0 / sqrt(dot(dd, dd))));
+    wgt *= wr;
+    bool keep = ok && wgt > 0.0 && !isinf(wgt);
+    DustSmallPoint o;
+    o.mx = keep ? mx : 0.0;
+    o.my = keep ? my : 0.0;
+    o.ix = keep ? inversesqrt(cxx) * DUST_SMALL_INV_SQRT2 : 0.0;
+    o.iy = keep ? inversesqrt(cyy) * DUST_SMALL_INV_SQRT2 : 0.0;
+    o.rho = keep ? rho : 0.0;
+    o.m = keep ? wgt : 0.0;
+    return o;
+}
+
+// One depth point q of a small piece by one projection with the screen Jacobian's lateral
+// covariance (dust::volume_small_points' fast_point; mean, g, the lateral axes' dots x1 = r0.lat1,
+// x2 = r0.lat2, y1 = r1.lat1, y2 = r1.lat2, w1 = r3.lat1, w2 = r3.lat2, the mass and the slice's
+// radiance weight wr precomputed by the caller): the columns (W / 2w) (r0.lat_i - ndx r3.lat_i),
+// (H / 2w) (r1.lat_i - ndy r3.lat_i); one reciprocal of w a slice (round 3); branch-free
+DustSmallPoint dust_volume_small_fast(uint q, bool five, vec3 mean, vec3 g, float x1, float x2, float y1, float y2,
+                                      float w1, float w2, float massW, float wr, vec3 r0, vec3 r1, vec3 r3, vec3 t,
+                                      float W, float H) {
+    vec2 nw = dust_small_node(q, five);
+    vec3 xq = mean + g * nw.x;
+    float w = dot(r3, xq) + t.z;
+    bool ok = w > 0.0;
+    // (behind the eye: a finite stand-in, the point dropped by ok)
+    float iw = 1.0 / (ok ? w : 1.0);
+    float ndx = (dot(r0, xq) + t.x) * iw;
+    float ndy = (dot(r1, xq) + t.y) * iw;
+    vec3 c = cross(r0 - r3 * ndx, r1 - r3 * ndy);
+    float sj = 0.25 * W * H * sqrt(dot(c, c)) * (iw * iw);
+    float kx = 0.5 * W * iw, ky = 0.5 * H * iw;
+    float a1 = kx * (x1 - ndx * w1), a2 = kx * (x2 - ndx * w2);
+    float b1 = ky * (y1 - ndy * w1), b2 = ky * (y2 - ndy * w2);
+    float mx = (ndx * 0.5 + 0.5) * W;
+    float my = (ndy * 0.5 + 0.5) * H;
+    float cxx = max(a1 * a1 + a2 * a2, 1e-6);
+    float cyy = max(b1 * b1 + b2 * b2, 1e-6);
+    float rhoRaw = (a1 * b1 + a2 * b2) * inversesqrt(cxx * cyy);
+    return dust_small_finish(ok, nw.y, massW, wr, sj, mx, my, cxx, cyy, rhoRaw);
+}
+
+// One depth point q of a small piece through the 4 lateral sigma points of its slice
+// (dust::volume_small_points' edge_point: x_q +- sqrt2 lat_i projects through r.x_q +- sqrt2
+// r.lat_i; J3-weighted moments about the first point's position; one reciprocal a sigma point)
+DustSmallPoint dust_volume_small_edge(uint q, bool five, vec3 mean, vec3 g, float x1, float x2, float y1, float y2,
+                                      float w1, float w2, float massW, float wr, vec3 r0, vec3 r1, vec3 r3, vec3 t,
+                                      float W, float H) {
+    vec2 nw = dust_small_node(q, five);
+    vec3 xq = mean + g * nw.x;
+    float bx = dot(r0, xq) + t.x, by = dot(r1, xq) + t.y, bw = dot(r3, xq) + t.z;
+    float tj = 0.0, sx = 0.0, sy = 0.0, sxx = 0.0, syy = 0.0, sxy = 0.0;
+    float ox = 0.0, oy = 0.0;
+    bool haveO = false;
+    for (uint j = 0u; j < 4u; ++j) {
+        float s = (j & 1u) == 0u ? -DUST_UT2_NODE : DUST_UT2_NODE;
+        bool ax1 = j < 2u;
+        float w = bw + s * (ax1 ? w1 : w2);
+        if (!(w > 0.0)) continue;
+        float iw = 1.0 / w;
+        float ndx = (bx + s * (ax1 ? x1 : x2)) * iw;
+        float ndy = (by + s * (ax1 ? y1 : y2)) * iw;
+        vec3 c = cross(r0 - r3 * ndx, r1 - r3 * ndy);
+        float j3 = 0.25 * (0.25 * W * H * sqrt(dot(c, c)) * (iw * iw));
+        float sxp = (ndx * 0.5 + 0.5) * W, syp = (ndy * 0.5 + 0.5) * H;
+        if (!haveO) { ox = sxp; oy = syp; haveO = true; }
+        float px = sxp - ox, py = syp - oy;
+        tj += j3;
+        sx += j3 * px;
+        sy += j3 * py;
+        sxx += j3 * px * px;
+        syy += j3 * py * py;
+        sxy += j3 * px * py;
     }
-    if (!(wgt > 0.0) || isinf(wgt)) return o;
-    o.mx = mx;
-    o.my = my;
-    o.ix = 1.0 / (sqrt(cxx) * DUST_SQRT_2);
-    o.iy = 1.0 / (sqrt(cyy) * DUST_SQRT_2);
-    o.rho = rho;
-    o.m = wgt;
+    bool ok = tj > 0.0;
+    float itj = 1.0 / (ok ? tj : 1.0);
+    float dx = sx * itj, dy = sy * itj;
+    float cxx = max(sxx * itj - dx * dx, 1e-6);
+    float cyy = max(syy * itj - dy * dy, 1e-6);
+    float rhoRaw = (sxy * itj - dx * dy) * inversesqrt(cxx * cyy);
+    return dust_small_finish(ok, nw.y, massW, wr, tj, ox + dx, oy + dy, cxx, cyy, rhoRaw);
+}
+
+// a small piece's empty point (m = 0: none)
+DustSmallPoint dust_small_none() {
+    DustSmallPoint o;
+    o.mx = 0.0; o.my = 0.0; o.ix = 0.0; o.iy = 0.0; o.rho = 0.0; o.m = 0.0;
     return o;
 }
 
 // The three depth points of a small volumetric piece (dust::volume_small_points), as three
-// values (no array)
+// values (no array). Live across the slices: mean, g, the lateral axes' six dots, the mass and the
+// slices' weights. Round 3: the weights and the fast projections of every slice as one
+// straight-line block (independent chains the scheduler overlaps), then the edge decision on s0
+// as before; an edge piece redraws every slice by sigma points (its fast s1, s2 discarded).
+// Profile parts (DUST_PROF_K1C0): vsmprep the prelude, vsmfast the weights, the fast slices and
+// the decision (every piece), vsmedge an edge piece's slices; the pieces by path counted
 void dust_volume_small_points(DustVolumePiece pc_, vec3 eye, vec3 r0, vec3 r1, vec3 r3, vec3 t, float W, float H,
                               vec3 meanRef, float renorm, out DustSmallPoint s0, out DustSmallPoint s1,
                               out DustSmallPoint s2, out DustSmallPoint s3, out DustSmallPoint s4) {
-    DustSmallPoint none_;
-    none_.mx = 0.0; none_.my = 0.0; none_.ix = 0.0; none_.iy = 0.0; none_.rho = 0.0; none_.m = 0.0;
-    s0 = none_; s1 = none_; s2 = none_; s3 = none_; s4 = none_;
+    s0 = dust_small_none(); s1 = dust_small_none(); s2 = dust_small_none(); s3 = dust_small_none(); s4 = dust_small_none();
+    DUST_PROF_BEGIN(vsmprep)
     vec3 lq = dust_l_mul(pc_.l, pc_.qw);
     vec3 mean = eye - lq;
     float dn = sqrt(dot(lq, lq));
-    if (!(dn > 0.0)) return;
+    if (!(dn > 0.0)) { DUST_PROF_END(vsmprep) return; }
     vec3 e = lq * (-1.0 / dn);
     vec3 lte = dust_lt_mul(pc_.l, e);
     float se = sqrt(dot(lte, lte));
-    if (!(se > 0.0)) return;
+    if (!(se > 0.0)) { DUST_PROF_END(vsmprep) return; }
     vec3 z = lte * (1.0 / se);
     vec3 g = dust_l_mul(pc_.l, z);
     float sgn = z.z >= 0.0 ? 1.0 : -1.0;
@@ -665,6 +758,10 @@ void dust_volume_small_points(DustVolumePiece pc_, vec3 eye, vec3 r0, vec3 r1, v
     g = g * sb;
     vec3 lat1 = dust_l_mul(pc_.l, vec3(1.0 + sgn * z.x * z.x * ia, sgn * ib, -sgn * z.x)) * sb;
     vec3 lat2 = dust_l_mul(pc_.l, vec3(ib, sgn + z.y * z.y * ia, -z.y)) * sb;
+    // the lateral axes against the projection's rows (lat1, lat2 dead after these)
+    float x1 = dot(r0, lat1), x2 = dot(r0, lat2);
+    float y1 = dot(r1, lat1), y2 = dot(r1, lat2);
+    float w1 = dot(r3, lat1), w2 = dot(r3, lat2);
     vec4 sp = dust_phot_support;
     float kept = 1.0;
     if (dust_has_support(sp)) {
@@ -677,22 +774,52 @@ void dust_volume_small_points(DustVolumePiece pc_, vec3 eye, vec3 r0, vec3 r1, v
     float massW = mass;
     // (the 5-point depth rule of step F5 is off in production: dust::DUST_K1C_D_GH5)
     bool five = false;
-    // one projection a slice; when the centre slice's 3 sigma crosses the frame's edge (or it has
-    // none), the 4 lateral sigma points a slice (dust::volume_small_points, step D3)
-    s0 = dust_volume_small_point(0u, five, mean, g, lat1, lat2, massW, false, r0, r1, r3, t, W, H, eye, meanRef);
+    DUST_PROF_END(vsmprep)
+    // every slice's weight and one projection, then the decision: when the centre slice's 3 sigma
+    // crosses the frame's edge (or it has none), the 4 lateral sigma points a slice
+    // (dust::volume_small_points, step D3); the weights serve both paths
+    DUST_PROF_BEGIN(vsmfast)
+    float wr0, wr1, wr2;
+    vec3 sun0;
+    float r20;
+    dust_small_weights(mean + g * dust_small_node(0u, five).x, mean + g * dust_small_node(1u, five).x,
+                       mean + g * dust_small_node(2u, five).x, eye, meanRef, wr0, wr1, wr2, sun0, r20);
+#ifdef DUST_PROF_SMALL_NO_WEIGHT
+    // profile experiment P1b only (a hand-built .prof blob): the other slices reuse the centre's
+    // weight, the deposits' magnitude kept
+    wr1 = wr0; wr2 = wr0;
+#endif
+    float wr3 = 1.0, wr4 = 1.0;
+    if (five) {
+        wr3 = dust_small_weight_more(mean + g * dust_small_node(3u, five).x, eye, meanRef, sun0, r20);
+        wr4 = dust_small_weight_more(mean + g * dust_small_node(4u, five).x, eye, meanRef, sun0, r20);
+    }
+    s0 = dust_volume_small_fast(0u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr0, r0, r1, r3, t, W, H);
+    s1 = dust_volume_small_fast(1u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr1, r0, r1, r3, t, W, H);
+    s2 = dust_volume_small_fast(2u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr2, r0, r1, r3, t, W, H);
+    if (five) {
+        s3 = dust_volume_small_fast(3u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr3, r0, r1, r3, t, W, H);
+        s4 = dust_volume_small_fast(4u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr4, r0, r1, r3, t, W, H);
+    }
     bool edge = true;
     if (s0.m > 0.0) {
         float ex = 3.0 / (s0.ix * DUST_SQRT_2), ey = 3.0 / (s0.iy * DUST_SQRT_2);
         edge = s0.mx - ex < 0.0 || s0.mx + ex > W || s0.my - ey < 0.0 || s0.my + ey > H;
     }
+    DUST_PROF_END(vsmfast)
     if (edge) {
-        s0 = dust_volume_small_point(0u, five, mean, g, lat1, lat2, massW, true, r0, r1, r3, t, W, H, eye, meanRef);
-    }
-    s1 = dust_volume_small_point(1u, five, mean, g, lat1, lat2, massW, edge, r0, r1, r3, t, W, H, eye, meanRef);
-    s2 = dust_volume_small_point(2u, five, mean, g, lat1, lat2, massW, edge, r0, r1, r3, t, W, H, eye, meanRef);
-    if (five) {
-        s3 = dust_volume_small_point(3u, five, mean, g, lat1, lat2, massW, edge, r0, r1, r3, t, W, H, eye, meanRef);
-        s4 = dust_volume_small_point(4u, five, mean, g, lat1, lat2, massW, edge, r0, r1, r3, t, W, H, eye, meanRef);
+        DUST_PROF_BEGIN(vsmedge)
+        s0 = dust_volume_small_edge(0u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr0, r0, r1, r3, t, W, H);
+        s1 = dust_volume_small_edge(1u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr1, r0, r1, r3, t, W, H);
+        s2 = dust_volume_small_edge(2u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr2, r0, r1, r3, t, W, H);
+        if (five) {
+            s3 = dust_volume_small_edge(3u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr3, r0, r1, r3, t, W, H);
+            s4 = dust_volume_small_edge(4u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr4, r0, r1, r3, t, W, H);
+        }
+        DUST_PROF_END(vsmedge)
+        DUST_PROF_COUNT(small_edge, 1u)
+    } else {
+        DUST_PROF_COUNT(small_fast, 1u)
     }
 }
 
@@ -1025,10 +1152,11 @@ const uint DUST_QUEUE_EWA = 0u;
 const uint DUST_FRAME_QUEUE_OFF = 1u << 28u;
 const uint DUST_FRAME_QUEUE_ALL = 1u << 29u;
 
-// the queue's first word (after the measurement grid)
+// the queue's first word, in words from `pyr` (header word DUST_PYR_QUEUE_BASE, host-written: the
+// frame's is its measure grid's end plus the class images, a class image's the same word less its
+// own offset in the view buffer, so a draw into a class image appends to the view's queues)
 uint dust_queue_base(DustUintBuffer pyr) {
-    uint m = pyr.v[DUST_PYR_MEASURE];
-    return m + pyr.v[DUST_PYR_MEASURE + 1u] * pyr.v[DUST_PYR_MEASURE + 2u] * DUST_PYRAMID_TEXEL_WORDS;
+    return pyr.v[DUST_PYR_QUEUE_BASE];
 }
 
 // the queue's capacity: DUST_QUEUE_CAPACITY, or less when header word 4 says so (a test hook,
@@ -1065,7 +1193,7 @@ float dust_queue_get_f(DustUintBuffer pyr, uint at) { return uintBitsToFloat(pyr
 // consumer's indirect dispatch (x = ceil(records / 64), 1, 1), the raw append counter (reset per
 // chunk by the host), a capacity override (0 = DUST_VQUEUE_CAPACITY), the chunk's cluster range
 // [first, end) the producer threads cover, then the frame's counts (records drawn, overflowed:
-// drawn in-thread) — then DUST_VQUEUE_RECORD_WORDS-word records: the volumetric packets a chunk's
+// sent to the volume spill) — then DUST_VQUEUE_RECORD_WORDS-word records: the volumetric packets a chunk's
 // producer threads emit (dust_splat.comp dust_volume_emit) with their own rounding seed, drawn one
 // lane per record by dust_draw_volume.comp (the same dust_volume_draw, so the pyramid is the one
 // the producer would have drawn, word for word; the atomics are order-free).
@@ -1081,7 +1209,8 @@ const uint DUST_VQUEUE_RECORDS = 9u;
 const uint DUST_VQUEUE_FIRST_SLOT = 10u;
 const uint DUST_VQUEUE_RING_MASK = 11u;
 const uint DUST_QUEUE_WORDS = DUST_QUEUE_HEADER_WORDS + DUST_QUEUE_CAPACITY * DUST_QUEUE_RECORD_WORDS;
-// PYR_FLAGS bit (host-written, dust::DUST_FRAME_VQUEUE_OFF): the volume packets drawn in-thread
+// PYR_FLAGS bit (host-written, dust::DUST_FRAME_VQUEUE_OFF): the main volume queue refuses every
+// record (all through the volume spill: the spill path's A/B)
 const uint DUST_FRAME_VQUEUE_OFF = 1u << 30u;
 // PYR_FLAGS bit (a test hook, dust::DUST_FRAME_SPLIT_SERIAL): dust_split.comp walks a cluster's
 // records in one lane with a running ordinal (the former per-cluster thread's order), the
@@ -1093,12 +1222,27 @@ uint dust_vqueue_capacity(DustUintBuffer pyr, uint base) {
     uint c = pyr.v[base + 4u];
     return c == 0u ? DUST_VQUEUE_CAPACITY : min(c, DUST_VQUEUE_CAPACITY);
 }
-// A record index, or ~0u when the chunk's queue is full (the packet is then drawn in-thread)
+// A record index, or ~0u when the chunk's queue is full (the main queue's refusal goes to the
+// volume spill; the spill's is dropped and counted)
 uint dust_vqueue_append(DustUintBuffer pyr, uint base) {
     uint r = atomicAdd(pyr.v[base + 3u], 1u);
     if (r >= dust_vqueue_capacity(pyr, base)) return 0xFFFFFFFFu;
     atomicMax(pyr.v[base], (r >> 6u) + 1u);
     return r;
+}
+// The volume spill (dust::dust_vspill_records): a second volume queue in the same format (header
+// words 0-2 its consumer's indirect dispatch, 3 its raw append counter, 4 its capacity; the
+// records structure-of-arrays at its capacity's stride) after the speck spill, at the main
+// header's DUST_VQUEUE_SPILL_OFFSET (host-written per frame). The records the main queue refuses
+// go there (dust_volume_emit), drained by a second dispatch of dust_draw_volume.comp
+// (DUST_VIEW_VOLUME_SPILL); a record it refuses too is dropped and counted (DUST_VQUEUE_LOST).
+// The frame's counts stay in the main header: words 13 (spill drawn) and 14 (lost).
+const uint DUST_VQUEUE_SPILL_DRAWN = 13u;
+const uint DUST_VQUEUE_LOST = 14u;
+const uint DUST_VQUEUE_SPILL_OFFSET = 15u;
+uint dust_vspill_base(DustUintBuffer pyr) {
+    uint vbase = dust_vqueue_base(pyr);
+    return vbase + pyr.v[vbase + DUST_VQUEUE_SPILL_OFFSET];
 }
 // A volume record, structure-of-arrays: word w of record r at base + DUST_VQUEUE_HEADER_WORDS +
 // w * capacity + r, so a warp's 32 consecutive records load and store each word from 128

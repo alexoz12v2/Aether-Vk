@@ -1066,6 +1066,8 @@ fn gpu_dust_trace_records_particles_over_time() {
       }
     }
   });
+  // SAFETY: as for set_var above; later tests in this process must not trace
+  unsafe { std::env::remove_var("AETHERVK_DUST_TRACE") };
   let text = std::fs::read_to_string(&path).expect("trace file written");
   let _ = std::fs::remove_file(&path);
   let lines: alloc::vec::Vec<&str> = text.lines().collect();
@@ -1409,6 +1411,10 @@ fn splat_parity(
     let gpu = device.download_dust_pyramid(pe).unwrap();
     let layout = device.dust_view_layout(pe).unwrap();
     assert_eq!(layout, dust::PyramidLayout::new(w, h));
+    // every volumetric record the GPU emitted was drawn (the CPU draws them all; a record the
+    // volume spill refused would be a mismatch that is not the drawing's)
+    let (_, lost) = device.dust_vqueue_spill_counts(pe).unwrap();
+    assert_eq!(lost, 0, "case {id}: the volume spill lost {lost} records");
     // a fixed volume bias must have reached the header the GPU drew with, before anything else
     if let Some(b) = parity_volume_bias() {
       let hw_ = dust::PYRAMID_HEADER_WORDS as usize;
@@ -2411,11 +2417,15 @@ fn gpu_dust_queue_draws_the_same_pyramid() {
 }
 
 /// The volume packet queue (`dust_draw_volume.comp`, `dust::DUST_VQUEUE_*`): a frame drawn with
-/// the volumetric packets queued per chunk and drawn by the consumer (default), with them drawn
-/// in-thread (the queue off), with a chunk queue of 5 records that overflows (the rest in-thread)
-/// and with a forced chunk of 100 clusters (many chunks) gives the same pyramid word for word:
-/// the packet's seed travels with its record and the pyramid's atomics are order-free. The
-/// perspective view inside the cloud draws volumetric packets only; the orthographic one none.
+/// the volumetric packets queued per chunk and drawn by the consumer (default), with every one
+/// through the volume spill (the queue off: the spill path's A/B, slower — the chunk is sized to
+/// the spill), with a chunk queue of 5 records that overflows (the rest drawn from the spill) and
+/// with a forced chunk of 100 clusters (many chunks) gives the same pyramid word for word: the
+/// packet's seed travels with its record, every record is drawn by the consumer and the
+/// pyramid's atomics are order-free. With the spill capped at 3 records a chunk too, the rest are
+/// lost: counted (overflowed = spill drawn + lost, the records conserved) and missing from the
+/// image. The perspective view inside the cloud draws volumetric packets only; the orthographic
+/// one none.
 #[test]
 fn gpu_dust_volume_queue_draws_the_same_pyramid() {
   let id = 9037;
@@ -2486,24 +2496,39 @@ fn gpu_dust_volume_queue_draws_the_same_pyramid() {
       };
       device.dust_set_vqueue_mode(pe, None);
       device.dust_set_vqueue_capacity(pe, 0);
+      device.dust_set_vspill_capacity(pe, 0);
       device.dust_set_vqueue_chunk(pe, 0);
       let mut inv_unit = 0.0;
       for _ in 0..(super::dust::DUST_READBACK_SLOTS + 2) {
         inv_unit = run(0.0).1;
       }
+      // (drawn by the consumer from the queue, overflowed, chunks, spill drawn, lost)
+      let counts = || {
+        let (d, o, c) = device.dust_vqueue_counts(pe).unwrap();
+        let (sd, l) = device.dust_vqueue_spill_counts(pe).unwrap();
+        (d, o, c, sd, l)
+      };
       let (default, _) = run(inv_unit);
-      let default_counts = device.dust_vqueue_counts(pe).unwrap();
+      let default_counts = counts();
+      // the queue off: every record through the volume spill (the spill path's A/B; slower:
+      // the chunk sized to the spill)
       device.dust_set_vqueue_mode(pe, Some(dust::DUST_FRAME_VQUEUE_OFF));
       let (off, _) = run(inv_unit);
-      let off_counts = device.dust_vqueue_counts(pe).unwrap();
+      let off_counts = counts();
       device.dust_set_vqueue_mode(pe, None);
+      // the queue at 5 records a chunk: the rest through the spill
       device.dust_set_vqueue_capacity(pe, 5);
       let (overflow, _) = run(inv_unit);
-      let overflow_counts = device.dust_vqueue_counts(pe).unwrap();
+      let overflow_counts = counts();
+      // and the spill at 3 records a chunk too: the rest lost (dropped, counted)
+      device.dust_set_vspill_capacity(pe, 3);
+      let (lossy, _) = run(inv_unit);
+      let lossy_counts = counts();
+      device.dust_set_vspill_capacity(pe, 0);
       device.dust_set_vqueue_capacity(pe, 0);
       device.dust_set_vqueue_chunk(pe, 100);
       let (chunked, _) = run(inv_unit);
-      let chunked_counts = device.dust_vqueue_counts(pe).unwrap();
+      let chunked_counts = counts();
       device.dust_set_vqueue_chunk(pe, 0);
       // the splitter's serial reference: one lane per cluster, the records in order
       device.dust_set_vqueue_mode(pe, Some(dust::DUST_FRAME_SPLIT_SERIAL));
@@ -2511,23 +2536,44 @@ fn gpu_dust_volume_queue_draws_the_same_pyramid() {
       let (srecords, soverflow) = device.dust_squeue_counts(pe).unwrap();
       device.dust_set_vqueue_mode(pe, None);
       std::println!(
-        "[dust vqueue] {name}: (drawn by the consumer, overflowed, chunks): default {default_counts:?}, off {off_counts:?}, capacity 5 {overflow_counts:?}, chunk 100 {chunked_counts:?}"
+        "[dust vqueue] {name}: (drawn by the consumer, overflowed, chunks, spill drawn, lost): default {default_counts:?}, off (spill only) {off_counts:?}, capacity 5 {overflow_counts:?}, capacity 5 + spill 3 {lossy_counts:?}, chunk 100 {chunked_counts:?}"
       );
       assert!(off.iter().any(|&v| v != 0), "{name}: the frame drew nothing");
-      assert_eq!((off_counts.0, off_counts.1), (0, 0), "{name}: the volume queue was used while off");
-      assert_eq!(off_counts.2, 1, "{name}: more than one chunk with the queue off");
+      // every case: overflowed = spill drawn + lost (the spill drain's counts)
+      for (case, c) in [("default", default_counts), ("off", off_counts), ("capacity 5", overflow_counts), ("spill 3", lossy_counts), ("chunk 100", chunked_counts)] {
+        assert_eq!(c.1, c.3 + c.4, "{name} / {case}: overflowed {} != spill drawn {} + lost {}", c.1, c.3, c.4);
+      }
+      // with the queue off nothing is drawn from the main queue: every record through the spill
+      assert_eq!(off_counts.0, 0, "{name}: the volume queue was used while off");
+      assert_eq!(off_counts.4, 0, "{name}: the spill lost records with the queue off");
+      assert_eq!(off_counts.3, default_counts.0, "{name}: the spill-only frame drew another count of packets");
       if name == "perspective" {
         assert!(default_counts.0 > 0, "{name}: no volumetric packet was queued inside the cloud");
-        assert_eq!(default_counts.1, 0, "{name}: the default queue overflowed");
-        assert!(overflow_counts.0 >= 5 && overflow_counts.1 > 0, "{name}: the capped queue did not overflow");
+        assert_eq!((default_counts.1, default_counts.4), (0, 0), "{name}: the default queue overflowed");
+        // the capped queue: its refusals all drawn from the spill. Main raw - main n = spill raw
+        // per chunk (dust_draw_volume.comp), summed: the records the queue did not draw are
+        // exactly the spill's appends
+        assert!(overflow_counts.0 >= 5 && overflow_counts.3 > 0, "{name}: the capped queue did not spill");
+        assert_eq!(overflow_counts.4, 0, "{name}: the default spill lost records");
+        assert_eq!(default_counts.0 - overflow_counts.0, overflow_counts.1, "{name}: main raw - main n != spill raw");
+        // the capped spill: some lost, counted; the rest conserved
+        assert!(lossy_counts.4 > 0, "{name}: the capped spill lost nothing");
+        assert!(lossy_counts.3 <= 3 * lossy_counts.2, "{name}: more than 3 spill records a chunk drawn");
+        assert_eq!(default_counts.0 - lossy_counts.0, lossy_counts.1, "{name}: main raw - main n != spill raw (capped spill)");
+        assert_eq!(lossy_counts.0 + lossy_counts.3 + lossy_counts.4, default_counts.0, "{name}: records not conserved");
         assert_eq!(chunked_counts.0, default_counts.0, "{name}: the chunked frame drew another count of packets");
       } else {
         assert_eq!(default_counts.0, 0, "{name}: an orthographic view queued volumetric packets");
+        assert_eq!(off_counts.3, 0, "{name}: an orthographic view spilled volumetric packets");
       }
       assert_eq!(chunked_counts.2, (batch.count as u32).div_ceil(100), "{name}: chunk count");
       let diff = |a: &[u32], b: &[u32]| a.iter().zip(b).filter(|(x, y)| x != y).count();
-      assert_eq!(diff(&default, &off), 0, "{name}: the queued volume packets drew another pyramid than in-thread");
+      assert_eq!(diff(&default, &off), 0, "{name}: the spilled volume packets drew another pyramid than the queued ones");
       assert_eq!(diff(&overflow, &off), 0, "{name}: an overflowing volume queue drew another pyramid");
+      if name == "perspective" {
+        // the lost records are missing from the image (the drop is visible, not silent)
+        assert!(diff(&lossy, &off) > 0, "{name}: the lost records left the pyramid unchanged");
+      }
       assert_eq!(diff(&chunked, &off), 0, "{name}: the chunked frame drew another pyramid");
       assert!(srecords > 0 && soverflow == 0, "{name}: sub-packet records {srecords}, overflowed {soverflow}");
       assert_eq!(diff(&serial, &off), 0, "{name}: the splitter's counting pass and prefix differ from the serial order");
@@ -2626,6 +2672,7 @@ fn gpu_dust_profile_counters_are_consistent() {
       let (profiled, _) = run(inv_unit);
       let p = device.dust_profile_counters(pe).unwrap();
       let vq = device.dust_vqueue_counts(pe).unwrap();
+      let vs = device.dust_vqueue_spill_counts(pe).unwrap();
       DUST_PROFILE_OVERRIDE.store(false, core::sync::atomic::Ordering::Relaxed);
       let (production, _) = run(inv_unit);
       let p_off = device.dust_profile_counters(pe).unwrap();
@@ -2677,8 +2724,9 @@ fn gpu_dust_profile_counters_are_consistent() {
         assert!(p.qstage(2) <= p.qstage(1), "{name}: qseg > qrows");
       } else {
         assert!(p.word(dust::DUST_PROF_VOLUME) > 0, "{name}: no volume packets inside the cloud");
-        // the consumer (dust_draw_volume.comp.prof): its records are the queue's drawn count
-        assert_eq!(p.word(dust::DUST_PROF_CPACKETS), vq.0, "{name}: the consumer's packet count");
+        // the consumer (dust_draw_volume.comp.prof): its records are the queue's and the volume
+        // spill's drawn counts (both drains run the profiled consumer)
+        assert_eq!(p.word(dust::DUST_PROF_CPACKETS), vq.0 + vs.0, "{name}: the consumer's packet count");
         assert!(p.word(dust::DUST_PROF_CPACKETS) > 0, "{name}: the consumer drew nothing");
         assert!(
           p.u64_at(dust::DUST_PROF_CVPLAN) + p.u64_at(dust::DUST_PROF_CVDRAW) <= p.u64_at(dust::DUST_PROF_CTHREAD),

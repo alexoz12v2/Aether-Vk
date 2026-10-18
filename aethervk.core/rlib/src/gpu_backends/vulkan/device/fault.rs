@@ -202,6 +202,18 @@ pub fn unregister_address_range(name: &str) {
   m.retain(|(n, _, _)| n != name);
 }
 
+/// Runs `f` on empty address maps and puts the previous entries back afterwards (ranges registered
+/// meanwhile are kept): a test of the map must not see the ranges earlier tests' devices left.
+#[cfg(test)]
+pub fn with_isolated_address_maps<R>(f: impl FnOnce() -> R) -> R {
+  let saved = core::mem::take(&mut *ADDRESS_MAP.lock());
+  let saved_freed = core::mem::take(&mut *FREED_MAP.lock());
+  let r = f();
+  ADDRESS_MAP.lock().extend(saved);
+  FREED_MAP.lock().extend(saved_freed);
+  r
+}
+
 /// The registered buffer containing `address` (or the nearest one within 64 MB after its end),
 /// as "name + offset" / "name end + distance".
 pub fn describe_address(address: u64) -> alloc::string::String {

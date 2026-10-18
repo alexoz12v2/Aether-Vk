@@ -4286,9 +4286,19 @@ impl RenderDevice for Device {
           // Bug fix: store M only (not V×M) so that outWorldPos = M*pos = world-space.
           // The VS RTE trick (centerClip = VP*center + localClip = VP*direction) is
           // already correct when viewProj = VP and model = M.
+          // global-depth reference: the layer's D_ref (0 = absolute; 0 everywhere while
+          // frame::PRECISE_COMPOSITE is off), composite precision plan §3.6
+          let (center_dist, inv_center_len) =
+            crate::gpu::scene_conversion::trajectory_rte::rte_distance_reference(
+              draw_call.center_rte_f64,
+              draw_call.layer_ref_dist,
+            );
           let object_data = crate::gpu::ObjectData {
             model: draw_call.model_matrix.into(),
             center_clip: crate::gpu::frame::center_clip_f64(camera, draw_call.center_rte_f64),
+            center_dist,
+            inv_center_len,
+            _pad: [0.0; 3],
           };
 
           unsafe {
@@ -4805,7 +4815,16 @@ impl RenderDevice for Device {
   }
 
   #[named]
-  fn upload_trajectories(
+  fn upload_composite_layer_refs(
+    &self,
+    _cmd_buffer: gpu::CommandBufferHandle,
+    refs: &[f32; 8],
+  ) -> GpuResult<u64> {
+    // the frame staging ring, as upload_sphere_gizmos_batch: host-written before the submit
+    self.stage_for_device_read(refs.as_ptr() as *const u8, core::mem::size_of::<[f32; 8]>(), 16)
+  }
+
+  fn upload_trajectories_with_anchors(
     &self,
     cmd_buffer: gpu::CommandBufferHandle,
     trajectories: &[(
@@ -4813,6 +4832,7 @@ impl RenderDevice for Device {
       crate::scene::trajectory::TrajectoryComponent,
       aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
     )],
+    anchors: &[crate::gpu::TrajectoryAnchorGpu],
   ) -> GpuResult<Option<crate::gpu::frame::TrajectoryBatchCall>> {
     if trajectories.is_empty() {
       return Ok(None);
@@ -4826,16 +4846,8 @@ impl RenderDevice for Device {
       cp2: [f32; 4],
       cp3: [f32; 4],
     }
-    #[repr(C, align(16))]
-    #[derive(Copy, Clone)]
-    struct TrajectoryGpu {
-      segments_ptr: u64,
-      _pad0: u64,
-      color: [f32; 4],
-      line_width: f32,
-      texture_id: u32,
-      _pad1: u64,
-    }
+    // the shared layout (gpu.rs, size-asserted; the mega-buffer in resources.rs is sized with it)
+    use crate::gpu::TrajectoryGpu;
     #[repr(C, align(4))]
     #[derive(Copy, Clone)]
     struct SegmentMapGpu {
@@ -4888,7 +4900,7 @@ impl RenderDevice for Device {
     let mut total_segments = 0;
     let mut max_subdivs = 0;
 
-    for (entity_id, traj_comp, model_mat) in trajectories.iter() {
+    for (input_idx, (entity_id, traj_comp, model_mat)) in trajectories.iter().enumerate() {
       let local_segments_count = traj_comp.control_points.len() / 4;
       if local_segments_count == 0 {
         continue;
@@ -5010,6 +5022,7 @@ impl RenderDevice for Device {
       // 4. METADATA (Small arrays densely rebuilt per frame for flawless sequential instanced rendering)
       // Index into `traj_gpus`, not the input: skipped (0-segment) trajectories have no entry.
       let trajectory_id = traj_gpus.len() as u32;
+      let anchor = anchors.get(input_idx).copied().unwrap_or(crate::gpu::TrajectoryAnchorGpu::NONE);
       traj_gpus.push(TrajectoryGpu {
         segments_ptr: arena_mut.segments_ptr
           + (offset * core::mem::size_of::<RationalBezierGpu>() as u64),
@@ -5018,6 +5031,12 @@ impl RenderDevice for Device {
         line_width: traj_comp.line_width,
         texture_id: traj_comp.texture_id,
         _pad1: 0,
+        // anchors are indexed by the input trajectory (skipped ones included)
+        anchor_clip: anchor.clip,
+        anchor_dist: anchor.dist,
+        inv_anchor_len: anchor.inv_len,
+        anchor_layer: anchor.layer,
+        _pad2: [0; 2],
       });
 
       for j in 0..local_segments_count {
@@ -9238,6 +9257,10 @@ mod meshutils {
         0.0, 0.0, 0.0, 1.0,
       ],
       center_clip: [0.0; 4],
+      // no centre reference: the shader's global depth falls back to |u| (= |model · v| here)
+      center_dist: [0.0; 4],
+      inv_center_len: 0.0,
+      _pad: [0.0; 3],
     }
   }
 }

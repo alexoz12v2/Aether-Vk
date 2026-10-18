@@ -1310,6 +1310,11 @@ pub struct SceneContext {
 
   pub presentation_engines: Arc<RwLock<BTreeMap<PresentationEngineHandle, PresentationEngineData>>>,
 
+  /// Render budgets per presentation engine (`SimulationContext::set_render_budget`; the
+  /// observer's camera path): a view listed here is sent a frame only while its budget is above
+  /// 0, one less per frame sent; a view not listed renders every frame (the default)
+  pub render_budgets: Arc<RwLock<BTreeMap<PresentationEngineHandle, u32>>>,
+
   /// Necessary for the C# side bulk update (TODO check correctness)
   pub changed_entities: Arc<RwLock<BTreeMap<u64, BTreeSet<u64>>>>,
 
@@ -1427,6 +1432,7 @@ impl SceneContext {
       physics_engine_type: Arc::new(RwLock::new(PhysicsEngineType::VulkanCompute)),
       time_state,
       presentation_engines: Arc::new(RwLock::new(BTreeMap::new())),
+      render_budgets: Arc::new(RwLock::new(BTreeMap::new())),
       scene_snapshot: None,
       changed_entities: Arc::new(RwLock::new(BTreeMap::new())),
       custom_render_callback: None,
