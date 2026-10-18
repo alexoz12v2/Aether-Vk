@@ -36,6 +36,12 @@ pub struct ResourceUploadResult {
   pub descriptor_index: Option<u32>,
 }
 
+/// Composite precision (`.agents/briefs/04-composite-precision-plan.md`): per-layer distance
+/// references for the mesh global depth, anchored layer-0 tracks and the composite's offset
+/// compare. Off until the composite shader that consumes them is compiled (step 4): the old
+/// composite would pass the offsets and the track tags into `finalGlobalDepth`.
+pub const PRECISE_COMPOSITE: bool = true;
+
 /// Represents a single draw call with all necessary information.
 #[derive(Clone)]
 pub struct DrawCall {
@@ -62,6 +68,9 @@ pub struct DrawCall {
   pub use_new_path: bool,
   pub paint_display_mode: u32,
   pub layer_index: u32,
+  /// the layer's distance reference `D_ref` (layer units; 0 = absolute): the mesh global depth is
+  /// `|c + u| − D_ref` (`ObjectData::center_dist`), the composite adds it back
+  pub layer_ref_dist: f64,
 }
 
 impl DrawCall {
@@ -92,6 +101,7 @@ impl DrawCall {
       use_new_path,
       paint_display_mode,
       layer_index,
+      layer_ref_dist: 0.0,
     }
   }
 }
@@ -952,6 +962,42 @@ pub fn dust_projection_scales(
   (proj.cols[0].x().abs() as f32, proj.cols[2].y().abs() as f32)
 }
 
+/// One dust frame as [`prepare_dust`] recorded it: the frame ledger (telemetry, diagnostics; the
+/// observer's camera path proves with it one drawn frame per step, its simulation time and its
+/// eye − nucleus). `seq` is `prepare_dust`'s frame counter (every view), `pe` the view, `reused`
+/// whether the frame kept the previous image; `eye_m` / `nucleus_m` are the first dust call's
+/// (`DustDrawCall::eye_m`, `nucleus_m`), `t_now_s` the simulation time its propagate evaluates.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DustFrameLedger {
+  pub seq: u64,
+  pub pe: u64,
+  pub reused: bool,
+  pub t_now_s: f64,
+  pub eye_m: [f64; 3],
+  pub nucleus_m: Option<[f64; 3]>,
+  pub width: u32,
+  pub height: u32,
+}
+
+/// entries the frame ledger keeps (every view; the oldest drop out)
+pub const DUST_FRAME_LEDGER_LEN: usize = 256;
+
+static DUST_FRAME_LEDGER: spin::Mutex<alloc::collections::VecDeque<DustFrameLedger>> =
+  spin::Mutex::new(alloc::collections::VecDeque::new());
+
+fn dust_frame_ledger_push(e: DustFrameLedger) {
+  let mut l = DUST_FRAME_LEDGER.lock();
+  if l.len() >= DUST_FRAME_LEDGER_LEN {
+    l.pop_front();
+  }
+  l.push_back(e);
+}
+
+/// The frame ledger's entries of view `pe` with `seq ≥ since_seq`, oldest first
+pub fn dust_frame_ledger(pe: PresentationEngineHandle, since_seq: u64) -> Vec<DustFrameLedger> {
+  DUST_FRAME_LEDGER.lock().iter().filter(|e| e.pe == pe.0 && e.seq >= since_seq).copied().collect()
+}
+
 /// Evaluates every dust system of the frame (compute dispatches on the graphics command buffer,
 /// or the reference evaluation in CPU particle mode) and splats every tier with its layer's
 /// camera into the view's pyramid (`dust_splat.comp`), which the composite reads
@@ -1010,6 +1056,20 @@ pub fn prepare_dust(
     let inputs = dust_draw_inputs(render_scene, flags, &flow, specks_needed);
     device.cmd_dust_frame_begin_reusable(cmd, pe, render_scene.window_extent, flags, flow, inputs)?
   };
+  // the frame ledger (telemetry): what this frame is, for the observer's camera path
+  {
+    let first = render_scene.depth_layers.iter().flat_map(|l| l.dust_calls.iter()).next();
+    dust_frame_ledger_push(DustFrameLedger {
+      seq: frame_no,
+      pe: pe.0,
+      reused: reuse,
+      t_now_s: t_sim,
+      eye_m: first.map_or([0.0; 3], |c| c.eye_m),
+      nucleus_m: first.and_then(|c| c.nucleus_m),
+      width: render_scene.window_extent[0],
+      height: render_scene.window_extent[1],
+    });
+  }
   // the speck shell's pixel solid angle (perspective cameras; 0 = no shell): used from the next
   // readback on (`dust::specks::shell_radius_m`)
   let omega_px_sr = match render_scene.camera_data.projection_params {
@@ -1028,6 +1088,25 @@ pub fn prepare_dust(
     if let Err(e) = device.cmd_dust_system_begin(id, flags, flow) {
       aethervk_oshal_rlib::log!("[Dust] frame begin failed for {id}: {e}");
     }
+  }
+  // the cadence (temporal reuse, step 3; `AETHERVK_DUST_CADENCE=1` until the user's gate): its
+  // begin before the propagates (the resets, aborts, swaps, the propagate set); a failure turns
+  // it off for the view (this frame draws everything fresh)
+  let cad_plan = if !reuse && !dust_debug_skip("propagate") && device.dust_cadence_auto(pe) {
+    device.cmd_checkpoint(cmd, c"dust: cadence");
+    match dust_cadence_begin(device, cmd, render_scene, pe, flags, &view) {
+      Ok(p) => Some(p),
+      Err(e) => {
+        aethervk_oshal_rlib::log!("[Dust cadence] view {}: {e}; off", pe.0);
+        let _ = device.dust_cadence_enable(pe, None);
+        None
+      }
+    }
+  } else {
+    None
+  };
+  if cad_plan.is_some() {
+    device.cmd_dust_timestamp(cmd, pe, crate::gpu_backends::vulkan::device::dust::DUST_TS_CADENCE);
   }
   device.cmd_checkpoint(cmd, c"dust: propagate");
   let mut buffers: Vec<Option<(u64, u64)>> = Vec::new();
@@ -1060,7 +1139,12 @@ pub fn prepare_dust(
       // unchanged inputs (a paused or still frame, a second view): the buffers already hold this
       // propagate's output and the dispatch is skipped (`cmd_dust_propagate_cached`;
       // `AETHERVK_DUST_NO_REUSE=1` dispatches every frame)
-      let propagated = if aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_NO_REUSE").is_some_and(|v| v.trim() == "1") {
+      let propagated = if cad_plan.is_some() {
+        // the cadence's propagate set and stamp skip (no dispatch-level cache)
+        device
+          .cmd_dust_cadence_propagate(cmd, pe, call.entity_id.as_ffi(), s.ring_base, s.capacity, s.first_slot, s.live_count, &frame, s.compute_wait)
+          .map(|a| (a, false))
+      } else if aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_NO_REUSE").is_some_and(|v| v.trim() == "1") {
         device
           .cmd_dust_propagate(cmd, call.entity_id.as_ffi(), s.ring_base, s.capacity, s.first_slot, s.live_count, &frame)
           .map(|a| (a, false))
@@ -1095,6 +1179,66 @@ pub fn prepare_dust(
   device.cmd_dust_pre_splat_barrier(cmd);
   device.cmd_checkpoint(cmd, c"dust: splat");
   let extent = render_scene.window_extent;
+  // the cadence's classifies, chunk pre-passes and build draws (the CPU's F2b, F3), then the
+  // reprojection of the shown images (F4), before the specks and the fresh splat (F5, F6)
+  if let Some(plan) = cad_plan.as_ref() {
+    use crate::gpu_backends::vulkan::device::dust::cadence::CadenceBuildDraw;
+    device.cmd_checkpoint(cmd, c"dust: cadence builds");
+    let inv_unit = if view.unit > 0.0 { 1.0 / view.unit } else { 0.0 };
+    let mut draws: Vec<CadenceBuildDraw> = Vec::new();
+    let mut bi = buffers.iter();
+    for layer in render_scene.depth_layers.iter() {
+      let camera = render_scene.camera_data.rebuild_for_layer(layer.near, layer.far, layer.frame_scale);
+      for call in layer.dust_calls.iter() {
+        let Some(Some((render, moments))) = bi.next().copied() else {
+          continue;
+        };
+        let s = &call.state;
+        let key = dust_cadence_key(call);
+        let pc = dust_splat_pc(call, &camera, extent, flags, inv_unit);
+        if let Err(e) = device.cmd_dust_cadence_classify(cmd, pe, key, render, moments, pc.mvp, pc.eye_local) {
+          aethervk_oshal_rlib::log!("[Dust cadence] classify failed for {:?}: {e}", call.entity_id);
+        }
+        if let Err(e) = device.cmd_dust_cadence_chunks(cmd, pe, key, render, moments) {
+          aethervk_oshal_rlib::log!("[Dust cadence] chunks failed for {:?}: {e}", call.entity_id);
+        }
+        for b in &plan.builds {
+          let mut pcb = pc;
+          pcb.mvp = match plan.geom.as_ref() {
+            Some(g) => b.view.mvp_image(s.anchor_m, g),
+            None => b.view.mvp(s.anchor_m),
+          };
+          let e = b.view.eye_local(s.anchor_m);
+          pcb.eye_local = [e[0], e[1], e[2], s.ttl_s];
+          pcb.inv_unit = if b.unit > 0.0 { 1.0 / b.unit } else { 0.0 };
+          draws.push(CadenceBuildDraw {
+            k: b.k,
+            p: b.p,
+            key,
+            system: call.entity_id.as_ffi(),
+            ring_base: s.ring_base,
+            first_slot: s.first_slot,
+            capacity: s.capacity,
+            render,
+            moments,
+            pc: pcb,
+          });
+        }
+      }
+    }
+    device.cmd_dust_timestamp(cmd, pe, crate::gpu_backends::vulkan::device::dust::DUST_TS_CHUNKED);
+    // pair-major (one header copy and one queue drain per image), the tiers in order
+    draws.sort_by_key(|d| (d.k, d.p));
+    if let Err(e) = device.cmd_dust_cadence_builds(cmd, pe, &draws) {
+      aethervk_oshal_rlib::log!("[Dust cadence] builds failed: {e}");
+    }
+    device.cmd_dust_timestamp(cmd, pe, crate::gpu_backends::vulkan::device::dust::DUST_TS_BUILDS);
+    if let Err(e) = device.cmd_dust_cadence_reproject(cmd, pe) {
+      aethervk_oshal_rlib::log!("[Dust cadence] reprojection failed: {e}");
+    }
+    device.cmd_dust_timestamp(cmd, pe, crate::gpu_backends::vulkan::device::dust::DUST_TS_REPROJECTED);
+    device.cmd_dust_pre_splat_barrier(cmd);
+  }
   let mut traced: Vec<(u64, crate::gpu::dust_trace::TraceFrameMeta, Vec<u32>)> = Vec::new();
   let specks_buffers = buffers.clone();
   let mut buffers = buffers.into_iter();
@@ -1193,33 +1337,10 @@ pub fn prepare_dust(
         call.state.live_count = 0;
         continue;
       };
-      let (mvp, params) = call.mvp_params(&camera, extent);
       let s = &call.state;
-      let eye = call.eye_local_m();
-      let debug_env = |name: &str| {
-        aethervk_oshal_rlib::os::env::var(name).and_then(|v| v.trim().parse::<u32>().ok())
-      };
-      let flags = match (
-        debug_env("AETHERVK_DUST_DEBUG_STREAM"),
-        debug_env("AETHERVK_DUST_DEBUG_SAMPLE_MOD"),
-      ) {
-        (Some(v), _) => flags | crate::scene::dust::DUST_VIEW_DEBUG_STREAM | ((v & 0xFF) << 20),
-        (None, Some(v)) => flags | crate::scene::dust::DUST_VIEW_DEBUG_SAMPLE | ((v & 0xFF) << 20),
-        (None, None) => flags,
-      };
-      let pc = crate::scene::dust::DustSplatPushConstants {
-        moments: 0,
-        render: 0,
-        pyramid: 0,
-        live_count: s.live_count.min(s.capacity),
-        flags,
-        exposure: call.raw_exposure(),
-        inv_unit,
-        color: crate::scene::dust::pack_color(call.stream_color),
-        albedo: s.albedo,
-        mvp,
-        eye_local: [eye[0], eye[1], eye[2], s.ttl_s],
-      };
+      // (the cadence's classify and build draws use the same push constants: `dust_splat_pc`)
+      let pc = dust_splat_pc(call, &camera, extent, flags, inv_unit);
+      let mvp = pc.mvp;
       // AETHERVK_DUST_DEBUG_SKIP=splat|composite|readback: bisection aids (no production use);
       // AETHERVK_DUST_DEBUG_TIER=<k>: only tier k is splatted (which tier draws a feature)
       let skip_splat = dust_debug_skip("splat")
@@ -1302,6 +1423,12 @@ pub fn prepare_dust(
       aethervk_oshal_rlib::log!("[Dust trace] failed for {id}: {e}");
     }
   }
+  // the cadence's state readback, the drawn frame and the deferred cursor advance
+  if cad_plan.is_some()
+    && let Err(e) = device.cmd_dust_cadence_end(cmd, pe)
+  {
+    aethervk_oshal_rlib::log!("[Dust cadence] end failed for view {}: {e}", pe.0);
+  }
   if !dust_debug_skip("readback") {
     if let Err(e) = device.cmd_dust_frame_end(cmd, pe) {
       aethervk_oshal_rlib::log!("[Dust] readback failed for view {}: {e}", pe.0);
@@ -1315,6 +1442,168 @@ pub fn prepare_dust(
     render_scene.dust_view.pyramid = 0;
   }
   Ok(wait)
+}
+
+/// The splat's push constants of one call (`dust_splat.comp`): the call's mvp and eye, the frame's
+/// unit, the diagnostics' flag bits (`AETHERVK_DUST_DEBUG_STREAM` / `_SAMPLE_MOD`). Shared by the
+/// fresh splat and the cadence's classify and build draws (the CPU's `TierDraw::pc`).
+fn dust_splat_pc(
+  call: &DustDrawCall,
+  camera: &CameraRenderData,
+  extent: [u32; 2],
+  flags: u32,
+  inv_unit: f32,
+) -> crate::scene::dust::DustSplatPushConstants {
+  let (mvp, _params) = call.mvp_params(camera, extent);
+  let s = &call.state;
+  let eye = call.eye_local_m();
+  let debug_env = |name: &str| aethervk_oshal_rlib::os::env::var(name).and_then(|v| v.trim().parse::<u32>().ok());
+  let flags = match (debug_env("AETHERVK_DUST_DEBUG_STREAM"), debug_env("AETHERVK_DUST_DEBUG_SAMPLE_MOD")) {
+    (Some(v), _) => flags | crate::scene::dust::DUST_VIEW_DEBUG_STREAM | ((v & 0xFF) << 20),
+    (None, Some(v)) => flags | crate::scene::dust::DUST_VIEW_DEBUG_SAMPLE | ((v & 0xFF) << 20),
+    (None, None) => flags,
+  };
+  crate::scene::dust::DustSplatPushConstants {
+    moments: 0,
+    render: 0,
+    pyramid: 0,
+    live_count: s.live_count.min(s.capacity),
+    flags,
+    exposure: call.raw_exposure(),
+    inv_unit,
+    color: crate::scene::dust::pack_color(call.stream_color),
+    albedo: s.albedo,
+    mvp,
+    eye_local: [eye[0], eye[1], eye[2], s.ttl_s],
+  }
+}
+
+/// a column-major f64 matrix as the cadence's `[f64; 16]`
+fn dust_mat16(m: &aethervk_oshal_rlib::math::matrix::mat4f64::Mat4x4f64) -> [f64; 16] {
+  let mut o = [0.0f64; 16];
+  for c in 0..4 {
+    for r in 0..4 {
+      o[c * 4 + r] = m.cols[c][r];
+    }
+  }
+  o
+}
+
+/// a tier's cadence key: stable over its life (the system and the tier index)
+fn dust_cadence_key(call: &DustDrawCall) -> u64 {
+  call.entity_id.as_ffi().wrapping_mul(8).wrapping_add(call.state.tier as u64)
+}
+
+/// The compact offset from which a tier's slots hold content emitted (or re-emitted: the
+/// provisional window) since `prev` (the emission value at the cadence's previous frame): the
+/// first of the newest live batches with a later ready value (`DustDrawState::ready_tail`); the
+/// live count when none, 0 when every batch the tail holds is newer (more may be: all rewritten)
+fn dust_cadence_rewritten_from(s: &crate::scene::dust::DustDrawState, prev: Option<u64>) -> u32 {
+  let live = s.live_count.min(s.capacity);
+  let Some(prev) = prev else { return live };
+  let n = s.ready_tail_len as usize;
+  let (mut from, mut newer) = (live, 0usize);
+  for &(off, ready) in &s.ready_tail[..n] {
+    if ready > prev && off < live {
+      from = from.min(off);
+      newer += 1;
+    }
+  }
+  if n == crate::scene::dust::DUST_READY_TAIL && newer == n { 0 } else { from }
+}
+
+/// The cadence's fingerprint of the non-view draw inputs (`FrameMeta::fingerprint`: a change resets
+/// every class): per call its system, tier, colour, exposure, albedo, TTL, size law and age band,
+/// and the knobs that change the drawing
+fn dust_cadence_fingerprint(render_scene: &RenderScene, flags: u32) -> u64 {
+  let mut h = 0xcbf2_9ce4_8422_2325u64;
+  let mut eat = |b: &[u8]| {
+    for &x in b {
+      h = (h ^ x as u64).wrapping_mul(0x100_0000_01b3);
+    }
+  };
+  eat(&flags.to_le_bytes());
+  for name in [
+    "AETHERVK_DUST_DEBUG_STREAM",
+    "AETHERVK_DUST_DEBUG_SAMPLE_MOD",
+    "AETHERVK_DUST_DEBUG_TIER",
+    "AETHERVK_DUST_DEBUG_AGE_MAX",
+    "AETHERVK_DUST_DEBUG_AGE_MIN",
+    "AETHERVK_DUST_LOD_PX",
+    "AETHERVK_DUST_CADENCE_EPS",
+    "AETHERVK_DUST_CADENCE_MARGIN",
+    "AETHERVK_DUST_CADENCE_PHASES",
+  ] {
+    eat(aethervk_oshal_rlib::os::env::var(name).unwrap_or_default().as_bytes());
+    eat(&[0xff]);
+  }
+  for layer in render_scene.depth_layers.iter() {
+    for call in layer.dust_calls.iter() {
+      let s = &call.state;
+      eat(&call.entity_id.as_ffi().to_le_bytes());
+      eat(&s.tier.to_le_bytes());
+      for v in call.stream_color.iter().chain([s.albedo, s.ttl_s, s.s_ref_um, s.size_q, s.frame.ttl[0], s.frame.ttl[1], s.frame.ttl[2]].iter()) {
+        eat(&v.to_bits().to_le_bytes());
+      }
+    }
+  }
+  h
+}
+
+/// The cadence's frame begin from the render scene: the view (the first dust layer's camera, the
+/// first call's eye and units: the x, y, w clip rows every layer shares), the nucleus (the scene's,
+/// else the first tier's anchor: the nucleus centre at its tick), the tiers with their rewritten
+/// offsets, the speed 0 (no simulation speed reaches the renderer yet: step 5)
+fn dust_cadence_begin(
+  device: &crate::gpu_backends::vulkan::device::Device,
+  cmd: ash::vk::CommandBuffer,
+  render_scene: &RenderScene,
+  pe: PresentationEngineHandle,
+  flags: u32,
+  view: &crate::gpu_backends::vulkan::device::dust::DustViewParams,
+) -> GpuResult<crate::gpu_backends::vulkan::device::dust::cadence::CadenceGpuPlan> {
+  use crate::gpu_backends::vulkan::device::dust::cadence::CadenceTierInput;
+  let Some((layer, call0)) = render_scene.depth_layers.iter().find_map(|l| l.dust_calls.first().map(|c| (l, c))) else {
+    return Err(crate::gpu_err!("dust cadence: no dust call"));
+  };
+  let camera = render_scene.camera_data.rebuild_for_layer(layer.near, layer.far, layer.frame_scale);
+  let cv = crate::scene::dust::cadence::CadenceView {
+    view_rot: dust_mat16(&camera.view_f64),
+    proj: dust_mat16(&camera.proj_f64),
+    eye_m: call0.eye_m,
+    units_per_m: call0.units_per_m,
+    width: render_scene.window_extent[0],
+    height: render_scene.window_extent[1],
+  };
+  let fm = crate::scene::dust::cadence::FrameMeta {
+    view: cv,
+    t_now_s: call0.state.frame.t_now_s(),
+    speed: 0.0,
+    nucleus_m: call0.nucleus_m.unwrap_or(call0.state.anchor_m),
+    flags,
+    fingerprint: dust_cadence_fingerprint(render_scene, flags),
+    reused: false,
+    unit_now: view.unit,
+  };
+  let mut tiers = Vec::new();
+  for l in render_scene.depth_layers.iter() {
+    for call in l.dust_calls.iter() {
+      let s = &call.state;
+      let key = dust_cadence_key(call);
+      tiers.push(CadenceTierInput {
+        key,
+        system: call.entity_id.as_ffi(),
+        ring_base: s.ring_base,
+        first_slot: s.first_slot,
+        capacity: s.capacity,
+        live_count: s.live_count.min(s.capacity),
+        emitted: s.compute_wait,
+        rewritten_from: dust_cadence_rewritten_from(s, device.dust_cadence_tier_emitted(pe, key)),
+        anchor_m: s.anchor_m,
+      });
+    }
+  }
+  device.cmd_dust_cadence_begin(cmd, pe, &fm, &tiers, view.d_max_m)
 }
 
 /// A fingerprint (FNV-1a) of everything a dust frame's propagates, splats and specks read
@@ -1503,6 +1792,9 @@ pub struct RenderScene {
   pub dust_flow: crate::scene::dust::DustFlowClock,
   /// the view's dust pyramid of this frame (filled by [`prepare_dust`]; pyramid 0 = no dust)
   pub dust_view: crate::gpu_backends::vulkan::device::dust::DustViewParams,
+  /// distance reference of depth layers 0..7 (layer units, 0 = absolute), the same numbers as the
+  /// meshes' `DrawCall::layer_ref_dist` (composite precision plan §3.6)
+  pub layer_ref_dist: [f64; 8],
 }
 
 impl RenderScene {
@@ -1527,6 +1819,7 @@ impl RenderScene {
       dust_view_flags: 0,
       dust_flow: Default::default(),
       dust_view: Default::default(),
+      layer_ref_dist: [0.0; 8],
     }
   }
 }
@@ -2093,6 +2386,14 @@ pub fn render_frame(
   let macro_layer = render_scene.depth_layers.iter().find(|l| l.layer_index == 0);
   // the nearest micro layer is drawn last, so its depth is the one left in the buffer
   let micro_layer = micro_layers.last().copied();
+  // the meshes' distance references (DrawCall::layer_ref_dist): the composite restores the
+  // absolute distance with them; 0 = none (every layer absolute)
+  let layer_refs: [f32; 8] = core::array::from_fn(|i| render_scene.layer_ref_dist[i] as f32);
+  let layer_refs_addr = if layer_refs.iter().any(|&r| r != 0.0) {
+    device.upload_composite_layer_refs(cmd_buffer, &layer_refs)?
+  } else {
+    0
+  };
   let constants = gpu::CompositePushConstants {
     macro_near: macro_layer.map(|l| l.near as f32).unwrap_or(0.0001),
     macro_far: macro_layer.map(|l| l.far as f32).unwrap_or(200.0),
@@ -2121,7 +2422,7 @@ pub fn render_frame(
     } else {
       crate::scene::dust::DUST_BLACK_POINT
     },
-    _pad0: 0,
+    layer_ref_lo: layer_refs_addr as u32,
     dust_pyramid: render_scene.dust_view.pyramid,
     dust_white: match crate::scene::dust::dust_exposure_fixed() {
       Some(white) => white,
@@ -2129,7 +2430,7 @@ pub fn render_frame(
     },
     dust_levels: render_scene.dust_view.levels,
     dust_unit: render_scene.dust_view.unit,
-    _pad1: 0,
+    layer_ref_hi: (layer_refs_addr >> 32) as u32,
     layer_unit_au: {
       // AU per unit of each layer's global depth: the macro layer is in AU, micro layers in km
       // (`frame_scale` = AU per layer unit)

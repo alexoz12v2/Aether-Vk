@@ -223,6 +223,26 @@ impl SceneConversionExt2 for Scene {
         layer_frame_scales.insert(entry.depth_layer, entry.scale);
       }
     }
+    // Composite precision references, one per micro layer from the final per-layer maps (the
+    // frame that won the layer: two frames sharing a layer must not give a track an anchor whose
+    // reference the layer's meshes do not use). D_m = |camera in frame| (frame units, incl. the
+    // light-time shift); o_m = −camera·frame_scale (AU, camera-relative), the same factor as the
+    // composite's layerUnitAu, so |o_m| = D_m·frame_scale by construction.
+    let mut layer_ref_dists: hashbrown::HashMap<u32, f64> = hashbrown::HashMap::with_capacity(8);
+    let mut anchor_candidates: alloc::vec::Vec<([f64; 3], u32)> = alloc::vec::Vec::with_capacity(8);
+    if crate::gpu::frame::PRECISE_COMPOSITE {
+      for (&layer, cam) in camera_in_frames.iter() {
+        let Some(&scale) = layer_frame_scales.get(&layer) else {
+          continue; // layer 0 (the root) has no micro reference
+        };
+        if layer == 0 || layer >= 8 {
+          continue;
+        }
+        let p = [cam.position.x(), cam.position.y(), cam.position.z()];
+        layer_ref_dists.insert(layer, cam.position.length());
+        anchor_candidates.push((trajectory_rte::anchor_origin(p, scale as f64), layer));
+      }
+    }
 
     let mut layer_map: hashbrown::HashMap<u32, RenderLayer> = hashbrown::HashMap::with_capacity(16);
 
@@ -284,6 +304,7 @@ impl SceneConversionExt2 for Scene {
       dust_view_flags: 0,
       dust_flow: Default::default(),
       dust_view: Default::default(),
+      layer_ref_dist: core::array::from_fn(|i| layer_ref_dists.get(&(i as u32)).copied().unwrap_or(0.0)),
     };
 
     // ------ 3. Zero-Copy GPU Upload Abstraction Macro -------------------------------------
@@ -676,6 +697,9 @@ impl SceneConversionExt2 for Scene {
           0,
           layer_idx as u32,
         ));
+        if let Some(dc) = l.draw_calls.last_mut() {
+          dc.layer_ref_dist = layer_ref_dists.get(&layer_idx).copied().unwrap_or(0.0);
+        }
       } else {
         let err = unsafe { gpu_res.unwrap_err_unchecked() };
         aethervk_oshal_rlib::log!("GPU Upload Error: {}", err);
@@ -806,9 +830,13 @@ impl SceneConversionExt2 for Scene {
     }
 
     // 7. Trajectories (Batched - deferred upload)
+    // per layer: the trajectories and, at the same index, their anchor (composite precision §2.3)
     let mut traj_batch_buffers = hashbrown::HashMap::<
       u32,
-      alloc::vec::Vec<(EntityId, TrajectoryComponent, Mat4x4f32)>,
+      (
+        alloc::vec::Vec<(EntityId, TrajectoryComponent, Mat4x4f32)>,
+        alloc::vec::Vec<Option<trajectory_rte::AnchorGpu>>,
+      ),
     >::with_capacity(16);
     let identity = <Mat4x4f32 as aethervk_oshal_rlib::math::matrix::SquareMatrix>::identity();
     let view_extent_hint = trajectory_rte::ViewScale::from_projection(&cam_comp.projection);
@@ -823,16 +851,32 @@ impl SceneConversionExt2 for Scene {
         _ => alloc::vec::Vec::new(),
       };
       compute_rte(self, id).map(|(layer_idx, rte)| {
-        let rel =
-          trajectory_rte::camera_relative_control_points(traj, &extra, &rte, view_extent_hint);
+        // layer-0 pieces near a micro frame origin are anchored there (empty candidate list
+        // while PRECISE_COMPOSITE is off: the output is camera_relative_control_points')
+        let (rel, anchor) = if layer_idx == 0 {
+          trajectory_rte::control_points_with_anchor(
+            traj,
+            &extra,
+            &rte,
+            view_extent_hint,
+            &anchor_candidates,
+          )
+        } else {
+          (
+            trajectory_rte::camera_relative_control_points(traj, &extra, &rte, view_extent_hint),
+            None,
+          )
+        };
         let mut t = traj.clone();
         t.control_points = rel;
-        (layer_idx, id, t, identity)
+        (layer_idx, id, t, identity, anchor)
       })
     });
-    for (layer_idx, id, traj, mat) in extracted_traj {
+    for (layer_idx, id, traj, mat, anchor) in extracted_traj {
       get_or_create_layer!(layer_idx);
-      traj_batch_buffers.entry(layer_idx).or_default().push((id, traj, mat));
+      let e = traj_batch_buffers.entry(layer_idx).or_default();
+      e.0.push((id, traj, mat));
+      e.1.push(anchor);
     }
 
     let proj_scale = match cam_comp.projection {
@@ -1563,8 +1607,31 @@ impl SceneConversionExt2 for Scene {
           l.sphere_gizmo_batch_call =
             device.upload_sphere_gizmos_batch(cmd_buffer, &sg_data).ok().flatten();
         }
-        if let Some(traj_list) = traj_batch_buffers.remove(&l.layer_index) {
-          l.trajectory_call = device.upload_trajectories(cmd_buffer, &traj_list).ok().flatten();
+        if let Some((traj_list, anchors)) = traj_batch_buffers.remove(&l.layer_index) {
+          let gpu_anchors: alloc::vec::Vec<gpu::TrajectoryAnchorGpu> =
+            if anchors.iter().any(|a| a.is_some()) {
+              // the camera draw_layer_content draws this layer's trajectories with
+              let layer_camera =
+                render_scene.camera_data.rebuild_for_layer(l.near, l.far, l.frame_scale);
+              anchors
+                .iter()
+                .map(|a| match a {
+                  Some(a) => gpu::TrajectoryAnchorGpu {
+                    clip: crate::gpu::frame::center_clip_f64(&layer_camera, a.origin_rte),
+                    dist: a.dist,
+                    inv_len: a.inv_len,
+                    layer: a.layer,
+                  },
+                  None => gpu::TrajectoryAnchorGpu::NONE,
+                })
+                .collect()
+            } else {
+              alloc::vec::Vec::new()
+            };
+          l.trajectory_call = device
+            .upload_trajectories_with_anchors(cmd_buffer, &traj_list, &gpu_anchors)
+            .ok()
+            .flatten();
         }
         l
       })

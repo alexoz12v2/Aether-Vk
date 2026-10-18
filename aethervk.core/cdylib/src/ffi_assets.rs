@@ -836,7 +836,7 @@ mod tests {
       kind: AssetKind::Texture,
       key: "k".into(),
       label: "l".into(),
-      source_path: String::new(),
+      source_path: alloc::string::String::new(),
       a: 4,
       b: 2,
       channel_hint: None,

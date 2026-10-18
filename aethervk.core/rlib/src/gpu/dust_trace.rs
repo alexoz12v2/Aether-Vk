@@ -22,14 +22,22 @@ const TRACE_SALT: u32 = 0x7A3C_E115;
 
 /// `AETHERVK_DUST_TRACE` output path, `None` = tracing off (cached).
 pub fn trace_path() -> Option<&'static str> {
-  static PATH: spin::Once<Option<String>> = spin::Once::new();
-  PATH
-    .call_once(|| {
-      aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_TRACE")
-        .map(|s| String::from(s.trim()))
-        .filter(|s| !s.is_empty())
-    })
-    .as_deref()
+  let read = || {
+    aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_TRACE")
+      .map(|s| String::from(s.trim()))
+      .filter(|s| !s.is_empty())
+  };
+  // test builds run every test in one process and set the variable at run time: read it on every
+  // call there (the leaked string is a few bytes per traced frame, only while the variable is set)
+  #[cfg(test)]
+  {
+    read().map(|s| &*alloc::boxed::Box::leak(s.into_boxed_str()))
+  }
+  #[cfg(not(test))]
+  {
+    static PATH: spin::Once<Option<String>> = spin::Once::new();
+    PATH.call_once(read).as_deref()
+  }
 }
 
 /// traced frame period (`AETHERVK_DUST_TRACE_EVERY`, default 10, ≥ 1)

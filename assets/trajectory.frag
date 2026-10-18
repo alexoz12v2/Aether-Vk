@@ -1,10 +1,17 @@
 #version 450 core
 #extension GL_EXT_nonuniform_qualifier : require
+#extension GL_GOOGLE_include_directive : require
+
+#include "rte_distance.glsl"
 
 layout(location = 0) in vec4 vColor;
 layout(location = 1) in vec2 vUV;
 layout(location = 2) in flat float vLineWidth;
 layout(location = 3) in flat uint vTexId;
+layout(location = 4) in vec3 vAnchorU;
+layout(location = 5) in flat uint vAnchorLayer;
+layout(location = 6) in flat vec4 vAnchorDist;
+layout(location = 7) in flat float vInvAnchorLen;
 
 layout(set = 0, binding = 0) uniform sampler2D trajectoryTextures[];
 
@@ -30,6 +37,10 @@ void main() {
     outColor = vColor * tex;
     outColor.a *= alphaEdge;
 
-    // Not an occlusion/pick target: same sentinel as the MRT clear value.
-    outGlobalDepth = vec2(-1.0, -1.0);
+    // Anchored pieces: (16 + m, |o_m + u| - |o_m|) in AU, the precise offset the composite compares
+    // with micro layer m's mesh offsets; the composite turns it into the sentinel afterwards.
+    // Otherwise not an occlusion/pick target: same sentinel as the MRT clear value.
+    outGlobalDepth = (vAnchorLayer != 0xFFFFFFFFu)
+        ? vec2(16.0 + float(vAnchorLayer), rteDistanceOffset(vAnchorDist, vInvAnchorLen, vAnchorU))
+        : vec2(-1.0, -1.0);
 }

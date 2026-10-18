@@ -423,3 +423,56 @@ Dissection tools (all `--lab`):
 | `OBSERVER_LAB_DUMP=<prefix>` | the scored unit-sum boxed images (`_render.f32`, `_truth.f32`) |
 
 The 1 km datasets live in `aethervk.core/rlib/test_assets/lab/` (untracked).
+
+## Camera path and the cadence's image gate (`--path-frames`, `--lab-path`, `--lab-score`)
+
+Temporal reuse, step 4: the cadence is judged on a moving camera, with its frames drawn as at 60 fps.
+
+**The path (GPU, `--pose inside --days 0`).** `--path-frames N` (32) starts from the settled frame 0. Each later frame k is one hold-step:
+1. The render budget holds the view (`SimulationContext::set_render_budget(scene, pe, Some(0))`: the logic thread sends that view no frame).
+2. The clock seeks, paused, to t₀ + k·Δt, and the tiers catch up.
+3. The camera moves to nucleus(t_k) + rel_k. rel_k is rel₀ turned by k·ω about the orbit axis, which is ecliptic north across rel₀, so the view never rolls. rel_k is nucleus-relative in fixed world axes, its length less k·dolly.
+4. Exactly one frame is released (`Some(1)`).
+
+The renderer therefore sees Δeye and Δt together, once per frame, as the cadence will at 60 fps. The far plane stays at frame 0's: a moving one would change the projection, which resets the cadence.
+
+Flags:
+- `--path-fps F` (60).
+- `--path-speed X`: simulation seconds per wall second; Δt = X / F.
+- `--path-dt-s T`: Δt directly.
+- `--orbit-deg-per-s W` (10).
+- `--eye-step-m S`: the orbit by its arc per frame, overriding W.
+- `--dolly-m-per-frame D` (0).
+- `--path-keep 0,31`: the frames whose `frame_NNN.pyr`, PNG, `truth_NNN.bin` and, with `--save-snapshot`, snapshot are written. Default: the first and the last.
+
+The frame ledger (`dust_frame_ledger`, `gpu/frame.rs`: the last 256 dust frames, each with its sequence, reuse flag, simulation time, eye and nucleus) proves the path. Each step must have exactly one new dust frame, drawn, at t₀ + k·Δt (to 1 ms) with eye − nucleus = rel_k (to 1 mm). `--check` fails otherwise.
+
+Outputs:
+- `path.txt`: the path's parameters and the cadence's environment variables.
+- `path_summary.txt`: clean, steps, GPU ms per path frame mean / p90 / max, and the cadence's telemetry (`n/a` until the GPU cadence exists).
+- In `stats.jsonl`, one `path_frame` line per frame: θ, Δt, eye − nucleus, the ledger's errors, the frame's light Σ, the tiers' live counts, the wall time.
+
+**The score (`--lab-score DIR --against FULL --lab-frame F --lab-truth N`).**
+- Frame F of a path capture and the fully drawn frame of the same path (`AETHERVK_DUST_CADENCE=0`) are scored against one truth.
+- That truth is `FULL/truth_FFF.bin` drawn once at N grains and cached as `FULL/truthN_FFF.f64` (+ `_counts.f64`).
+- Both runs' truth inputs must be byte-equal, otherwise the score exits 2 (not the same frame).
+- Printed per frame:
+  - the observer's judged value, Σ render/truth, the ratio by truth level and the light outside the region (`run_lab`'s arithmetic; `run_lab` prints a `score check` line proving it is the same);
+  - the **60-px block rms**: blocks of 60×60 px with truth ≥ 5 % of the brightest block, sqrt(Σ(R_B − T_B)² / Σ T_B²), absolute; also shown with the shape only and as the truth's count noise at that scale;
+  - **x against full directly** (no truth, no noise): Σ ratio, shape rel rms, block60 rms, and the worst block with its block coordinates.
+- `--check` fails when either path is not clean, or when |Σ x / Σ full − 1| > 1 % + the ghost share (0 while the cadence reports none).
+- `--lab-table T.tsv` appends the row; `--lab-table-md T.tsv` prints the tables (one per source × speed; rows by pose × variant).
+- A second fully drawn run (`aa`) gives the run-to-run floor of the direct numbers.
+
+**The recipe.** `scripts/lab_cadence_capture.sh` runs poses 1 km / 100 m / 5 000 km × speeds 0 / 60 / 86 400 × variants `full aa` (later `eps1 eps2 eps4 eps16`, and `fb` once step 5 brings its knob). Every run is one process under the memory cap. Captures go under `~/aethervk-lab/lab/<pose>_cad/s<speed>/<variant>`; the table goes to `~/aethervk-lab/lab/table.md`. `--smoke` runs 1 km at 60× for 8 frames, full + aa only.
+
+**The CPU mirror's path (`--lab DIR --lab-frame F --lab-path N --lab-truth M [--lab-path-eps 1,2,4,16] [--check]`).**
+- It replays a snapshot along the same orbit with Δt = 0, using the cadence's CPU state machine (`scene::dust::cadence`) against the full parallel splat on every frame.
+- The path's projection comes from the captured mvp: Q = [M₀(3×3) | M₀ col3 + M₀(3×3)·eye_local], and each frame's mvp is Q·ΔRᵀ·[I | anchor − eye_k]. It is checked against every tier's captured mvp at frame 0.
+- The last frame is scored against the truth drawn at the last view.
+- The check `lab_cadence_scores_the_path`:
+  - frame 0 word-identical to the full draw with `OBSERVER_LAB_GATES_OFF=1`;
+  - every frame |Σ cadence / Σ full − 1| ≤ 1 %;
+  - the owner bytes consistent;
+  - at least one class image shown (else vacuous).
+- `--lab-table` appends its rows (source `CPU mirror`, speed 0).

@@ -27,14 +27,16 @@ layout(push_constant, std430) uniform PushConstants {
     uint liveCount;              // 28
     uint ringMask;               // 32
     uint generation;             // 36: the host's propagate generation (the stamp, edges[12].w)
-    uvec2 skip;                  // 40: x 1 = skip a slot stamped with `generation`; y unused
+    uvec2 skip;                  // 40: x 1 = skip a slot stamped with `generation`; y the cadence's
+                                 //     propagate bitmask address, low word (0, 0 = every slot)
                                  //     (std430: the vec4 below is 16-aligned)
     vec4 ps_r_t_hi;              // 48: particle-system heliocentric position (m), w = t_now (s); df64 hi
     vec4 ps_r_t_lo;              // 64: ... low part
     vec4 rot_inv;                // 80: root -> particle-system quaternion (xyzw)
     vec4 ttl;                    // 96: age band: x max age = TTL (s), y min age (s), z 1 = no fade,
                                  //     w the tier's stream shift
-    vec4 spin;                   // 112: nucleus spin axis * omega (rad/s, particle-system axes), w unused
+    vec3 spin;                   // 112: nucleus spin axis * omega (rad/s, particle-system axes)
+    uint maskHi;                 // 124: the bitmask address, high word
 } pc;                            // 128 bytes
 
 // K(r0, v0 + dv, mu, dt) - r, rotated into the particle-system frame
@@ -49,6 +51,10 @@ void main() {
     uint i = gl_GlobalInvocationID.x;
     if (i >= pc.liveCount) return;
     uint slot = (pc.firstSlot + i) & pc.ringMask;
+    // the cadence's propagate set (dust_classify.comp's marks: fresh, the build chunks, their
+    // predecessors): an unmarked slot keeps its moments
+    uvec2 maskAddr = uvec2(pc.skip.y, pc.maskHi);
+    if (maskAddr != uvec2(0u) && (DustUintBuffer(maskAddr).v[slot >> 5u] & (1u << (slot & 31u))) == 0u) return;
     bool hasMoments = uvec2(pc.moments) != uvec2(0u);
     // already at this generation's time (a paused frame): the record and moments stand
     if (pc.skip.x != 0u && hasMoments && floatBitsToUint(pc.moments.m[slot].edges[12].w) == pc.generation) return;

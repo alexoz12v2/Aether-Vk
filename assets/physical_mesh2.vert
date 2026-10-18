@@ -16,6 +16,9 @@ layout(location = 1) out vec2 outUV;
 layout(location = 2) out vec3 outNormal;
 layout(location = 3) out vec3 outTangent;
 layout(location = 4) out vec3 outBitangent;
+// local vertex offset from the object centre (layer units, small): the fragment shader forms
+// the precise Euclidean distance from it (rteDistanceOffset), see the global-depth MRT write
+layout(location = 5) out vec3 outLocalOffset;
 
 void main() {
     mat4 model = push.object.model;
@@ -33,7 +36,9 @@ void main() {
     // Isolate RTE precision offset by bypassing matrix addition inside the shader
     vec4 centerClip = push.object.centerClip;
     if (centerClip == vec4(0.0)) centerClip = viewProj * vec4(model[3].xyz, 1.0);
-    vec4 localClip = viewProj * vec4(mat3(model) * inPosition, 0.0);
+    vec3 localOffset = mat3(model) * inPosition;
+    outLocalOffset = localOffset;
+    vec4 localClip = viewProj * vec4(localOffset, 0.0);
     vec4 clipPos = centerClip + localClip;
 
     // Emissive outline expansion hack (triggers on negative intensity)

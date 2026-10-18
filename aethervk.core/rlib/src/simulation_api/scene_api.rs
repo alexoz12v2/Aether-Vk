@@ -889,8 +889,9 @@ impl SimulationContext {
       .ok()
   }
   /// The volume packet queue of `pe`'s last drawn frame (`dust::DUST_VQUEUE_*`): records drawn
-  /// by the consumer, packets that overflowed (drawn in-thread), chunks; `None` without a view or
-  /// a device. Waits for the GPU (diagnostics).
+  /// by the consumer from the main queue, packets that overflowed it (sent to the volume spill:
+  /// [`Self::dust_vqueue_spill_counts`]), chunks; `None` without a view or a device. Waits for
+  /// the GPU (diagnostics).
   pub fn dust_vqueue_counts(
     &self,
     pe: crate::gpu::PresentationEngineHandle,
@@ -902,6 +903,20 @@ impl SimulationContext {
         let vulkan_device: &crate::gpu_backends::vulkan::device::Device =
           device.as_any().downcast_ref().ok_or(crate::gpu_err!("not a Vulkan device"))?;
         vulkan_device.dust_vqueue_counts(pe)
+      })
+      .ok()
+  }
+  /// The volume spill of `pe`'s last drawn frame (`dust::DUST_VQUEUE_SPILL_DRAWN` / `_LOST`):
+  /// records the consumer drew from it, records it refused too (lost, not drawn); `None` without
+  /// a view or a device. Waits for the GPU (diagnostics).
+  pub fn dust_vqueue_spill_counts(&self, pe: crate::gpu::PresentationEngineHandle) -> Option<(u32, u32)> {
+    use crate::gpu::WeakRenderFrontendExt;
+    let frontend = self.render_proxy.0.as_frontend()?;
+    frontend
+      .with_device(self.render_proxy.1, |device| {
+        let vulkan_device: &crate::gpu_backends::vulkan::device::Device =
+          device.as_any().downcast_ref().ok_or(crate::gpu_err!("not a Vulkan device"))?;
+        vulkan_device.dust_vqueue_spill_counts(pe)
       })
       .ok()
   }
@@ -934,6 +949,50 @@ impl SimulationContext {
       })
       .ok()
       .flatten()
+  }
+
+  /// Observer / diagnostics: the render budget of presentation engine `pe` of scene `scene_id`.
+  /// `Some(n)`: the logic thread sends that view a frame only while its budget is above 0, one
+  /// less per frame sent (`Some(0)` holds the view, `Some(1)` releases exactly one frame: the
+  /// observer's camera path); `None` (the default) renders every frame. False without the scene.
+  pub fn set_render_budget(
+    &self,
+    scene_id: u64,
+    pe: crate::gpu::PresentationEngineHandle,
+    budget: Option<u32>,
+  ) -> bool {
+    let Some(scene) = self.get_scene(scene_id) else {
+      return false;
+    };
+    let g = scene.read();
+    let mut b = g.render_budgets.write();
+    match budget {
+      Some(n) => {
+        b.insert(pe, n);
+      }
+      None => {
+        b.remove(&pe);
+      }
+    }
+    true
+  }
+
+  /// The render budget left to `pe` ([`Self::set_render_budget`]); `None` = unlimited
+  pub fn render_budget(&self, scene_id: u64, pe: crate::gpu::PresentationEngineHandle) -> Option<u32> {
+    let scene = self.get_scene(scene_id)?;
+    let g = scene.read();
+    g.render_budgets.read().get(&pe).copied()
+  }
+
+  /// Telemetry: the dust frame ledger of `pe` (`gpu::frame::DustFrameLedger`: every recorded
+  /// dust frame's sequence, reuse, simulation time, eye and nucleus; the last
+  /// `gpu::frame::DUST_FRAME_LEDGER_LEN` of every view) with `seq ≥ since_seq`, oldest first
+  pub fn dust_frame_ledger(
+    &self,
+    pe: crate::gpu::PresentationEngineHandle,
+    since_seq: u64,
+  ) -> alloc::vec::Vec<crate::gpu::frame::DustFrameLedger> {
+    crate::gpu::frame::dust_frame_ledger(pe, since_seq)
   }
 
   /// Diagnostic / observer: what the GPU splat passes of the last recorded frame of `pe` drew —

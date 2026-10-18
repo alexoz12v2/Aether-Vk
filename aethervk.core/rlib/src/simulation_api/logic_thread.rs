@@ -470,6 +470,21 @@ pub fn start_logic_thread(
               let Some(camera_entity) = pe_data.camera_entity else {
                 continue;
               };
+              // the render budget (`SimulationContext::set_render_budget`): a listed view is
+              // sent a frame only while its budget lasts, one less per frame sent
+              {
+                let scenes = context.scenes.read();
+                if let Some(sc) = scenes.get(scene_id) {
+                  let sc = sc.read();
+                  let mut budgets = sc.render_budgets.write();
+                  if let Some(n) = budgets.get_mut(&pe) {
+                    if *n == 0 {
+                      continue;
+                    }
+                    *n -= 1;
+                  }
+                }
+              }
               let is_windowless = pe_data.is_windowless;
               let task_id = alloc::sync::Arc::new(core::sync::atomic::AtomicU64::new(0));
               let scene = {

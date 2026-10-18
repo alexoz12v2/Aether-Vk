@@ -105,19 +105,21 @@ fn single_queue_mode_maps_every_role_to_the_graphics_queue() {
 #[test]
 fn fault_address_map_names_registered_buffers() {
   use crate::gpu_backends::vulkan::device::fault::{
-    describe_address, register_address_range, unregister_address_range,
+    describe_address, register_address_range, unregister_address_range, with_isolated_address_maps,
   };
-  register_address_range("TestBufA", 0x1000_0000, 0x1000);
-  register_address_range("TestBufB", 0x2000_0000, 0x100);
-  assert_eq!(
-    describe_address(0x1000_0230),
-    "TestBufA + 0x230 (size 0x1000)"
-  );
-  assert_eq!(
-    describe_address(0x2000_0100 + 0x40),
-    "0x40 past the end of TestBufB"
-  );
-  assert_eq!(describe_address(0x9000_0000_0000), "no registered buffer");
-  unregister_address_range("TestBufA");
-  unregister_address_range("TestBufB");
+  with_isolated_address_maps(|| {
+    register_address_range("TestBufA", 0x1000_0000, 0x1000);
+    register_address_range("TestBufB", 0x2000_0000, 0x100);
+    assert_eq!(
+      describe_address(0x1000_0230),
+      "TestBufA + 0x230 (size 0x1000)"
+    );
+    assert_eq!(
+      describe_address(0x2000_0100 + 0x40),
+      "0x40 past the end of TestBufB"
+    );
+    assert_eq!(describe_address(0x9000_0000_0000), "no registered buffer");
+    unregister_address_range("TestBufA");
+    unregister_address_range("TestBufB");
+  });
 }

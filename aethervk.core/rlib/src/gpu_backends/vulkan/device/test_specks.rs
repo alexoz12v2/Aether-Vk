@@ -1110,3 +1110,287 @@ fn speck_floor(sc: &specks::SpeckCluster, xi: [f32; 3]) -> f32 {
   }
   d
 }
+
+/// One frame of the walk-mask case: the propagate (cached or not), the speck pass, the splat, at a
+/// perspective camera at `eye`; returns whether the propagate was skipped.
+#[allow(clippy::too_many_arguments)]
+fn walk_mask_frame(
+  device: &Device,
+  id: u64,
+  pe: crate::gpu::PresentationEngineHandle,
+  capacity: u32,
+  first_slot: u32,
+  count: u32,
+  frame: &DustFrame,
+  eye: [f32; 3],
+  cached: bool,
+) -> bool {
+  let (w, h) = (320u32, 200u32);
+  let flow = dust::DustFlowUniform {
+    t_hi: 1.0e8,
+    t_lo: 0.0,
+    speed: 1.0,
+  };
+  let ttl = 30.0 * 86400.0f32;
+  let (mvp_abs, mvp_rel) = camera(eye, w, h);
+  let flags = dust::DUST_VIEW_FLOW;
+  let mut splat_pc = dust::DustSplatPushConstants {
+    moments: 0,
+    render: 0,
+    pyramid: 0,
+    live_count: count,
+    flags,
+    exposure: 1.0,
+    inv_unit: 0.0,
+    color: dust::pack_color([1.0, 0.6, 0.2, 1.0]),
+    albedo: 0.04,
+    mvp: mvp_abs,
+    eye_local: [eye[0], eye[1], eye[2], ttl],
+  };
+  let mut speck_pc = specks::DustSpecksPushConstants {
+    moments: 0,
+    render: 0,
+    pyramid: 0,
+    live_count: count,
+    size_fade: specks::pack_size_fade(50.0, 0.0),
+    exposure: 1.0,
+    inv_unit: 0.0,
+    color: specks::pack_color_q(dust::pack_color([1.0, 0.6, 0.2, 1.0]), 3.5),
+    albedo: 0.04,
+    mvp: mvp_rel,
+    eye_local: [eye[0], eye[1], eye[2], ttl],
+  };
+  let mut skipped = false;
+  let mut cmds = device
+    .run_transient_commands(|cmd| {
+      device.cmd_dust_pre_propagate_barrier(cmd);
+      let view = device.cmd_dust_frame_begin(cmd, pe, [w, h], flags, flow)?;
+      splat_pc.inv_unit = 1.0 / view.unit;
+      speck_pc.inv_unit = 1.0 / view.unit;
+      device.cmd_dust_system_begin(id, flags, flow)?;
+      let (render, moments) = if cached {
+        // a paused simulation: the same frame and range, no new emission
+        let (a, s) = device.cmd_dust_propagate_cached(cmd, id, 0, capacity, first_slot, count, frame, 0)?;
+        skipped = s;
+        a
+      } else {
+        device.cmd_dust_propagate(cmd, id, 0, capacity, first_slot, count, frame)?
+      };
+      device.cmd_dust_pre_splat_barrier(cmd);
+      device.cmd_dust_specks(cmd, pe, id, 0, first_slot, capacity, render, moments, speck_pc)?;
+      device.cmd_dust_pre_splat_barrier(cmd);
+      device.cmd_dust_splat(cmd, pe, id, 0, first_slot, capacity, render, moments, splat_pc)?;
+      device.cmd_dust_post_splat_barrier(cmd);
+      device.cmd_dust_frame_end(cmd, pe)?;
+      device.cmd_dust_system_end(id)?;
+      Ok(())
+    })
+    .unwrap();
+  cmds.cleanup(&device.device);
+  skipped
+}
+
+/// The speck pass's walk mask follows the eye when the propagate is cached (track 5, I0b; found
+/// 2026-10-18): with the simulation paused and the eye moved, `cmd_dust_propagate_cached` skips
+/// the dispatch, so the lane (`DustMoments::specks_mask`, `edges[15].w`, zeroed only by the
+/// propagate) must still end the frame holding this frame's walked bins only — as after an
+/// uncached propagate, and as the CPU mirror's `specks_tier`, which clears it per cluster.
+///
+/// Two views with the same history (frames at eye 1, then one frame at eye 2, the same fixed
+/// shell): view A propagates cached (eye 1's walk bits are still in the lane at eye 2), view B
+/// uncached. Asserted: some bin walked at eye 1 is not walked at eye 2 (the stale bits exist: the
+/// case fails without a fix), no speck budget overflow, then A's mask lanes equal B's for every
+/// live cluster and A's pyramid equals B's word for word (GPU against GPU, same inputs).
+#[test]
+fn gpu_dust_specks_walk_mask_follows_the_eye() {
+  setup_assets_dir();
+  assert!(
+    !crate::gpu_backends::vulkan::physics::is_cpu_particles_mode(),
+    "GPU parity tests need GPU particle mode"
+  );
+  let id = 9022u64;
+  let (_pool, render_frontend, handle, _) = setup_render_frontend_for_tests(false);
+  render_frontend
+    .with_device(handle, |dyn_device| {
+      let device: &Device = dyn_device.as_any().downcast_ref().unwrap();
+      device.create_particle_system(id)?;
+      run_walk_mask_case(device, id);
+      unsafe { device.device.device_wait_idle() }.unwrap();
+      device.discard_particle_system(id, 0, 0)?;
+      GpuResult::Ok(())
+    })
+    .unwrap();
+}
+
+fn run_walk_mask_case(device: &Device, id: u64) {
+  let (capacity, render_buf, moments_buf) = buffers(device, id);
+  let batch = test_batch(1024, 3600.0, 3, capacity);
+  let mut res = device
+    .run_transient_compute_commands(|cmd| device.cmd_dust_emit(cmd, id, 0, &batch, 0))
+    .unwrap();
+  res.cleanup(&device.device);
+  let first_slot = batch.first_index & batch.ring_mask;
+  let frame = frame_after(5.0);
+  let fetch = |device: &Device| {
+    let render: alloc::vec::Vec<dust::DustRenderCluster> =
+      super::test_dust::read_tier_records(device, render_buf, 0, first_slot, batch.count, capacity - 1);
+    let moments: alloc::vec::Vec<dust::DustMoments> =
+      super::test_dust::read_tier_records(device, moments_buf, 0, first_slot, batch.count, capacity - 1);
+    (render, moments)
+  };
+  // one frame of moments (no specks, no splat) to place the two eyes
+  let pe0 = crate::gpu::PresentationEngineHandle(u64::MAX - 24);
+  let flow = dust::DustFlowUniform {
+    t_hi: 1.0e8,
+    t_lo: 0.0,
+    speed: 1.0,
+  };
+  let mut cmds = device
+    .run_transient_commands(|cmd| {
+      device.cmd_dust_pre_propagate_barrier(cmd);
+      device.cmd_dust_frame_begin(cmd, pe0, [320, 200], 0, flow)?;
+      device.cmd_dust_system_begin(id, 0, flow)?;
+      device.cmd_dust_propagate(cmd, id, 0, capacity, first_slot, batch.count, &frame)?;
+      device.cmd_dust_pre_splat_barrier(cmd);
+      device.cmd_dust_post_splat_barrier(cmd);
+      device.cmd_dust_frame_end(cmd, pe0)?;
+      device.cmd_dust_system_end(id)?;
+      Ok(())
+    })
+    .unwrap();
+  cmds.cleanup(&device.device);
+  let (render0, moments0) = fetch(device);
+  let mut live: alloc::vec::Vec<usize> = (0..moments0.len()).filter(|&i| moments0[i].flux() > 0.0).collect();
+  assert!(live.len() > 500, "{} live clusters", live.len());
+  live.sort_by(|&a, &b| moments0[a].mean()[0].total_cmp(&moments0[b].mean()[0]));
+  // the CPU mirror's walk gate per (cluster, bin) at an eye and a shell (SpeckCluster::
+  // expected_in_shell ≥ DUST_SPECKS_WALK_MIN: the bins the GPU's gate pass marks), the masks by
+  // compact offset, and the largest expected grains of a bin
+  let (s_ref, q, ttl) = (50.0f32, 3.5f32, 30.0 * 86400.0f32);
+  let gate = |eye: [f32; 3], d_max: f32| -> (alloc::vec::Vec<u32>, f32) {
+    let cut = specks::ShellCut::new(eye, d_max);
+    let mut best = 0.0f32;
+    let masks = (0..moments0.len())
+      .map(|o| {
+        let m = &moments0[o];
+        if !(m.flux() > 0.0) {
+          return 0u32;
+        }
+        let pred = dust::streak_pred(&render0, o).map(|p| &moments0[p]);
+        let mut bits = 0u32;
+        for b in 0..dust::SIZE_BINS as usize {
+          let sc = specks::SpeckCluster::new(m, b, specks::bin_time_segment(m, pred, b), o as u32, s_ref, q, ttl, 0.0);
+          let e = sc.expected_in_shell(&cut);
+          best = best.max(e);
+          if e >= specks::DUST_SPECKS_WALK_MIN {
+            bits |= 1 << b;
+          }
+        }
+        bits
+      })
+      .collect();
+    (masks, best)
+  };
+  let walked = |m: &[u32]| m.iter().filter(|&&b| b != 0).count();
+  // eye 1 at the median cluster; the shell from the parity case's 2·10⁵ grains, doubled until the
+  // gate walks ≥ 200 clusters there
+  let eye1 = moments0[live[live.len() / 2]].mean();
+  let n1 = specks::number_density_at(&moments0, &render0, batch.count, eye1, s_ref, q, ttl, 0.0);
+  let mut d_max = ((2.0e5f64 / (4.0 / 3.0 * core::f64::consts::PI * n1.max(1e-30))).cbrt()).clamp(1.0, 2.0e4) as f32;
+  let (mut g1, mut best1) = gate(eye1, d_max);
+  for _ in 0..8 {
+    if walked(&g1) >= 200 || d_max >= 2.0e4 {
+      break;
+    }
+    d_max = (d_max * 2.0).min(2.0e4);
+    (g1, best1) = gate(eye1, d_max);
+  }
+  // eye 2: eye 1 moved out of the cloud along +z (the clusters' 3σ clouds dwarf the shell, so every
+  // eye inside the cloud walks every bin): the box of the means and polylines widened by 3σ_max,
+  // then steps from eye 1 towards its top face and beyond, the first position where the CPU gate
+  // walks some bins but leaves ≥ 20 clusters with bins eye 1 walked
+  let top = moments0
+    .iter()
+    .filter(|m| m.flux() > 0.0)
+    .map(|m| {
+      let r = 3.0 * dust::cadence::sym3_eigen_range(m.cov_v()).1.max(0.0).sqrt();
+      (0..dust::SIZE_EDGES as usize).map(|j| m.edge(j)[2]).fold(m.mean()[2], f32::max) + r
+    })
+    .fold(f32::MIN, f32::max);
+  let mut chosen = None;
+  let mut tried = alloc::vec::Vec::new();
+  for f in [0.05f32, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5] {
+    let eye2 = [eye1[0], eye1[1], eye1[2] + f * (top - eye1[2])];
+    let (g2, best2) = gate(eye2, d_max);
+    let stale = (0..g1.len()).filter(|&o| g1[o] & !g2[o] != 0).count();
+    tried.push((f, walked(&g2), stale));
+    if stale >= 20 && walked(&g2) >= 1 && chosen.is_none() {
+      chosen = Some((eye2, g2, best2, stale));
+    }
+  }
+  std::println!("[specks gpu] walk mask: eye 2 candidates (fraction to the cloud's 3σ top {top:.4e} m, clusters walked, stale): {tried:?}");
+  let n_ball = n1 * 4.0 / 3.0 * core::f64::consts::PI * (d_max as f64).powi(3);
+  std::println!(
+    "[specks gpu] walk mask: eye 1 {eye1:?} m, n_eye {n1:.3e} m⁻³, shell {d_max:.2} m ({n_ball:.3e} grains in the ball); CPU gate: {} clusters walked, the largest bin expects {best1:.3} grains (gate {})",
+    walked(&g1),
+    specks::DUST_SPECKS_WALK_MIN
+  );
+  let (eye2, g2, best2, stale_cpu) = chosen.expect("no second eye leaves eye 1's bins unwalked: the CPU gate must predict stale bits");
+  std::println!(
+    "[specks gpu] walk mask: eye 2 {eye2:?} m; CPU gate: {} clusters walked (largest bin {best2:.3} grains), {stale_cpu} with eye-1-only bins",
+    walked(&g2)
+  );
+  assert!(walked(&g1) >= 200, "the CPU gate walks only {} clusters at eye 1 with a {d_max} m shell", walked(&g1));
+  let masks = |device: &Device| -> alloc::vec::Vec<u32> { fetch(device).1.iter().map(|m| m.specks_mask()).collect() };
+  let warm = super::dust::DUST_READBACK_SLOTS + 2;
+  let run = |pe: crate::gpu::PresentationEngineHandle, cached: bool| {
+    for i in 0..warm {
+      walk_mask_frame(device, id, pe, capacity, first_slot, batch.count, &frame, eye1, cached);
+      if i == 0 {
+        // (the view exists now) the same fixed shell in both views' later frames
+        device.dust_set_shell_override(pe, Some(d_max));
+      }
+    }
+    let m1 = masks(device);
+    let skipped = walk_mask_frame(device, id, pe, capacity, first_slot, batch.count, &frame, eye2, cached);
+    (m1, skipped, device.download_dust_pyramid(pe).unwrap(), masks(device))
+  };
+  let pe_a = crate::gpu::PresentationEngineHandle(u64::MAX - 22);
+  let pe_b = crate::gpu::PresentationEngineHandle(u64::MAX - 23);
+  let (m1, skipped_a, ga, ma) = run(pe_a, true);
+  let (_, _, gb, mb) = run(pe_b, false);
+  let word = |p: &[u32], k: u32| p[k as usize];
+  std::println!(
+    "[specks gpu] walk mask: eye-2 propagate skipped {skipped_a}; specks A {} B {}, overflow A {} B {}, nodes A {} B {}",
+    word(&ga, specks::PYR_SPECKS),
+    word(&gb, specks::PYR_SPECKS),
+    word(&ga, specks::PYR_SPECKS_OVERFLOW),
+    word(&gb, specks::PYR_SPECKS_OVERFLOW),
+    word(&ga, specks::PYR_SPECKS_NODES),
+    word(&gb, specks::PYR_SPECKS_NODES)
+  );
+  assert_eq!(word(&ga, specks::PYR_SPECKS_OVERFLOW), 0, "speck budget overflow in view A");
+  assert_eq!(word(&gb, specks::PYR_SPECKS_OVERFLOW), 0, "speck budget overflow in view B");
+  // the precondition: eye 1 walked bins eye 2 does not (else the case cannot see stale bits)
+  let stale: usize = live.iter().filter(|&&i| m1[i] & !mb[i] != 0).count();
+  let walked1: usize = live.iter().filter(|&&i| m1[i] != 0).count();
+  let walked2: usize = live.iter().filter(|&&i| mb[i] != 0).count();
+  std::println!("[specks gpu] walk mask: clusters walked at eye 1 {walked1}, at eye 2 {walked2}, with eye-1-only bins {stale}");
+  assert!(stale > 0, "no bin walked at eye 1 is unwalked at eye 2: move the eyes further apart");
+  let mut bad = 0usize;
+  for &i in &live {
+    if ma[i] != mb[i] {
+      if bad < 3 {
+        std::println!("[specks gpu] walk mask: offset {i}: cached {:#06x} uncached {:#06x} (eye 1 {:#06x})", ma[i], mb[i], m1[i]);
+      }
+      bad += 1;
+    }
+  }
+  let words_diff: alloc::vec::Vec<usize> = (0..ga.len().min(gb.len())).filter(|&k| ga[k] != gb[k]).collect();
+  std::println!("[specks gpu] walk mask: {bad} mask lanes and {} pyramid words differ (cached vs uncached)", words_diff.len());
+  for &k in words_diff.iter().take(3) {
+    std::println!("[specks gpu] walk mask: word {k}: cached {} uncached {}", ga[k], gb[k]);
+  }
+  assert_eq!(bad, 0, "{bad} walk-mask lanes keep stale bits after a cached propagate");
+  assert!(words_diff.is_empty(), "{} pyramid words differ between the cached and the uncached frame", words_diff.len());
+}

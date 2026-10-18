@@ -43,8 +43,9 @@ const uint DUST_PROF_CMAX          = 105u; // its slowest lane's cycles
 const uint DUST_PROF_STHREAD       = 106u; // (lo, hi) the splitter's lane cycles (dust_split.comp)
 const uint DUST_PROF_SLANES        = 108u; // its lanes with a record
 const uint DUST_PROF_SMAX          = 109u; // its slowest lane's cycles
-const uint DUST_PROF_K1C0          = 110u; // 5 x (lo, hi), K1c's parts of vplan / vdraw (every volumetric draw, in-thread and consumer): vclass (pass A's per-class sums), vsmallpts (a small piece's depth points), vsmall (its texels' rectangle integrals), vsubline (sub-ray and line texels), vcentre (the centre class's rows), 110..119
-const uint DUST_PROF_WORDS_END     = 120u; // ..127 spare (DUST_QUEUE_HEADER_WORDS = 128)
+const uint DUST_PROF_K1C0          = 110u; // 8 x (lo, hi), K1c's parts of vplan / vdraw (every volumetric draw, in-thread and consumer): vclass (pass A's per-class sums), vsmallpts (a small piece's depth points), vsmall (its texels' rectangle integrals), vsubline (sub-ray and line texels), vcentre (the centre class's rows), 110..119; vsmallpts' parts: vsmprep (its prelude: the depth axis, the lateral axes' dots, the mass), vsmfast (the centre slice by one projection and the edge decision, every piece; the other slices of an interior piece), vsmedge (the slices of an edge piece by 4 sigma points each), 120..125
+const uint DUST_PROF_SMALL_PATHS   = 126u; // 2 words (add32): the small pieces drawn by one projection a slice (126) and by 4 sigma points a slice (127) (dust::DUST_PROF_SMALL_PATHS)
+const uint DUST_PROF_WORDS_END     = 128u; // (DUST_QUEUE_HEADER_WORDS = 128)
 
 #ifdef DUST_PROFILE
 #define DUST_PROF_BEGIN_AS(t)   uint dust_prof_t0_##t = clock2x32ARB().x;
@@ -64,7 +65,8 @@ uint dust_prof_thread = 0u, dust_prof_setup = 0u, dust_prof_subpk = 0u, dust_pro
      dust_prof_tracer = 0u, dust_prof_vemit = 0u, dust_prof_count = 0u;
 // K1c's parts (nested in vplan / vdraw)
 uint dust_prof_vclass = 0u, dust_prof_vsmallpts = 0u, dust_prof_vsmall = 0u, dust_prof_vsubline = 0u,
-     dust_prof_vcentre = 0u;
+     dust_prof_vcentre = 0u, dust_prof_vsmprep = 0u, dust_prof_vsmfast = 0u, dust_prof_vsmedge = 0u;
+uint dust_prof_n_small_fast = 0u, dust_prof_n_small_edge = 0u;
 void dust_prof_flush_k1c(DustUintBuffer pyr, uint base);
 uint dust_prof_n_packets = 0u, dust_prof_n_cone = 0u, dust_prof_n_leaves = 0u,
      dust_prof_n_records = 0u, dust_prof_n_volume = 0u, dust_prof_n_nodes = 0u,
@@ -127,13 +129,19 @@ void dust_prof_flush_splat(DustUintBuffer pyr, uint base, bool ran) {
         atomicAdd(pyr.v[base + DUST_PROF_HIST + bucket], 1u);
     }
 }
-// K1c's parts of the volumetric draw (DUST_PROF_K1C0: vclass vsmallpts vsmall vsubline)
+// K1c's parts of the volumetric draw (DUST_PROF_K1C0: vclass vsmallpts vsmall vsubline vcentre
+// vsmprep vsmfast vsmedge, in dust::DUST_PROF_K1C_NAMES' order) and the small pieces by path
 void dust_prof_flush_k1c(DustUintBuffer pyr, uint base) {
     dust_prof_add64(pyr, base + DUST_PROF_K1C0 + 0u, dust_prof_vclass);
     dust_prof_add64(pyr, base + DUST_PROF_K1C0 + 2u, dust_prof_vsmallpts);
     dust_prof_add64(pyr, base + DUST_PROF_K1C0 + 4u, dust_prof_vsmall);
     dust_prof_add64(pyr, base + DUST_PROF_K1C0 + 6u, dust_prof_vsubline);
     dust_prof_add64(pyr, base + DUST_PROF_K1C0 + 8u, dust_prof_vcentre);
+    dust_prof_add64(pyr, base + DUST_PROF_K1C0 + 10u, dust_prof_vsmprep);
+    dust_prof_add64(pyr, base + DUST_PROF_K1C0 + 12u, dust_prof_vsmfast);
+    dust_prof_add64(pyr, base + DUST_PROF_K1C0 + 14u, dust_prof_vsmedge);
+    dust_prof_add32(pyr, base + DUST_PROF_SMALL_PATHS + 0u, dust_prof_n_small_fast);
+    dust_prof_add32(pyr, base + DUST_PROF_SMALL_PATHS + 1u, dust_prof_n_small_edge);
 }
 void dust_prof_flush_queue(DustUintBuffer pyr, uint base) {
     uint s0 = base + DUST_PROF_QSTAGE0;

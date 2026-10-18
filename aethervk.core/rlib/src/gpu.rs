@@ -113,6 +113,33 @@ pub struct TrajectoryGpu {
   pub line_width: f32,
   pub texture_id: u32,
   pub _pad1: u64,
+  /// `P·V·(o_m, 1)` composed in f64 for anchored pieces (`trajectory.vert`), 0 otherwise
+  pub anchor_clip: [f32; 4],
+  /// `(ô, 0)` of the anchor origin (AU), `trajectory_rte::rte_distance_reference(o, |o|)`
+  pub anchor_dist: [f32; 4],
+  /// `1 / |o_m|` (0 when `|o_m|` is 0)
+  pub inv_anchor_len: f32,
+  /// micro layer of the anchor, `u32::MAX` = not anchored
+  pub anchor_layer: u32,
+  pub _pad2: [u32; 2],
+}
+const _: () = assert!(core::mem::size_of::<TrajectoryGpu>() == 96);
+
+/// Per-trajectory anchor for [`RenderDevice::upload_trajectories_with_anchors`] (host side).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TrajectoryAnchorGpu {
+  pub clip: [f32; 4],
+  pub dist: [f32; 4],
+  pub inv_len: f32,
+  pub layer: u32,
+}
+impl TrajectoryAnchorGpu {
+  pub const NONE: Self = Self {
+    clip: [0.0; 4],
+    dist: [0.0; 4],
+    inv_len: 0.0,
+    layer: u32::MAX,
+  };
 }
 
 #[repr(C, align(4))]
@@ -161,7 +188,15 @@ pub struct ObjectData {
   /// the shader compute it). At 1 AU the f32 model translation and view rotation each carry
   /// ~10 km of rounding, more than a telescope field on a comet nucleus.
   pub center_clip: [f32; 4],
+  /// `(ĉ, |c| − D_ref)` of the RTE centre `c` (layer units, f64 → f32 once): the mesh shader writes
+  /// the global depth as the precise offset `|c + u| − D_ref` from it (`rteDistanceOffset`,
+  /// `common.glsl`; `trajectory_rte::rte_distance_reference`). `D_ref` = 0 gives the distance.
+  pub center_dist: [f32; 4],
+  /// `1 / |c|` (0: `|c|` is 0, or not filled — the shader then uses `|u|`)
+  pub inv_center_len: f32,
+  pub _pad: [f32; 3],
 }
+const _: () = assert!(core::mem::size_of::<ObjectData>() == 112);
 
 /// push constants layout for `physical_mesh2.vert/frag`
 #[repr(C)]
@@ -333,7 +368,8 @@ pub struct CompositePushConstants {
   pub dust_softening: f32,
   /// black point of the dust display stretch, relative to the white point
   pub dust_black_point: f32,
-  pub _pad0: u32,
+  /// [`RenderDevice::upload_composite_layer_refs`] address, low word (0 = no references)
+  pub layer_ref_lo: u32,
   /// the view's dust splat pyramid (`dust::PyramidLayout`, buffer device address; 0 = no dust)
   pub dust_pyramid: u64,
   /// white point the pyramid's optical depth is divided by
@@ -341,7 +377,8 @@ pub struct CompositePushConstants {
   pub dust_levels: u32,
   /// exposure-scaled optical depth × px² per pyramid count
   pub dust_unit: f32,
-  pub _pad1: u32,
+  /// layer reference table address, high word
+  pub layer_ref_hi: u32,
   /// AU per unit of each depth layer's global depth (`layer_index` → scale): dust occlusion
   pub layer_unit_au: [f32; 8],
 }
@@ -794,6 +831,29 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
       crate::scene::trajectory::TrajectoryComponent,
       aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
     )],
+  ) -> GpuResult<Option<crate::gpu::frame::TrajectoryBatchCall>> {
+    self.upload_trajectories_with_anchors(cmd_buffer, trajectories, &[])
+  }
+
+  /// Stages the composite's per-layer distance references (`LayerRefs` in `composite.frag`) in
+  /// this frame's staging ring; returns its device address.
+  fn upload_composite_layer_refs(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    refs: &[f32; 8],
+  ) -> GpuResult<u64>;
+
+  /// [`Self::upload_trajectories`] with one [`TrajectoryAnchorGpu`] per input trajectory (same
+  /// index; an empty slice = none anchored).
+  fn upload_trajectories_with_anchors(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    trajectories: &[(
+      crate::scene::EntityId,
+      crate::scene::trajectory::TrajectoryComponent,
+      aethervk_oshal_rlib::math::matrix::mat4::Mat4x4f32,
+    )],
+    anchors: &[TrajectoryAnchorGpu],
   ) -> GpuResult<Option<crate::gpu::frame::TrajectoryBatchCall>>;
 
   fn upload_ui(
@@ -1576,4 +1636,37 @@ pub enum SubgroupSize {
   Size32 = 32,
   Size64 = 64,
   Size128 = 128,
+}
+
+/// GPU struct layouts of the composite-precision track (`.agents/briefs/04-composite-precision-plan.md`
+/// §4.2): the Rust mirrors must match the std430 GLSL blocks byte for byte.
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use core::mem::{offset_of, size_of};
+
+  #[test]
+  fn composite_precision_layout_sizes() {
+    // common.glsl ObjectData: mat4 model (0), vec4 centerClip (64), vec4 centerDist (80),
+    // float invCenterLen (96), 3 pad floats (100..112)
+    assert_eq!(size_of::<ObjectData>(), 112);
+    assert_eq!(offset_of!(ObjectData, center_clip), 64);
+    assert_eq!(offset_of!(ObjectData, center_dist), 80);
+    assert_eq!(offset_of!(ObjectData, inv_center_len), 96);
+    // composite.frag push block: 96 bytes, dust fields where the dust track has them
+    assert_eq!(size_of::<CompositePushConstants>(), 96);
+    assert_eq!(offset_of!(CompositePushConstants, layer_ref_lo), 36);
+    assert_eq!(offset_of!(CompositePushConstants, dust_pyramid), 40);
+    assert_eq!(offset_of!(CompositePushConstants, layer_ref_hi), 60);
+    assert_eq!(offset_of!(CompositePushConstants, layer_unit_au), 64);
+    // trajectory.vert Trajectory: std430, the anchor block after the 40-byte prefix
+    assert_eq!(size_of::<TrajectoryGpu>(), 96);
+    assert_eq!(offset_of!(TrajectoryGpu, color), 16);
+    assert_eq!(offset_of!(TrajectoryGpu, line_width), 32);
+    assert_eq!(offset_of!(TrajectoryGpu, texture_id), 36);
+    assert_eq!(offset_of!(TrajectoryGpu, anchor_clip), 48);
+    assert_eq!(offset_of!(TrajectoryGpu, anchor_dist), 64);
+    assert_eq!(offset_of!(TrajectoryGpu, inv_anchor_len), 80);
+    assert_eq!(offset_of!(TrajectoryGpu, anchor_layer), 84);
+  }
 }

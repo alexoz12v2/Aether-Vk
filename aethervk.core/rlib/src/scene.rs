@@ -3478,7 +3478,9 @@ impl Scene {
 
   /// f64 version of `get_relative_transform`. Computes the transform of `target_entity`
   /// relative to `reference_entity` with all position math in f64.
-  /// Returns an `HighResTransformComponent` with f64 position.
+  /// Returns an `HighResTransformComponent` with f64 position, in the local units of the
+  /// reference's children (a micro frame's km), also when the two share no ancestor (then the
+  /// result is the one a common root above both trees would give).
   pub fn get_relative_transform_f64(
     &self,
     target_entity: EntityId,
@@ -3530,18 +3532,33 @@ impl Scene {
     let safe_div_f32 = |a: f32, b: f32| -> f32 { if b.abs() < 1e-15 { 0.0 } else { a / b } };
 
     if lca.is_none() {
-      // Fallback: use global transforms in f64
+      // No common ancestor: the LCA branch below with a virtual root above both trees. Each side
+      // then accumulates its whole path, i.e. its global transform with its own frame scale on
+      // top (a node's `frame_scale` scales its children; the branch below multiplies the start
+      // node's own frame scale into `t_scale` / `r_scale`). The position is in the reference's
+      // local units, `(T − R) / r_scale`, as `diff_pos / r_scale` below. (This used to return
+      // `T − R` unscaled: a camera without a parent read a micro frame 1 AU away as 1 km away.)
       let target_global = self.global_transform_f64(target_entity)?;
       let ref_global = self.global_transform_f64(reference_entity)?;
+      let own_frame_scale = |id: EntityId| {
+        self.with_component(id, |c: &ReferenceFrameComponent| c.scale).unwrap_or(1.0)
+      };
+      let t_scale = target_global.scale * own_frame_scale(target_entity);
+      let r_scale = ref_global.scale * own_frame_scale(reference_entity);
+      let diff_pos = target_global.position - ref_global.position;
 
       return Some(HighResTransformComponent {
         scale: Vec3f32::from_components(
-          safe_div_f32(target_global.scale.x(), ref_global.scale.x()),
-          safe_div_f32(target_global.scale.y(), ref_global.scale.y()),
-          safe_div_f32(target_global.scale.z(), ref_global.scale.z()),
+          safe_div_f32(t_scale.x(), r_scale.x()),
+          safe_div_f32(t_scale.y(), r_scale.y()),
+          safe_div_f32(t_scale.z(), r_scale.z()),
         ),
         rotation: target_global.rotation,
-        position: target_global.position - ref_global.position,
+        position: Vec3f64::from_components(
+          safe_div_f64(diff_pos.x(), r_scale.x() as f64),
+          safe_div_f64(diff_pos.y(), r_scale.y() as f64),
+          safe_div_f64(diff_pos.z(), r_scale.z() as f64),
+        ),
       });
     }
 
@@ -5945,5 +5962,109 @@ mod tests {
 
     let val_after = scene.with_component(e1, |h: &HealthComp| h.hp);
     assert_eq!(val_after, Some(43));
+  }
+
+  /// A camera parented to a rig outside root's tree shares no ancestor with a micro frame (km,
+  /// scale 1/AU) 1 AU from the Sun: `get_relative_transform_f64(camera, frame)` takes its
+  /// fallback. The camera is 1e-4 AU from the frame origin along +Y, so the expected result is
+  /// (0, 1e-4 / scale, 0) ≈ (0, 14 959.787, 0) km with scale 1/scale ≈ 1.496e8, the same as the
+  /// LCA branch gives once the rig is a child of root.
+  /// Before the fix the fallback returned the global difference in AU, unscaled: position
+  /// (0, 1.0e-4, 0) (10 cm read as km) and scale (1, 1, 1); this test then fails at the first
+  /// assert ("fallback position (0, 0.0001, 0) ...").
+  #[test]
+  fn relative_transform_f64_without_common_ancestor_is_in_frame_units() {
+    let scene = Scene::new(alloc::sync::Arc::new(parking_lot::RwLock::new(
+      crate::simulation::texture_cache::TextureCache::new("AetherVk"),
+    )));
+    scene.register_component::<TransformComponent>(&[]);
+    scene.register_component::<HighResTransformComponent>(&[]);
+    scene.register_component::<ReferenceFrameComponent>(&[]);
+    let scale = (1.0 / 149_597_870.7f64) as f32;
+    let hr = |x: f64, y: f64, z: f64| HighResTransformComponent {
+      position: Vec3f64::from_components(x, y, z),
+      rotation: Quat64::identity(),
+      scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+    };
+
+    let root = scene.spawn_entity("root");
+    scene.add_component(root, TransformComponent::default()).unwrap();
+    let frame = scene.spawn_entity("frame");
+    scene
+      .add_component(
+        frame,
+        TransformComponent {
+          position: Vec3f32::from_components(1.0, 0.0, 0.0),
+          rotation: Quat::identity(),
+          scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+        },
+      )
+      .unwrap();
+    scene
+      .add_component(
+        frame,
+        ReferenceFrameComponent {
+          frame_type: ReferenceFrameType::Micro,
+          scale,
+          soi_radius: 1e-4,
+          depth_layer: 1,
+        },
+      )
+      .unwrap();
+    scene.set_parent(frame, Some(root));
+    // the rig has no parent: a second tree
+    let rig = scene.spawn_entity("rig");
+    scene.add_component(rig, hr(1.0, 0.0, 0.0)).unwrap();
+    let camera = scene.spawn_entity("camera");
+    scene.add_component(camera, hr(0.0, 1e-4, 0.0)).unwrap();
+    scene.set_parent(camera, Some(rig));
+
+    let expected_y = 1e-4 / scale as f64;
+    let expected_scale = 1.0 / scale;
+    let check = |what: &str, t: &HighResTransformComponent| {
+      let p = t.position;
+      assert!(
+        p.x().abs() <= 1e-9
+          && (p.y() - expected_y).abs() <= 1e-9 * expected_y
+          && p.z().abs() <= 1e-9,
+        "{what} position ({}, {}, {}), expected (0, {expected_y}, 0) km",
+        p.x(),
+        p.y(),
+        p.z()
+      );
+      let s = t.scale;
+      assert!(
+        [s.x(), s.y(), s.z()].iter().all(|&c| (c - expected_scale).abs() <= 1e-6 * expected_scale),
+        "{what} scale ({}, {}, {}), expected {expected_scale}",
+        s.x(),
+        s.y(),
+        s.z()
+      );
+    };
+    let fallback = scene.get_relative_transform_f64(camera, frame).unwrap();
+    check("fallback", &fallback);
+    // a reference without a frame scale is unchanged: the frame relative to the camera, in AU
+    // (the scale is the frame's own 1/AU on top of its unit node scale, as in the LCA branch)
+    let inverse = scene.get_relative_transform_f64(frame, camera).unwrap();
+    assert!(
+      inverse.position.x() == 0.0 && inverse.position.y() == -1e-4 && inverse.position.z() == 0.0,
+      "fallback, frame relative to the camera: ({}, {}, {}), expected (0, -1e-4, 0) AU",
+      inverse.position.x(),
+      inverse.position.y(),
+      inverse.position.z()
+    );
+    assert!((inverse.scale.x() - scale).abs() <= 1e-6 * scale, "inverse scale {}", inverse.scale.x());
+
+    // the same pair with a common ancestor (the rig under root): the LCA branch
+    scene.set_parent(rig, Some(root));
+    let lca = scene.get_relative_transform_f64(camera, frame).unwrap();
+    check("lca branch", &lca);
+    let lca_inverse = scene.get_relative_transform_f64(frame, camera).unwrap();
+    assert_eq!(
+      [lca_inverse.position.x(), lca_inverse.position.y(), lca_inverse.position.z()],
+      [inverse.position.x(), inverse.position.y(), inverse.position.z()],
+      "fallback and LCA branch differ for the frame relative to the camera"
+    );
+    assert_eq!(lca_inverse.scale.x(), inverse.scale.x(), "fallback and LCA branch scale differ");
   }
 }

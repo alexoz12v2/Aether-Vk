@@ -1,0 +1,232 @@
+// @assets/sim/dust_compact.comp
+//
+// Temporal reuse, step 3 (GLSL mirror of scene/dust/cadence.rs): the deterministic stream
+// compaction of a tier's owner bytes into the slot lists (in ascending range offset: the CPU's
+// list order, which a ring advance preserves since the live range only loses its tail), and the
+// frame's control pass. Modes (push constant):
+//
+//  0 COUNT    a workgroup per block of 1 024 range offsets (256 threads × 4 consecutive offsets):
+//             per list descriptor, the block's members by a shared-memory reduction
+//  1 PREFIX   one workgroup, a thread per list descriptor: the serial exclusive prefix over its
+//             blocks, the list's length and the finalize (build: step = ⌈len / N⌉, cursor 0,
+//             g_max of the promoted pending list, exists; pending emptied)
+//  2 SCATTER  as COUNT: the block's exclusive scan in offset order, each member written at its
+//             block's base + its rank
+//  3 CONTROL  one thread (F1 and the scalar parts of F2a): the deferred cursor advance, the
+//             frame's counters zeroed, the abort test (the CPU's f32 product `dd · g_max` against
+//             the class bound), the exists flags moved at the swaps
+//
+// List descriptors: set 0 (after the swaps' transitions) = per swapped pair its shown and build
+// lists; set 1 (after the classify) = per swapped pair its pending list. A member of list
+// (k, p, s): class k + 1, the state bit of s, slot parity p when two phases, offset < live.
+#version 450 core
+#extension GL_GOOGLE_include_directive : require
+#include "dust_common.glsl"
+#include "dust_cadence.glsl"
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PushConstants {
+    DustUintBuffer sys;     // 0: the system's cadence buffer
+    DustUintBuffer params;  // 8
+    uint firstSlot;         // 16
+    uint liveCount;         // 20
+    uint ringMask;          // 24
+    uint tierMode;          // 28: tier | mode << 8 | set << 16
+} pc;                       // 32 bytes
+
+const uint DUST_CMPM_COUNT = 0u;
+const uint DUST_CMPM_PREFIX = 1u;
+const uint DUST_CMPM_SCATTER = 2u;
+const uint DUST_CMPM_CONTROL = 3u;
+const uint DUST_CMP_BLOCK = 1024u;
+
+shared uint s_scan[256];
+
+// list descriptor j of the set: (k, p, s)
+uvec3 dust_cmp_desc(DustUintBuffer prm, uint set, uint j) {
+    uint sw = set == 0u ? j >> 1u : j;
+    uint code = prm.v[DUST_CADP_SWAP0 + sw];
+    return uvec3(code & 0xFFu, code >> 8u, set == 0u ? (j & 1u) : 2u);
+}
+bool dust_cmp_member(uint b, uint slot, uvec3 d, uint np) {
+    return (b & DUST_OWN_CLASS_MASK) == d.x + 1u && (b & dust_own_state_bit(d.z)) != 0u && (np != 2u || (slot & 1u) == d.y);
+}
+
+void main() {
+    uint lane = gl_LocalInvocationID.x;
+    uint t = pc.tierMode & 0xFFu;
+    uint mode = (pc.tierMode >> 8u) & 0xFFu;
+    uint set = (pc.tierMode >> 16u) & 1u;
+    DustUintBuffer prm = pc.params;
+    DustUintBuffer st = DustUintBuffer(uvec2(prm.v[DUST_CADP_STATE], prm.v[DUST_CADP_STATE + 1u]));
+    uint R = prm.v[DUST_CADP_TIER0 + DUST_CADP_TIER_WORDS * (pc.tierMode & 0xFFu) + 4u];
+    uint nc = prm.v[DUST_CADP_NC];
+    uint np = prm.v[DUST_CADP_NP];
+    uint nsw = prm.v[DUST_CADP_NSWAP];
+    uint nl = set == 0u ? 2u * nsw : nsw;
+    uint tb = DUST_CADP_TIER0 + DUST_CADP_TIER_WORDS * t;
+    uint rb = prm.v[tb];
+    uint cap = prm.v[tb + 1u];
+    uint nb = cap / DUST_CMP_BLOCK + 1u;   // the tier's block region (dust_cad_blocks)
+
+    if (mode == DUST_CMPM_CONTROL) {
+        if (gl_GlobalInvocationID.x != 0u) return;
+        uint nt = prm.v[DUST_CADP_NT];
+        uint flags = prm.v[DUST_CADP_FLAGS];
+        for (uint w = DUST_CADS_HIST; w <= DUST_CADS_SHELL_FORCED; ++w) st.v[w] = 0u;
+        for (uint tt = 0u; tt < nt; ++tt)
+            for (uint k = 0u; k < nc; ++k)
+                for (uint pp = 0u; pp < np; ++pp) {
+                    uint tp = dust_cads_tp(tt, k, pp);
+                    st.v[tp + 8u] = 0u;
+                    st.v[tp + 9u] = 0u;
+                    // the advance of the previous drawn frame's chunk (the CPU's end of begin)
+                    if ((flags & DUST_CADF_ADVANCE) != 0u) st.v[tp + 3u] = min(st.v[tp + 3u] + st.v[tp + 4u], st.v[tp + 1u]);
+                }
+        for (uint k = 0u; k < nc; ++k)
+            for (uint pp = 0u; pp < np; ++pp) {
+                uint pr = dust_cads_pair(k, pp);
+                st.v[pr + 2u] = 0u;
+                st.v[pr + 9u] = 0u;
+                st.v[pr + 10u] = 0u;
+                st.v[pr + 11u] = 0u;
+            }
+        // F1: the aborts (the build list, then the pending list of each pair)
+        if ((flags & DUST_CADF_ABORTS) != 0u) {
+            for (uint k = 0u; k < nc; ++k) {
+                float bound = uintBitsToFloat(prm.v[DUST_CADP_BOUND + k]);
+                for (uint pp = 0u; pp < np; ++pp) {
+                    uint pr = dust_cads_pair(k, pp);
+                    for (uint list = 1u; list <= 2u; ++list) {
+                        uint entries = 0u, gm = 0u;
+                        for (uint tt = 0u; tt < nt; ++tt) {
+                            uint tp = dust_cads_tp(tt, k, pp);
+                            uint n = st.v[tp + list];
+                            if (n > 0u) { entries += n; gm = max(gm, st.v[tp + 4u + list]); }
+                        }
+                        if (entries == 0u) continue;
+                        precise float excess = uintBitsToFloat(prm.v[DUST_CADP_DD + (k * 2u + pp) * 2u + (list - 1u)]) * uintBitsToFloat(gm);
+                        // the rate first, then the host's reasons (the motion budget, the build's
+                        // predicted displacement: cadence::begin F1)
+                        uint forced = prm.v[DUST_CADP_FORCE + (k * 2u + pp) * 2u + (list - 1u)];
+                        uint reason;
+                        if (excess > bound) reason = DUST_CAD_ABORT_RATE;
+                        else if (forced != 0u) reason = forced;
+                        else continue;
+                        st.v[pr + 2u] |= list;   // bit 0 build, bit 1 pending
+                        st.v[pr + 8u + list] = reason;
+                        st.v[pr + 2u + list] = floatBitsToUint(excess);
+                        for (uint tt = 0u; tt < nt; ++tt) {
+                            uint tp = dust_cads_tp(tt, k, pp);
+                            st.v[tp + list] = 0u;
+                            st.v[tp + 4u + list] = 0u;
+                            if (list == 1u) { st.v[tp + 3u] = 0u; st.v[tp + 4u] = 0u; }
+                        }
+                        if (list == 1u) { st.v[pr + 1u] = 0u; st.v[pr + 5u] = 0u; st.v[pr + 6u] = 0u; }
+                    }
+                }
+            }
+        }
+        // the coverage drops: a shown image no longer covering the viewport goes now (ghost 0)
+        if ((flags & DUST_CADF_COVERAGE) != 0u) {
+            uint cover = prm.v[DUST_CADP_COVER];
+            for (uint k = 0u; k < nc; ++k)
+                for (uint pp = 0u; pp < np; ++pp) {
+                    uint pr = dust_cads_pair(k, pp);
+                    if (((cover >> (k * 2u + pp)) & 1u) == 0u || st.v[pr] == 0u) continue;
+                    st.v[pr] = 0u;
+                    st.v[pr + 11u] = 1u;
+                    for (uint tt = 0u; tt < nt; ++tt) st.v[dust_cads_tp(tt, k, pp)] = 0u;
+                }
+        }
+        // F2a's scalars: the build image becomes the shown one; the cycle's counts are kept
+        for (uint j = 0u; j < nsw; ++j) {
+            uint code = prm.v[DUST_CADP_SWAP0 + j];
+            uint pr = dust_cads_pair(code & 0xFFu, code >> 8u);
+            st.v[pr] = st.v[pr + 1u];
+            st.v[pr + 1u] = 0u;
+            st.v[pr + 7u] = st.v[pr + 5u];
+            st.v[pr + 8u] = st.v[pr + 6u];
+            st.v[pr + 5u] = 0u;
+            st.v[pr + 6u] = 0u;
+        }
+        return;
+    }
+
+    if (mode == DUST_CMPM_PREFIX) {
+        uint j = lane;
+        if (j >= nl) return;
+        uvec3 d = dust_cmp_desc(prm, set, j);
+        uint l = (d.x * np + d.y) * 3u + d.z;
+        uint bl = dust_cad_blocks(R, nc, np, rb, t, nb, l);
+        uint blocks = (pc.liveCount + DUST_CMP_BLOCK - 1u) / DUST_CMP_BLOCK;
+        uint acc = 0u;
+        for (uint b = 0u; b < blocks; ++b) {
+            uint c = pc.sys.v[bl + b];
+            pc.sys.v[bl + nb + b] = acc;
+            acc += c;
+        }
+        uint tp = dust_cads_tp(t, d.x, d.y);
+        if (d.z == 0u) {
+            st.v[tp] = acc;
+        } else if (d.z == 1u) {
+            // the promotion (cadence.rs F2a): step ⌈len / N⌉, cursor 0, the list meta moved
+            uint n = prm.v[DUST_CADP_N + d.x];
+            st.v[tp + 1u] = acc;
+            st.v[tp + 4u] = (acc + n - 1u) / n;
+            st.v[tp + 3u] = 0u;
+            st.v[tp + 5u] = st.v[tp + 6u];
+            st.v[tp + 6u] = 0u;
+            st.v[tp + 2u] = 0u;
+            if (acc > 0u) atomicOr(st.v[dust_cads_pair(d.x, d.y) + 1u], 1u);
+        } else {
+            st.v[tp + 2u] = acc;
+        }
+        return;
+    }
+
+    // COUNT and SCATTER: block gl_WorkGroupID.x, offsets base + 4 lane .. + 3
+    uint block = gl_WorkGroupID.x;
+    uint o0 = block * DUST_CMP_BLOCK + 4u * lane;
+    for (uint j = 0u; j < nl; ++j) {
+        uvec3 d = dust_cmp_desc(prm, set, j);
+        uint l = (d.x * np + d.y) * 3u + d.z;
+        uint bl = dust_cad_blocks(R, nc, np, rb, t, nb, l);
+        uint c = 0u;
+        uint f = 0u;   // bit i: offset o0 + i is a member
+        for (uint i = 0u; i < 4u; ++i) {
+            uint o = o0 + i;
+            if (o < pc.liveCount) {
+                uint s = (pc.firstSlot + o) & pc.ringMask;
+                if (dust_cmp_member(dust_own_get(pc.sys, rb + s), s, d, np)) { c += 1u; f |= 1u << i; }
+            }
+        }
+        s_scan[lane] = c;
+        barrier();
+        if (mode == DUST_CMPM_COUNT) {
+            for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+                if (lane < stride) s_scan[lane] += s_scan[lane + stride];
+                barrier();
+            }
+            if (lane == 0u) pc.sys.v[bl + block] = s_scan[0];
+        } else {
+            // inclusive Hillis–Steele scan
+            for (uint dd = 1u; dd < 256u; dd <<= 1u) {
+                uint v = lane >= dd ? s_scan[lane - dd] : 0u;
+                barrier();
+                s_scan[lane] += v;
+                barrier();
+            }
+            uint pos = pc.sys.v[bl + nb + block] + s_scan[lane] - c;
+            uint la = dust_cad_list(R, nc, np, rb, cap, d.x, d.y, d.z);
+            for (uint i = 0u; i < 4u; ++i) {
+                if ((f & (1u << i)) != 0u) {
+                    pc.sys.v[la + pos] = (pc.firstSlot + o0 + i) & pc.ringMask;
+                    pos += 1u;
+                }
+            }
+        }
+        barrier();
+    }
+}

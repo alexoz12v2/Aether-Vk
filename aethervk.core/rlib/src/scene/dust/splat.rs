@@ -115,7 +115,16 @@ pub const DUST_LOD_PX_MAX: f32 = 8.0;
 pub const PYR_UNIT: u32 = 15;
 /// per level `ℓ`: `(offset in words, width, height)` at `PYR_TABLE + 3ℓ`
 pub const PYR_TABLE: u32 = 16;
-pub const PYRAMID_MAX_LEVELS: u32 = (PYR_EWA_TEXELS - PYR_TABLE) / 3;
+/// the view's queue start in words from this pyramid's first word (host-written per frame and per
+/// class image: the GPU shaders' `dust_queue_base`; the cadence's class images sit between the
+/// frame pyramid and the queues, so an image's word is the queue start less its own offset; the
+/// CPU mirror has no queues and never reads it)
+pub const PYR_QUEUE_BASE: u32 = 58;
+/// the most levels a pyramid holds: its table ends below [`PYR_QUEUE_BASE`] (14 levels: a
+/// viewport up to 8 192 px wide; 15 before the queue word took the table's last entry)
+pub const PYRAMID_MAX_LEVELS: u32 = (PYR_QUEUE_BASE - PYR_TABLE) / 3;
+const _: () = assert!(PYR_TABLE + 3 * PYRAMID_MAX_LEVELS <= PYR_QUEUE_BASE);
+const _: () = assert!(PYR_QUEUE_BASE < PYR_LOD);
 /// the texels the EWA packets of this frame planned to visit, in units of
 /// [`DUST_EWA_TEXEL_UNIT`] (`atomicAdd` of `⌊band / unit⌋ + 1` per packet after the level choice; the
 /// host mirror adds, a merge sums): the near-field frame cost (a packet near the eye crosses the
@@ -375,24 +384,24 @@ static LAB_ALL_VOLUME: core::sync::atomic::AtomicU8 = core::sync::atomic::Atomic
 static LAB_NO_VOLUME: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
 static LAB_VOLUME_CAP_ALL: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
 static LAB_VOLUME_FULL_TOP: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 std::thread_local! {
   /// The test's switch for the K1 cap (`AETHERVK_DUST_LAB_VOLUME_FULL_TOP` without the process-wide
   /// environment): [`set_volume_full_top_test`].
   static VOLUME_FULL_TOP_TEST: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
 }
-#[cfg(not(feature = "std"))]
+#[cfg(not(any(test, feature = "std")))]
 struct VolumeFullTopNoStd;
-#[cfg(not(feature = "std"))]
+#[cfg(not(any(test, feature = "std")))]
 impl VolumeFullTopNoStd {
   fn with<R>(&self, f: impl FnOnce(&core::cell::Cell<bool>) -> R) -> R {
     f(&core::cell::Cell::new(false))
   }
 }
-#[cfg(not(feature = "std"))]
+#[cfg(not(any(test, feature = "std")))]
 static VOLUME_FULL_TOP_TEST: VolumeFullTopNoStd = VolumeFullTopNoStd;
 /// Tests only: the K1 cap ([`volume_full_top`]) on this thread's volume plans.
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 pub fn set_volume_full_top_test(on: bool) {
   VOLUME_FULL_TOP_TEST.with(|c| c.set(on));
 }
@@ -453,18 +462,18 @@ fn touch_rect(off: u32, w: u32, x0: i64, x1: i64, y0: i64, y1: i64) {
 }
 #[cfg(not(feature = "std"))]
 fn touch_rect(_: u32, _: u32, _: i64, _: i64, _: i64, _: i64) {}
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 std::thread_local! {
   /// the pieces this thread's `volume_scatter` drew, per class ([`take_volume_class_counts`])
   static VOLUME_CLASS_COUNTS: core::cell::Cell<[u64; 4]> = const { core::cell::Cell::new([0; 4]) };
 }
 /// Tests: the pieces this thread's [`volume_scatter`] drew since the last call, per class
 /// (centre, small, sub-rays, lines: [`DUST_VOLUME_CLASS_CENTRE`] …); resets them.
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 pub fn take_volume_class_counts() -> [u64; 4] {
   VOLUME_CLASS_COUNTS.with(|c| c.replace([0; 4]))
 }
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 std::thread_local! {
   /// the small pieces this thread drew by one projection a slice and by the 4 sigma points a
   /// slice ([`take_volume_small_paths`])
@@ -472,11 +481,11 @@ std::thread_local! {
 }
 /// Tests and the lab: the small pieces drawn since the last call by one projection a slice and by
 /// the 4 sigma points a slice ([`volume_small_points`]'s two paths); resets them.
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 pub fn take_volume_small_paths() -> [u64; 2] {
   VOLUME_SMALL_PATHS.with(|c| c.replace([0; 2]))
 }
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 std::thread_local! {
   /// the volumetric texel deposits this thread split into several adds ([`take_volume_split_adds`])
   static VOLUME_SPLIT_ADDS: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
@@ -486,11 +495,11 @@ std::thread_local! {
 /// coarse texel exceeds `2²⁴ / s²` units: 64 at 512-px texels, 4 at 2048-px ones; until step F4
 /// they were clipped at the cap and their light lost); resets it. The GPU's count is the volume
 /// queue header word [`DUST_VQUEUE_SPLIT_ADDS`].
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 pub fn take_volume_split_adds() -> u64 {
   VOLUME_SPLIT_ADDS.with(|c| c.replace(0))
 }
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 std::thread_local! {
   /// tests: draw only this piece of each volumetric packet (`u32::MAX`: all; [`set_volume_piece_only`])
   static VOLUME_PIECE_ONLY: core::cell::Cell<u32> = const { core::cell::Cell::new(u32::MAX) };
@@ -500,22 +509,22 @@ std::thread_local! {
 }
 /// Tests (diagnostics): this thread's `volume_scatter` draws only piece `k` of each packet
 /// (`None`: every piece)
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 pub fn set_volume_piece_only(k: Option<u32>) {
   VOLUME_PIECE_ONLY.with(|c| c.set(k.unwrap_or(u32::MAX)));
 }
 /// Tests (diagnostics): the class ([`DUST_VOLUME_CLASS_CENTRE`] …; 255: not drawn) each piece of
 /// this thread's last volumetric packet took
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 pub fn last_volume_piece_classes() -> [u8; DUST_VOLUME_PIECES_MAX as usize] {
   VOLUME_PIECE_CLASSES.with(|c| c.get())
 }
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 std::thread_local! {
   /// tests: plan every volumetric packet at one level for all its pieces ([`set_volume_packet_level`])
   static VOLUME_PACKET_LEVEL: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
 }
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 std::thread_local! {
   /// tests: the full-piece floor at DUST_VOLUME_MIN_LEVEL (the first F8 rule; [`set_volume_level_rule_test`])
   static VOLUME_LEVEL_FLOOR: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
@@ -525,7 +534,7 @@ std::thread_local! {
 }
 /// Tests (diagnostics): this thread's piece-level rule — the full-piece floor on or off, the cap
 /// as a uniform extra level (0, production), the share (1) or none (2)
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 pub fn set_volume_level_rule_test(floor: bool, cap_mode: u8) {
   VOLUME_LEVEL_FLOOR.with(|c| c.set(floor));
   VOLUME_CAP_MODE.with(|c| c.set(cap_mode));
@@ -533,7 +542,7 @@ pub fn set_volume_level_rule_test(floor: bool, cap_mode: u8) {
 /// Tests (diagnostics): this thread's volume plans put every piece at the packet's one level (the
 /// rule before step F8: the angular σ's level, at least [`DUST_VOLUME_MIN_LEVEL`] with a full
 /// piece, plus the bias, coarsened for the cap) instead of each piece at its own
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 pub fn set_volume_packet_level(on: bool) {
   VOLUME_PACKET_LEVEL.with(|c| c.set(on));
 }
@@ -579,21 +588,21 @@ pub const DUST_K1C_D_TAPER: u32 = 32;
 /// cover; not the sub-ray order caps (+14 % on the 1–10 d volume class) nor the one radiance
 /// weight (−2.5 % on its split class): the bisection of 2026-10-17
 pub const DUST_K1C_D_PRODUCTION: u32 = DUST_K1C_D_FAST_SLICES | DUST_K1C_D_COVER;
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 std::thread_local! {
   /// tests: this thread's step-D mask in place of the process's ([`set_k1c_d_test`])
   static K1C_D_TEST: core::cell::Cell<u32> = const { core::cell::Cell::new(u32::MAX) };
 }
 /// Tests: this thread's draws use the step-D mask `mask` (`None`: the process's,
 /// `AETHERVK_DUST_LAB_K1C_D` or [`DUST_K1C_D_PRODUCTION`]); CPU only, the GLSL has no mask
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 pub fn set_k1c_d_test(mask: Option<u32>) {
   K1C_D_TEST.with(|c| c.set(mask.map_or(u32::MAX, |m| m & 0x3F)));
 }
 static LAB_K1C_D: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(u32::MAX);
 fn k1c_d(bit: u32) -> bool {
   use core::sync::atomic::Ordering::Relaxed;
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   {
     let t = K1C_D_TEST.with(|c| c.get());
     if t != u32::MAX {
@@ -4060,13 +4069,13 @@ fn volume_plan_pieces(
     levels - 1
   };
   // tests ([`set_volume_packet_level`]): every piece at the packet's one level, the pre-F8 rule
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   let packet_level = VOLUME_PACKET_LEVEL.with(|c| c.get());
-  #[cfg(not(feature = "std"))]
+  #[cfg(not(any(test, feature = "std")))]
   let packet_level = false;
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   let (floor, cap_mode) = (VOLUME_LEVEL_FLOOR.with(|c| c.get()), VOLUME_CAP_MODE.with(|c| c.get()));
-  #[cfg(not(feature = "std"))]
+  #[cfg(not(any(test, feature = "std")))]
   let (floor, cap_mode) = (false, 0u8);
   let mut single = None;
   let mut rule = VolumeLevelRule { bias, top, share: u32::MAX, extra: 0, floor };
@@ -4422,6 +4431,13 @@ struct VolumeSmallPoint {
   m: f32,
 }
 
+#[cfg(all(test, feature = "std"))]
+std::thread_local! {
+  /// Tests: each point's f32 conditioning in the last [`volume_small_points`] call, `(|r3| |x_q| +
+  /// |t3| + √2 max |r3·lat_i|) / min |w|` over the projections it made (the w ≤ 0 ones included):
+  /// the relative f32 resolution of its w is ~4 ε × this (`factored_small_points_match_the_f10_build`)
+  static SMALL_POINT_COND: core::cell::Cell<[f32; 5]> = const { core::cell::Cell::new([0.0; 5]) };
+}
 /// The screen integral of a small volumetric piece ([`DUST_VOLUME_CLASS_SMALL`], K1c) as three
 /// points along its depth axis: with `e` the unit direction from the eye to its mean and
 /// `g = Σe / σ_e` (`σ_e² = eᵀΣe`), the points `μ`, `μ ∓ √3 g` (the conditional means of the
@@ -4438,6 +4454,278 @@ struct VolumeSmallPoint {
 /// `dust_volume_small_points`.
 #[allow(clippy::too_many_arguments)]
 fn volume_small_points(
+  pc: &VolumePiece,
+  eye: [f32; 3],
+  mvp: &[f32; 16],
+  wf: f32,
+  hf: f32,
+  phot: &Photometry,
+  mean_ref: [f32; 3],
+  renorm: f32,
+) -> [VolumeSmallPoint; 5] {
+  let mut out = [VolumeSmallPoint::default(); 5];
+  let m = |r: usize, c: usize| mvp[c * 4 + r];
+  let row = |r: usize| [m(r, 0), m(r, 1), m(r, 2)];
+  let (r0, r1, r3) = (row(0), row(1), row(3));
+  let l = &pc.l;
+  // eye − mean
+  let lq = l_mul(l, pc.qw);
+  let mean = sub3(eye, lq);
+  let dn = <f32 as FloatLike>::sqrt(dot3(lq, lq));
+  if !(dn > 0.0) {
+    return out;
+  }
+  let e = scale3(lq, -1.0 / dn);
+  let lte = lt_mul(l, e);
+  let se = <f32 as FloatLike>::sqrt(dot3(lte, lte));
+  if !(se > 0.0) {
+    return out;
+  }
+  // the depth axis in the whitened space and two unit axes across it (Duff et al. 2017): the
+  // depth points move along `g = L ζ`, the slice spreads along `L b₁`, `L b₂`
+  let z = scale3(lte, 1.0 / se);
+  let g = l_mul(l, z);
+  let sgn = if z[2] >= 0.0 { 1.0f32 } else { -1.0 };
+  let ia = -1.0 / (sgn + z[2]);
+  let ib = z[0] * z[1] * ia;
+  // bounded at 3σ (step F2): the spread narrowed to the 3σ ball's second moment
+  let sb = <f32 as FloatLike>::sqrt(DUST_BOUND_VAR);
+  let g = scale3(g, sb);
+  let lat1 = scale3(l_mul(l, [1.0 + sgn * z[0] * z[0] * ia, sgn * ib, -sgn * z[0]]), sb);
+  let lat2 = scale3(l_mul(l, [ib, sgn + z[1] * z[1] * ia, -z[1]]), sb);
+  let s = &phot.support;
+  let kept = if has_support(s) {
+    let n = [s[0], s[1], s[2]];
+    let ltn = lt_mul(l, n);
+    let sn = <f32 as FloatLike>::sqrt(dot3(ltn, ltn));
+    let mn = dot3(n, mean) - s[3];
+    if sn > 0.0 {
+      0.5 * (1.0 + erf(mn / (sn * core::f32::consts::SQRT_2)))
+    } else if mn >= 0.0 {
+      1.0
+    } else {
+      0.0
+    }
+  } else {
+    1.0
+  };
+  let mass = 2.0 * core::f32::consts::PI * pc.k * (l[0] * l[3] * l[5]) * renorm * kept;
+  // the radiance weight once, at the mean (step D: a small piece spans a small range of phase
+  // angles; three weights a piece were a third of its cost)
+  let one_weight = k1c_d(DUST_K1C_D_ONE_WEIGHT);
+  let w_rad = if phot.albedo > 0.0 && one_weight {
+    let d = sub3(mean, eye);
+    let u = scale3(d, 1.0 / <f32 as FloatLike>::sqrt(dot3(d, d)));
+    volume_weight(phot, mean_ref, mean, u)
+  } else {
+    1.0
+  };
+  // one depth point: through its slice's 4 lateral sigma points (`edge`) or one projection with
+  // its screen Jacobian's lateral covariance (step D: 3 projections a piece instead of 12)
+  let mass_w = mass * w_rad;
+  // the depth quadrature: 3 Gauss–Hermite points, or 5 for a piece deep along the view (its
+  // bounded depth σ over its distance above DUST_SMALL_DEPTH5_EPS: the 1/d² of a 3-point rule
+  // drew a chord seen along its length 5 % short, `bounded_chords_match_the_bounded_monte_carlo`)
+  let five = k1c_d(DUST_K1C_D_GH5) && se * <f32 as FloatLike>::sqrt(DUST_BOUND_VAR) > DUST_SMALL_DEPTH5_EPS * dn;
+  // the lateral axes against the projection's rows (cost track 2): a sigma point `x_q ± √2 lat_i`
+  // projects through `r·x_q ± √2 r·lat_i`, and the Jacobian's lateral columns are
+  // `(W / 2w) (r0·lat_i − ndx r3·lat_i)`, `(H / 2w) (r1·lat_i − ndy r3·lat_i)`; lat1, lat2 are dead
+  // after these six dots (live across the slices: mean, g, the six dots, the mass — 13 floats, as
+  // mean, g, lat1, lat2 and the mass were)
+  let (x1, x2) = (dot3(r0, lat1), dot3(r0, lat2));
+  let (y1, y2) = (dot3(r1, lat1), dot3(r1, lat2));
+  let (w1, w2) = (dot3(r3, lat1), dot3(r3, lat2));
+  #[cfg(all(test, feature = "std"))]
+  let (cond, r3n) = (core::cell::Cell::new([0.0f32; 5]), <f32 as FloatLike>::sqrt(dot3(r3, r3)));
+  // the depth node (σ) and Gauss–Hermite weight of point q
+  let node = |q: usize| -> (f32, f32) {
+    if five {
+      match q {
+        0 => (0.0, DUST_GH5_W0),
+        1 => (-DUST_GH5_N1, DUST_GH5_W1),
+        2 => (DUST_GH5_N1, DUST_GH5_W1),
+        3 => (-DUST_GH5_N2, DUST_GH5_W2),
+        _ => (DUST_GH5_N2, DUST_GH5_W2),
+      }
+    } else {
+      match q {
+        0 => (0.0, 2.0 / 3.0),
+        1 => (-DUST_GH3_NODE, 1.0 / 6.0),
+        _ => (DUST_GH3_NODE, 1.0 / 6.0),
+      }
+    }
+  };
+  let xq_of = |q: usize| add3(mean, scale3(g, node(q).0));
+  // the radiance weight of a slice at its centre (per depth point; 1 without albedo or under the
+  // lab's one weight a piece): computed before the slice's projections (the GLSL issues its LUT
+  // reads ahead of them); the centre slice's serves both paths. Final round A2: the Sun's
+  // direction and r_h are the centre slice's for every slice ([`volume_weight`]'s arithmetic at
+  // x_0: the slices lie ≤ 2.9 σ_depth from it against r_h AU, so their own differ by ≤ ~1e-5
+  // relative at the far poses), each slice with its own phase angle and table interpolation
+  // ([`super::phase::radiance_weight`]'s arithmetic): the centre's weight is bit-identical
+  let (sun0, r_au0) = if phot.albedo > 0.0 && !one_weight {
+    let d = sub3(xq_of(0), mean_ref);
+    let r_vec = add3(scale3(phot.sun, -phot.r_h_au * AU_M_F32), d);
+    let rn = <f32 as FloatLike>::sqrt(dot3(r_vec, r_vec)).max(1.0);
+    (scale3(r_vec, -1.0 / rn), rn / AU_M_F32)
+  } else {
+    ([0.0; 3], 1.0)
+  };
+  let weight_at = |xq: [f32; 3]| -> f32 {
+    if phot.albedo > 0.0 && !one_weight {
+      let d = sub3(xq, eye);
+      let u = scale3(d, 1.0 / <f32 as FloatLike>::sqrt(dot3(d, d)));
+      super::phase::radiance_weight(phot.albedo, sun0, scale3(u, -1.0), r_au0)
+    } else {
+      1.0
+    }
+  };
+  let finish = |wq: f32, wr: f32, sj: f32, mx: f32, my: f32, cxx: f32, cyy: f32, rho_raw: f32| -> VolumeSmallPoint {
+    let rho = if rho_raw.is_finite() { rho_raw.clamp(-DUST_SMALL_RHO_MAX, DUST_SMALL_RHO_MAX) } else { 0.0 };
+    let mut wgt = wq * mass_w * sj;
+    wgt *= wr;
+    if !(wgt > 0.0) || !wgt.is_finite() {
+      return VolumeSmallPoint::default();
+    }
+    // (round 3: by the reciprocal square root, the GLSL's inversesqrt)
+    VolumeSmallPoint {
+      mx,
+      my,
+      ix: (1.0 / <f32 as FloatLike>::sqrt(cxx)) * core::f32::consts::FRAC_1_SQRT_2,
+      iy: (1.0 / <f32 as FloatLike>::sqrt(cyy)) * core::f32::consts::FRAC_1_SQRT_2,
+      rho,
+      m: wgt,
+    }
+  };
+  // one projection with the screen Jacobian's lateral covariance (step D); one reciprocal of w
+  // (round 3)
+  let fast_point = |q: usize, wr: f32| -> VolumeSmallPoint {
+    let wq = node(q).1;
+    let xq = xq_of(q);
+    let w = dot3(r3, xq) + m(3, 3);
+    #[cfg(all(test, feature = "std"))]
+    {
+      let mut v = cond.get();
+      v[q] = (r3n * <f32 as FloatLike>::sqrt(dot3(xq, xq)) + m(3, 3).abs()) / w.abs();
+      cond.set(v);
+    }
+    if !(w > 0.0) {
+      return VolumeSmallPoint::default();
+    }
+    let iw = 1.0 / w;
+    let ndx = (dot3(r0, xq) + m(0, 3)) * iw;
+    let ndy = (dot3(r1, xq) + m(1, 3)) * iw;
+    let c = cross3(sub3(r0, scale3(r3, ndx)), sub3(r1, scale3(r3, ndy)));
+    let sj = 0.25 * wf * hf * <f32 as FloatLike>::sqrt(dot3(c, c)) * (iw * iw);
+    let (kx, ky) = (0.5 * wf * iw, 0.5 * hf * iw);
+    let (a1, a2) = (kx * (x1 - ndx * w1), kx * (x2 - ndx * w2));
+    let (b1, b2) = (ky * (y1 - ndy * w1), ky * (y2 - ndy * w2));
+    let cxx = (a1 * a1 + a2 * a2).max(1e-6);
+    let cyy = (b1 * b1 + b2 * b2).max(1e-6);
+    let rho_raw = (a1 * b1 + a2 * b2) * (1.0 / <f32 as FloatLike>::sqrt(cxx * cyy));
+    finish(wq, wr, sj, (ndx * 0.5 + 0.5) * wf, (ndy * 0.5 + 0.5) * hf, cxx, cyy, rho_raw)
+  };
+  // the 4 lateral sigma points of the slice, J3-weighted moments (moments about the first point's
+  // position: no f32 cancellation for a thin piece far from the origin)
+  let edge_point = |q: usize, wr: f32| -> VolumeSmallPoint {
+    let wq = node(q).1;
+    let xq = xq_of(q);
+    let (bx, by, bw) = (dot3(r0, xq) + m(0, 3), dot3(r1, xq) + m(1, 3), dot3(r3, xq) + m(3, 3));
+    let (mut tj, mut sx, mut sy, mut sxx, mut syy, mut sxy) = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
+    let (mut ox, mut oy, mut have_o) = (0.0f32, 0.0f32, false);
+    #[cfg(all(test, feature = "std"))]
+    let mut w_min = f32::INFINITY;
+    for j in 0..4u32 {
+      let s = if j & 1 == 0 { -DUST_UT2_NODE } else { DUST_UT2_NODE };
+      let (dx_, dy_, dw_) = if j < 2 { (x1, y1, w1) } else { (x2, y2, w2) };
+      let w = bw + s * dw_;
+      #[cfg(all(test, feature = "std"))]
+      {
+        w_min = w_min.min(w.abs());
+      }
+      if !(w > 0.0) {
+        continue;
+      }
+      let iw = 1.0 / w;
+      let ndx = (bx + s * dx_) * iw;
+      let ndy = (by + s * dy_) * iw;
+      let c = cross3(sub3(r0, scale3(r3, ndx)), sub3(r1, scale3(r3, ndy)));
+      let j3 = 0.25 * (0.25 * wf * hf * <f32 as FloatLike>::sqrt(dot3(c, c)) * (iw * iw));
+      let (sxp, syp) = ((ndx * 0.5 + 0.5) * wf, (ndy * 0.5 + 0.5) * hf);
+      if !have_o {
+        (ox, oy, have_o) = (sxp, syp, true);
+      }
+      let (px, py) = (sxp - ox, syp - oy);
+      tj += j3;
+      sx += j3 * px;
+      sy += j3 * py;
+      sxx += j3 * px * px;
+      syy += j3 * py * py;
+      sxy += j3 * px * py;
+    }
+    #[cfg(all(test, feature = "std"))]
+    {
+      let mut v = cond.get();
+      v[q] = (r3n * <f32 as FloatLike>::sqrt(dot3(xq, xq)) + m(3, 3).abs() + DUST_UT2_NODE * w1.abs().max(w2.abs())) / w_min;
+      cond.set(v);
+    }
+    if !(tj > 0.0) {
+      return VolumeSmallPoint::default();
+    }
+    let itj = 1.0 / tj;
+    let (dx, dy) = (sx * itj, sy * itj);
+    let cxx = (sxx * itj - dx * dx).max(1e-6);
+    let cyy = (syy * itj - dy * dy).max(1e-6);
+    let rho_raw = (sxy * itj - dx * dy) * (1.0 / <f32 as FloatLike>::sqrt(cxx * cyy));
+    finish(wq, wr, tj, ox + dx, oy + dy, cxx, cyy, rho_raw)
+  };
+  // inside the frame one projection a slice; when the centre slice's 3σ crosses the frame's
+  // edge (or it has none), the 4 lateral sigma points a slice (the perspective's skew decides
+  // what the edge cuts): step D3, the test on the light, not on the box
+  // round 3: every slice's weight, then (fast) every slice by one projection — the GPU's one
+  // straight-line block of independent chains — then the decision on the centre's as before; an
+  // edge piece redraws every slice by sigma points (its fast ones discarded), the weights shared
+  let n = if five { 5 } else { 3 };
+  let fast = k1c_d(DUST_K1C_D_FAST_SLICES);
+  let mut wr = [1.0f32; 5];
+  for q in 0..n {
+    wr[q] = weight_at(xq_of(q));
+  }
+  let mut edge = !fast;
+  if fast {
+    for q in 0..n {
+      out[q] = fast_point(q, wr[q]);
+    }
+    let c = &out[0];
+    if c.m > 0.0 {
+      let (ex, ey) = (3.0 / (c.ix * core::f32::consts::SQRT_2), 3.0 / (c.iy * core::f32::consts::SQRT_2));
+      edge = c.mx - ex < 0.0 || c.mx + ex > wf || c.my - ey < 0.0 || c.my + ey > hf;
+    } else {
+      edge = true;
+    }
+  }
+  if edge {
+    for q in 0..n {
+      out[q] = edge_point(q, wr[q]);
+    }
+  }
+  #[cfg(all(test, feature = "std"))]
+  SMALL_POINT_COND.with(|c| c.set(cond.get()));
+  #[cfg(any(test, feature = "std"))]
+  VOLUME_SMALL_PATHS.with(|c| {
+    let mut v = c.get();
+    v[edge as usize] += 1;
+    c.set(v);
+  });
+  out
+}
+
+/// The small points as F10 built them (before cost track 2's factoring), kept as the reference of
+/// `small_points_tests::factored_small_points_match_the_f10_build`: the same light to f32
+/// rounding, the same edge decision.
+#[cfg(all(test, feature = "std"))]
+#[allow(clippy::too_many_arguments)]
+fn volume_small_points_ref(
   pc: &VolumePiece,
   eye: [f32; 3],
   mvp: &[f32; 16],
@@ -4635,13 +4923,252 @@ fn volume_small_points(
       out[4] = point(4, true);
     }
   }
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   VOLUME_SMALL_PATHS.with(|c| {
     let mut v = c.get();
     v[edge as usize] += 1;
     c.set(v);
   });
   out
+}
+
+
+#[cfg(all(test, feature = "std"))]
+mod small_points_tests {
+  use super::*;
+
+  /// The factored small points (cost track 2: the sigma points and the Jacobian from the lateral
+  /// axes' six dots with the projection's rows, the weights ahead of the projections, the centre
+  /// weight shared by both paths) against the F10 build ([`volume_small_points_ref`]): 12 000
+  /// random small pieces a mask — σ/d from 10⁻³ to 0.3, anisotropic and rotated, their means
+  /// scattered over and around the frame (a fifth to either side) so most cross an edge, with and
+  /// without a support plane, an eye at 200 m and one at 5·10⁶ m from the origin (the 5 000 km
+  /// magnitudes) — under the production mask, the lab's one weight, the 5-point rule and the
+  /// sigma points everywhere. Each piece takes the same path in both (a flip is allowed only for a
+  /// centre slice whose 3σ edge is within 10⁻³ σ of the frame's). Each point's mass, position,
+  /// spreads and correlation agree within 10⁻⁴ relative plus the f32 resolution of the scene's
+  /// coordinates at the piece's σ (8 ε |x| / σ) plus its w's resolution (4 ε × the conditioning the
+  /// build reports, `SMALL_POINT_COND`) carried through n / w into px and 1 / w² into J3: the
+  /// builds round w differently, which matters only near the eye plane (the 5-point rule's node 3).
+  /// A point whose ±4σ cover misses the frame is compared by its mass only (it deposits on no
+  /// in-frame texel); one with a projection within ten resolutions of w = 0 (the builds may drop
+  /// different sigma points) by its cover's in / out only. Prints the counts and the worst
+  /// differences / tolerance per mask.
+  #[test]
+  fn factored_small_points_match_the_f10_build() {
+    let (w, h) = (480u32, 300u32);
+    let (wf, hf) = (w as f32, h as f32);
+    let tan_h = (30.0f32).to_radians().tan();
+    let mut state = 0x5eed_5a11_u64;
+    let mut rnd = || -> f32 {
+      state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+      ((state >> 40) as f32) * (1.0 / 16_777_216.0)
+    };
+    let masks = [
+      ("production", DUST_K1C_D_PRODUCTION),
+      ("one weight", DUST_K1C_D_PRODUCTION | DUST_K1C_D_ONE_WEIGHT),
+      ("5-point depth rule", DUST_K1C_D_PRODUCTION | DUST_K1C_D_GH5),
+      ("sigma points everywhere", DUST_K1C_D_COVER),
+    ];
+    let mut failures = std::vec::Vec::new();
+    for (name, mask) in masks {
+      set_k1c_d_test(Some(mask));
+      let (mut n_pieces, mut paths_old, mut paths_new, mut flips, mut worst) = (0u32, [0u64; 2], [0u64; 2], 0u32, [0.0f64; 6]);
+      let (mut n_points, mut n_off, mut n_straddle, mut n_cover_edge) = (0u32, 0u32, 0u32, 0u32);
+      for case in 0..12_000u32 {
+        let far = case % 2 == 1;
+        let ez = if far { 5.0e6f32 } else { 200.0 };
+        let mut mvp = [0.0f32; 16];
+        mvp[0] = hf / (wf * tan_h);
+        mvp[5] = 1.0 / tan_h;
+        mvp[10] = -1e-3;
+        mvp[11] = -1.0;
+        mvp[15] = ez;
+        let eye = [0.0f32, 0.0, ez];
+        // the mean on the ray through a pixel over and around the frame, at distance d
+        let (px, py) = ((-0.2 + 1.4 * rnd()) * wf, (-0.2 + 1.4 * rnd()) * hf);
+        let d = if far { 2.0e3 * (1.0e3f32).powf(rnd()) } else { 5.0 * (20.0f32).powf(rnd()) };
+        let v = [(2.0 * px / wf - 1.0) * tan_h * wf / hf, (2.0 * py / hf - 1.0) * tan_h, -1.0];
+        let vn = (v[0] * v[0] + v[1] * v[1] + 1.0).sqrt();
+        let mean = [v[0] / vn * d, v[1] / vn * d, ez + v[2] / vn * d];
+        // σ/d from 1e-3 to 0.3, anisotropic up to 4:1, rotated about two axes
+        let sd = 1.0e-3 * (300.0f32).powf(rnd());
+        let sig = [sd * d, sd * d * (0.25 + 0.75 * rnd()), sd * d * (0.25 + 0.75 * rnd())];
+        let (a, b) = (rnd() * 6.283, rnd() * 6.283);
+        let (ca, sa, cb, sb) = (a.cos(), a.sin(), b.cos(), b.sin());
+        let ry = [[ca, 0.0, sa], [0.0, 1.0, 0.0], [-sa, 0.0, ca]];
+        let rx = [[1.0, 0.0, 0.0], [0.0, cb, -sb], [0.0, sb, cb]];
+        let mut r = [[0.0f32; 3]; 3];
+        for i in 0..3 {
+          for j in 0..3 {
+            for k in 0..3 {
+              r[i][j] += rx[i][k] * ry[k][j];
+            }
+          }
+        }
+        let mut cov = [[0.0f32; 3]; 3];
+        for i in 0..3 {
+          for j in 0..3 {
+            for k in 0..3 {
+              cov[i][j] += r[i][k] * sig[k] * sig[k] * r[j][k];
+            }
+          }
+        }
+        let l = cholesky3(&[cov[0][0], cov[0][1], cov[0][2], cov[1][1], cov[1][2], cov[2][2]]);
+        let pc = VolumePiece {
+          l,
+          qw: cholesky_solve3(&l, sub3(eye, mean)),
+          k: 1.0 / (2.0 * core::f32::consts::PI * l[0] * l[3] * l[5]),
+          ..VolumePiece::default()
+        };
+        let support = if case % 3 == 0 {
+          // a plane through the piece, its normal along the piece's first axis
+          let n = [r[0][0], r[1][0], r[2][0]];
+          [n[0], n[1], n[2], dot3(n, mean) - sig[0] * (rnd() - 0.5)]
+        } else {
+          [0.0; 4]
+        };
+        let sun = [0.3f32, 0.5, 0.812_404];
+        let phot = Photometry { albedo: 0.1, sun, r_h_au: 1.0, support, origin: f32::NAN };
+        let _ = take_volume_small_paths();
+        let old = volume_small_points_ref(&pc, eye, &mvp, wf, hf, &phot, mean, 1.0);
+        let po = take_volume_small_paths();
+        let new = volume_small_points(&pc, eye, &mvp, wf, hf, &phot, mean, 1.0);
+        let pn = take_volume_small_paths();
+        let kap = SMALL_POINT_COND.with(|c| c.get());
+        n_pieces += 1;
+        for k in 0..2 {
+          paths_old[k] += po[k];
+          paths_new[k] += pn[k];
+        }
+        if po != pn {
+          // a flip: only where the centre slice's 3σ meets the frame's edge within 1e-3 σ
+          let c = &old[0];
+          let (sx, sy) = (1.0 / (c.ix * core::f32::consts::SQRT_2), 1.0 / (c.iy * core::f32::consts::SQRT_2));
+          let margin = [
+            (c.mx - 3.0 * sx).abs() / sx,
+            (c.mx + 3.0 * sx - wf).abs() / sx,
+            (c.my - 3.0 * sy).abs() / sy,
+            (c.my + 3.0 * sy - hf).abs() / sy,
+          ]
+          .into_iter()
+          .fold(f32::INFINITY, f32::min);
+          flips += 1;
+          if !(margin < 1e-3) {
+            failures.push(std::format!("{name}: case {case}: the path flipped {po:?} → {pn:?} with the edge {margin:.2e} σ away"));
+          }
+          continue;
+        }
+        let xmag = dot3(eye, eye).sqrt().max(dot3(mean, mean).sqrt());
+        let tol = 1e-4 + 8.0 * f32::EPSILON as f64 * (xmag / sig[2].min(sig[1]).min(sig[0])) as f64;
+        for q in 0..5 {
+          let (o, n) = (&old[q], &new[q]);
+          if (o.m > 0.0) != (n.m > 0.0) {
+            failures.push(std::format!("{name}: case {case} point {q}: m {} vs {}", o.m, n.m));
+            continue;
+          }
+          if !(o.m > 0.0) {
+            continue;
+          }
+          n_points += 1;
+          // the f32 resolution of the point's w (relative; ~4 roundings of its dot and offset) — the
+          // two builds round w differently, and ndx = n / w, J3 ∝ 1 / w² amplify it near the eye
+          // plane (the 5-point rule's node 3 at −2.86 σ_depth sits there)
+          let dw = 4.0 * f32::EPSILON as f64 * kap[q] as f64;
+          // a sigma point's w within ten resolutions of 0: the builds may disagree on its sign (a
+          // projection dropped), so the moments may jump; only in / out is compared
+          let straddle = !(dw < 0.1);
+          // the frame cover (±DUST_SMALL_COVER σ): a point whose cover misses the frame deposits on
+          // no in-frame texel of its own
+          let covers = |p: &VolumeSmallPoint| {
+            let (sx, sy) = (1.0 / (p.ix * core::f32::consts::SQRT_2), 1.0 / (p.iy * core::f32::consts::SQRT_2));
+            p.mx + DUST_SMALL_COVER * sx >= 0.0
+              && p.mx - DUST_SMALL_COVER * sx <= wf
+              && p.my + DUST_SMALL_COVER * sy >= 0.0
+              && p.my - DUST_SMALL_COVER * sy <= hf
+          };
+          let (on_o, on_n) = (covers(o), covers(n));
+          if !on_o {
+            n_off += 1;
+          }
+          if straddle {
+            n_straddle += 1;
+          }
+          if straddle {
+            continue;
+          }
+          let rel = |a: f32, b: f32| ((a - b).abs() / a.abs().max(b.abs()).max(1e-30)) as f64;
+          // the tolerances: the scene's coordinates at the piece's σ (tol), plus w's resolution
+          // carried through ndx = n / w into px (|p − centre| δw) in σ, and into J3 ∝ 1 / w² (m);
+          // ix, iy and ρ carry the position's term
+          let px_x = (o.mx - 0.5 * wf).abs() as f64 * (o.ix * core::f32::consts::SQRT_2) as f64;
+          let px_y = (o.my - 0.5 * hf).abs() as f64 * (o.iy * core::f32::consts::SQRT_2) as f64;
+          let t_m = tol + 4.0 * dw;
+          let t_x = tol + 2.0 * dw * (1.0 + px_x);
+          let t_y = tol + 2.0 * dw * (1.0 + px_y);
+          let t_s = tol + 2.0 * dw * (1.0 + px_x.max(px_y));
+          let tols = [t_m, t_x, t_y, t_s, t_s, t_s];
+          // the cover's in / out at the frame edge (like a path flip): allowed where the old
+          // cover's edge is within 1e-3 σ of the frame's plus what the tolerances let it move (4 t_s
+          // for the 4σ reach, max(t_x, t_y) for the centre); the point is then compared on the
+          // on-frame tolerances
+          let mut on = on_o;
+          if on_o != on_n {
+            let (sx, sy) = (1.0 / (o.ix * core::f32::consts::SQRT_2), 1.0 / (o.iy * core::f32::consts::SQRT_2));
+            let margin = [
+              (o.mx + DUST_SMALL_COVER * sx).abs() / sx,
+              (o.mx - DUST_SMALL_COVER * sx - wf).abs() / sx,
+              (o.my + DUST_SMALL_COVER * sy).abs() / sy,
+              (o.my - DUST_SMALL_COVER * sy - hf).abs() / sy,
+            ]
+            .into_iter()
+            .fold(f32::INFINITY, f32::min) as f64;
+            let allow = 1e-3 + 4.0 * t_s + t_x.max(t_y);
+            if !(margin <= allow) {
+              failures.push(std::format!(
+                "{name}: case {case} point {q}: frame cover {on_o} vs {on_n} with its edge {margin:.2e} σ from the frame's (allowed {allow:.2e}): old {o:?} new {n:?}"
+              ));
+              continue;
+            }
+            n_cover_edge += 1;
+            on = true;
+          }
+          // off the frame only the mass is compared (the moments of a point that touches no
+          // in-frame texel decide nothing)
+          let checked = if on { 6 } else { 1 };
+          let d = [
+            rel(o.m, n.m),
+            ((o.mx - n.mx) * o.ix * core::f32::consts::SQRT_2).abs() as f64,
+            ((o.my - n.my) * o.iy * core::f32::consts::SQRT_2).abs() as f64,
+            rel(o.ix, n.ix),
+            rel(o.iy, n.iy),
+            (o.rho - n.rho).abs() as f64,
+          ];
+          for k in 0..checked {
+            worst[k] = worst[k].max(d[k] / tols[k]);
+            if d[k] > tols[k] {
+              failures.push(std::format!(
+                "{name}: case {case} point {q}: {} differs by {:.3e} (tolerance {:.3e}, w resolution {dw:.2e}, on frame {on_o}): old {o:?} new {n:?}",
+                ["m", "mx (σ)", "my (σ)", "ix", "iy", "rho"][k],
+                d[k],
+                tols[k]
+              ));
+            }
+          }
+        }
+      }
+      std::println!(
+        "[small points] {name}: {n_pieces} pieces, paths (one projection, sigma points) F10 {paths_old:?} factored {paths_new:?}, {flips} flips at the edge; {n_points} points, {n_off} with their cover off the frame (mass only), {n_straddle} with a projection within 10 f32 resolutions of the eye plane (in / out only), {n_cover_edge} cover decisions at the frame edge; worst difference / tolerance: m {:.3}, mx {:.3}, my {:.3}, ix {:.3}, iy {:.3}, rho {:.3}",
+        worst[0], worst[1], worst[2], worst[3], worst[4], worst[5]
+      );
+      if flips * 1000 > n_pieces {
+        failures.push(std::format!("{name}: {flips} of {n_pieces} pieces changed path"));
+      }
+    }
+    set_k1c_d_test(None);
+    let shown: std::vec::Vec<_> = failures.iter().take(20).cloned().collect();
+    assert!(failures.is_empty(), "{} failures, the first: {shown:#?}", failures.len());
+  }
 }
 
 /// Draws a packet by the **exact ray integral** of its density (mirror of `dust_volume_scatter`):
@@ -4735,12 +5262,12 @@ pub fn volume_scatter(
   } else {
     1.0
   };
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   let piece_only = VOLUME_PIECE_ONLY.with(|c| c.get());
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   VOLUME_PIECE_CLASSES.with(|c| c.set([255; DUST_VOLUME_PIECES_MAX as usize]));
   for (k, pc) in pieces.iter().take(plan.pieces as usize).enumerate() {
-    #[cfg(feature = "std")]
+    #[cfg(any(test, feature = "std"))]
     if piece_only != u32::MAX && k as u32 != piece_only {
       continue;
     }
@@ -4771,13 +5298,13 @@ pub fn volume_scatter(
       (c, k)
     };
     let (mut tr_raw, mut tr_in) = (0.0f64, 0.0f64);
-    #[cfg(feature = "std")]
+    #[cfg(any(test, feature = "std"))]
     VOLUME_CLASS_COUNTS.with(|c| {
       let mut v = c.get();
       v[class as usize] += 1;
       c.set(v);
     });
-    #[cfg(feature = "std")]
+    #[cfg(any(test, feature = "std"))]
     VOLUME_PIECE_CLASSES.with(|c| {
       let mut v = c.get();
       v[k] = class as u8;
@@ -4916,7 +5443,7 @@ pub fn volume_scatter(
         }
         let i = (off + (ty as u32 * lw + tx as u32) * PYRAMID_TEXEL_WORDS) as usize;
         let hfr = (dust_hash32(i as u32) >> 8) as f32 * (1.0 / 16_777_216.0);
-        #[cfg(feature = "std")]
+        #[cfg(any(test, feature = "std"))]
         if counts > DUST_COUNT_MAX_PER_ADD as f32 {
           VOLUME_SPLIT_ADDS.with(|c| c.set(c.get() + 1));
         }
@@ -5782,9 +6309,16 @@ pub const DUST_PROF_STHREAD: usize = 106;
 pub const DUST_PROF_SLANES: usize = 108;
 pub const DUST_PROF_SMAX: usize = 109;
 /// K1c's parts of the volumetric draw (every draw, in-thread and consumer; nested in vplan /
-/// vdraw): 5 × (lo, hi) cycle sums, [`DUST_PROF_K1C_NAMES`] in order
+/// vdraw): 8 × (lo, hi) cycle sums, [`DUST_PROF_K1C_NAMES`] in order (`dust_prof_flush_k1c`'s);
+/// vsmprep / vsmfast / vsmedge are vsmallpts' parts (its prelude; the centre slice by one
+/// projection and the edge decision of every piece and an interior piece's other slices; an edge
+/// piece's slices by 4 sigma points), the rest of vsmallpts the divergence waits
 pub const DUST_PROF_K1C0: usize = 110;
-pub const DUST_PROF_K1C_NAMES: [&str; 5] = ["vclass", "vsmallpts", "vsmall", "vsubline", "vcentre"];
+pub const DUST_PROF_K1C_NAMES: [&str; 8] =
+  ["vclass", "vsmallpts", "vsmall", "vsubline", "vcentre", "vsmprep", "vsmfast", "vsmedge"];
+/// 2 words: the small pieces drawn by one projection a slice and by 4 sigma points a slice (the
+/// GPU's [`take_volume_small_paths`])
+pub const DUST_PROF_SMALL_PATHS: usize = 126;
 
 /// The counter block of one drawn frame ([`Device::dust_profile_counters`]): words 8..128 of the
 /// queue header, indexed by the `DUST_PROF_*` offsets (from the queue base) through [`Self::word`]
@@ -5837,7 +6371,9 @@ pub const DUST_FRAME_QUEUE_ALL: u32 = 1 << 29;
 // not fit, so `Device::cmd_dust_splat` runs a tier in chunks of clusters: per chunk it writes the
 // queue header (the range [first, end), the counters), dispatches the producer over the range,
 // then the consumer indirectly; the chunk is sized from the previous frames' packets per cluster
-// and a full chunk draws the rest in-thread (the EWA queue's overflow rule).
+// and the records a full chunk's queue refuses go to the volume spill (`dust_vspill_records`),
+// drained by a second dispatch of the same consumer ([`DUST_VIEW_VOLUME_SPILL`]); a record the
+// spill refuses too is dropped and counted ([`DUST_VQUEUE_LOST`]). Nothing is drawn in-thread.
 /// `dust_splat.comp`'s lanes per cluster: a warp, a lane per sub-packet (the slow end bin's
 /// [`DUST_END_SUBBINS`] sub-bins, then a bin each: 17 of 32; a merged polyline's time pieces)
 pub const DUST_SPLAT_LANES: u32 = 32;
@@ -5901,8 +6437,8 @@ pub const DUST_SQUEUE_WORDS: u32 = DUST_SQUEUE_HEADER_WORDS
   + DUST_SQUEUE_CAPACITY * DUST_SQUEUE_RECORD_WORDS;
 /// header word 2: records a chunk could not hold (never by construction; the test asserts 0)
 pub const DUST_SQUEUE_OVERFLOWED: usize = 2;
-/// header words: the chunk's cluster range, the frame's records drawn by the consumer and
-/// overflowed (drawn in-thread)
+/// header words: the chunk's cluster range, the frame's records drawn by the consumer from the
+/// main queue and overflowed (refused by it: sent to the volume spill)
 pub const DUST_VQUEUE_FIRST: usize = 5;
 pub const DUST_VQUEUE_END: usize = 6;
 pub const DUST_VQUEUE_DRAWN: usize = 7;
@@ -5919,6 +6455,25 @@ pub const DUST_VQUEUE_RING_MASK: usize = 11;
 /// header word 12: the frame's volumetric deposits above `DUST_COUNT_MAX_PER_ADD`, each split into
 /// several adds (the GPU's count of [`take_volume_split_adds`]; zeroed per frame with the counts)
 pub const DUST_VQUEUE_SPLIT_ADDS: usize = 12;
+/// header words 13–14 (the frame's counts, zeroed per frame; written by the spill drain's lane 0
+/// of each chunk, `dust_draw_volume.comp` with [`DUST_VIEW_VOLUME_SPILL`]): the records the
+/// consumer drew from the volume spill, and the records the spill refused too (dropped: counted,
+/// logged, never drawn). [`DUST_VQUEUE_OVERFLOWED`] (the main queue's refusals, the spill's raw
+/// appends) = spill drawn + lost by construction.
+pub const DUST_VQUEUE_SPILL_DRAWN: usize = 13;
+pub const DUST_VQUEUE_LOST: usize = 14;
+/// header word 15 (host-written each drawn frame): the volume spill's base in words relative to
+/// the volume queue's ([`DustQueueOffsets::vspill`] − [`DustQueueOffsets::vqueue`];
+/// `dust_vspill_base`)
+pub const DUST_VQUEUE_SPILL_OFFSET: usize = 15;
+/// The volume spill's records for a view of `vqueue_records` volume records: a quarter, at least
+/// 64 (8 MiB on a full queue). The records the main queue refuses (a chunk whose packets the
+/// packets-per-cluster estimate under-counted) go there, drained by a second dispatch of the
+/// same consumer, so every volumetric record is drawn by the consumer.
+pub const fn dust_vspill_records(vqueue_records: u32) -> u32 {
+  let s = vqueue_records / 4;
+  if s < 64 { 64 } else { s }
+}
 
 // ─── The views' queue placement and the EWA queue's dispatch (portability) ───────────────────
 /// Workgroups per dispatch dimension every Vulkan device supports (`maxComputeWorkGroupCount`'s
@@ -5956,15 +6511,19 @@ pub const fn dust_spill_slots(vqueue_records: u32) -> u32 {
 }
 /// Where a view's queues lie, in words after the pyramid (`PyramidLayout::total_words`): the EWA
 /// queue at 0, then the volume queue of `vqueue_records` records, the sub-packet queue, the
-/// spill (with the speck trace), and the words the view allocates (`end`). The shaders compute
-/// the same from the volume header's [`DUST_VQUEUE_RECORDS`] (`dust_squeue_base`,
-/// `dust_spill_base`); every host offset comes from here.
+/// spill (with the speck trace), the volume spill (a volume queue of
+/// [`dust_vspill_records`] records, the same header and record format), and the words the view
+/// allocates (`end`). The shaders compute the first ones from the volume header's
+/// [`DUST_VQUEUE_RECORDS`] (`dust_squeue_base`, `dust_spill_base`) and the volume spill from its
+/// [`DUST_VQUEUE_SPILL_OFFSET`] (`dust_vspill_base`); every host offset comes from here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DustQueueOffsets {
   pub vqueue: u32,
   pub squeue: u32,
   pub spill: u32,
   pub spill_slots: u32,
+  pub vspill: u32,
+  pub vspill_records: u32,
   pub end: u32,
 }
 pub const fn dust_queue_offsets(vqueue_records: u32) -> DustQueueOffsets {
@@ -5972,17 +6531,28 @@ pub const fn dust_queue_offsets(vqueue_records: u32) -> DustQueueOffsets {
   let squeue = vqueue + DUST_VQUEUE_HEADER_WORDS + vqueue_records * DUST_VQUEUE_RECORD_WORDS;
   let spill = squeue + DUST_SQUEUE_WORDS;
   let spill_slots = dust_spill_slots(vqueue_records);
+  // after everything the view had before the volume spill: no earlier offset moves
+  let vspill = spill + dust_spill_words(spill_slots);
+  let vspill_records = dust_vspill_records(vqueue_records);
   DustQueueOffsets {
     vqueue,
     squeue,
     spill,
     spill_slots,
-    end: spill + dust_spill_words(spill_slots),
+    vspill,
+    vspill_records,
+    end: vspill + DUST_VQUEUE_HEADER_WORDS + vspill_records * DUST_VQUEUE_RECORD_WORDS,
   }
 }
-/// [`PYR_FLAGS`] bit (host-written, `AETHERVK_DUST_VQUEUE=0` or the device's test hook): the
-/// volume packets drawn in-thread (the A/B)
+/// [`PYR_FLAGS`] bit (host-written, `AETHERVK_DUST_VQUEUE=0` or the device's test hook): the main
+/// volume queue refuses every record, so every volumetric packet goes through the volume spill
+/// (the spill path's A/B: the same pyramid, slower; the chunk sized so the spill holds it)
 pub const DUST_FRAME_VQUEUE_OFF: u32 = 1 << 30;
+/// [`DustSplatPushConstants::flags`] bit, host-internal (`Device::cmd_dust_splat` sets it on the
+/// consumer's second dispatch of each chunk and refuses a caller's flags carrying it):
+/// `dust_draw_volume.comp` drains the volume spill instead of the main volume queue. Bits 0–1,
+/// 16–17 and 20–27 are the view's flags (`DUST_VIEW_*`).
+pub const DUST_VIEW_VOLUME_SPILL: u32 = 1 << 28;
 /// [`PYR_FLAGS`] bit (a test hook through `Device::dust_set_vqueue_mode`): `dust_split.comp`
 /// walks a cluster's records in one lane with a running ordinal (the former per-cluster thread's
 /// order), the word-identical reference for its counting pass and prefix
@@ -6695,7 +7265,7 @@ pub fn merge_pyramid(out: &mut [u32], part: &[u32]) {
 /// merge into `pyramid` by [`merge_pyramid`] — order-free, so the result is bit-identical to
 /// [`splat_tier`] (`host_rasterizer_is_thread_count_independent`). One thread, or the
 /// `AETHERVK_DUST_PROBE` diagnostics (reports per call), runs [`splat_tier`] itself.
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 #[allow(clippy::too_many_arguments)]
 pub fn splat_tier_parallel(
   moments: &[DustMoments],
@@ -6708,7 +7278,9 @@ pub fn splat_tier_parallel(
   threads: usize,
 ) {
   use std::sync::atomic::{AtomicUsize, Ordering};
-  const BLOCK: usize = 64;
+  // small blocks: a young near cluster costs far more than an old one, and 64-cluster blocks left
+  // the last few threads drawing alone at the end of each call
+  const BLOCK: usize = 4;
   let n = (pc.live_count as usize).min(moments.len()).min(render.len());
   let threads = threads.min(n.div_ceil(BLOCK)).max(1);
   if threads == 1 || std::env::var_os("AETHERVK_DUST_PROBE").is_some() {
@@ -6792,6 +7364,101 @@ pub fn splat_tier_range(
       line += &alloc::format!(" [{h}]");
     }
     aethervk_oshal_rlib::log!("{}", line);
+  }
+}
+
+/// [`splat_tier_range`] over a list of compact indices instead of a range (the temporal reuse's
+/// class lists and fresh set, `cadence`): every listed cluster below the live count with flux is
+/// drawn by the same body ([`splat_cluster_inner`]), in list order; the sums are order-free, so a
+/// permutation of the list draws the same pyramid. The predecessor lookup reads the whole slices.
+/// No probe pixels and no work log (the range form keeps those diagnostics).
+#[allow(clippy::too_many_arguments)]
+pub fn splat_tier_list(
+  moments: &[DustMoments],
+  render: &[DustRenderCluster],
+  pc: &DustSplatPushConstants,
+  flow: &DustFlowUniform,
+  tracer_counts: u32,
+  layout: &PyramidLayout,
+  pyramid: &mut [u32],
+  list: &[u32],
+) {
+  let stream = unpack_color(pc.color);
+  let eye = [pc.eye_local[0], pc.eye_local[1], pc.eye_local[2]];
+  let mut view = SplitView::of(&pc.mvp, eye);
+  view.shell = super::specks::ShellCut::from_header(pyramid, eye).d_max;
+  let mut scratch = SplitLeaves::default();
+  let n = (pc.live_count as usize).min(moments.len()).min(render.len());
+  for &i in list {
+    let i = i as usize;
+    if i >= n || !(moments[i].flux() > 0.0) {
+      continue;
+    }
+    splat_cluster_inner(
+      moments, render, pc, flow, tracer_counts, layout, pyramid, &view, &mut scratch, stream, eye, i,
+    );
+  }
+}
+
+/// [`splat_tier_list`] on `threads` threads (the cadence's CPU fresh pass and build chunks, the
+/// tests): blocks of the list handed out dynamically, each into its own pyramid carrying
+/// `pyramid`'s header with the counters zeroed, merged by [`merge_pyramid`] — the same scheme as
+/// [`splat_tier_parallel`]. **Word-identical to [`splat_tier_list`] with the in-frame gates off**
+/// (`DUST_FRAME_GATES_OFF_BIT`): the scatter is a saturating sum per word, a non-zero minimum for
+/// the depth, a maximum for `PYR_TAU_MAX`, an OR for `PYR_LEVEL_MASK`, all order-free, and each
+/// cluster's dither seeds from its own slot. With the gates on it may differ: the gates read the
+/// running counters of the pyramid drawn into, which each partial starts at zero (2026-10-17: 976
+/// words on the cadence scene, the serial draw tripping a gate the partials never reach).
+#[cfg(any(test, feature = "std"))]
+#[allow(clippy::too_many_arguments)]
+pub fn splat_tier_list_parallel(
+  moments: &[DustMoments],
+  render: &[DustRenderCluster],
+  pc: &DustSplatPushConstants,
+  flow: &DustFlowUniform,
+  tracer_counts: u32,
+  layout: &PyramidLayout,
+  pyramid: &mut [u32],
+  list: &[u32],
+  threads: usize,
+) {
+  use std::sync::atomic::{AtomicUsize, Ordering};
+  // small blocks, as in `splat_tier_parallel` (the load balance of short lists)
+  const BLOCK: usize = 4;
+  let n = list.len();
+  let threads = threads.min(n.div_ceil(BLOCK)).max(1);
+  if threads == 1 {
+    splat_tier_list(moments, render, pc, flow, tracer_counts, layout, pyramid, list);
+    return;
+  }
+  let hn = PYRAMID_HEADER_WORDS as usize;
+  let mut header = pyramid[..hn].to_vec();
+  for wd in [PYR_TAU_MAX, PYR_LEVEL_MASK, PYR_SPLIT_CHILDREN, PYR_VOLUME_EVALS, PYR_EWA_TEXELS, PYR_SPLIT_DROPPED_FLUX] {
+    header[wd as usize] = 0;
+  }
+  let (next, len) = (AtomicUsize::new(0), pyramid.len());
+  let parts: alloc::vec::Vec<alloc::vec::Vec<u32>> = std::thread::scope(|s| {
+    let handles: alloc::vec::Vec<_> = (0..threads)
+      .map(|_| {
+        let (header, next) = (&header, &next);
+        s.spawn(move || {
+          let mut p = alloc::vec![0u32; len];
+          p[..hn].copy_from_slice(header);
+          loop {
+            let lo = next.fetch_add(BLOCK, Ordering::Relaxed);
+            if lo >= n {
+              break;
+            }
+            splat_tier_list(moments, render, pc, flow, tracer_counts, layout, &mut p, &list[lo..(lo + BLOCK).min(n)]);
+          }
+          p
+        })
+      })
+      .collect();
+    handles.into_iter().map(|h| h.join().unwrap()).collect()
+  });
+  for p in &parts {
+    merge_pyramid(pyramid, p);
   }
 }
 
@@ -6907,6 +7574,7 @@ fn splat_range_probed(
     }
     #[cfg(feature = "std")]
     let v0 = VOLUME_CALLS.with(|c| c.get());
+    #[cfg(feature = "std")]
     let p0 = PACKET_CALLS.with(|c| c.get());
     #[cfg(feature = "std")]
     let w0 = logging.then(|| {

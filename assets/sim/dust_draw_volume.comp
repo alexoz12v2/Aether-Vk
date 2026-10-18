@@ -1,8 +1,9 @@
 // @assets/sim/dust_draw_volume.comp
 //
 // The volume packet queue's consumer: one lane per record of the chunk's queue
-// (dust_scatter.glsl DUST_VQUEUE_*, filled by dust_splat.comp dust_volume_emit), dispatched
-// indirectly after each chunk's producer dispatch (Device::cmd_dust_splat). Every lane runs the
+// (dust_scatter.glsl DUST_VQUEUE_*, filled by dust_split.comp dust_volume_emit), dispatched
+// indirectly after each chunk's splitter dispatch (Device::cmd_dust_splat), then a second time
+// over the chunk's volume spill (DUST_VIEW_VOLUME_SPILL: the records the queue refused). Every lane runs the
 // same code on its own packet (dust_volume_draw.glsl, the arithmetic the producer would have run
 // in its cluster's thread, with the packet's own rounding seed), so the pyramid is the producer's
 // word for word and the lanes stay coherent, which the per-cluster thread's walk is not. The same
@@ -36,16 +37,30 @@ layout(push_constant, std430) uniform PushConstants {
 
 #include "dust_volume_draw.glsl"
 
-// the record r of the chunk's queue (false: none)
+// the record r of the chunk's volume queue, or of its volume spill with DUST_VIEW_VOLUME_SPILL
+// (the second dispatch of each chunk; false: none)
 bool dust_draw_volume_record(uint r) {
-    uint base = dust_vqueue_base(pc.pyramid);
+    bool spill = (pc.flags & DUST_VIEW_VOLUME_SPILL) != 0u;
+    uint vbase = dust_vqueue_base(pc.pyramid);
+    uint base = spill ? dust_vspill_base(pc.pyramid) : vbase;
     uint raw = pc.pyramid.v[base + 3u];
     uint cap = dust_vqueue_capacity(pc.pyramid, base);
     uint n = min(raw, cap);
-    // the frame's counts (one lane per chunk): records drawn here, overflowed (drawn in-thread)
+    // the frame's counts (lane 0 of each drain, once per chunk; all in the main header). The
+    // main drain counts only what it drew: its refusals, main raw - main n, are exactly the
+    // spill's raw appends (dust_volume_emit appends each refused record to the spill once; with
+    // the queue off main raw = 0), so the spill drain counts them as OVERFLOWED, and splits them
+    // into SPILL_DRAWN and LOST (OVERFLOWED = SPILL_DRAWN + LOST). The spill drain's lane 0 runs
+    // whenever its raw count is > 0: its record 0 is always held (capacity >= 1), so the
+    // indirect x is >= 1.
     if (r == 0u) {
-        atomicAdd(pc.pyramid.v[base + DUST_VQUEUE_DRAWN], n);
-        atomicAdd(pc.pyramid.v[base + DUST_VQUEUE_OVERFLOWED], raw - n);
+        if (!spill) {
+            atomicAdd(pc.pyramid.v[vbase + DUST_VQUEUE_DRAWN], n);
+        } else {
+            atomicAdd(pc.pyramid.v[vbase + DUST_VQUEUE_OVERFLOWED], raw);
+            atomicAdd(pc.pyramid.v[vbase + DUST_VQUEUE_SPILL_DRAWN], n);
+            atomicAdd(pc.pyramid.v[vbase + DUST_VQUEUE_LOST], raw - n);
+        }
     }
     if (r >= n) return false;
     DustPacket p;

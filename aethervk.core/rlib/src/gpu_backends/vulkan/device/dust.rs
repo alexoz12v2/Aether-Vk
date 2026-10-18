@@ -25,6 +25,9 @@
 //! implementation) instead of the compute shaders; the pyramid is then a host-visible buffer the
 //! host writes directly and the composite reads through the same address. Same layouts, same
 //! composite.
+/// the GPU mirror of the cadence classes (temporal reuse, step 3; `dust_cadence.rs`)
+#[path = "dust_cadence.rs"]
+pub mod cadence;
 use super::*;
 use crate::scene::dust::{
   self, DustBatch, DustCluster, DustEmitPushConstants, DustFrame, DustMoments,
@@ -48,7 +51,7 @@ pub const DUST_READBACK_SLOTS: usize = 4;
 /// after the splats and specks, after the measure and readback copy, around the composite; then
 /// after the splats (before the specks), after each of the first [`DUST_TS_CALLS`] splat
 /// dispatches, and after the packet queue
-pub const DUST_TIMESTAMPS: u32 = 17;
+pub const DUST_TIMESTAMPS: u32 = 27;
 /// the most workgroups a dispatch may have per dimension on the baseline devices (Vulkan's
 /// required `maxComputeWorkGroupCount`); larger dispatches go two-dimensional
 pub const DUST_DISPATCH_MAX_X: u32 = 65_535;
@@ -67,7 +70,17 @@ pub const DUST_TS_QUEUED: u32 = DUST_TS_CALL0 + DUST_TS_CALLS as u32;
 /// after the speck passes, which run before the splats since 2026-10-16 (they write the walk
 /// mask the splats read: `DustMoments::specks_mask`)
 pub const DUST_TS_SPECKED: u32 = DUST_TS_QUEUED + 1;
-const _: () = assert!(DUST_TS_SPECKED < DUST_TIMESTAMPS);
+/// after the cadence's begin (fills, control, transitions, compaction, the propagate marks)
+pub const DUST_TS_CADENCE: u32 = DUST_TS_SPECKED + 1;
+/// after the cadence's classifies, chunk pre-passes and build draws
+pub const DUST_TS_BUILDS: u32 = DUST_TS_CADENCE + 1;
+/// after the reprojection of the shown class images
+pub const DUST_TS_REPROJECTED: u32 = DUST_TS_BUILDS + 1;
+/// after the cadence's classifies and chunk pre-passes (before its build draws)
+pub const DUST_TS_CHUNKED: u32 = DUST_TS_REPROJECTED + 1;
+/// after the build draws of pair `k * 2 + p` (`DUST_TS_PAIR0 + k * 2 + p`, six)
+pub const DUST_TS_PAIR0: u32 = DUST_TS_CHUNKED + 1;
+const _: () = assert!(DUST_TS_PAIR0 + 6 <= DUST_TIMESTAMPS);
 
 /// What a dust frame cost on the GPU, per pass (ms; `NaN` = not measured: a pass not recorded
 /// that frame, or its timestamps not yet available), read [`DUST_READBACK_SLOTS`] frames after
@@ -88,6 +101,15 @@ pub struct DustGpuTimings {
   pub call_ms: [f64; DUST_TS_CALLS],
   /// the packet queue's draw (after the splats and specks; `NaN` when not recorded)
   pub queue_ms: f64,
+  /// the cadence (`NaN` without it): its begin (inside `propagate_ms`), the classifies and build
+  /// draws, the reprojection (inside `splat_ms`)
+  pub cadence_ms: f64,
+  pub builds_ms: f64,
+  pub reproject_ms: f64,
+  /// the cadence's classifies and chunk pre-passes, and each pair's build draws (`k * 2 + p`;
+  /// from the previous pair's end, the chunks' for the first)
+  pub classify_ms: f64,
+  pub pair_build_ms: [f64; 6],
   /// the measurement grid and the readback copy
   pub measure_ms: f64,
   /// the composite draw (inside the render pass)
@@ -123,11 +145,29 @@ impl DustGpuTimings {
     // timestamp and the splats start at the propagate's end
     let after_specks = if ts[DUST_TS_SPECKED as usize].is_some() {
       DUST_TS_SPECKED
+    } else if ts[DUST_TS_REPROJECTED as usize].is_some() {
+      DUST_TS_REPROJECTED
     } else {
       DUST_TS_PROPAGATED
     };
     let splat_only_ms = span(after_specks, DUST_TS_SPLATS_DONE);
-    let specks_ms = span(DUST_TS_PROPAGATED, DUST_TS_SPECKED);
+    // (with the cadence the specks follow its builds and reprojection)
+    let before_specks = if ts[DUST_TS_REPROJECTED as usize].is_some() { DUST_TS_REPROJECTED } else { DUST_TS_PROPAGATED };
+    let specks_ms = span(before_specks, DUST_TS_SPECKED);
+    let cadence_ms = span(DUST_TS_BEGIN, DUST_TS_CADENCE);
+    let chunked = ts[DUST_TS_CHUNKED as usize].is_some();
+    let builds_ms = span(if chunked { DUST_TS_CHUNKED } else { DUST_TS_PROPAGATED }, DUST_TS_BUILDS);
+    let classify_ms = span(DUST_TS_PROPAGATED, DUST_TS_CHUNKED);
+    let mut prev_pair = DUST_TS_CHUNKED;
+    let pair_build_ms = core::array::from_fn(|i| {
+      let at = DUST_TS_PAIR0 + i as u32;
+      let ms = span(prev_pair, at);
+      if ts[at as usize].is_some() {
+        prev_pair = at;
+      }
+      ms
+    });
+    let reproject_ms = span(DUST_TS_BUILDS, DUST_TS_REPROJECTED);
     let mut prev = after_specks;
     let call_ms = core::array::from_fn(|k| {
       let at = DUST_TS_CALL0 + k as u32;
@@ -153,6 +193,11 @@ impl DustGpuTimings {
       specks_ms,
       call_ms,
       queue_ms,
+      cadence_ms,
+      builds_ms,
+      reproject_ms,
+      classify_ms,
+      pair_build_ms,
       measure_ms,
       composite_ms,
       total_ms,
@@ -387,10 +432,14 @@ pub struct DustViewHost {
   /// estimate); the packets per cluster estimate (an EMA of the frames read back: the next
   /// frame's chunk is `capacity / (2 × ppc)`); the frame's chunks and clusters so far; per
   /// readback slot the clusters drawn that frame; the last frame read back: (records drawn by the
-  /// consumer, overflowed, chunks)
+  /// consumer from the main queue, overflowed (sent to the volume spill), chunks); the volume
+  /// spill's capacity per chunk (test hook; 0 = the view's [`dust::dust_vspill_records`]); the
+  /// last frame read back's spill: (records drawn from it, records lost: refused by it too)
   pub vqueue_mode: Option<u32>,
   pub vqueue_off: bool,
   pub vqueue_capacity: u32,
+  pub vspill_capacity: u32,
+  pub vspill_counts: (u32, u32),
   pub vqueue_chunk: u32,
   pub vqueue_ppc: f32,
   pub vqueue_chunks_frame: u32,
@@ -418,6 +467,8 @@ pub struct DustViewHost {
   /// the walk pass records every speck it draws ([`Device::dust_set_specks_trace`],
   /// `dust::DUST_SPECKS_TRACE_*`; a test hook)
   pub specks_trace: bool,
+  /// the in-frame gates off for this view (a test hook, [`Device::dust_set_frame_gates`])
+  pub frame_gates_off: bool,
 }
 
 /// how long the pyramid download (diagnostics, `download_dust_pyramid`) waits for the graphics
@@ -468,6 +519,8 @@ impl Default for DustViewHost {
       vqueue_mode: None,
       vqueue_off: false,
       vqueue_capacity: 0,
+      vspill_capacity: 0,
+      vspill_counts: (0, 0),
       vqueue_chunk: 0,
       vqueue_ppc: 64.0,
       vqueue_chunks_frame: 0,
@@ -481,6 +534,7 @@ impl Default for DustViewHost {
       lod_px: None,
       volume_bias_override: None,
       specks_trace: false,
+      frame_gates_off: false,
       drawn: None,
     }
   }
@@ -619,6 +673,8 @@ pub struct DustView {
   /// the speck walk's spill slots this view allocated (`dust::DUST_SPILL_SLOTS` in proportion
   /// to the volume queue's records; 0 in CPU mode)
   pub spill_slots: u32,
+  /// words of the cadence's class images between the frame pyramid and the queues (0: none)
+  pub image_words: u32,
   /// CPU particle mode: the pyramid is host-visible and written directly; one per frame in
   /// flight (`DUST_READBACK_SLOTS`), since the GPU may still read the previous frames' while the
   /// host zeroes and fills the next (the first entry is `pyramid`'s)
@@ -679,6 +735,13 @@ unsafe impl Send for DustView {}
 unsafe impl Sync for DustView {}
 
 impl DustView {
+  /// the word where the view's queues start (the EWA queue header): after the frame pyramid and
+  /// the class images ([`Self::image_words`]); header word `dust::PYR_QUEUE_BASE` carries it to
+  /// the shaders (`dust_queue_base`)
+  pub fn queue_word(&self) -> u32 {
+    self.layout.total_words + self.image_words
+  }
+
   /// CPU mode: the host pyramid (buffer, mapped words) of frame `frame`
   fn cpu_pyramid(&self, frame: u64) -> Option<(&DustBuffer, *mut u8)> {
     let k = (frame % DUST_READBACK_SLOTS as u64) as usize;
@@ -708,6 +771,8 @@ impl DustView {
 pub struct DustManager {
   pub systems: dashmap::DashMap<u64, DustGpuSystem>,
   pub views: dashmap::DashMap<gpu::PresentationEngineHandle, DustView>,
+  /// the views running the GPU cadence ([`Device::dust_cadence_enable`])
+  pub cadence: dashmap::DashMap<gpu::PresentationEngineHandle, spin::Mutex<cadence::DustCadenceGpu>>,
   allocator_view: vk_mem::AllocatorView,
   /// every timestamp query pool the views were given (destroyed with the device,
   /// [`DustManager::take_query_pools`]) and those no view holds now: a removed view's pool may
@@ -721,6 +786,7 @@ impl DustManager {
     Self {
       systems: dashmap::DashMap::new(),
       views: dashmap::DashMap::new(),
+      cadence: dashmap::DashMap::new(),
       allocator_view,
       query_pools: spin::Mutex::new(alloc::vec::Vec::new()),
       free_query_pools: spin::Mutex::new(alloc::vec::Vec::new()),
@@ -778,6 +844,15 @@ impl Drop for DustManager {
     for pe in pes {
       if let Some((_, v)) = self.views.remove(&pe) {
         Self::destroy_view(&self.allocator_view, v);
+      }
+    }
+    let pes: alloc::vec::Vec<_> = self.cadence.iter().map(|e| *e.key()).collect();
+    for pe in pes {
+      if let Some((_, c)) = self.cadence.remove(&pe) {
+        for b in c.into_inner().into_buffers() {
+          let mut a = b.alloc;
+          unsafe { self.allocator_view.destroy_buffer(b.buffer, &mut a) };
+        }
       }
     }
   }
@@ -1276,7 +1351,9 @@ impl Device {
     let cpu = crate::gpu_backends::vulkan::physics::is_cpu_particles_mode();
     let layout = PyramidLayout::new(extent[0], extent[1]);
     // (re)create on first use or a size change
-    let stale = mgr.views.get(&pe).is_some_and(|v| v.layout != layout);
+    // (a changed class-image span recreates the view too: the images sit before the queues)
+    let want_images = if cpu { 0 } else { mgr.cadence.get(&pe).map_or(0, |c| c.lock().image_span(&layout)) };
+    let stale = mgr.views.get(&pe).is_some_and(|v| v.layout != layout || v.image_words != want_images);
     if stale {
       let timeline = res.timeline_manager.get_next_submit_value();
       if let Some((_, mut view)) = mgr.views.remove(&pe) {
@@ -1304,12 +1381,15 @@ impl Device {
       let offsets = dust::dust_queue_offsets(vqueue_records);
       let spill_slots = offsets.spill_slots;
       let queue_words = offsets.end;
+      // the cadence's class images (`DustCadenceGpu::image_span`): between the frame pyramid and
+      // the queues
+      let image_words = want_images;
       let (pyramid, pmapped) = self.dust_create_buffer(
         &allocator,
         if cpu {
           bytes
         } else {
-          bytes + queue_words as u64 * 4
+          bytes + (image_words as u64 + queue_words as u64) * 4
         },
         if cpu {
           DustMem::HostWrite
@@ -1400,6 +1480,7 @@ impl Device {
           layout: layout.clone(),
           vqueue_records,
           spill_slots: if cpu { 0 } else { spill_slots },
+          image_words: if cpu { 0 } else { image_words },
           pyramid: Some(pyramid),
           cpu_pyramids,
           pyramid_mapped: pmapped,
@@ -1456,9 +1537,19 @@ impl Device {
           aethervk_oshal_rlib::log!("[Dust] view {}: queue {} records drawn of {} appended", pe.0, held, queue[3]);
         }
         // the volume packet queue of that frame: the consumer's records, the overflowed ones
-        // (drawn in-thread), and the packets per cluster that size the next frame's chunks
+        // (sent to the volume spill: drawn from it, or lost), and the packets per cluster that
+        // size the next frame's chunks
         let (vdrawn, voverflowed) = (vqueue[dust::DUST_VQUEUE_DRAWN], vqueue[dust::DUST_VQUEUE_OVERFLOWED]);
+        let (vspilled, vlost) = (vqueue[dust::DUST_VQUEUE_SPILL_DRAWN], vqueue[dust::DUST_VQUEUE_LOST]);
         host.vqueue_counts = (vdrawn, voverflowed, host.slot_chunks[slot]);
+        host.vspill_counts = (vspilled, vlost);
+        // never silent: a record the spill refused was not drawn
+        if vlost > 0 {
+          aethervk_oshal_rlib::log!(
+            "[Dust] view {}: volume spill lost {} of {} refused records ({} drawn from the spill, {} by the queue): the image misses them",
+            pe.0, vlost, voverflowed, vspilled, vdrawn
+          );
+        }
         let clusters = host.slot_clusters[slot];
         if clusters > 0 && vdrawn + voverflowed > 0 {
           let ppc = (vdrawn + voverflowed) as f32 / clusters as f32;
@@ -1566,6 +1657,7 @@ impl Device {
       .unwrap_or(host.ewa_bias)
       .min(dust::DUST_EWA_BIAS_MAX);
     let (queue_mode, queue_capacity) = (host.queue_mode, host.queue_capacity);
+    let gates_hook = host.frame_gates_off;
     // the volume packet queue's mode for this frame (`dust::DUST_FRAME_VQUEUE_OFF`): a test's
     // override, else `AETHERVK_DUST_VQUEUE=0`; the forced chunk (`AETHERVK_DUST_VQUEUE_CHUNK`)
     let vqueue_bits = host.vqueue_mode.unwrap_or_else(|| {
@@ -1607,8 +1699,8 @@ impl Device {
       .map(|v| dust::volume_axis_from_str(&v))
       .unwrap_or(dust::DUST_VOLUME_AXIS_CHORD);
     // `AETHERVK_DUST_FRAME_GATES=0`: the in-frame gates off (diagnostics: unbounded frame work)
-    let gates_off = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_FRAME_GATES")
-      .is_some_and(|v| v.trim() == "0");
+    let gates_off = gates_hook
+      || aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_FRAME_GATES").is_some_and(|v| v.trim() == "0");
     header[dust::PYR_SPLIT_DEPTH as usize] = split_depth
       | (volume_bias << 8)
       | (volume_axis << 16)
@@ -1652,6 +1744,9 @@ impl Device {
     header[dust::PYR_LOD as usize] = lod_px.to_bits();
     // the unit this frame's counts are written with, for dump readers (`download_dust_pyramid`)
     header[dust::PYR_UNIT as usize] = unit.to_bits();
+    // where the queues start, for the shaders (`dust_queue_base`): with no class images the
+    // value their former formula gave (measure offset + measure words = total_words)
+    header[dust::PYR_QUEUE_BASE as usize] = view.queue_word();
     // the white point and softening this frame is shown with (dump readers)
     header[dust::PYR_WHITE as usize] = white.to_bits();
     header[dust::PYR_SOFTENING as usize] = softening.to_bits();
@@ -1717,7 +1812,7 @@ impl Device {
         self.device.cmd_update_buffer(
           cmd,
           pyramid.buffer,
-          view.layout.total_words as u64 * 4,
+          view.queue_word() as u64 * 4,
           bytemuck::cast_slice(&q),
         );
         // the volume packet queue: the frame's counters zero (the chunk words are written per
@@ -1728,10 +1823,13 @@ impl Device {
         vq[4] = vqueue_capacity;
         // the records this view allocated: the shaders' sub-packet queue and spill follow them
         vq[dust::DUST_VQUEUE_RECORDS] = view.vqueue_records;
+        // the volume spill's place (`dust_vspill_base`); its counts (words 13-14) zero
+        let offsets = dust::dust_queue_offsets(view.vqueue_records);
+        vq[dust::DUST_VQUEUE_SPILL_OFFSET] = offsets.vspill - offsets.vqueue;
         self.device.cmd_update_buffer(
           cmd,
           pyramid.buffer,
-          (view.layout.total_words + dust::DUST_QUEUE_WORDS) as u64 * 4,
+          (view.queue_word() + dust::DUST_QUEUE_WORDS) as u64 * 4,
           bytemuck::cast_slice(&vq),
         );
       }
@@ -1859,8 +1957,10 @@ impl Device {
     // slot claimed, the view's slot count, the trace's capacity (a test hook) and count, the
     // tier's live range start (ring slot) and ring mask (the buffers are slot indexed). After the
     // previous tier's walk (its spill atomics) and before this tier's passes.
-    let spill_offset = (view.layout.total_words + dust::dust_queue_offsets(view.vqueue_records).spill) as u64 * 4;
+    let spill_offset = (view.queue_word() + dust::dust_queue_offsets(view.vqueue_records).spill) as u64 * 4;
     let trace_cap = if view.host.lock().specks_trace { dust::DUST_SPECKS_TRACE_CAPACITY } else { 0 };
+    // the cadence's owner bytes (SHOWN slots are not walked; 0: no cadence)
+    let owner = self.cad_owner_address(mgr, pe, id, ring_base);
     let to_update = vk::MemoryBarrier2::default()
       .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
       .src_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE | vk::AccessFlags2::SHADER_STORAGE_READ)
@@ -1875,7 +1975,16 @@ impl Device {
         cmd,
         pyramid.buffer,
         spill_offset,
-        bytemuck::cast_slice(&[0u32, view.spill_slots, trace_cap, 0, first_slot, capacity.wrapping_sub(1)]),
+        bytemuck::cast_slice(&[
+          0u32,
+          view.spill_slots,
+          trace_cap,
+          0,
+          first_slot,
+          capacity.wrapping_sub(1),
+          owner as u32,
+          (owner >> 32) as u32,
+        ]),
       );
     }
     self.cmd_dust_pre_splat_barrier(cmd);
@@ -1929,8 +2038,37 @@ impl Device {
     capacity: u32,
     render: u64,
     moments: u64,
-    mut pc: DustSplatPushConstants,
+    pc: DustSplatPushConstants,
   ) -> GpuResult<()> {
+    self.dust_splat_impl(cmd, pe, id, ring_base, first_slot, capacity, render, moments, pc, None, 0, 0, None)
+  }
+
+  /// [`Self::cmd_dust_splat`] with the cadence's options: `target` a class image's address in the
+  /// view buffer (`None`: the frame pyramid), `list` the address of `n_list` ring slots to draw
+  /// (0: the range `[0, live_count)`; ~0 entries are holes), `owner` the owner bytes whose SHOWN
+  /// slots are skipped (`None`: the view's cadence, if any; `Some(0)`: none)
+  #[allow(clippy::too_many_arguments)]
+  pub(crate) fn dust_splat_impl(
+    &self,
+    cmd: vk::CommandBuffer,
+    pe: gpu::PresentationEngineHandle,
+    id: u64,
+    ring_base: u32,
+    first_slot: u32,
+    capacity: u32,
+    render: u64,
+    moments: u64,
+    mut pc: DustSplatPushConstants,
+    target: Option<u64>,
+    list: u64,
+    n_list: u32,
+    owner: Option<u64>,
+  ) -> GpuResult<()> {
+    // the volume spill's drain flag is the host's own (set on the consumer's second dispatch)
+    assert!(
+      pc.flags & dust::DUST_VIEW_VOLUME_SPILL == 0,
+      "cmd_dust_splat: the caller's flags carry the host-internal DUST_VIEW_VOLUME_SPILL bit"
+    );
     let res = self.res.read();
     let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
     let sys = mgr.systems.get(&id).ok_or(gpu_err!("dust system {} not found", id))?;
@@ -1946,9 +2084,10 @@ impl Device {
     };
     pc.render = render;
     pc.moments = moments;
-    pc.pyramid = pyramid.address;
-    // the record of this pass (diagnostics: `download_dust_snapshot`)
+    pc.pyramid = target.unwrap_or(pyramid.address);
+    // the record of this pass (diagnostics: `download_dust_snapshot`; the frame's draws only)
     if sys.cpu_ring.is_none()
+      && target.is_none()
       && let (Some(rb), Some(mb)) = (sys.render.as_ref(), sys.moments.as_ref())
     {
       let rec = DustSplatRecord {
@@ -2005,9 +2144,15 @@ impl Device {
       )?;
       return Ok(());
     }
-    if pc.live_count == 0 {
+    // the clusters the chunks cover: the range, or the list's entries
+    let count = if list != 0 { n_list } else { pc.live_count };
+    if count == 0 {
       return Ok(());
     }
+    let owner = match owner {
+      Some(o) => o,
+      None => self.cad_owner_address(mgr, pe, id, ring_base),
+    };
     // the profiler variants while the request is on (`dust_profile.glsl`; same drawing)
     let profiling = crate::gpu_backends::vulkan::physics::dust_profile_requested();
     let producer = match self.kernels.pipelines.dust_splat_prof {
@@ -2025,14 +2170,15 @@ impl Device {
     self.kernels.pipelines.assert_pc_size(producer, core::mem::size_of_val(&pc));
     self.kernels.pipelines.assert_pc_size(consumer, core::mem::size_of_val(&pc));
     self.kernels.pipelines.assert_pc_size(splitter, core::mem::size_of_val(&pc));
-    // the tier in chunks of clusters (`dust::DUST_VQUEUE_*`): per chunk the volume queue header
-    // (empty, the range [first, end), the capacity), the producer over the range, then the
-    // consumer over its records; with the queue off one chunk and no consumer (today's drawing,
-    // in-thread). `AETHERVK_DUST_VQUEUE_NODRAW=1` skips the consumer (diagnostics: the producer
+    // the tier in chunks of clusters (`dust::DUST_VQUEUE_*`): per chunk the volume queue and
+    // volume spill headers (empty, the range [first, end), the capacities), the producer over
+    // the range, the splitter, then the consumer over the queue's records and again over the
+    // spill's (`dust::DUST_VIEW_VOLUME_SPILL`); with the queue off every record goes through the
+    // spill. `AETHERVK_DUST_VQUEUE_NODRAW=1` skips the consumer (diagnostics: the producer
     // alone; the image wrong by design).
-    let (vqueue_off, chunk, vqueue_capacity) = {
+    let (chunk, vqueue_capacity, vspill_capacity) = {
       let mut host = view.host.lock();
-      host.vqueue_clusters_frame += pc.live_count;
+      host.vqueue_clusters_frame += count;
       let capacity = if host.vqueue_capacity > 0 {
         host.vqueue_capacity.min(view.vqueue_records)
       } else {
@@ -2040,7 +2186,11 @@ impl Device {
       };
       // (every chunk at most DUST_SQUEUE_CLUSTERS: the sub-packet queue's table and capacity)
       let chunk = if host.vqueue_off {
-        pc.live_count.min(dust::DUST_SQUEUE_CLUSTERS)
+        // the queue off: every record goes through the volume spill, so the chunk that fits the
+        // spill twice over (the spill path's A/B; slower: smaller chunks)
+        dust::dust_vqueue_auto_chunk(dust::dust_vspill_records(view.vqueue_records), host.vqueue_ppc)
+          .min(dust::DUST_SQUEUE_CLUSTERS)
+          .min(count)
       } else {
         // the chunk that fits the queue twice over, at most DUST_VQUEUE_CHUNK_MAX clusters
         // (measured 2026-10-15 at 1 km: 256 / 512 / 1024 / 2400 / 8192 clusters a chunk give
@@ -2052,15 +2202,24 @@ impl Device {
         } else {
           dust::dust_vqueue_auto_chunk(view.vqueue_records, host.vqueue_ppc)
         };
-        c.min(pc.live_count)
+        c.min(count)
       };
-      (host.vqueue_off, chunk.max(1), capacity)
+      // the volume spill's capacity per chunk: the view's records or the test hook's, never 0
+      // (0 in its header word 4 would read as DUST_VQUEUE_CAPACITY)
+      let spill_records = dust::dust_vspill_records(view.vqueue_records);
+      let spill_capacity =
+        if host.vspill_capacity > 0 { host.vspill_capacity.min(spill_records) } else { spill_records };
+      (chunk.max(1), capacity, spill_capacity)
     };
-    let nodraw = vqueue_off
-      || aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_VQUEUE_NODRAW").is_some_and(|v| v.trim() == "1");
+    let nodraw =
+      aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_VQUEUE_NODRAW").is_some_and(|v| v.trim() == "1");
     let offsets = dust::dust_queue_offsets(view.vqueue_records);
-    let vbase = (view.layout.total_words + offsets.vqueue) as u64 * 4;
-    let sbase = (view.layout.total_words + offsets.squeue) as u64 * 4;
+    let vbase = (view.queue_word() + offsets.vqueue) as u64 * 4;
+    let sbase = (view.queue_word() + offsets.squeue) as u64 * 4;
+    let vsbase = (view.queue_word() + offsets.vspill) as u64 * 4;
+    // the consumer's second dispatch of each chunk drains the volume spill (host-internal flag)
+    let mut pc_spill = pc;
+    pc_spill.flags |= dust::DUST_VIEW_VOLUME_SPILL;
     // the consumer's (and the previous producer's) storage writes → the header update
     let to_update = vk::MemoryBarrier2::default()
       .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
@@ -2086,7 +2245,7 @@ impl Device {
     let mut first = 0u32;
     let mut chunks = 0u32;
     loop {
-      let end = first.saturating_add(chunk).min(pc.live_count);
+      let end = first.saturating_add(chunk).min(count);
       let hdr = [0u32, 1, 1, 0, vqueue_capacity, first, end];
       unsafe {
         if first > 0 {
@@ -2105,8 +2264,13 @@ impl Device {
           bytemuck::cast_slice(&ring),
         );
         // the sub-packet queue: empty (its record counter and overflow count)
-        let shdr = [0u32, dust::DUST_SQUEUE_CAPACITY, 0, 0];
+        // (words 4-5 the list, 6-7 the owner bytes: dust_splat.comp)
+        let shdr = [0u32, dust::DUST_SQUEUE_CAPACITY, 0, 0, list as u32, (list >> 32) as u32, owner as u32, (owner >> 32) as u32];
         self.device.cmd_update_buffer(cmd, pyramid.buffer, sbase, bytemuck::cast_slice(&shdr));
+        // the volume spill: empty, its dispatch (0, 1, 1), its capacity (covered by the same
+        // `to_update` / `to_producer` barriers as the main header)
+        let vshdr = [0u32, 1, 1, 0, vspill_capacity];
+        self.device.cmd_update_buffer(cmd, pyramid.buffer, vsbase, bytemuck::cast_slice(&vshdr));
         self.device.synchronization2.cmd_pipeline_barrier2(
           cmd,
           &vk::DependencyInfo::default().memory_barriers(core::slice::from_ref(&to_producer)),
@@ -2149,11 +2313,24 @@ impl Device {
             bytemuck::bytes_of(&pc),
           );
           self.device.cmd_dispatch_indirect(cmd, pyramid.buffer, vbase);
+          // the same consumer over the chunk's volume spill (the records the queue refused). No
+          // barrier between the two drains: the spill's records and dispatch were made visible
+          // by the splitter → consumer barrier above, and the drains share only order-free
+          // atomics (the in-frame gate's evaluation count is order-dependent past the gate, as
+          // among the lanes of one drain)
+          self.device.cmd_push_constants(
+            cmd,
+            self.kernels.pipelines.pipeline_layout,
+            vk::ShaderStageFlags::COMPUTE,
+            0,
+            bytemuck::bytes_of(&pc_spill),
+          );
+          self.device.cmd_dispatch_indirect(cmd, pyramid.buffer, vsbase);
         }
       }
       chunks += 1;
       first = end;
-      if first >= pc.live_count {
+      if first >= count {
         break;
       }
     }
@@ -2288,7 +2465,7 @@ impl Device {
           0,
           bytemuck::bytes_of(&qpc),
         );
-        self.device.cmd_dispatch_indirect(cmd, pyramid.buffer, view.layout.total_words as u64 * 4);
+        self.device.cmd_dispatch_indirect(cmd, pyramid.buffer, view.queue_word() as u64 * 4);
         self.device.synchronization2.cmd_pipeline_barrier2(
           cmd,
           &vk::DependencyInfo::default().memory_barriers(core::slice::from_ref(&after_queue)),
@@ -2303,6 +2480,8 @@ impl Device {
         }
       }
     }
+    // the cadence's frame end (the frame's light, the state's readback copy)
+    self.cad_frame_end(cmd, mgr, pe, pyramid.address, &view.layout);
     // the measurement grid from the finished pyramid (`dust_measure.comp`): the splats' writes →
     // this pass, then its writes → the readback copy
     let (_, mw, mh) = view.layout.measure;
@@ -2353,14 +2532,14 @@ impl Device {
         .dst_offset(slot as u64 * rb_words * 4 + dust::PYRAMID_HEADER_WORDS as u64 * 4)
         .size((lw * lh * dust::PYRAMID_TEXEL_WORDS) as u64 * 4),
       vk::BufferCopy::default()
-        .src_offset(view.layout.total_words as u64 * 4)
+        .src_offset(view.queue_word() as u64 * 4)
         .dst_offset(
           (slot as u64 + 1) * rb_words * 4
             - (dust::DUST_QUEUE_HEADER_WORDS + dust::DUST_VQUEUE_HEADER_WORDS) as u64 * 4,
         )
         .size(dust::DUST_QUEUE_HEADER_WORDS as u64 * 4),
       vk::BufferCopy::default()
-        .src_offset((view.layout.total_words + dust::DUST_QUEUE_WORDS) as u64 * 4)
+        .src_offset((view.queue_word() + dust::DUST_QUEUE_WORDS) as u64 * 4)
         .dst_offset((slot as u64 + 1) * rb_words * 4 - dust::DUST_VQUEUE_HEADER_WORDS as u64 * 4)
         .size(dust::DUST_VQUEUE_HEADER_WORDS as u64 * 4),
     ];
@@ -2483,7 +2662,7 @@ impl Device {
       let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
       let view = mgr.views.get(&pe).ok_or(gpu_err!("dust view of PE {} absent", pe.0))?;
       let pyramid = view.pyramid.as_ref().ok_or(gpu_err!("dust view has no pyramid"))?;
-      let off = (view.layout.total_words + dust::dust_queue_offsets(view.vqueue_records).spill) as u64 * 4;
+      let off = (view.queue_word() + dust::dust_queue_offsets(view.vqueue_records).spill) as u64 * 4;
       (pyramid.buffer, off, view.spill_slots)
     };
     let header: alloc::vec::Vec<u32> = pod_vec(&self.dust_download_bytes(buffer, spill_offset, dust::DUST_SPILL_HEADER_WORDS as u64 * 4)?);
@@ -2540,7 +2719,7 @@ impl Device {
       let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
       let view = mgr.views.get(&pe).ok_or(gpu_err!("dust view of PE {} absent", pe.0))?;
       let pyramid = view.pyramid.as_ref().ok_or(gpu_err!("dust view has no pyramid"))?;
-      (pyramid.buffer, view.layout.total_words as u64 * 4)
+      (pyramid.buffer, view.queue_word() as u64 * 4)
     };
     let w: alloc::vec::Vec<u32> = pod_vec(&self.dust_download_bytes(buffer, base, 32)?);
     Ok((dust::dust_queue_held(&w), w[3]))
@@ -2579,8 +2758,9 @@ impl Device {
   }
 
   /// Sets `pe`'s volume packet queue mode from the next frame on (tests, diagnostics):
-  /// `Some(dust::DUST_FRAME_VQUEUE_OFF)` draws every volumetric packet in its cluster's thread,
-  /// `None` = `AETHERVK_DUST_VQUEUE` / on. A no-op without a view.
+  /// `Some(dust::DUST_FRAME_VQUEUE_OFF)` sends every volumetric packet through the volume spill
+  /// (the main queue refuses all; the spill path's A/B), `None` = `AETHERVK_DUST_VQUEUE` / on.
+  /// A no-op without a view.
   pub fn dust_set_vqueue_mode(&self, pe: gpu::PresentationEngineHandle, mode: Option<u32>) {
     let res = self.res.read();
     if let Some(view) = res.dust_manager.as_ref().and_then(|m| m.views.get(&pe)) {
@@ -2594,6 +2774,15 @@ impl Device {
     let res = self.res.read();
     if let Some(view) = res.dust_manager.as_ref().and_then(|m| m.views.get(&pe)) {
       view.host.lock().vqueue_capacity = records;
+    }
+  }
+
+  /// Sets `pe`'s volume spill capacity per chunk from the next frame on (a test hook for the
+  /// lost path; 0 = the view's `dust::dust_vspill_records`)
+  pub fn dust_set_vspill_capacity(&self, pe: gpu::PresentationEngineHandle, records: u32) {
+    let res = self.res.read();
+    if let Some(view) = res.dust_manager.as_ref().and_then(|m| m.views.get(&pe)) {
+      view.host.lock().vspill_capacity = records;
     }
   }
 
@@ -2616,7 +2805,7 @@ impl Device {
       let pyramid = view.pyramid.as_ref().ok_or(gpu_err!("dust view has no pyramid"))?;
       (
         pyramid.buffer,
-        (view.layout.total_words + dust::dust_queue_offsets(view.vqueue_records).squeue) as u64 * 4,
+        (view.queue_word() + dust::dust_queue_offsets(view.vqueue_records).squeue) as u64 * 4,
       )
     };
     let w: alloc::vec::Vec<u32> = pod_vec(&self.dust_download_bytes(buffer, base, 16)?);
@@ -2631,7 +2820,7 @@ impl Device {
       let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
       let view = mgr.views.get(&pe).ok_or(gpu_err!("dust view of PE {} absent", pe.0))?;
       let pyramid = view.pyramid.as_ref().ok_or(gpu_err!("dust view has no pyramid"))?;
-      (pyramid.buffer, (view.layout.total_words + dust::DUST_QUEUE_WORDS) as u64 * 4)
+      (pyramid.buffer, (view.queue_word() + dust::DUST_QUEUE_WORDS) as u64 * 4)
     };
     let w: alloc::vec::Vec<u32> =
       pod_vec(&self.dust_download_bytes(buffer, base, dust::DUST_VQUEUE_HEADER_WORDS as u64 * 4)?);
@@ -2639,7 +2828,8 @@ impl Device {
   }
 
   /// `pe`'s last frame's volume packet queue (diagnostics, waits for the GPU): the records the
-  /// consumer drew, the packets that overflowed a chunk (drawn in-thread), the chunks
+  /// consumer drew from the main queue, the packets that overflowed a chunk's queue (sent to the
+  /// volume spill: [`Self::dust_vqueue_spill_counts`]), the chunks
   pub fn dust_vqueue_counts(&self, pe: gpu::PresentationEngineHandle) -> GpuResult<(u32, u32, u32)> {
     let (buffer, base, chunks) = {
       let res = self.res.read();
@@ -2648,13 +2838,28 @@ impl Device {
       let pyramid = view.pyramid.as_ref().ok_or(gpu_err!("dust view has no pyramid"))?;
       (
         pyramid.buffer,
-        (view.layout.total_words + dust::DUST_QUEUE_WORDS) as u64 * 4,
+        (view.queue_word() + dust::DUST_QUEUE_WORDS) as u64 * 4,
         view.host.lock().vqueue_chunks_frame,
       )
     };
     let w: alloc::vec::Vec<u32> =
       pod_vec(&self.dust_download_bytes(buffer, base, dust::DUST_VQUEUE_HEADER_WORDS as u64 * 4)?);
     Ok((w[dust::DUST_VQUEUE_DRAWN], w[dust::DUST_VQUEUE_OVERFLOWED], chunks))
+  }
+
+  /// `pe`'s last frame's volume spill (diagnostics, waits for the GPU): the records the consumer
+  /// drew from it, and the records it refused too (lost: not drawn). Overflowed = the two summed.
+  pub fn dust_vqueue_spill_counts(&self, pe: gpu::PresentationEngineHandle) -> GpuResult<(u32, u32)> {
+    let (buffer, base) = {
+      let res = self.res.read();
+      let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
+      let view = mgr.views.get(&pe).ok_or(gpu_err!("dust view of PE {} absent", pe.0))?;
+      let pyramid = view.pyramid.as_ref().ok_or(gpu_err!("dust view has no pyramid"))?;
+      (pyramid.buffer, (view.queue_word() + dust::DUST_QUEUE_WORDS) as u64 * 4)
+    };
+    let w: alloc::vec::Vec<u32> =
+      pod_vec(&self.dust_download_bytes(buffer, base, dust::DUST_VQUEUE_HEADER_WORDS as u64 * 4)?);
+    Ok((w[dust::DUST_VQUEUE_SPILL_DRAWN], w[dust::DUST_VQUEUE_LOST]))
   }
 
   /// The shader-clock profiler's counters of `pe`'s last drawn frame
@@ -2671,7 +2876,7 @@ impl Device {
       let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
       let view = mgr.views.get(&pe).ok_or(gpu_err!("dust view of PE {} absent", pe.0))?;
       let pyramid = view.pyramid.as_ref().ok_or(gpu_err!("dust view has no pyramid"))?;
-      (pyramid.buffer, view.layout.total_words as u64 * 4, view.host.lock().frame)
+      (pyramid.buffer, view.queue_word() as u64 * 4, view.host.lock().frame)
     };
     let w: alloc::vec::Vec<u32> =
       pod_vec(&self.dust_download_bytes(buffer, base, dust::DUST_QUEUE_HEADER_WORDS as u64 * 4)?);
@@ -2990,7 +3195,7 @@ impl Device {
     frame: &DustFrame,
   ) -> GpuResult<(u64, u64)> {
     self
-      .propagate(cmd, id, ring_base, capacity, first_slot, live_count, frame, None)
+      .propagate(cmd, id, ring_base, capacity, first_slot, live_count, frame, None, 0)
       .map(|(addrs, _)| addrs)
   }
 
@@ -3030,7 +3235,7 @@ impl Device {
     frame: &DustFrame,
     emitted: u64,
   ) -> GpuResult<((u64, u64), bool)> {
-    self.propagate(cmd, id, ring_base, capacity, first_slot, live_count, frame, Some(emitted))
+    self.propagate(cmd, id, ring_base, capacity, first_slot, live_count, frame, Some(emitted), 0)
   }
 
   #[allow(clippy::too_many_arguments)]
@@ -3044,6 +3249,9 @@ impl Device {
     live_count: u32,
     frame: &DustFrame,
     emitted: Option<u64>,
+    // the cadence's propagate bitmask (the address of the word holding the tier's first bit; 0 =
+    // every live slot): only marked slots are evaluated, the stamp skip on, no dispatch-level cache
+    prop_mask: u64,
   ) -> GpuResult<((u64, u64), bool)> {
     let res = self.res.read();
     let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
@@ -3098,9 +3306,11 @@ impl Device {
       moments: if skip_moments { 0 } else { moments.address + moments_offset },
       emitted,
     });
-    let skipped = live_count > 0 && key.is_some() && sys.propagated.lock().get(&ring_base) == key.as_ref();
+    let skipped =
+      prop_mask == 0 && live_count > 0 && key.is_some() && sys.propagated.lock().get(&ring_base) == key.as_ref();
     match key {
-      Some(k) if live_count > 0 => {
+      // (a masked propagate evaluates part of the range: unknown to the cache)
+      Some(k) if live_count > 0 && prop_mask == 0 => {
         sys.propagated.lock().insert(ring_base, k);
       }
       // an uncached or empty propagate leaves the buffers unknown to the cache
@@ -3140,10 +3350,14 @@ impl Device {
         ring_mask: mask,
         generation,
         skip: [
-          sys.propagate_skip.load(core::sync::atomic::Ordering::Relaxed) as u32,
-          0,
+          (prop_mask != 0 || sys.propagate_skip.load(core::sync::atomic::Ordering::Relaxed)) as u32,
+          prop_mask as u32,
         ],
-        frame: *frame,
+        // `spin.w` (unused by the shader) carries the bitmask address's high word
+        frame: DustFrame {
+          spin: [frame.spin[0], frame.spin[1], frame.spin[2], f32::from_bits((prop_mask >> 32) as u32)],
+          ..*frame
+        },
       };
       let pipeline = self.kernels.pipelines.dust_propagate;
       self.kernels.pipelines.assert_pc_size(pipeline, core::mem::size_of_val(&pc));
