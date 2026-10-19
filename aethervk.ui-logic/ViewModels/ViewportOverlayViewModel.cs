@@ -27,6 +27,10 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
   [ObservableProperty]
   private string _currentEpochString = string.Empty;
 
+  /// <summary>Run to End in progress: the viewport spinner.</summary>
+  [ObservableProperty]
+  private bool _isRunningToEnd;
+
   [ObservableProperty]
   private string _jetPreviewSizeString = string.Empty;
 
@@ -150,6 +154,10 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
           if (session != null && session.CurrentEpochString != CurrentEpochString)
           {
             CurrentEpochString = session.CurrentEpochString;
+          }
+          if (session != null && session.IsRunningToEnd != IsRunningToEnd)
+          {
+            IsRunningToEnd = session.IsRunningToEnd;
           }
         });
       })

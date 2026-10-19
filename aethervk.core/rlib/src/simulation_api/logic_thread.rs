@@ -1172,10 +1172,10 @@ fn process_command_internal(
         "Failed to create scene snapshot",
       ))
     }
-    // TODO playtoend command!
-    LogicCommand::PlaySceneToEnd { scene_id, speed } => {
-      todo!()
-    }
+    // Run to End is the UI's seek to the committed end (`SeekEpoch`); nothing sends this
+    LogicCommand::PlaySceneToEnd { .. } => Err(EngineError::InvalidOperation(
+      "PlaySceneToEnd: unused, Run to End seeks to the end",
+    )),
 
     // TODO now this command will be fused with StopScene, therefore
     //commenting out pieces as I see fit is perfectly fine
