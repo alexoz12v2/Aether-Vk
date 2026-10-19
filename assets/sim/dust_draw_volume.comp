@@ -82,7 +82,9 @@ bool dust_draw_volume_record(uint r) {
     // bits 8-15: the volume level bias; 16-17: the volumetric axis mode (as dust_splat.comp)
     uint volumeBias = (dust_pyr_split_word >> 8u) & 0xFFu;
     uint volumeAxis = (dust_pyr_split_word >> 16u) & 0x3u;
-    dust_volume_draw(p, seed, exposure, color, levels, W, H, volumeBias, volumeAxis);
+    // (the record's address and column stride as DUST_VQUEUE_GET's: pass B re-reads the packet's
+    // seed, colour, segments, flux and photometry there at each piece, step 9C)
+    dust_volume_draw(p, base + DUST_VQUEUE_HEADER_WORDS + r, cap, exposure, levels, W, H, volumeBias, volumeAxis);
     return true;
 }
 

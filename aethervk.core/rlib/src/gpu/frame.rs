@@ -1094,8 +1094,15 @@ pub fn prepare_dust(
   // it off for the view (this frame draws everything fresh)
   let cad_plan = if !reuse && !dust_debug_skip("propagate") && device.dust_cadence_auto(pe) {
     device.cmd_checkpoint(cmd, c"dust: cadence");
-    match dust_cadence_begin(device, cmd, render_scene, pe, flags, &view) {
-      Ok(p) => Some(p),
+    // the budget loop's ε and class lengths (step 5); the salt resets the cadence at a changed class length
+    let salt = device.dust_budget_apply_cadence(pe);
+    match dust_cadence_begin(device, cmd, render_scene, pe, flags, &view, salt) {
+      Ok(p) => {
+        // a reset or first frame draws everything fresh: the full-draw regime's biases
+        let full = p.reset.is_some() || p.mode != Some(crate::scene::dust::cadence::CadenceMode::Run);
+        device.dust_budget_frame_kind(cmd, pe, full);
+        Some(p)
+      }
       Err(e) => {
         aethervk_oshal_rlib::log!("[Dust cadence] view {}: {e}; off", pe.0);
         let _ = device.dust_cadence_enable(pe, None);
@@ -1232,6 +1239,8 @@ pub fn prepare_dust(
     if let Err(e) = device.cmd_dust_cadence_builds(cmd, pe, &draws) {
       aethervk_oshal_rlib::log!("[Dust cadence] builds failed: {e}");
     }
+    // the work counters after the builds (the budget loop's counters by target)
+    device.cmd_dust_budget_probe(cmd, pe);
     device.cmd_dust_timestamp(cmd, pe, crate::gpu_backends::vulkan::device::dust::DUST_TS_BUILDS);
     if let Err(e) = device.cmd_dust_cadence_reproject(cmd, pe) {
       aethervk_oshal_rlib::log!("[Dust cadence] reprojection failed: {e}");
@@ -1561,6 +1570,7 @@ fn dust_cadence_begin(
   pe: PresentationEngineHandle,
   flags: u32,
   view: &crate::gpu_backends::vulkan::device::dust::DustViewParams,
+  salt: u64,
 ) -> GpuResult<crate::gpu_backends::vulkan::device::dust::cadence::CadenceGpuPlan> {
   use crate::gpu_backends::vulkan::device::dust::cadence::CadenceTierInput;
   let Some((layer, call0)) = render_scene.depth_layers.iter().find_map(|l| l.dust_calls.first().map(|c| (l, c))) else {
@@ -1581,7 +1591,8 @@ fn dust_cadence_begin(
     speed: 0.0,
     nucleus_m: call0.nucleus_m.unwrap_or(call0.state.anchor_m),
     flags,
-    fingerprint: dust_cadence_fingerprint(render_scene, flags),
+    // (the budget loop's salt: 0 unless the fallback changed a class length)
+    fingerprint: dust_cadence_fingerprint(render_scene, flags) ^ salt.wrapping_mul(0x9E37_79B9_7F4A_7C15),
     reused: false,
     unit_now: view.unit,
   };

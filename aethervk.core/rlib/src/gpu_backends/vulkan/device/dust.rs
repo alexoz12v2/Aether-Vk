@@ -469,6 +469,233 @@ pub struct DustViewHost {
   pub specks_trace: bool,
   /// the in-frame gates off for this view (a test hook, [`Device::dust_set_frame_gates`])
   pub frame_gates_off: bool,
+  /// the budget loop (temporal reuse step 5, `dust::cadence::BudgetLoop`): `Some` while the view
+  /// runs the cadence and `AETHERVK_DUST_BUDGET_LOOP` is not 0
+  pub budget: Option<dust::cadence::BudgetLoop>,
+  /// the feedback's two regimes ([`FeedbackSet`]): full draws and cadenced frames
+  pub fb_full: FeedbackSet,
+  pub fb_cad: Option<FeedbackSet>,
+  /// per readback slot: the frame's regime (0 full draw, 1 cadenced) and whether its target
+  /// probe was recorded ([`Device::cmd_dust_budget_probe`])
+  slot_regime: [u8; DUST_READBACK_SLOTS],
+  slot_probe: [bool; DUST_READBACK_SLOTS],
+  /// the last readback's regime and its counters by target
+  pub last_regime: u8,
+  pub targets: Option<TargetCounters>,
+  /// full-draw frames whose biases were restored ([`Device::dust_budget_frame_kind`])
+  pub restored: u32,
+}
+
+/// One regime's feedback state ([`DustViewHost::absorb`]: the split depth and its over-budget
+/// memory, the volumetric and EWA biases). The budget loop keeps two (step 5, 2026-10-18): full
+/// draws (the cadence off, a cadence reset or first frame) and cadenced frames, so the cheap
+/// cadenced frames never lower the biases a full draw begins with (5 000 km: a reset frame with
+/// the cadenced EWA bias 3 drew 2.3e8 EWA texels, 276 ms, against 7.6e7 at bias 5, 111 ms).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FeedbackSet {
+  pub split_depth: u32,
+  pub split_depth_over: u32,
+  pub volume_bias: u32,
+  pub ewa_bias: u32,
+}
+
+impl Default for FeedbackSet {
+  fn default() -> Self {
+    Self {
+      split_depth: dust::DUST_SPLIT_DEPTH_MAX,
+      split_depth_over: u32::MAX,
+      volume_bias: 0,
+      ewa_bias: 0,
+    }
+  }
+}
+
+/// A cadenced frame's work counters by target ([`DUST_PROBE_HEADER_WORDS`]: split children, EWA
+/// texels in `DUST_EWA_TEXEL_UNIT`s, volume evaluations): the build draws' (the frame header copied
+/// after them, `Device::cmd_dust_budget_probe`) and the fresh pass's (the frame's total less them).
+/// The counters are frame-continuous (the builds' headers are routed through the frame's), so the
+/// in-frame gates read the frame's total across both targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TargetCounters {
+  pub builds: [u32; 3],
+  pub fresh: [u32; 3],
+}
+
+/// words per readback slot of the target probe, appended after the readback slots
+pub const DUST_PROBE_WORDS: u32 = 4;
+/// the header words the target probe copies: split children, EWA texels, volume evaluations
+pub const DUST_PROBE_HEADER_WORDS: [u32; 3] = [dust::PYR_SPLIT_CHILDREN, dust::PYR_EWA_TEXELS, dust::PYR_VOLUME_EVALS];
+
+/// The budget loop's telemetry of a view ([`Device::dust_budget_telemetry`]): the knobs, the
+/// loop's state, the feedback regimes, the counters by target and the cadence's own telemetry
+#[derive(Debug, Clone, Default)]
+pub struct DustBudgetTelemetry {
+  pub budget_ms: f64,
+  /// `None`: the loop is off (no cadence, or `AETHERVK_DUST_BUDGET_LOOP=0`)
+  pub knobs: Option<dust::cadence::BudgetKnobs>,
+  pub rung: usize,
+  pub rungs: usize,
+  pub state: &'static str,
+  pub ratio_ema: f64,
+  pub moves: u32,
+  pub k_target: Option<u32>,
+  pub shell_cap_m: Option<f32>,
+  /// the class lengths in use and the staleness bound `2 · N_max` (frames)
+  pub classes: alloc::vec::Vec<u32>,
+  pub staleness_frames: u32,
+  /// the last readback's regime (0 full draw, 1 cadenced) and the full-draw frames whose biases
+  /// were restored
+  pub regime: u8,
+  pub restored: u32,
+  pub fb_full: FeedbackSet,
+  pub fb_cad: Option<FeedbackSet>,
+  pub targets: Option<TargetCounters>,
+  pub cadence: Option<cadence::CadenceTelemetry>,
+}
+
+impl DustBudgetTelemetry {
+  /// the observer's `dust GPU:` lines (no prefix)
+  pub fn lines(&self) -> alloc::vec::Vec<alloc::string::String> {
+    use alloc::format;
+    let mut out = alloc::vec::Vec::new();
+    let fbs = |f: &FeedbackSet| format!("[depth {}, volume {}, EWA {}]", f.split_depth, f.volume_bias, f.ewa_bias);
+    let (fresh, live, frac) = self.cadence.as_ref().map_or((0, 0, 0.0), |c| (c.fresh, c.live, c.fresh_fraction));
+    match self.knobs {
+      Some(k) => out.push(format!(
+        "dust GPU: budget {} ms: loop {} at rung {}/{}{}: ε {} px, lod {} px, budgets ÷{}, classes {:?} (staleness ≤ {} frames), ratio ema {:.2}, K {} vs fresh {} of {} ({:.3}), {} moves",
+        self.budget_ms,
+        self.state,
+        self.rung,
+        self.rungs.saturating_sub(1),
+        if k.fallback { format!(", by-count fallback (N level {})", k.n_level) } else { alloc::string::String::new() },
+        k.eps_px,
+        k.lod_px,
+        1u32 << k.budget_shift,
+        self.classes,
+        self.staleness_frames,
+        self.ratio_ema,
+        self.k_target.map_or("n/a".into(), |k| format!("{k}")),
+        fresh,
+        live,
+        frac,
+        self.moves
+      )),
+      None => out.push(alloc::string::String::from("dust GPU: budget loop off (no cadence, or AETHERVK_DUST_BUDGET_LOOP=0)")),
+    }
+    if let Some(c) = self.cadence.as_ref() {
+      let t = c.timings;
+      out.push(format!(
+        "dust GPU: cadence: images {}, class hist fresh/N… {:?}, D3 {} at build / {} at classify, shown light {:.4}, ghosts {} ({:.4}), aborts rate/budget/prediction/coverage {:?}; ms: builds {} (per pair {}), classify {}, reproject {}, fresh splat {}",
+        c.images_shown,
+        c.class_hist,
+        c.d3_rejected,
+        c.d3_at_classify,
+        c.shown_light_share,
+        c.ghost_entries,
+        c.ghost_share,
+        c.aborts,
+        t.map_or("n/a".into(), |t| format!("{:.2}", t.builds_ms)),
+        t.map_or("n/a".into(), |t| t.pair_build_ms.iter().map(|v| format!("{v:.2}")).collect::<alloc::vec::Vec<_>>().join(" / ")),
+        t.map_or("n/a".into(), |t| format!("{:.2}", t.classify_ms)),
+        t.map_or("n/a".into(), |t| format!("{:.2}", t.reproject_ms)),
+        t.map_or("n/a".into(), |t| format!("{:.2}", t.splat_only_ms)),
+      ));
+    }
+    out.push(format!(
+      "dust GPU: feedback regime {} (full-draw biases restored {} times): full {}, cadenced {}; work by target (split children, EWA texel units, volume evals): {}; specks shell cap {}",
+      if self.regime == 1 { "cadenced" } else { "full" },
+      self.restored,
+      fbs(&self.fb_full),
+      self.fb_cad.as_ref().map_or("n/a".into(), fbs),
+      self.targets.map_or("n/a".into(), |t| format!("builds {:?}, fresh {:?}", t.builds, t.fresh)),
+      self.shell_cap_m.map_or("none".into(), |c| format!("{c:.3} m")),
+    ));
+    out
+  }
+
+  /// `stats.jsonl`'s `dust_budget`
+  pub fn to_json(&self) -> alloc::string::String {
+    use alloc::format;
+    let num = |v: f64| if v.is_finite() { format!("{v}") } else { alloc::string::String::from("null") };
+    let fb = |f: &FeedbackSet| format!("{{\"split_depth\":{},\"volume_bias\":{},\"ewa_bias\":{}}}", f.split_depth, f.volume_bias, f.ewa_bias);
+    let knobs = self.knobs.map_or("null".into(), |k| {
+      format!(
+        "{{\"eps_px\":{},\"lod_px\":{},\"budget_shift\":{},\"fallback\":{},\"n_level\":{},\"saturated\":{}}}",
+        num(k.eps_px as f64), num(k.lod_px as f64), k.budget_shift, k.fallback, k.n_level, k.saturated
+      )
+    });
+    let cad = self.cadence.as_ref().map_or("null".into(), |c| {
+      let t = c.timings;
+      format!(
+        "{{\"eps_px\":{},\"classes\":{:?},\"live\":{},\"fresh\":{},\"fresh_fraction\":{},\"images_shown\":{},\"class_hist\":{:?},\"d3_rejected\":{},\"d3_at_classify\":{},\"shown_light_share\":{},\"ghost_share\":{},\"aborts\":{:?},\"builds_ms\":{},\"pair_build_ms\":[{}],\"classify_ms\":{},\"reproject_ms\":{},\"fresh_splat_ms\":{}}}",
+        num(c.eps_px as f64), c.classes, c.live, c.fresh, num(c.fresh_fraction as f64), c.images_shown, c.class_hist, c.d3_rejected, c.d3_at_classify,
+        num(c.shown_light_share), num(c.ghost_share as f64), c.aborts,
+        t.map_or("null".into(), |t| num(t.builds_ms)),
+        t.map_or(alloc::string::String::new(), |t| t.pair_build_ms.iter().map(|&v| num(v)).collect::<alloc::vec::Vec<_>>().join(",")),
+        t.map_or("null".into(), |t| num(t.classify_ms)),
+        t.map_or("null".into(), |t| num(t.reproject_ms)),
+        t.map_or("null".into(), |t| num(t.splat_only_ms)),
+      )
+    });
+    format!(
+      "{{\"budget_ms\":{},\"knobs\":{},\"rung\":{},\"rungs\":{},\"state\":\"{}\",\"ratio_ema\":{},\"moves\":{},\"k_target\":{},\"shell_cap_m\":{},\"classes\":{:?},\"staleness_frames\":{},\"regime\":{},\"restored\":{},\"fb_full\":{},\"fb_cad\":{},\"targets\":{},\"cadence\":{}}}",
+      num(self.budget_ms),
+      knobs,
+      self.rung,
+      self.rungs,
+      self.state,
+      num(self.ratio_ema),
+      self.moves,
+      self.k_target.map_or("null".into(), |k| format!("{k}")),
+      self.shell_cap_m.map_or("null".into(), |c| num(c as f64)),
+      self.classes,
+      self.staleness_frames,
+      self.regime,
+      self.restored,
+      fb(&self.fb_full),
+      self.fb_cad.as_ref().map_or("null".into(), fb),
+      self.targets.map_or("null".into(), |t| format!("{{\"builds\":{:?},\"fresh\":{:?}}}", t.builds, t.fresh)),
+      cad,
+    )
+  }
+}
+
+impl DustViewHost {
+  fn feedback_now(&self) -> FeedbackSet {
+    FeedbackSet {
+      split_depth: self.split_depth,
+      split_depth_over: self.split_depth_over,
+      volume_bias: self.volume_bias,
+      ewa_bias: self.ewa_bias,
+    }
+  }
+
+  /// the feedback fields ← regime `regime`'s state (1 cadenced: the full-draw one until a
+  /// cadenced frame was measured, the conservative start; else the full-draw one). With the
+  /// cadence off only regime 0 is ever loaded and stored: the identity on the fields (today's
+  /// single feedback state).
+  pub fn feedback_load(&mut self, regime: u8) {
+    let s = if regime == 1 { self.fb_cad.unwrap_or(self.fb_full) } else { self.fb_full };
+    self.split_depth = s.split_depth;
+    self.split_depth_over = s.split_depth_over;
+    self.volume_bias = s.volume_bias;
+    self.ewa_bias = s.ewa_bias;
+  }
+
+  /// regime `regime`'s state ← the feedback fields
+  pub fn feedback_store(&mut self, regime: u8) {
+    let s = self.feedback_now();
+    if regime == 1 {
+      self.fb_cad = Some(s);
+    } else {
+      self.fb_full = s;
+    }
+  }
+
+  /// the budget loop's shift of the EWA and volume feedback budgets (0 without the loop)
+  pub fn budget_shift(&self) -> u32 {
+    self.budget.as_ref().map_or(0, |b| b.knobs().budget_shift)
+  }
 }
 
 /// how long the pyramid download (diagnostics, `download_dust_pyramid`) waits for the graphics
@@ -536,6 +763,14 @@ impl Default for DustViewHost {
       specks_trace: false,
       frame_gates_off: false,
       drawn: None,
+      budget: None,
+      fb_full: FeedbackSet::default(),
+      fb_cad: None,
+      slot_regime: [0; DUST_READBACK_SLOTS],
+      slot_probe: [false; DUST_READBACK_SLOTS],
+      last_regime: 0,
+      targets: None,
+      restored: 0,
     }
   }
 }
@@ -598,31 +833,34 @@ impl DustViewHost {
     // over the budget: coarser by log4(evals / budget) levels at once (a level divides the
     // texels by 4; inside the coma the first frame asks ~45× the budget, and one level per
     // readback took four slow frames to settle); else the one-step rule
-    let bias = if vol.evals > dust::DUST_VOLUME_FRAME_BUDGET {
-      let ratio = vol.evals as f64 / dust::DUST_VOLUME_FRAME_BUDGET as f64;
+    // the budget loop's knob (step 5): the target halved `budget_shift` times (0: the constant)
+    let vol_budget = dust::DUST_VOLUME_FRAME_BUDGET >> self.budget_shift();
+    let bias = if vol.evals > vol_budget {
+      let ratio = vol.evals as f64 / vol_budget as f64;
       let up = (ratio.ln() / 4f64.ln()).ceil().max(1.0) as u32;
       (vol.bias + up).min(dust::DUST_VOLUME_BIAS_MAX)
     } else {
-      vol.suggested_bias()
+      vol.suggested_bias_for(vol_budget)
     };
     if bias != self.volume_bias {
       aethervk_oshal_rlib::log!(
         "[Dust volume] {} ray-integral evaluations at bias {} (budget {}): bias {} for the next frames",
         vol.evals,
         vol.bias,
-        dust::DUST_VOLUME_FRAME_BUDGET,
+        vol_budget,
         bias
       );
     }
     self.volume_bias = bias;
     let ewa = dust::EwaStats::load(header);
-    let ewa_bias = ewa.suggested_bias();
+    let ewa_budget = (dust::DUST_EWA_FRAME_BUDGET as u64) >> self.budget_shift();
+    let ewa_bias = ewa.suggested_bias_for(ewa_budget);
     if ewa_bias != self.ewa_bias {
       aethervk_oshal_rlib::log!(
         "[Dust EWA] {:.3e} texels at bias {} (budget {:.3e}): bias {} for the next frames",
         ewa.texels as f64,
         ewa.bias,
-        dust::DUST_EWA_FRAME_BUDGET as f64,
+        ewa_budget as f64,
         ewa_bias
       );
     }
@@ -1428,7 +1666,9 @@ impl Device {
           }
         }
       }
-      let rb_bytes = DUST_READBACK_SLOTS as u64 * DustView::readback_words(&layout) as u64 * 4;
+      // (then the target probes, `DUST_PROBE_WORDS` per slot)
+      let rb_bytes = DUST_READBACK_SLOTS as u64 * DustView::readback_words(&layout) as u64 * 4
+        + DUST_READBACK_SLOTS as u64 * DUST_PROBE_WORDS as u64 * 4;
       let (readback, rmapped) = match self.dust_create_buffer(
         &allocator,
         rb_bytes,
@@ -1509,8 +1749,16 @@ impl Device {
     // fold the readback of DUST_READBACK_SLOTS frames ago
     let (lvl, lvl_off, lw, lh) = DustView::white_level(&view.layout);
     let rb_words = DustView::readback_words(&view.layout) as usize;
+    // the view's cadence (the budget loop runs with it) and its newest fresh count (taken
+    // before the host lock: the two locks are never held together here)
+    let (cad_active, cad_fresh) = match mgr.cadence.get(&pe) {
+      Some(c) => (true, c.lock().last_state.as_ref().map(|s| s[cadence::CADS_FRESH])),
+      None => (false, None),
+    };
     let mut host = view.host.lock();
     let slot = (host.frame % DUST_READBACK_SLOTS as u64) as usize;
+    // the regime the frame read back now was drawn in (0 full, 1 cadenced)
+    let regime_rb = host.slot_regime[slot];
     if host.slot_valid[slot] && !cpu {
       if let Some(rb) = view.readback.as_ref() {
         res.allocator.allocator.as_allocator_view().invalidate_allocation(
@@ -1528,7 +1776,23 @@ impl Device {
         let (header, rest) = words.split_at(dust::PYRAMID_HEADER_WORDS as usize);
         let (rest, vqueue) = rest.split_at(rest.len() - dust::DUST_VQUEUE_HEADER_WORDS as usize);
         let (level, queue) = rest.split_at(rest.len() - dust::DUST_QUEUE_HEADER_WORDS as usize);
+        // the feedback of the regime the frame was drawn in: full draws and cadenced frames learn
+        // apart (cheap cadenced frames never lower a full draw's biases); the cadence off loads
+        // and stores regime 0 only: today's single state
+        host.feedback_load(regime_rb);
         host.absorb(header, level, 1 << lvl, unit);
+        host.feedback_store(regime_rb);
+        host.last_regime = regime_rb;
+        // the counters by target (the probe after the builds; fresh = the frame's less them)
+        host.targets = if host.slot_probe[slot] {
+          let off = DUST_READBACK_SLOTS * rb_words * 4 + slot * DUST_PROBE_WORDS as usize * 4;
+          res.allocator.allocator.as_allocator_view().invalidate_allocation(&rb.alloc, off as u64, DUST_PROBE_WORDS as u64 * 4)?;
+          let p = unsafe { core::slice::from_raw_parts(view.readback_mapped.add(off).cast::<u32>(), 3) };
+          let tot: [u32; 3] = core::array::from_fn(|i| header[DUST_PROBE_HEADER_WORDS[i] as usize]);
+          Some(TargetCounters { builds: [p[0], p[1], p[2]], fresh: core::array::from_fn(|i| tot[i].wrapping_sub(p[i])) })
+        } else {
+          None
+        };
         // the packet queue of that frame: records drawn, packets appended (the rest in-thread)
         // (header word 0 is the dispatch's x, at most `DUST_QUEUE_DISPATCH_X`: not the count)
         let held = dust::dust_queue_held(queue);
@@ -1602,6 +1866,26 @@ impl Device {
             if !t.reused {
               host.timings_drawn = Some(t);
             }
+            // the budget loop (step 5): drawn cadenced frames only (a full draw is the known
+            // transient: a reset never moves a knob)
+            if !t.reused && regime_rb == 1 {
+              let now = host.frame;
+              let d_max = host.shell.d_max_m;
+              if let Some(b) = host.budget.as_mut() {
+                let s = dust::cadence::BudgetSample { frame: t.frame, total_ms: t.total_ms, fresh_ms: t.splat_only_ms, fresh: cad_fresh.unwrap_or(0) };
+                if b.observe(&s, now) {
+                  let k = b.knobs();
+                  aethervk_oshal_rlib::log!(
+                    "[Dust budget] view {}: {:.2} ms against {} ms: ε {} px, lod {} px, budgets ÷{}, fallback {} (N level {}){}",
+                    pe.0, t.total_ms, b.budget_ms, k.eps_px, k.lod_px, 1u32 << k.budget_shift, k.fallback, k.n_level,
+                    if k.saturated { ", every knob at its ceiling" } else { "" }
+                  );
+                }
+                if specks_enabled() {
+                  b.observe_specks(t.specks_ms, d_max);
+                }
+              }
+            }
           }
         }
       }
@@ -1620,6 +1904,21 @@ impl Device {
       host.ts_frame[slot] = host.frame;
       host.ts_slot = Some(slot);
     }
+    // this frame's regime until `Device::dust_budget_frame_kind` says otherwise: cadenced with the
+    // cadence on (reused frames included), full without it
+    host.slot_regime[slot] = if cad_active { 1 } else { 0 };
+    host.slot_probe[slot] = false;
+    // the budget loop lives with the cadence
+    if cad_active && host.budget.is_none() && !cpu {
+      host.budget = dust::cadence::BudgetLoop::from_env();
+    } else if !cad_active {
+      host.budget = None;
+    }
+    // the biases this frame begins with: the cadenced regime's with the cadence on (the full one
+    // until a cadenced frame was measured); a full-draw frame gets the full regime's back
+    host.feedback_load(if cad_active { 1 } else { 0 });
+    let budget_knobs = host.budget.as_ref().map(|b| b.knobs());
+    let shell_cap = host.budget.as_ref().and_then(|b| b.shell_cap_m);
     let unit = host.unit();
     host.slot_unit[slot] = unit;
     let (white, softening) = host.display();
@@ -1639,7 +1938,7 @@ impl Device {
       aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_LOD_PX")
         .and_then(|v| v.trim().parse::<f32>().ok())
         .filter(|v| v.is_finite() && *v >= 0.0)
-        .unwrap_or(dust::DUST_LOD_PX_DEFAULT)
+        .unwrap_or(budget_knobs.map_or(dust::DUST_LOD_PX_DEFAULT, |k| k.lod_px))
     });
     let split_depth = host.split_depth.min(split_depth_cap());
     // `AETHERVK_DUST_VOLUME_BIAS=<n>`: a fixed volumetric level bias (diagnostics: measures what the
@@ -1726,7 +2025,7 @@ impl Device {
     // per system, in the speck push constants
     let d_max = match shell_override {
       Some(d) => d,
-      None if specks_enabled() => shell.d_max_m,
+      None if specks_enabled() => shell_cap.map_or(shell.d_max_m, |c| c.min(shell.d_max_m)),
       None => 0.0,
     };
     SpeckHeader::write(&mut header, d_max, specks_budget());
@@ -1846,6 +2145,158 @@ impl Device {
       specks: shell.specks,
       specks_overflow: shell.overflow,
     }, reuse))
+  }
+
+  /// The budget loop's cadence knobs into `pe`'s cadence (`frame.rs`, before
+  /// `cmd_dust_cadence_begin`; temporal reuse step 5): ε and the class lengths under the
+  /// fallback's N level (the longest class × 2^n). Returns the cadence fingerprint's salt (the N
+  /// level: a changed class length resets the cadence the same frame, as any fingerprint change);
+  /// 0 without the loop or the cadence (nothing changed).
+  pub fn dust_budget_apply_cadence(&self, pe: gpu::PresentationEngineHandle) -> u64 {
+    let res = self.res.read();
+    let Some(mgr) = res.dust_manager.as_ref() else { return 0 };
+    let Some(view) = mgr.views.get(&pe) else { return 0 };
+    // the knobs under the host lock, then the cadence's lock (never both held)
+    let (knobs, base) = {
+      let host = view.host.lock();
+      let Some(b) = host.budget.as_ref() else { return 0 };
+      (b.knobs(), b.base_classes.clone())
+    };
+    let Some(entry) = mgr.cadence.get(&pe) else { return 0 };
+    let base = {
+      let mut c = entry.lock();
+      let base = base.unwrap_or_else(|| c.cfg.classes.clone());
+      c.cfg.eps_px = knobs.eps_px;
+      // the fallback's shape bound (0 off the fallback: the ε rule alone)
+      c.shape_frac = knobs.shape_frac();
+      let mut classes = base.clone();
+      if let Some(l) = classes.last_mut() {
+        *l <<= knobs.n_level;
+      }
+      c.cfg.classes = classes;
+      base
+    };
+    let mut host = view.host.lock();
+    if let Some(b) = host.budget.as_mut()
+      && b.base_classes.is_none()
+    {
+      b.base_classes = Some(base);
+    }
+    knobs.n_level as u64
+  }
+
+  /// What the frame being recorded is for the feedback (`frame.rs`, after
+  /// `cmd_dust_cadence_begin`): `full` (a reset or first frame: everything fresh) or a cadenced
+  /// frame. A full frame draws with the full-draw regime's biases: header word
+  /// [`dust::PYR_SPLIT_DEPTH`]'s depth / volume-bias / EWA-bias bits are rewritten before any splat
+  /// (the overrides keep theirs) and its readback updates that regime.
+  pub fn dust_budget_frame_kind(&self, cmd: vk::CommandBuffer, pe: gpu::PresentationEngineHandle, full: bool) {
+    let res = self.res.read();
+    let Some(mgr) = res.dust_manager.as_ref() else { return };
+    let Some(view) = mgr.views.get(&pe) else { return };
+    let Some(pyramid) = view.pyramid.as_ref() else { return };
+    let mut host = view.host.lock();
+    let slot = (host.frame % DUST_READBACK_SLOTS as u64) as usize;
+    host.slot_regime[slot] = if full { 0 } else { 1 };
+    if !full || crate::gpu_backends::vulkan::physics::is_cpu_particles_mode() {
+      return;
+    }
+    let f = host.fb_full;
+    let env_u32 = |k: &str| aethervk_oshal_rlib::os::env::var(k).and_then(|v| v.trim().parse::<u32>().ok());
+    let mut words = view.frame_words.lock();
+    let w = words[dust::PYR_SPLIT_DEPTH as usize];
+    let mut n = (w & !0xFF) | f.split_depth.min(split_depth_cap());
+    if host.volume_bias_override.is_none() && env_u32("AETHERVK_DUST_VOLUME_BIAS").is_none() {
+      n = (n & !(0xFF << 8)) | (f.volume_bias.min(255) << 8);
+    }
+    if env_u32("AETHERVK_DUST_EWA_BIAS").is_none() {
+      n = (n & !(0xF << 18)) | (f.ewa_bias.min(dust::DUST_EWA_BIAS_MAX) << 18);
+    }
+    if n == w {
+      return;
+    }
+    words[dust::PYR_SPLIT_DEPTH as usize] = n;
+    host.restored += 1;
+    // after the frame begin's header write (transfer → transfer); the splats read it after the
+    // frame's pre-splat barrier
+    let b = vk::MemoryBarrier2::default()
+      .src_stage_mask(vk::PipelineStageFlags2::TRANSFER | vk::PipelineStageFlags2::COMPUTE_SHADER)
+      .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE | vk::AccessFlags2::SHADER_STORAGE_WRITE)
+      .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+      .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE);
+    unsafe {
+      self.device.synchronization2.cmd_pipeline_barrier2(cmd, &vk::DependencyInfo::default().memory_barriers(core::slice::from_ref(&b)));
+      self.device.cmd_update_buffer(cmd, pyramid.buffer, dust::PYR_SPLIT_DEPTH as u64 * 4, bytemuck::cast_slice(&[n]));
+    }
+  }
+
+  /// The work counters after the cadence's build draws ([`DUST_PROBE_HEADER_WORDS`]) into this
+  /// frame's probe (after the readback slots of the view's readback buffer); read with the frame's
+  /// readback as [`TargetCounters`] (`frame.rs`, right after `cmd_dust_cadence_builds`)
+  pub fn cmd_dust_budget_probe(&self, cmd: vk::CommandBuffer, pe: gpu::PresentationEngineHandle) {
+    let res = self.res.read();
+    let Some(mgr) = res.dust_manager.as_ref() else { return };
+    let Some(view) = mgr.views.get(&pe) else { return };
+    let (Some(pyramid), Some(rb)) = (view.pyramid.as_ref(), view.readback.as_ref()) else { return };
+    if crate::gpu_backends::vulkan::physics::is_cpu_particles_mode() {
+      return;
+    }
+    let slot = {
+      let mut host = view.host.lock();
+      let slot = (host.frame % DUST_READBACK_SLOTS as u64) as usize;
+      host.slot_probe[slot] = true;
+      slot
+    };
+    let base = DUST_READBACK_SLOTS as u64 * DustView::readback_words(&view.layout) as u64 * 4 + slot as u64 * DUST_PROBE_WORDS as u64 * 4;
+    let regions: [vk::BufferCopy; 3] = core::array::from_fn(|i| {
+      vk::BufferCopy::default().src_offset(DUST_PROBE_HEADER_WORDS[i] as u64 * 4).dst_offset(base + i as u64 * 4).size(4)
+    });
+    let b = vk::MemoryBarrier2::default()
+      .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER | vk::PipelineStageFlags2::TRANSFER)
+      .src_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE | vk::AccessFlags2::TRANSFER_WRITE)
+      .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+      .dst_access_mask(vk::AccessFlags2::TRANSFER_READ);
+    unsafe {
+      self.device.synchronization2.cmd_pipeline_barrier2(cmd, &vk::DependencyInfo::default().memory_barriers(core::slice::from_ref(&b)));
+      self.device.cmd_copy_buffer(cmd, pyramid.buffer, rb.buffer, &regions);
+    }
+    // the fresh pass's atomics on these words come after the frame's pre-splat barrier (its
+    // source stages include TRANSFER: the write-after-read is ordered)
+  }
+
+  /// The budget loop's telemetry of `pe` (`None` without a view)
+  pub fn dust_budget_telemetry(&self, pe: gpu::PresentationEngineHandle) -> Option<DustBudgetTelemetry> {
+    let cad = self.dust_cadence_telemetry(pe);
+    let res = self.res.read();
+    let view = res.dust_manager.as_ref()?.views.get(&pe)?;
+    let host = view.host.lock();
+    let classes = cad.as_ref().map_or(alloc::vec::Vec::new(), |c| c.classes.clone());
+    let mut t = DustBudgetTelemetry {
+      budget_ms: dust::cadence::DUST_BUDGET_MS_DEFAULT,
+      staleness_frames: 2 * classes.last().copied().unwrap_or(0),
+      classes,
+      regime: host.last_regime,
+      restored: host.restored,
+      fb_full: host.fb_full,
+      fb_cad: host.fb_cad,
+      targets: host.targets,
+      cadence: cad,
+      state: "off",
+      ratio_ema: f64::NAN,
+      ..Default::default()
+    };
+    if let Some(b) = host.budget.as_ref() {
+      t.budget_ms = b.budget_ms;
+      t.knobs = Some(b.knobs());
+      t.rung = b.rung;
+      t.rungs = b.ladder.len();
+      t.state = b.state_name();
+      t.ratio_ema = b.ema;
+      t.moves = b.moves;
+      t.k_target = b.k_last;
+      t.shell_cap_m = b.shell_cap_m;
+    }
+    Some(t)
   }
 
   /// Sets the view's pixel solid angle (sr) for the speck shell: `(3 / (n_eye Ω_px))^{1/3}` is

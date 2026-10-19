@@ -381,31 +381,35 @@ pub struct SimpleParticleEmissionStepParams<'a> {
   pub t_current: aethervk_oshal_rlib::os::time::timeus_t,
 }
 
+/// How long [`allocate_primary_vk_command_buffer`] waits for the GPU to return command buffers
+/// (µs): a few frames, spent only when every pool of the (thread, family) is in flight.
+const ALLOCATE_RETRY_DEADLINE_US: i64 = 100_000;
+
 /// Vulkan Utility to allocate a vulkan command buffer from a given
 /// [`crate::gpu_backends::vulkan::device::commands::CommandPools`], with the possibility to retry
 /// when Pool fails because out of host memory (fixed capacities in use there). Therefore, on
 /// failure, a discard pool recycling phase is called and another attempt is made. This is done
-/// every 0.1ms interval with a deadline of 1ms
-/// Note: `current_timeline` is the value which will be signaled from the previous graphics queue
-/// command, not the next signal value.
+/// every 0.1ms interval with a deadline of [`ALLOCATE_RETRY_DEADLINE_US`].
+/// Note: `completed_timeline` returns the role's *completed* counter (never a value still in
+/// flight); it is re-read on every attempt, so the loop sees the GPU progress it waits for.
 fn allocate_primary_vk_command_buffer(
   device: &device::LogicalDevice,
   command_pools: &device::commands::CommandPools,
   discard_pool: &device::resources::DiscardPool,
   queue_family_index: u32,
   cmd_id: device::commands::CommandBufferId,
-  current_timeline: u64,
+  completed_timeline: &dyn Fn() -> u64,
 ) -> GpuResult<ash::vk::CommandBuffer> {
   use aethervk_oshal_rlib::os::{native::this_thread, time::get_monotonic_time};
 
   let tid = this_thread::id();
   let start = get_monotonic_time();
-  while (get_monotonic_time() - start) < 1_000_i64 {
+  while (get_monotonic_time() - start) < ALLOCATE_RETRY_DEADLINE_US {
     if let Ok(cmd) = command_pools.allocate_primary(device, tid, queue_family_index, cmd_id) {
       return Ok(cmd);
     }
 
-    let items = discard_pool.pop_ready_items(current_timeline);
+    let items = discard_pool.pop_ready_items(completed_timeline());
     device::resources::DiscardPool::destroy_items_lock_free(device, items);
 
     this_thread::sleep_for(core::time::Duration::from_micros(100));

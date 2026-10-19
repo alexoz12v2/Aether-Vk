@@ -131,7 +131,11 @@ fn eye_above(moments: &[dust::DustMoments], back: f32) -> ([f32; 3], f32) {
 /// inputs (Δt, Δe, a_w) scaled by one λ so the CPU's median δ_16 sits at the class-16 bound ε / 32:
 /// every term of δ is linear in them (the projected step to first order), so the clusters' own
 /// spread (depth, extent, velocity) puts them on both sides of it — at least two classes in each
-/// view, asserted (the unscaled scene put every cluster in class 16 in both).
+/// view, asserted (the unscaled scene put every cluster in class 16 in both). A third case is the
+/// perspective one under the by-count fallback's shape bound (`RateInputs::shape_frac`, params word
+/// `CADP_SHAPE`), θ putting the median age at class 16's bound `2 · 16 · Δt ≤ θ · age`: the same
+/// per-slot comparison, the shape bound changes classes there (counted against θ = 0 on the CPU,
+/// asserted > 0) and nowhere else (0 in the first two cases).
 #[test]
 fn gpu_dust_cadence_classify_matches_reference() {
   let id = 9031u64;
@@ -172,6 +176,14 @@ fn gpu_dust_cadence_classify_matches_reference() {
       v.sort_by(f32::total_cmp);
       v[v.len() / 2]
     };
+    // the median age (floored as the rate floors it): the shape case's θ puts it at class 16's bound
+    let age_med = {
+      let mut a: alloc::vec::Vec<f32> =
+        moments.iter().filter(|m| m.flux() > 0.0).map(|m| m.age().max(cad::DUST_CADENCE_AGE_MIN_S)).collect();
+      a.sort_by(f32::total_cmp);
+      a[a.len() / 2]
+    };
+    const SHAPE_CASE: &str = "perspective, fallback shape";
     // the ortho view: ±ext around the cloud's centre, the eye far above
     let half = ext;
     let mut ortho = [0.0f32; 16];
@@ -182,7 +194,7 @@ fn gpu_dust_cadence_classify_matches_reference() {
     ortho[13] = -eye[1] / half;
     ortho[15] = 1.0;
     let px_per_m = w as f32 / (2.0 * half);
-    let cases: [(&str, [f32; 16], [f32; 3], cad::RateInputs); 2] = [
+    let cases: [(&str, [f32; 16], [f32; 3], cad::RateInputs); 3] = [
       (
         "ortho",
         ortho,
@@ -194,6 +206,7 @@ fn gpu_dust_cadence_classify_matches_reference() {
           a_w_m: [0.0, 0.0, 0.0],
           eps_px: 1.0,
           frame_px: w.max(h) as f32,
+          shape_frac: 0.0,
         },
       ),
       (
@@ -206,6 +219,21 @@ fn gpu_dust_cadence_classify_matches_reference() {
           a_w_m: [0.0, 0.1 * d_med / (40.0 * f_px), 0.0],
           eps_px: 1.0,
           frame_px: w.max(h) as f32,
+          shape_frac: 0.0,
+        },
+      ),
+      (
+        // the perspective case under the fallback's shape bound (θ set after the scaling)
+        SHAPE_CASE,
+        camera(eye, w, h).0,
+        eye,
+        cad::RateInputs {
+          dt_s: 0.02,
+          d_eye_m: [d_med / (40.0 * f_px), 0.0, 0.0],
+          a_w_m: [0.0, 0.1 * d_med / (40.0 * f_px), 0.0],
+          eps_px: 1.0,
+          frame_px: w.max(h) as f32,
+          shape_frac: 0.0,
         },
       ),
     ];
@@ -230,12 +258,16 @@ fn gpu_dust_cadence_classify_matches_reference() {
         a_w_m: inp0.a_w_m.map(|x| x * lam),
         eps_px: inp0.eps_px,
         frame_px: inp0.frame_px,
+        // θ with the median age at class 16's shape bound 2 · 16 · Δt = θ · age
+        shape_frac: if tag == SHAPE_CASE { 2.0 * classes[1] as f32 * (inp0.dt_s * lam) / age_med } else { 0.0 },
       };
       std::println!("[cadence gpu] classify {tag}: inputs scaled by λ = {lam:.4e} (Δt {:.4e} s)", inp.dt_s);
       let gpu = device
         .dust_cadence_classify_debug(addrs.0, addrs.1, first, capacity, batch.count, mvp, [e[0], e[1], e[2], 0.0], w, h, &classes, &inp, 0.0)
         .unwrap();
       let (mut compared, mut boundary, mut bad) = (0usize, 0usize, 0usize);
+      // the slots whose class the shape bound changed (the CPU at θ against θ = 0)
+      let mut shaped = 0usize;
       let mut hist = [0usize; 4];
       let (mut rel_d, mut rel_g): (alloc::vec::Vec<f64>, alloc::vec::Vec<f64>) = (alloc::vec::Vec::new(), alloc::vec::Vec::new());
       let (mut worst_abs, mut over) = (0.0f64, 0usize);
@@ -249,6 +281,9 @@ fn gpu_dust_cadence_classify_matches_reference() {
         }
         let pred = dust::streak_pred(&render, o).map(|q| &moments[q]).filter(|q| q.propagate_stamp() == m.propagate_stamp());
         let r = cad::cadence_rate(m, pred, &mvp, e, w, h, &classes, &inp);
+        let r0 = cad::cadence_rate(m, pred, &mvp, e, w, h, &classes, &cad::RateInputs { shape_frac: 0.0, ..inp });
+        assert!(r.class <= r0.class, "{tag}: offset {o}: the shape bound raised a class ({} over {})", r.class, r0.class);
+        shaped += (r.class != r0.class) as usize;
         compared += 1;
         hist[r.class as usize] += 1;
         // the boundary: the GPU's and the CPU's δ_k · 2N_k on opposite sides of ε for some k (the
@@ -317,6 +352,12 @@ fn gpu_dust_cadence_classify_matches_reference() {
       assert_eq!(over, 0, "{tag}: {over} δ values beyond 1e-4·δ + 4 ulp px");
       assert!(q(&rel_g, 1.0) <= 1e-4, "{tag}: g relative error {:.2e}", q(&rel_g, 1.0));
       assert!(hist.iter().filter(|&&n| n > 0).count() >= 2, "{tag}: one class only {hist:?}: the scaled scene spreads nothing");
+      std::println!("[cadence gpu] classify {tag}: θ {:.4e}, classes changed by the shape bound {shaped}", inp.shape_frac);
+      if tag == SHAPE_CASE {
+        assert!(shaped > 0, "{tag}: the shape bound changed no class (θ {})", inp.shape_frac);
+      } else {
+        assert_eq!(shaped, 0, "{tag}: θ = 0 changed a class");
+      }
     }
   });
 }

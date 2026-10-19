@@ -44,6 +44,8 @@ pub const CADP_SWAP0: usize = 17;
 pub const CADP_FLAGS: usize = 23;
 pub const CADP_DEBUG: usize = 24;
 pub const CADP_DMAX: usize = 26;
+/// f32 the rate rule's shape bound θ (`RateInputs::shape_frac`; 0: off)
+pub const CADP_SHAPE: usize = 27;
 pub const CADP_STATE: usize = 28;
 pub const CADP_NT: usize = 30;
 pub const CADP_ADMIT: usize = 31;
@@ -317,6 +319,9 @@ struct FrameRec {
 /// The cadence of one view on the GPU (host half). Created by [`Device::dust_cadence_enable`].
 pub struct DustCadenceGpu {
   pub cfg: CadenceConfig,
+  /// the rate rule's shape bound θ (params word [`CADP_SHAPE`]; `DustCadenceState::shape_frac`):
+  /// 0 off the budget loop's fallback
+  pub shape_frac: f32,
   /// drawn frames since the last reset
   pub drawn_frame: u64,
   prev: Option<PrevFrame>,
@@ -607,6 +612,7 @@ impl Device {
       pe,
       spin::Mutex::new(DustCadenceGpu {
         cfg,
+        shape_frac: 0.0,
         drawn_frame: 0,
         prev: None,
         de_hist: alloc::collections::VecDeque::with_capacity(DUST_CADENCE_HISTORY),
@@ -882,6 +888,7 @@ impl Device {
       prm[CADP_AW + k] = fbits(aw[k]);
     }
     prm[CADP_EPS] = fbits(c.cfg.eps_px);
+    prm[CADP_SHAPE] = fbits(c.shape_frac);
     prm[CADP_FRAME_PX] = fbits(f.view.width.max(f.view.height) as f32);
     prm[CADP_W] = fbits(f.view.width as f32);
     prm[CADP_H] = fbits(f.view.height as f32);
@@ -1471,6 +1478,7 @@ impl Device {
       prm[CADP_AW + k] = inp.a_w_m[k].to_bits();
     }
     prm[CADP_EPS] = inp.eps_px.to_bits();
+    prm[CADP_SHAPE] = inp.shape_frac.to_bits();
     prm[CADP_FRAME_PX] = inp.frame_px.to_bits();
     prm[CADP_W] = (width as f32).to_bits();
     prm[CADP_H] = (height as f32).to_bits();

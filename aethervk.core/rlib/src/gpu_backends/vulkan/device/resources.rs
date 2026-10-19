@@ -469,6 +469,15 @@ impl DiscardPool {
             }
           }
           let _x = manager.recycle(device, thread_id, queue_family_index, command_buffer);
+          #[cfg(not(debug_assertions))]
+          if let Err(ref e) = _x {
+            aethervk_oshal_rlib::log!(
+              "command pool recycle failed: tid={:?} id={:?} err={:?}",
+              thread_id,
+              id,
+              e
+            );
+          }
           #[cfg(debug_assertions)]
           {
             if let Err(ref e) = _x {

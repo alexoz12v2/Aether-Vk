@@ -951,6 +951,25 @@ impl SimulationContext {
       .flatten()
   }
 
+  /// The budget loop's telemetry of `pe` (`dust::DustBudgetTelemetry`: ε, lod, budgets, the
+  /// fallback, class lengths and staleness, the feedback regimes, the counters by target and the
+  /// cadence's telemetry); `None` without a view or a device
+  pub fn dust_budget_telemetry(
+    &self,
+    pe: crate::gpu::PresentationEngineHandle,
+  ) -> Option<crate::gpu_backends::vulkan::device::dust::DustBudgetTelemetry> {
+    use crate::gpu::WeakRenderFrontendExt;
+    let frontend = self.render_proxy.0.as_frontend()?;
+    frontend
+      .with_device(self.render_proxy.1, |device| {
+        let vulkan_device: &crate::gpu_backends::vulkan::device::Device =
+          device.as_any().downcast_ref().ok_or(crate::gpu_err!("not a Vulkan device"))?;
+        Ok(vulkan_device.dust_budget_telemetry(pe))
+      })
+      .ok()
+      .flatten()
+  }
+
   /// Observer / diagnostics: the render budget of presentation engine `pe` of scene `scene_id`.
   /// `Some(n)`: the logic thread sends that view a frame only while its budget is above 0, one
   /// less per frame sent (`Some(0)` holds the view, `Some(1)` releases exactly one frame: the

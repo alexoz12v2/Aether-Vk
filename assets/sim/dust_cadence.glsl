@@ -50,6 +50,7 @@ const uint DUST_CADP_SWAP0     = 17u;  // 6 x k | p << 8, in the CPU's order (k,
 const uint DUST_CADP_FLAGS     = 23u;  // DUST_CADF_*
 const uint DUST_CADP_DEBUG     = 24u;  // 2 x the debug records' address (lo, hi; test hook)
 const uint DUST_CADP_DMAX      = 26u;  // f32 the speck shell radius of the frame (0: none)
+const uint DUST_CADP_SHAPE     = 27u;  // f32 the fallback's shape bound θ (0: off; cadence::RateInputs::shape_frac)
 const uint DUST_CADP_STATE     = 28u;  // 2 x the state buffer's address (lo, hi)
 const uint DUST_CADP_NT        = 30u;  // the view's tiers this frame (every system)
 const uint DUST_CADP_ADMIT     = 31u;  // bit k: class k fits the motion budget (cadence::class_admitted)
@@ -271,7 +272,8 @@ bool dust_cad_footprint(uint mi, vec3 sh, int pred, vec3 shP, mat4 mvp, float W,
 }
 
 // cadence::cadence_rate (cadence_rate_near at DUST_CADENCE_NEAR_SIGMAS): the class (0 fresh,
-// k + 1 the largest k with δ_k · 2 N_k ≤ ε), the δ_k (∞ when not finite or no class k), the
+// k + 1 the largest k with δ_k · 2 N_k ≤ ε and, with the fallback's shape bound θ > 0,
+// 2 N_k · Δt ≤ θ · age), the δ_k (∞ when not finite or no class k), the
 // sensitivity g (px/m) and the enclosing flag. `pred` ≥ 0: the predecessor at the same stamp.
 uint dust_cad_rate(uint mi, vec3 sh, int pred, vec3 shP, mat4 mvp, vec3 eye, DustUintBuffer prm,
                    out float dl0, out float dl1, out float dl2, out float gOut, out bool enclosingOut) {
@@ -361,26 +363,34 @@ uint dust_cad_rate(uint mi, vec3 sh, int pred, vec3 shP, mat4 mvp, vec3 eye, Dus
     uint cls = 0u;
     uint nc = prm.v[DUST_CADP_NC];
     float eps = uintBitsToFloat(prm.v[DUST_CADP_EPS]);
+    // the by-count fallback's shape bound (θ = 0: off, every class passes it): 2 N_k · Δt ≤ θ · age,
+    // the CPU's two f32 products and comparison
+    float theta = uintBitsToFloat(prm.v[DUST_CADP_SHAPE]);
+    bool shapeOn = theta > 0.0;
+    precise float thAge = theta * age;
     if (nc > 0u) {
         precise float dk = base + uintBitsToFloat(prm.v[DUST_CADP_AW]) * g;
         bool fin = dust_cad_finite(dk);
         dl0 = fin ? dk : INF;
         precise float lhs = dk * 2.0 * float(prm.v[DUST_CADP_N]);
-        if (fin && lhs <= eps) cls = 1u;
+        precise float shp = 2.0 * float(prm.v[DUST_CADP_N]) * dt;
+        if (fin && lhs <= eps && (!shapeOn || shp <= thAge)) cls = 1u;
     }
     if (nc > 1u) {
         precise float dk = base + uintBitsToFloat(prm.v[DUST_CADP_AW + 1u]) * g;
         bool fin = dust_cad_finite(dk);
         dl1 = fin ? dk : INF;
         precise float lhs = dk * 2.0 * float(prm.v[DUST_CADP_N + 1u]);
-        if (fin && lhs <= eps) cls = 2u;
+        precise float shp = 2.0 * float(prm.v[DUST_CADP_N + 1u]) * dt;
+        if (fin && lhs <= eps && (!shapeOn || shp <= thAge)) cls = 2u;
     }
     if (nc > 2u) {
         precise float dk = base + uintBitsToFloat(prm.v[DUST_CADP_AW + 2u]) * g;
         bool fin = dust_cad_finite(dk);
         dl2 = fin ? dk : INF;
         precise float lhs = dk * 2.0 * float(prm.v[DUST_CADP_N + 2u]);
-        if (fin && lhs <= eps) cls = 3u;
+        precise float shp = 2.0 * float(prm.v[DUST_CADP_N + 2u]) * dt;
+        if (fin && lhs <= eps && (!shapeOn || shp <= thAge)) cls = 3u;
     }
     return cls;
 }
