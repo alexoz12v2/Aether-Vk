@@ -245,6 +245,32 @@
       </Template>
     </controls:DebugOnly>
 
+    <!-- Run to End spinner -->
+    <Arc IsVisible="{Binding IsRunningToEnd}"
+         HorizontalAlignment="Center" VerticalAlignment="Center"
+         Width="48" Height="48"
+         StartAngle="0" SweepAngle="270"
+         Stroke="{DynamicResource Accent.Active}"
+         StrokeThickness="4">
+      <Arc.RenderTransform>
+        <RotateTransform />
+      </Arc.RenderTransform>
+      <Arc.Styles>
+        <Style Selector="Arc">
+          <Style.Animations>
+            <Animation Duration="0:0:1" IterationCount="Infinite">
+              <KeyFrame Cue="0%">
+                <Setter Property="RotateTransform.Angle" Value="0" />
+              </KeyFrame>
+              <KeyFrame Cue="100%">
+                <Setter Property="RotateTransform.Angle" Value="360" />
+              </KeyFrame>
+            </Animation>
+          </Style.Animations>
+        </Style>
+      </Arc.Styles>
+    </Arc>
+
     <!-- Simulation Current Epoch Overlay -->
     <ContentControl Content="{Binding CurrentEpochString}" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,16">
       <ContentControl.DataTemplates>

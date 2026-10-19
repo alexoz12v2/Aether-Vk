@@ -15,6 +15,10 @@ public sealed class TimelineSession : ITabSession
   
   public string CurrentEpochString { get; set; } = string.Empty;
 
+  /// <summary>True while Run to End seeks to the committed end (the viewport overlay shows a
+  /// spinner).</summary>
+  public bool IsRunningToEnd { get; set; }
+
   // ── Snapshot Restore fields ──────────────────────────────────────────────
 
   /// <summary>ISO string of the epoch when simulation was last started.</summary>

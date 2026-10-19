@@ -1,6 +1,7 @@
 using System;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Threading.Tasks;
 using System.Windows.Input;
 using AetherVk.Logic.Attributes;
 using AetherVk.Logic.Services;
@@ -169,7 +170,7 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
   public IRelayCommand RestoreCommand { get; }
   public IRelayCommand PlayPauseCommand { get; }
   public ICommand ResetCommand { get; }
-  public ICommand RunToEndCommand { get; }
+  public IAsyncRelayCommand RunToEndCommand { get; }
 
   public TimelineTabViewModel(
     ITranslationService translationService,
@@ -210,7 +211,7 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
           if (!running && IsPlaying) IsPlaying = false; // external stop -> sync UI
       })
       .AddDisposableTo(_disposables);
-    RunToEndCommand = new RelayCommand(() => { IsPlaying = false; });
+    RunToEndCommand = new AsyncRelayCommand(RunToEndAsync);
 
     _timelineService.IsTimelineValid
       .ObserveOn(schedulerProvider.MainThread)
@@ -227,6 +228,33 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
     Restore();
     
     IsActive = true;
+  }
+
+  /// <summary>
+  /// Run to End: pauses, then jumps to the committed end through the seek path (the clock is
+  /// clamped to the end, bodies and the last TTL of dust rebuilt there; no frame is simulated
+  /// on the way). The overlay spinner shows while the seek blocks off the UI thread; the
+  /// timeline is left paused at the end.
+  /// </summary>
+  private async Task RunToEndAsync()
+  {
+    if (CurrentSession is null
+        || !TimeUtils.TryParseIso8601(CurrentSession.CommittedEndEpoch, out var endDt))
+      return;
+    IsPlaying = false;
+    // a day past the end: the seek clamps to the committed end exactly (TAI vs TDB parts)
+    var (cent, ns) = TimeUtils.ToTaiParts(endDt.AddDays(1));
+    _timelineSessionService.UpdateSession(SessionId, s => s.IsRunningToEnd = true);
+    bool ok;
+    try
+    {
+      ok = await Task.Run(() => _runtimeService.SeekEpochSync(cent, ns));
+    }
+    finally
+    {
+      _timelineSessionService.UpdateSession(SessionId, s => s.IsRunningToEnd = false);
+    }
+    if (ok) PollSimulationClock();
   }
 
   private void PollSimulationClock()
