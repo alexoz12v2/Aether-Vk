@@ -1566,9 +1566,29 @@ fn splat_parity(
           small_paths[1]
         );
         PARITY_SMALL_PATHS_COMPARED.store(true, core::sync::atomic::Ordering::SeqCst);
+        PARITY_SMALL_DEMOTED.fetch_add(small_margins[0], core::sync::atomic::Ordering::SeqCst);
       }
     }
     let gpu_split_adds = device.dust_volume_split_adds(pe).unwrap_or(u32::MAX);
+    // track 9A (t9a2d): the edge pass drew every small edge piece the consumer deferred (none
+    // refused by a full region), and the path counts above saw them; t9a2e: it demoted as many as
+    // the reference (its own count, DUST_VEDGE_DEMOTED, in every build), within the pieces at a
+    // decision's margin (D3's 3σ edge, the predictor's ε or the gate: as the path counts)
+    if let Ok((edge_drawn, edge_lost, edge_demoted)) = device.dust_vedge_counts(pe) {
+      let margin = small_margins[1] + small_margins[2];
+      std::println!(
+        "[dust gpu] splat parity case {id}: edge pass drew {edge_drawn} small edge pieces, demoted gpu {edge_demoted} cpu {} (ε {:.0e}, {margin} at a margin), lost {edge_lost}",
+        small_margins[0],
+        dust::DUST_SMALL_DEMOTE_EPS
+      );
+      assert_eq!(edge_lost, 0, "case {id}: {edge_lost} small edge pieces lost (a full edge region)");
+      assert!(
+        (edge_demoted as u64).abs_diff(small_margins[0]) <= margin,
+        "case {id}: demoted gpu {edge_demoted} cpu {}, margin {margin}",
+        small_margins[0]
+      );
+      PARITY_SMALL_DEMOTED_GPU.fetch_add(edge_demoted as u64, core::sync::atomic::Ordering::SeqCst);
+    }
     PARITY_VOLUME_CLASSES.lock().unwrap_or_else(|e| e.into_inner()).push((id, classes));
     std::println!(
       "[dust gpu] splat parity: volumetric pieces drawn (centre, small, sub-rays, lines) {classes:?}; small by one projection a slice {}, by 4 sigma points {}; volume deposits split above the per-add cap: cpu {split_adds}, gpu {gpu_split_adds}",
@@ -1740,7 +1760,8 @@ fn splat_parity(
       "3×3 τ sums differ by more than 5 % + 6 on {box_violations} of {box_compared} neighbourhoods"
     );
 
-    assert!(nonzero > 300, "{nonzero} texels");
+    let min_nonzero = PARITY_MIN_NONZERO.load(core::sync::atomic::Ordering::SeqCst);
+    assert!(nonzero > min_nonzero, "{nonzero} texels (want > {min_nonzero})");
     assert!(
       (sg as f64 / sc as f64 - 1.0).abs() < 1e-3,
       "Σ counts gpu {sg} cpu {sc}"
@@ -2159,15 +2180,34 @@ fn gpu_dust_splat_matches_reference_spinning_site_perspective() {
 /// window five days old, the radiance weight on) seen with the volumetric level bias fixed at
 /// `bias` from (0, 0, `d`) looking at the anchor. Returns the reference's pieces per class.
 fn volume_texel_integral_parity(id: u64, bias: u32, d: f32) -> [u64; 4] {
+  volume_texel_integral_parity_fov(id, bias, d, 30.0)
+}
+
+/// [`volume_texel_integral_parity`] through a field of vertical half-angle `half_deg`
+fn volume_texel_integral_parity_fov(id: u64, bias: u32, d: f32, half_deg: f32) -> [u64; 4] {
   let batch_of = |cap: u32| test_batch(1024, 3600.0, 3, cap);
   let (w, h) = (640.0f32, 400.0f32);
-  let tan_h = (30.0f32).to_radians().tan();
+  let tan_h = half_deg.to_radians().tan();
   let mut mvp = [0.0f32; 16];
   mvp[0] = h / (w * tan_h);
   mvp[5] = 1.0 / tan_h;
   mvp[10] = -1e-3;
   mvp[11] = -1.0;
   mvp[15] = d;
+  volume_parity_at(id, bias, &batch_of, frame_after(5.0), mvp, [0.0, 0.0, d])
+}
+
+/// [`splat_parity`] of `batch_of` at `frame` through the perspective `mvp` from `eye` (local
+/// metres) with the volumetric level bias fixed at `bias` (exposure 1, albedo 0.04, as the K1c
+/// cases). Returns the reference's pieces per class.
+fn volume_parity_at(
+  id: u64,
+  bias: u32,
+  batch_of: &dyn Fn(u32) -> DustBatch,
+  frame: DustFrame,
+  mvp: [f32; 16],
+  eye: [f32; 3],
+) -> [u64; 4] {
   PARITY_VOLUME_BIAS.store(bias, core::sync::atomic::Ordering::SeqCst);
   // (reset even when the parity panics: the next case must not inherit the bias)
   struct Reset;
@@ -2177,7 +2217,7 @@ fn volume_texel_integral_parity(id: u64, bias: u32, d: f32) -> [u64; 4] {
     }
   }
   let _reset = Reset;
-  splat_parity(id, &batch_of, frame_after(5.0), 2.0e7, 1.0, false, 0.04, Some((mvp, [0.0, 0.0, d])), None, false, None);
+  splat_parity(id, batch_of, frame, 2.0e7, 1.0, false, 0.04, Some((mvp, eye)), None, false, None);
   PARITY_VOLUME_CLASSES
     .lock()
     .unwrap_or_else(|e| e.into_inner())
@@ -2209,6 +2249,16 @@ fn gpu_dust_splat_matches_reference_volume_texel_integral() {
 
 /// whether a [`splat_parity`] compared the small pieces' path counts (the profiler's words)
 static PARITY_SMALL_PATHS_COMPARED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+/// the pieces the reference demoted in the [`splat_parity`] frames whose path counts were compared
+static PARITY_SMALL_DEMOTED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+/// t9a2e: the pieces the GPU's edge pass demoted in the [`splat_parity`] frames (its
+/// `DUST_VEDGE_DEMOTED` words, compared with the reference's count in each frame)
+static PARITY_SMALL_DEMOTED_GPU: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+/// the fewest non-zero texels a [`splat_parity`] frame must draw (against a vacuous comparison):
+/// 300; the tail poses of [`gpu_dust_small_demotion_matches_reference`] lower it to 100 for their
+/// frames (737 small pieces on 102 texels at 200 d / 3°), whose comparison is kept from being
+/// vacuous by the demoted count instead (≥ 200 pieces, GPU = CPU)
+static PARITY_MIN_NONZERO: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(300);
 
 /// Track 9A: the small pieces' paths (one projection a slice — interior and demoted edge pieces —
 /// and 4 sigma points a slice) on both mirrors at the count level, in the 2 000 km bias-6 scene of
@@ -2234,6 +2284,226 @@ fn gpu_dust_small_paths_match_reference() {
     PARITY_SMALL_PATHS_COMPARED.load(core::sync::atomic::Ordering::SeqCst),
     "the profiler's words were empty (no VK_KHR_shader_clock, or the .prof shaders did not draw): the small paths were not compared"
   );
+}
+
+/// Track 9A (t9a2e): the demotion's scene. A volumetric piece is the packet of a leaf the eye is
+/// near (`is_volumetric`: `tr Σ > 0.2² dist²`, or still deep at the split's depth limit), so seen
+/// from outside the cloud (9053–9055) its σ over its distance is ≳ 0.1, its sigma points' relative
+/// depth spread `κ` ≳ 0.1 sin θ and its predicted change ≳ 10⁻² of its mass at the frame's edge:
+/// nothing demotes there at any field (9055's narrow field leaves no volumetric packet). A piece
+/// with a small `κ` (the calibration's σ/d 10⁻³..10⁻², `small_demotion_calibration`) is a long
+/// packet seen along its length from near its line: the old tail seen from the nucleus, as the
+/// observer's poses see it. This is that scene: the window of [`test_batch`] in 16 streams of a
+/// 0.2 rad cone (its clusters' lateral σ 0.05 of their speed, the floor; the cone's one stream
+/// spreads 0.6) `days` old at 5.5 AU, so its size bins' chords lie along the anti-solar
+/// direction and the slow grains' bins (speed factor ≲ 1) are volumetric with a lateral σ of a few
+/// 10⁻³ of their distance, a few degrees off that axis. Returns the batch, the frame and the
+/// anti-solar direction in the frame's local axes (the comet's heliocentric direction).
+fn tail_demotion_scene(days: f64) -> (impl Fn(u32) -> DustBatch, DustFrame, [f32; 3]) {
+  let batch_of = |cap: u32| {
+    let mut b = test_batch(1024, 3600.0, 3, cap);
+    b.mass_params[3] = dust::batch_streams_word(4, false);
+    b.jet_dir_aperture[3] = 0.2;
+    b
+  };
+  let (rc0, vc0) = comet_state();
+  let (rc, _) = kepler::propagate_f64(rc0, vc0, SUN_MU_M3_S2, days * 86400.0);
+  let n = (rc[0] * rc[0] + rc[1] * rc[1] + rc[2] * rc[2]).sqrt();
+  (batch_of, frame_after(days), [(rc[0] / n) as f32, (rc[1] / n) as f32, (rc[2] / n) as f32])
+}
+
+/// A perspective view from the local origin (the nucleus) along `fwd` (unit) through a field of
+/// vertical half-angle `half_deg` on a `w` × `h` frame (the conventions of the perspective cases:
+/// `w_clip` the depth along `fwd`, `z_clip` 10⁻³ of it)
+fn look_from_origin(fwd: [f32; 3], half_deg: f32, w: f32, h: f32) -> [f32; 16] {
+  let cross = |a: [f32; 3], b: [f32; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  let r = cross(fwd, [0.0, 0.0, 1.0]);
+  let rn = norm3(r);
+  let right = [r[0] / rn, r[1] / rn, r[2] / rn];
+  let up = cross(right, fwd);
+  let t = half_deg.to_radians().tan();
+  let (sx, sy) = (h / (w * t), 1.0 / t);
+  let mut m = [0.0f32; 16];
+  for c in 0..3 {
+    m[c * 4] = sx * right[c];
+    m[c * 4 + 1] = sy * up[c];
+    m[c * 4 + 2] = 1e-3 * fwd[c];
+    m[c * 4 + 3] = fwd[c];
+  }
+  m
+}
+
+/// The tail poses (age in days, vertical half-angle in degrees): the slow bins' volumetric pieces
+/// lie within ~3° (200 days) / ~1.5° (400 days) of the anti-solar point, so these fields put the
+/// frame's edges across them with a lateral σ of tens of px (the small class at bias 6) and
+/// `κ` ≈ 1.35 (σ/d) sin θ_edge ≲ 10⁻³
+const TAIL_DEMOTION_POSES: [(f64, f32); 6] = [(200.0, 3.0), (200.0, 1.5), (200.0, 0.75), (400.0, 2.0), (400.0, 1.0), (400.0, 0.5)];
+
+/// The reference (CPU moments, `dust::splat_tier`) of a tail pose at the volumetric level bias
+/// `bias`, the header as a first frame's (split depth `DUST_SPLIT_DEPTH_MAX`, the default level
+/// of detail): `[small pieces, small edge pieces, demoted, at a decision's margin]`. A survey: the
+/// parity frames draw at the GPU's own split depth, so their counts are close, not equal.
+fn tail_demotion_cpu(days: f64, half_deg: f32, bias: u32) -> [u64; 4] {
+  let (batch_of, frame, a) = tail_demotion_scene(days);
+  let log2cap = 12u32;
+  let batch = batch_of(1 << log2cap);
+  let first_slot = batch.first_index & batch.ring_mask;
+  let (mut render, mut moments) = (alloc::vec::Vec::new(), alloc::vec::Vec::new());
+  for i in 0..batch.count {
+    let slot = (first_slot + i) & batch.ring_mask;
+    let (r, m) = dust::packet_moments_in(&dust::emit_cluster(&batch, i), slot, log2cap, &frame);
+    render.push(r);
+    moments.push(m);
+  }
+  let (w, h) = (640u32, 400u32);
+  let layout = dust::PyramidLayout::new(w, h);
+  let pc = dust::DustSplatPushConstants {
+    moments: 0,
+    render: 0,
+    pyramid: 0,
+    live_count: batch.count,
+    flags: dust::DUST_VIEW_FLOW,
+    exposure: 1.0,
+    inv_unit: 1.0e4,
+    color: dust::pack_color([1.0, 0.6, 0.2, 1.0]),
+    albedo: 0.04,
+    eye_local: [0.0, 0.0, 0.0, 30.0 * 86400.0],
+    mvp: look_from_origin(a, half_deg, w as f32, h as f32),
+  };
+  let flow = dust::DustFlowUniform {
+    t_hi: 1.0e8,
+    t_lo: 0.0,
+    speed: 1.0,
+  };
+  let mut cpu = alloc::vec![0u32; layout.total_words as usize];
+  cpu[..dust::PYRAMID_HEADER_WORDS as usize].copy_from_slice(&layout.header());
+  let sw = dust::PYR_SPLIT_DEPTH as usize;
+  cpu[sw] = (cpu[sw] & !0xFF00) | ((bias & 0xFF) << 8);
+  cpu[dust::PYR_LOD as usize] = dust::DUST_LOD_PX_DEFAULT.to_bits();
+  let _ = dust::take_volume_class_counts();
+  let _ = dust::take_volume_small_paths();
+  let _ = dust::take_volume_small_margins();
+  dust::splat_tier(&moments, &render, &pc, &flow, 0, &layout, &mut cpu);
+  let classes = dust::take_volume_class_counts();
+  let paths = dust::take_volume_small_paths();
+  let margins = dust::take_volume_small_margins();
+  let _ = dust::take_volume_split_adds();
+  [classes[1], paths[1] + margins[0], margins[0], margins[1] + margins[2]]
+}
+
+/// [`tail_demotion_cpu`] at bias 6 over [`TAIL_DEMOTION_POSES`], printed
+fn tail_demotion_survey() -> alloc::vec::Vec<(f64, f32, [u64; 4])> {
+  TAIL_DEMOTION_POSES
+    .iter()
+    .map(|&(days, half)| {
+      let c = tail_demotion_cpu(days, half, 6);
+      std::println!(
+        "[small demotion] tail survey: {days:.0} d, half-angle {half}°: small pieces {}, edge {}, demoted {} (ε {:.0e}), {} at a margin",
+        c[0],
+        c[1],
+        c[2],
+        dust::DUST_SMALL_DEMOTE_EPS,
+        c[3]
+      );
+      (days, half, c)
+    })
+    .collect()
+}
+
+/// Track 9A (t9a2e), CPU only: the tail poses ([`tail_demotion_scene`]) demote hundreds of small
+/// edge pieces at the production ε on the reference: at least one pose demotes ≥ 200 (the scene
+/// `gpu_dust_small_demotion_matches_reference` draws on both mirrors). Prints every pose.
+#[test]
+fn small_demotion_tail_survey() {
+  let s = tail_demotion_survey();
+  let best = s.iter().map(|x| x.2[2]).max().unwrap_or(0);
+  if dust::DUST_SMALL_DEMOTE_EPS > 0.0 {
+    assert!(best >= 200, "no tail pose demotes 200 pieces at ε {:.0e} (best {best}): {s:?}", dust::DUST_SMALL_DEMOTE_EPS);
+  }
+}
+
+/// Track 9A: the demoted path on both mirrors at the production ε. t9a2b's cases 9054 / 9055 (the
+/// 2 000 km cloud of case 9053 through 10° and 3° fields at the same metres per px) demote
+/// nothing: their volumetric pieces' σ/d is ≳ 0.1 (they are volumetric because the eye is near
+/// them, [`tail_demotion_scene`]), and 9055's field leaves no volumetric packet at all; both are
+/// kept as image and path parity cases. t9a2e: the tail poses demote: the reference's survey
+/// ([`tail_demotion_survey`], CPU moments) picks up to two poses that demote most among those that
+/// demote ≥ 200 each (the 200-day / 1.5° pose's 28 pieces land on 1 texel: a vacuous image), and
+/// [`splat_parity`] draws each on both mirrors (the `.prof` shaders) — the images within its rules,
+/// the path counts (a demoted piece counts with the one projection) and the demoted count (the
+/// edge pass's own word) within the decisions' margins. Asserts the reference drew small pieces
+/// and, at ε > 0, that both mirrors demoted ≥ 200 in those frames. Needs `VK_KHR_shader_clock`.
+#[test]
+fn gpu_dust_small_demotion_matches_reference() {
+  use crate::gpu_backends::vulkan::physics::DUST_PROFILE_OVERRIDE;
+  use core::sync::atomic::Ordering::SeqCst;
+  struct Reset;
+  impl Drop for Reset {
+    fn drop(&mut self) {
+      DUST_PROFILE_OVERRIDE.store(false, core::sync::atomic::Ordering::Relaxed);
+      PARITY_MIN_NONZERO.store(300, core::sync::atomic::Ordering::SeqCst);
+    }
+  }
+  DUST_PROFILE_OVERRIDE.store(true, core::sync::atomic::Ordering::Relaxed);
+  let _reset = Reset;
+  let tan30 = (30.0f32).to_radians().tan();
+  let (mut small, mut demoted, mut demoted_gpu) = (0u64, 0u64, 0u64);
+  for (id, half) in [(9054u64, 10.0f32), (9055, 3.0)] {
+    PARITY_SMALL_PATHS_COMPARED.store(false, SeqCst);
+    PARITY_SMALL_DEMOTED.store(0, SeqCst);
+    PARITY_SMALL_DEMOTED_GPU.store(0, SeqCst);
+    let d = 2.0e6 * tan30 / half.to_radians().tan();
+    let classes = volume_texel_integral_parity_fov(id, 6, d, half);
+    assert!(
+      PARITY_SMALL_PATHS_COMPARED.load(SeqCst),
+      "case {id}: the profiler's words were empty (no VK_KHR_shader_clock, or the .prof shaders did not draw): the small paths were not compared"
+    );
+    std::println!(
+      "[dust gpu] small demotion parity case {id}: half-angle {half}°, eye at {d:.0} m: small pieces {}, demoted cpu {} gpu {} (ε {:.0e})",
+      classes[1],
+      PARITY_SMALL_DEMOTED.load(SeqCst),
+      PARITY_SMALL_DEMOTED_GPU.load(SeqCst),
+      dust::DUST_SMALL_DEMOTE_EPS
+    );
+    small += classes[1];
+  }
+  // the tail: the reference's two most demoting poses (each ≥ 200 demoted), on both mirrors
+  let survey = tail_demotion_survey();
+  let mut order: alloc::vec::Vec<usize> = (0..survey.len()).filter(|&k| survey[k].2[2] >= 200).collect();
+  assert!(!order.is_empty(), "no tail pose demotes ≥ 200 pieces");
+  order.sort_by_key(|&k| core::cmp::Reverse(survey[k].2[2]));
+  for (n, &k) in order.iter().take(2).enumerate() {
+    let (days, half, _) = survey[k];
+    let id = 9056 + n as u64;
+    PARITY_SMALL_PATHS_COMPARED.store(false, SeqCst);
+    PARITY_SMALL_DEMOTED.store(0, SeqCst);
+    PARITY_SMALL_DEMOTED_GPU.store(0, SeqCst);
+    let (batch_of, frame, a) = tail_demotion_scene(days);
+    PARITY_MIN_NONZERO.store(100, SeqCst);
+    let classes = volume_parity_at(id, 6, &batch_of, frame, look_from_origin(a, half, 640.0, 400.0), [0.0; 3]);
+    PARITY_MIN_NONZERO.store(300, SeqCst);
+    assert!(
+      PARITY_SMALL_PATHS_COMPARED.load(SeqCst),
+      "case {id}: the profiler's words were empty (no VK_KHR_shader_clock, or the .prof shaders did not draw): the small paths were not compared"
+    );
+    let (dc, dg) = (PARITY_SMALL_DEMOTED.load(SeqCst), PARITY_SMALL_DEMOTED_GPU.load(SeqCst));
+    std::println!(
+      "[dust gpu] small demotion parity case {id}: the tail {days:.0} d from the nucleus, half-angle {half}°: small pieces {}, demoted cpu {dc} gpu {dg} (ε {:.0e})",
+      classes[1],
+      dust::DUST_SMALL_DEMOTE_EPS
+    );
+    small += classes[1];
+    demoted += dc;
+    demoted_gpu += dg;
+  }
+  assert!(small > 0, "no small piece drawn");
+  if dust::DUST_SMALL_DEMOTE_EPS > 0.0 {
+    assert!(
+      demoted >= 200 && demoted_gpu >= 200,
+      "the tail poses demoted cpu {demoted} gpu {demoted_gpu} at ε {:.0e} (want ≥ 200 each): the demoted path was not compared on enough pieces",
+      dust::DUST_SMALL_DEMOTE_EPS
+    );
+  }
 }
 
 /// Stress: a full tier (every slot emitted) propagated 40 times with the moments, as a heavy

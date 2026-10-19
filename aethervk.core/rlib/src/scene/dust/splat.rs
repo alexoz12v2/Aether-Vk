@@ -494,7 +494,8 @@ std::thread_local! {
 /// Tests: since the last call, the small pieces demoted from the sigma points to one projection
 /// (track 9A, counted in [`take_volume_small_paths`]' first word), those whose D3 decision sat at
 /// its margin (the centre slice's 3σ within 10⁻³ σ of the frame's edge) and those whose demotion
-/// did (the predictor within 10⁻³ ε of ε); resets them. A float boundary can move such a piece
+/// did (the predictor within 10⁻³ ε of ε, or its gate within 10⁻³ of its threshold
+/// [`DUST_SMALL_DEMOTE_GATE`] ε); resets them. A float boundary can move such a piece
 /// between the mirrors' paths: the GPU/CPU path counts agree within the last two
 /// (`splat_parity`).
 #[cfg(any(test, feature = "std"))]
@@ -506,6 +507,9 @@ std::thread_local! {
   /// Tests: the piece predictor of the last [`volume_small_points`] call (NaN: not evaluated —
   /// an interior piece, ε = 0, or a slice without a prediction; the calibration's hook)
   static SMALL_DEMOTE_LAST_E: core::cell::Cell<f32> = const { core::cell::Cell::new(f32::NAN) };
+  /// Tests: the gate ([`small_demote_gate`]) of the last [`volume_small_points`] call whose
+  /// predictor ran (NaN otherwise; t9a2c)
+  static SMALL_DEMOTE_LAST_G: core::cell::Cell<f32> = const { core::cell::Cell::new(f32::NAN) };
 }
 #[cfg(any(test, feature = "std"))]
 std::thread_local! {
@@ -4298,14 +4302,24 @@ pub const DUST_SMALL_COVER: f32 = 4.0;
 pub const DUST_SMALL_RHO_MAX: f32 = 0.9;
 
 /// Track 9A, the edge-piece demotion: a small piece that step D3 sends to the 4 sigma points a
-/// slice (its centre slice's 3σ crosses the frame's edge) keeps its one projection a slice when the
+/// slice (its centre slice's 3σ crosses the frame's edge) keeps its one projection a slice (with
+/// the predicted second-order terms, [`volume_small_demote_fix`]) when its gate
+/// ([`small_demote_gate`]) is under [`DUST_SMALL_DEMOTE_GATE`] × this and the
 /// predicted change of its in-frame light, sigma points against one projection, as a fraction of
 /// its mass ([`volume_small_demote_err`], mass-weighted over the slices), is **under** this. Strict:
 /// at 0 the predictor is not evaluated and every decision is D3's, bit for bit. Mirror of
 /// `DUST_SMALL_DEMOTE_EPS` (dust_scatter.glsl); the value comes from
 /// `small_points_tests::small_demotion_calibration` (its ε_cal). CPU lab override:
 /// `AETHERVK_DUST_LAB_SMALL_EPS` ([`small_demote_eps`]).
-pub const DUST_SMALL_DEMOTE_EPS: f32 = 0.0;
+pub const DUST_SMALL_DEMOTE_EPS: f32 = 0.001;
+/// t9a2c: the demotion's gate factor: a piece is predicted only when its gate
+/// ([`small_demote_gate`]) is under this × ε. Part of the rule (it only removes demotions, so
+/// soundness holds as before); 0.5 keeps 99.96 % of the pieces the predictor alone would demote at
+/// ε 10⁻³ (≥ 99.9 % at every ε of the calibration's grid) and sends ~9 % of the others to the
+/// predictor (offline f64 replay of the calibration's 15 357 edge pieces, t9a2c REVIEW); the
+/// calibration applies it (`small_points_tests::small_demotion_calibration` prints what it drops).
+/// Mirror of `DUST_SMALL_DEMOTE_GATE` (dust_scatter.glsl)
+pub const DUST_SMALL_DEMOTE_GATE: f32 = 0.5;
 /// The predictor's range: a slice is predicted only when its lateral sigma points' relative depth
 /// change `√2 |κ_i|` (`κ_i = r3·lat_i / w`) is under this (every sigma point in front of the eye,
 /// the series' third-order terms ≲ 10⁻³ of the second-order ones); otherwise not demoted
@@ -4369,26 +4383,73 @@ fn small_demote_edge(tv: f32, u: f32, al: f32) -> (f32, f32, f32, f32) {
   (dp, dg, ea, pu)
 }
 
-/// Track 9A: the predicted change of one small slice's in-frame light, its 4 lateral sigma points
-/// (D3's edge path) against its one projection (the fast path), as a fraction of the slice's mass;
-/// `−1` when not predicted (the slice behind the eye, `√2 |κ_i|` ≥ [`DUST_SMALL_DEMOTE_KAPPA`], no
-/// Jacobian). `xq` the slice's centre, `d` the lateral axes' dots `[x1 x2 y1 y2 w1 w2]`
-/// (`r0·lat_i`, `r1·lat_i`, `r3·lat_i`), `t` the projection's offsets `(m03, m13, m33)`.
-///
-/// With `s` a sigma point's offset along `lat_i` (±√2), its ndc is `n + s α_i / (1 + s κ_i)`
-/// (`κ_i = r3·lat_i / w`, `α_i`, `β_i` the Jacobian's columns in ndc) and its J3 weight
-/// `|c(s)| / |c₀| · (1 + s κ_i)⁻²` (`c` affine in ndc: `c(n) = c₀ + Δnx (r1 × r3) + Δny (r3 × r0)`,
-/// so `|c|/|c₀| = 1 + s γ_i + s²(ν_i²/2 − κ_i γ_i)`, `γ_i = c₀·v_i / |c₀|²`, `ν_i²` the rest of
-/// `|v_i|² / |c₀|²`). To second order the rule's moments (E s² = 1, E s⁴ = 2 per axis) give the mass
-/// term `μ = Σ_i 3κ_i² − 3κ_iγ_i + ν_i²/2` (the sigma points' J3 sum over the one projection's,
-/// less 1), the J3-weighted mean shift `δ = Σ_i p_i (γ_i − 3κ_i)` (`p_i` the column in px) and the
-/// covariance change `Σ_i p_i p_iᵀ (20κ_i² − 10κ_iγ_i + ν_i²) − μ C − δδᵀ`. Their effect on the
-/// in-frame rectangle integral (`¼ fx fy + ρ/2π gx gy` over the frame, [`volume_scatter`]'s small
-/// branch) is bounded edge by edge ([`small_demote_edge`]): the marginals' change, the ρ term's
-/// shape and ρ's own change, and the mass term on the marginals' upper bounds; every predicted
-/// term × [`DUST_SMALL_DEMOTE_SAFETY`]. Mirror of `dust_small_demote_err`.
+/// Track 9A (t9a2c): the demotion's gate, from the centre slice's one projection `c` (mean
+/// `mx`, `my`, `ix = 1/(√2 σx)`, `iy`) and its sigma points' relative depth spread
+/// `κ = √2 max |r3·lat_i| / w` (`w = r3·mean + t3`; every predicted term is of first order in it):
+/// the in-frame light an edge can carry over, `κ/√(2π) · (e^{-ax²/2} p_y + p_x e^{-ay²/2})`, with
+/// `ax`, `ay` the signed distances (σ) from the mean to each axis' nearer edge and `p_x`, `p_y`
+/// the marginals' upper bounds (Mills beyond 1σ outside: `φ(a)/|a|`, else 1); `+∞` when the centre
+/// is behind the eye or `κ` ≥ [`DUST_SMALL_DEMOTE_KAPPA`] (the centre slice not predicted). Not a
+/// bound of the predictor: a cheap filter in front of it (the GPU evaluates the predictor only for
+/// the pieces under [`DUST_SMALL_DEMOTE_GATE`] × ε). Mirror of `dust_small_demote_gate`.
 #[allow(clippy::too_many_arguments)]
-fn volume_small_demote_err(
+fn small_demote_gate(
+  c: &VolumeSmallPoint,
+  mean: [f32; 3],
+  r3: [f32; 3],
+  t3: f32,
+  w1: f32,
+  w2: f32,
+  wf: f32,
+  hf: f32,
+) -> f32 {
+  let w0 = dot3(r3, mean) + t3;
+  if !(w0 > 0.0) {
+    return f32::INFINITY;
+  }
+  // (the centre slice's κ_i as small_demote_terms computes them)
+  let iw = 1.0 / w0;
+  let kap = DUST_UT2_NODE * (w1 * iw).abs().max((w2 * iw).abs());
+  if !(kap < DUST_SMALL_DEMOTE_KAPPA) {
+    return f32::INFINITY;
+  }
+  let (isx, isy) = (c.ix * core::f32::consts::SQRT_2, c.iy * core::f32::consts::SQRT_2);
+  let ax = c.mx.min(wf - c.mx) * isx;
+  let ay = c.my.min(hf - c.my) * isy;
+  let ex = <f32 as FloatLike>::exp(-0.5 * ax * ax);
+  let ey = <f32 as FloatLike>::exp(-0.5 * ay * ay);
+  let pxu = if ax < -1.0 { DUST_SMALL_INV_SQRT_2PI * ex / -ax } else { 1.0 };
+  let pyu = if ay < -1.0 { DUST_SMALL_INV_SQRT_2PI * ey / -ay } else { 1.0 };
+  kap * DUST_SMALL_INV_SQRT_2PI * (ex * pyu + pxu * ey)
+}
+
+/// Track 9A: one predicted slice's second-order terms ([`small_demote_terms`]): the mass term `mu`
+/// (the sigma points' J3 sum over the one projection's, less 1), the J3-weighted mean shift `dx`,
+/// `dy` (px), the one projection's lateral covariance `cxx`, `cyy`, `cxy` (px², the variances
+/// floored at 10⁻⁶ as its own) and the sigma points' change of it `dcxx`, `dcyy`, `dcxy`, the one
+/// projection's mean `mx`, `my` (px). Mirror of `DustSmallTerms` (dust_scatter.glsl).
+#[derive(Debug, Clone, Copy)]
+struct SmallDemoteTerms {
+  mu: f32,
+  dx: f32,
+  dy: f32,
+  cxx: f32,
+  cyy: f32,
+  cxy: f32,
+  dcxx: f32,
+  dcyy: f32,
+  dcxy: f32,
+  mx: f32,
+  my: f32,
+}
+
+/// Track 9A: the second-order terms of one small slice, its 4 lateral sigma points' J3-weighted
+/// moments against its one projection's (the derivation at [`volume_small_demote_err`]); `None`
+/// when not predicted (the slice behind the eye, `√2 |κ_i|` ≥ [`DUST_SMALL_DEMOTE_KAPPA`], no
+/// Jacobian). The predictor bounds their effect on the in-frame light; a demoted piece's slices
+/// carry them ([`volume_small_demote_fix`]). Mirror of `dust_small_demote_terms`.
+#[allow(clippy::too_many_arguments)]
+fn small_demote_terms(
   xq: [f32; 3],
   d: [f32; 6],
   r0: [f32; 3],
@@ -4397,23 +4458,23 @@ fn volume_small_demote_err(
   t: [f32; 3],
   wf: f32,
   hf: f32,
-) -> f32 {
+) -> Option<SmallDemoteTerms> {
   let [x1, x2, y1, y2, w1, w2] = d;
   let w = dot3(r3, xq) + t[2];
   if !(w > 0.0) {
-    return -1.0;
+    return None;
   }
   let iw = 1.0 / w;
   let (k1, k2) = (w1 * iw, w2 * iw);
   if !(DUST_UT2_NODE * k1.abs().max(k2.abs()) < DUST_SMALL_DEMOTE_KAPPA) {
-    return -1.0;
+    return None;
   }
   let ndx = (dot3(r0, xq) + t[0]) * iw;
   let ndy = (dot3(r1, xq) + t[1]) * iw;
   let c = cross3(sub3(r0, scale3(r3, ndx)), sub3(r1, scale3(r3, ndy)));
   let cn2 = dot3(c, c);
   if !(cn2 > 0.0) {
-    return -1.0;
+    return None;
   }
   let icn = 1.0 / cn2;
   // the Jacobian's lateral columns in ndc, and c's change along them
@@ -4440,6 +4501,91 @@ fn volume_small_demote_err(
   let dcxx = a1 * a1 * f1 + a2 * a2 * f2 - mu * cxx - dx * dx;
   let dcyy = b1 * b1 * f1 + b2 * b2 * f2 - mu * cyy - dy * dy;
   let dcxy = a1 * b1 * f1 + a2 * b2 * f2 - mu * cxy - dx * dy;
+  let mx = (ndx * 0.5 + 0.5) * wf;
+  let my = (ndy * 0.5 + 0.5) * hf;
+  Some(SmallDemoteTerms { mu, dx, dy, cxx, cyy, cxy, dcxx, dcyy, dcxy, mx, my })
+}
+
+/// Track 9A (t9a2): a demoted slice's one projection `p` with its predicted second-order terms
+/// ([`small_demote_terms`]) applied: mass × (1 + μ), mean + δ, covariance + ΔC (the variances
+/// floored at 10⁻⁶ px² as the one projection's, ρ clamped as [`volume_small_points`]' finish): the
+/// sigma points' moments to second order. Without them a demoted piece kept the one projection's
+/// systematic excess over the sigma points (`small_demotion_calibration`, f64 replay of its
+/// distribution: Σ (L_fast − L_sigma) = +5.2·10⁻³ of the demoted pieces' light at ε 10⁻², +2.3·10⁻³
+/// at 10⁻³; with them |L − L_sigma| ≤ 0.02 E M per piece). `p` unchanged when the slice has no
+/// prediction or no mass (a demoted piece has both on every slice). Mirror of
+/// `dust_small_demote_fix_of` (the GLSL applies it inside `dust_small_demote_slice`, on the terms its
+/// prediction made; `p.mx`, `p.my` are bit for bit the terms' `mx`, `my`).
+#[allow(clippy::too_many_arguments)]
+fn volume_small_demote_fix(
+  p: VolumeSmallPoint,
+  xq: [f32; 3],
+  d: [f32; 6],
+  r0: [f32; 3],
+  r1: [f32; 3],
+  r3: [f32; 3],
+  t: [f32; 3],
+  wf: f32,
+  hf: f32,
+) -> VolumeSmallPoint {
+  let Some(k) = small_demote_terms(xq, d, r0, r1, r3, t, wf, hf) else {
+    return p;
+  };
+  if !(p.m > 0.0) {
+    return p;
+  }
+  let cxx = (k.cxx + k.dcxx).max(1e-6);
+  let cyy = (k.cyy + k.dcyy).max(1e-6);
+  let rho_raw = (k.cxy + k.dcxy) * (1.0 / <f32 as FloatLike>::sqrt(cxx * cyy));
+  let rho = if rho_raw.is_finite() { rho_raw.clamp(-DUST_SMALL_RHO_MAX, DUST_SMALL_RHO_MAX) } else { 0.0 };
+  let m = p.m * (1.0 + k.mu);
+  if !(m > 0.0) || !m.is_finite() {
+    return VolumeSmallPoint::default();
+  }
+  VolumeSmallPoint {
+    mx: p.mx + k.dx,
+    my: p.my + k.dy,
+    ix: (1.0 / <f32 as FloatLike>::sqrt(cxx)) * core::f32::consts::FRAC_1_SQRT_2,
+    iy: (1.0 / <f32 as FloatLike>::sqrt(cyy)) * core::f32::consts::FRAC_1_SQRT_2,
+    rho,
+    m,
+  }
+}
+
+/// Track 9A: the predicted change of one small slice's in-frame light, its 4 lateral sigma points
+/// (D3's edge path) against its one projection (the fast path), as a fraction of the slice's mass;
+/// `−1` when not predicted (the slice behind the eye, `√2 |κ_i|` ≥ [`DUST_SMALL_DEMOTE_KAPPA`], no
+/// Jacobian). `xq` the slice's centre, `d` the lateral axes' dots `[x1 x2 y1 y2 w1 w2]`
+/// (`r0·lat_i`, `r1·lat_i`, `r3·lat_i`), `t` the projection's offsets `(m03, m13, m33)`.
+///
+/// With `s` a sigma point's offset along `lat_i` (±√2), its ndc is `n + s α_i / (1 + s κ_i)`
+/// (`κ_i = r3·lat_i / w`, `α_i`, `β_i` the Jacobian's columns in ndc) and its J3 weight
+/// `|c(s)| / |c₀| · (1 + s κ_i)⁻²` (`c` affine in ndc: `c(n) = c₀ + Δnx (r1 × r3) + Δny (r3 × r0)`,
+/// so `|c|/|c₀| = 1 + s γ_i + s²(ν_i²/2 − κ_i γ_i)`, `γ_i = c₀·v_i / |c₀|²`, `ν_i²` the rest of
+/// `|v_i|² / |c₀|²`). To second order the rule's moments (E s² = 1, E s⁴ = 2 per axis) give the mass
+/// term `μ = Σ_i 3κ_i² − 3κ_iγ_i + ν_i²/2` (the sigma points' J3 sum over the one projection's,
+/// less 1), the J3-weighted mean shift `δ = Σ_i p_i (γ_i − 3κ_i)` (`p_i` the column in px) and the
+/// covariance change `Σ_i p_i p_iᵀ (20κ_i² − 10κ_iγ_i + ν_i²) − μ C − δδᵀ`. Their effect on the
+/// in-frame rectangle integral (`¼ fx fy + ρ/2π gx gy` over the frame, [`volume_scatter`]'s small
+/// branch) is bounded edge by edge ([`small_demote_edge`]): the marginals' change, the ρ term's
+/// shape and ρ's own change, and the mass term on the marginals' upper bounds; every predicted
+/// term × [`DUST_SMALL_DEMOTE_SAFETY`]. Mirror of `dust_small_demote_err_of` (on
+/// `dust_small_demote_terms`' terms).
+#[allow(clippy::too_many_arguments)]
+fn volume_small_demote_err(
+  xq: [f32; 3],
+  d: [f32; 6],
+  r0: [f32; 3],
+  r1: [f32; 3],
+  r3: [f32; 3],
+  t: [f32; 3],
+  wf: f32,
+  hf: f32,
+) -> f32 {
+  let Some(k) = small_demote_terms(xq, d, r0, r1, r3, t, wf, hf) else {
+    return -1.0;
+  };
+  let SmallDemoteTerms { mu, dx, dy, cxx, cyy, cxy, dcxx, dcyy, dcxy, mx, my } = k;
   let lx = dcxx / (2.0 * cxx);
   let ly = dcyy / (2.0 * cyy);
   let sx = <f32 as FloatLike>::sqrt(cxx);
@@ -4448,8 +4594,6 @@ fn volume_small_demote_err(
   let rho = cxy * isc;
   let drho = dcxy * isc - rho * (lx + ly);
   // the frame's edges in σ from the slice's mean (positive inside)
-  let mx = (ndx * 0.5 + 0.5) * wf;
-  let my = (ndy * 0.5 + 0.5) * hf;
   let (tl, tr) = (mx / sx, (wf - mx) / sx);
   let (tb, tt) = (my / sy, (hf - my) / sy);
   let s = DUST_SMALL_DEMOTE_SAFETY;
@@ -4936,18 +5080,29 @@ fn volume_small_points(
       edge = true;
     }
   }
-  // track 9A: an edge piece whose predicted in-frame light change (the sigma points' against the
-  // one projection's, mass-weighted over its slices, [`volume_small_demote_err`]) is under ε keeps
-  // its one projection a slice. Strict, and not evaluated at ε = 0: D3's decision bit for bit. The
-  // GLSL computes the same slices' predictions in the same order (dust_volume_small_points)
+  // track 9A: an edge piece whose gate ([`small_demote_gate`], on the fast centre slice) is under
+  // DUST_SMALL_DEMOTE_GATE × ε and whose predicted in-frame light change (the sigma points' against
+  // the one projection's, mass-weighted over its slices, [`volume_small_demote_err`]) is under ε
+  // keeps its one projection a slice. Strict, and not evaluated at ε = 0: D3's decision bit for
+  // bit. The GLSL (the edge pass, t9a2d: dust_volume_small_edge_points) tests the gate first and
+  // evaluates the predictor only past it, then the same slices' predictions in the same order,
+  // stopping at the first slice
+  // whose running Σ m_q e_q / Σ m is not under ε: that sum only grows (m > 0, e ≥ 0, f32 rounding
+  // monotone), so its decision is this full sum's exactly (the CPU evaluates every slice whatever
+  // the gate: the counters and the tests' E are the full sum's)
   let mut demoted = false;
   #[cfg(all(test, feature = "std"))]
   SMALL_DEMOTE_LAST_E.with(|c| c.set(f32::NAN));
+  #[cfg(all(test, feature = "std"))]
+  SMALL_DEMOTE_LAST_G.with(|c| c.set(f32::NAN));
   if edge && fast {
     let eps = small_demote_eps();
     if eps > 0.0 && out[..n].iter().all(|p| p.m > 0.0) {
       let d = [x1, x2, y1, y2, w1, w2];
       let t = [m(0, 3), m(1, 3), m(3, 3)];
+      let gate = small_demote_gate(&out[0], mean, r3, t[2], w1, w2, wf, hf);
+      #[cfg(all(test, feature = "std"))]
+      SMALL_DEMOTE_LAST_G.with(|c| c.set(gate));
       let (mut acc, mut ms, mut ok) = (0.0f32, 0.0f32, true);
       for q in 0..n {
         let e = volume_small_demote_err(xq_of(q), d, r0, r1, r3, t, wf, hf);
@@ -4957,17 +5112,29 @@ fn volume_small_points(
       }
       if ok {
         let e = acc / ms;
-        demoted = e < eps;
+        demoted = gate < DUST_SMALL_DEMOTE_GATE * eps && e < eps;
         #[cfg(all(test, feature = "std"))]
         SMALL_DEMOTE_LAST_E.with(|c| c.set(e));
         #[cfg(any(test, feature = "std"))]
         VOLUME_SMALL_MARGINS.with(|v| {
           let mut a = v.get();
           a[0] += demoted as u64;
-          a[2] += ((e - eps).abs() <= 1e-3 * eps) as u64;
+          // (t9a2c: or its gate within 10⁻³ of its threshold)
+          let ge = DUST_SMALL_DEMOTE_GATE * eps;
+          a[2] += ((e - eps).abs() <= 1e-3 * eps || (gate - ge).abs() <= 1e-3 * ge) as u64;
           v.set(a);
         });
       }
+    }
+  }
+  // t9a2: a demoted piece's slices carry their predicted second-order terms (the sigma points'
+  // moments to second order, [`volume_small_demote_fix`]); the GLSL applies them as it predicts each
+  // slice (dust_small_demote_slice), on the same terms
+  if demoted {
+    let d = [x1, x2, y1, y2, w1, w2];
+    let t = [m(0, 3), m(1, 3), m(3, 3)];
+    for q in 0..n {
+      out[q] = volume_small_demote_fix(out[q], xq_of(q), d, r0, r1, r3, t, wf, hf);
     }
   }
   if edge && !demoted {
@@ -5474,7 +5641,8 @@ mod small_points_tests {
   /// and rotated, means over and a fifth around the 480 × 300 frame, eyes at 200 m and 5·10⁶ m)
   /// without albedo or support (both paths share the weights and the kept mass: the light compared
   /// is the geometry's); each piece D3 sends to the sigma points and whose slices all have a
-  /// prediction is drawn by both paths (the ε hook at +∞ keeps it on one projection, at 0 on the
+  /// prediction is drawn by both paths (the ε hook at +∞ keeps it on one projection — the demoted
+  /// path, with its second-order terms, [`volume_small_demote_fix`] — at 0 on the
   /// sigma points), its in-frame light `L` being the frame's rectangle integral of its points
   /// (`volume_scatter`'s small branch). Its truth `T` is the bounded Gaussian's (|z| ≤ 3, the 3σ
   /// ball the paths' spread is matched to) light in the frame, `∫ J3 · 1[in frame]`, by 2 × 8 192
@@ -5486,6 +5654,9 @@ mod small_points_tests {
   /// (c) ε_cal, the largest grid ε that passes (a) and whose demoted pieces' extra error against
   ///     the truth, Σ (|L_fast − T| − |L_sigma − T|), is at most 2·10⁻³ of their Σ T (the gate's
   ///     0.5 % over 2.5), is ≥ [`DUST_SMALL_DEMOTE_EPS`].
+  /// A piece is demoted at ε as [`volume_small_points`] demotes it: E < ε and its gate
+  /// ([`small_demote_gate`]) under [`DUST_SMALL_DEMOTE_GATE`] × ε (t9a2c); the pieces with E < ε
+  /// that the gate keeps on the sigma points are printed ("the gate kept … of the E < ε").
   /// Prints per ε the demoted share of the edge pieces (near / far eye), the worst |ΔL| / (ε M),
   /// the extra error, the signed change of the edge pieces' total in-frame light (the expected move
   /// of an image's small edge light) and the QMC error.
@@ -5520,6 +5691,8 @@ mod small_points_tests {
     let mut n_dem = [[0u32; 2]; 5];
     let mut worst = [0.0f64; 5];
     let (mut excess, mut tsum, mut dsum, mut qerr) = ([0.0f64; 5], [0.0f64; 5], [0.0f64; 5], [0.0f64; 5]);
+    let mut msum = [0.0f64; 5];
+    let mut n_gate = [[0u32; 2]; 5];
     let (mut edge_light, mut ratio_max) = (0.0f64, 0.0f64);
     let mut failures = std::vec::Vec::new();
     for case in 0..12_000u32 {
@@ -5575,7 +5748,8 @@ mod small_points_tests {
       let paths0 = take_volume_small_paths();
       let marg0 = take_volume_small_margins();
       let e_at_0 = SMALL_DEMOTE_LAST_E.with(|c| c.get());
-      if marg0[0] != 0 || !e_at_0.is_nan() {
+      let g_at_0 = SMALL_DEMOTE_LAST_G.with(|c| c.get());
+      if marg0[0] != 0 || !e_at_0.is_nan() || !g_at_0.is_nan() {
         failures.push(std::format!("case {case}: ε = 0 demoted {} (E {e_at_0})", marg0[0]));
       }
       if paths0[1] == 0 {
@@ -5586,6 +5760,7 @@ mod small_points_tests {
       set_small_demote_eps_test(Some(f32::INFINITY));
       let fast = volume_small_points(&pc, eye, &mvp, wf, hf, &phot, mean, 1.0);
       let e = SMALL_DEMOTE_LAST_E.with(|c| c.get()) as f64;
+      let gq = SMALL_DEMOTE_LAST_G.with(|c| c.get());
       if e.is_nan() || !e.is_finite() {
         n_none += 1;
         continue;
@@ -5645,6 +5820,12 @@ mod small_points_tests {
         if !(e < eps as f64) {
           continue;
         }
+        n_gate[k][1] += 1;
+        // the rule's gate (volume_small_points: `gate < DUST_SMALL_DEMOTE_GATE * eps`, in f32)
+        if !(gq < DUST_SMALL_DEMOTE_GATE * eps) {
+          continue;
+        }
+        n_gate[k][0] += 1;
         n_dem[k][far as usize] += 1;
         worst[k] = worst[k].max(act / eps as f64);
         if act > eps as f64 + 1e-6 {
@@ -5656,6 +5837,7 @@ mod small_points_tests {
         if let Some((t, qe)) = truth {
           excess[k] += (lf - t).abs() - (ls - t).abs();
           tsum[k] += t;
+          msum[k] += m_tot;
           qerr[k] += qe;
         }
       }
@@ -5675,13 +5857,16 @@ mod small_points_tests {
         eps_cal = eps;
       }
       std::println!(
-        "[small demotion] ε {eps:.0e}: demoted {nd} ({:.1} % of the edge pieces; near {} far {}), worst |ΔL| / (ε M) {:.3}, extra error vs the truth {:+.3e} of their light (QMC ±{:.1e}), edge light moved {:+.3e}{}",
+        "[small demotion] ε {eps:.0e}: demoted {nd} ({:.1} % of the edge pieces; near {} far {}; the gate kept {} of the {} with E < ε on the sigma points), worst |ΔL| / (ε M) {:.3}, extra error vs the truth {:+.3e} of their light (QMC ±{:.1e}; their light {:.2e} of their mass), edge light moved {:+.3e}{}",
         100.0 * nd as f64 / n_edge.max(1) as f64,
         n_dem[k][0],
         n_dem[k][1],
+        n_gate[k][1] - n_gate[k][0],
+        n_gate[k][1],
         worst[k],
         extra,
         qerr[k] / tsum[k].max(1e-300),
+        tsum[k] / msum[k].max(1e-300),
         dsum[k] / edge_light.max(1e-300),
         if ok { "" } else { " (fails the rule)" }
       );
@@ -6999,6 +7184,29 @@ pub const fn dust_vspill_records(vqueue_records: u32) -> u32 {
   let s = vqueue_records / 4;
   if s < 64 { 64 } else { s }
 }
+/// Track 9A (t9a2d), the deferred edge pieces: the volume consumer draws no small piece whose
+/// centre slice's 3σ crosses the frame; it appends the piece (its inputs, range, level, colour,
+/// depth bits and rounding seed: [`DUST_VEDGE_RECORD_WORDS`], structure-of-arrays) to the region of
+/// its chunk's parity ([`DUST_VIEW_EDGE_ODD`]), and `dust_draw_small_edge.comp` draws them (the
+/// demotion or the sigma points: `dust::volume_small_points`' edge branch, the same arithmetic)
+/// beside the next chunk's producer. Two regions after the volume spill, each a header in the
+/// volume queue's format (words 0–2 the pass's indirect dispatch, 3 the raw appends, 4 the
+/// capacity; [`DUST_VEDGE_DRAWN`] / [`DUST_VEDGE_LOST`] / [`DUST_VEDGE_DEMOTED`] the frame's
+/// counts) and [`dust_vedge_records`] records. A piece a full region refuses is dropped and counted.
+pub const DUST_VEDGE_RECORD_WORDS: u32 = 24;
+pub const DUST_VEDGE_DRAWN: usize = 5;
+pub const DUST_VEDGE_LOST: usize = 6;
+/// t9a2e: a deferred-edge region's frame count of the pieces the edge pass demoted (one projection
+/// a slice with the predicted terms instead of the sigma points: `volume_small_points`' `demoted`);
+/// mirror of `DUST_VEDGE_DEMOTED` (dust_scatter.glsl), zeroed with the region's header each frame
+pub const DUST_VEDGE_DEMOTED: usize = 7;
+/// A deferred-edge region's records for a view of `vqueue_records` volume records: half, at least
+/// 64 (2¹⁷ × 96 B = 12 MiB a region, 24 MiB a view on a full queue; 10 m measured 2.6 M edge pieces
+/// in 173 chunks, 15 k a chunk on average)
+pub const fn dust_vedge_records(vqueue_records: u32) -> u32 {
+  let s = vqueue_records / 2;
+  if s < 64 { 64 } else { s }
+}
 
 // ─── The views' queue placement and the EWA queue's dispatch (portability) ───────────────────
 /// Workgroups per dispatch dimension every Vulkan device supports (`maxComputeWorkGroupCount`'s
@@ -7049,6 +7257,10 @@ pub struct DustQueueOffsets {
   pub spill_slots: u32,
   pub vspill: u32,
   pub vspill_records: u32,
+  /// the deferred edge pieces' two regions (track 9A, t9a2d): region 0 at `vedge[0]`, region 1 at
+  /// `vedge[1]`, each a header and `vedge_records` records
+  pub vedge: [u32; 2],
+  pub vedge_records: u32,
   pub end: u32,
 }
 pub const fn dust_queue_offsets(vqueue_records: u32) -> DustQueueOffsets {
@@ -7059,6 +7271,10 @@ pub const fn dust_queue_offsets(vqueue_records: u32) -> DustQueueOffsets {
   // after everything the view had before the volume spill: no earlier offset moves
   let vspill = spill + dust_spill_words(spill_slots);
   let vspill_records = dust_vspill_records(vqueue_records);
+  // after the volume spill: no earlier offset moves
+  let vedge0 = vspill + DUST_VQUEUE_HEADER_WORDS + vspill_records * DUST_VQUEUE_RECORD_WORDS;
+  let vedge_records = dust_vedge_records(vqueue_records);
+  let vedge1 = vedge0 + DUST_VQUEUE_HEADER_WORDS + vedge_records * DUST_VEDGE_RECORD_WORDS;
   DustQueueOffsets {
     vqueue,
     squeue,
@@ -7066,7 +7282,9 @@ pub const fn dust_queue_offsets(vqueue_records: u32) -> DustQueueOffsets {
     spill_slots,
     vspill,
     vspill_records,
-    end: vspill + DUST_VQUEUE_HEADER_WORDS + vspill_records * DUST_VQUEUE_RECORD_WORDS,
+    vedge: [vedge0, vedge1],
+    vedge_records,
+    end: vedge1 + DUST_VQUEUE_HEADER_WORDS + vedge_records * DUST_VEDGE_RECORD_WORDS,
   }
 }
 /// [`PYR_FLAGS`] bit (host-written, `AETHERVK_DUST_VQUEUE=0` or the device's test hook): the main
@@ -7078,6 +7296,10 @@ pub const DUST_FRAME_VQUEUE_OFF: u32 = 1 << 30;
 /// `dust_draw_volume.comp` drains the volume spill instead of the main volume queue. Bits 0–1,
 /// 16–17 and 20–27 are the view's flags (`DUST_VIEW_*`).
 pub const DUST_VIEW_VOLUME_SPILL: u32 = 1 << 28;
+/// [`DustSplatPushConstants::flags`] bit, host-internal (track 9A, t9a2d; `Device::cmd_dust_splat`
+/// sets it on an odd chunk's consumer dispatches and on the edge pass that drains them, and refuses
+/// a caller's flags carrying it): the deferred edge pieces' region 1 instead of 0
+pub const DUST_VIEW_EDGE_ODD: u32 = 1 << 29;
 /// [`PYR_FLAGS`] bit (a test hook through `Device::dust_set_vqueue_mode`): `dust_split.comp`
 /// walks a cluster's records in one lane with a running ordinal (the former per-cluster thread's
 /// order), the word-identical reference for its counting pass and prefix

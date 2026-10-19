@@ -55,6 +55,9 @@ const uint  DUST_VIEW_DEBUG_STREAM = 1u << 16u;  // diagnostics: one stream (dus
 const uint  DUST_VIEW_DEBUG_SAMPLE = 1u << 17u;  // diagnostics: one time sample in every m
 // host-internal (dust::DUST_VIEW_VOLUME_SPILL): dust_draw_volume.comp drains the volume spill
 const uint  DUST_VIEW_VOLUME_SPILL = 1u << 28u;
+// host-internal (dust::DUST_VIEW_EDGE_ODD, track 9A t9a2d): the chunk's parity, the deferred edge
+// pieces' region the consumer appends to and dust_draw_small_edge.comp drains
+const uint  DUST_VIEW_EDGE_ODD = 1u << 29u;
 const uint  DUST_TRACER_EVERY        = 256u;
 const uint  DUST_TRACER_CHILD        = 1023u;
 const float DUST_TRACER_PX           = 2.0;

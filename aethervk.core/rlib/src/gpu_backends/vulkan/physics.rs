@@ -94,6 +94,11 @@ pub struct PhysicsPipelines {
   /// (`dust_draw_volume.comp`, wg 64, dispatched indirectly after each producer chunk)
   pub dust_draw_volume: vk::Pipeline,
   pub dust_draw_volume_prof: Option<vk::Pipeline>,
+  /// track 9A (t9a2d), the edge pass: a lane per small piece the consumer deferred (its centre
+  /// slice's 3σ crosses the frame; `dust_draw_small_edge.comp`, wg 64, dispatched indirectly beside
+  /// the next chunk's producer): the demotion or the sigma points, then its texels
+  pub dust_draw_small_edge: vk::Pipeline,
+  pub dust_draw_small_edge_prof: Option<vk::Pipeline>,
   /// per-chunk sub-packet queue splitter: a workgroup per cluster over its records
   /// (`dust_split.comp`, wg 64; the leaf path of the former per-cluster splat thread)
   pub dust_split: vk::Pipeline,
@@ -547,6 +552,12 @@ impl PhysicsPipelines {
         } else {
           None
         },
+        dust_draw_small_edge: mk!("dust_draw_small_edge.comp.spv"),
+        dust_draw_small_edge_prof: if has_shader_clock && dust_profile_requested() {
+          Some(mk!("dust_draw_small_edge.comp.prof.spv"))
+        } else {
+          None
+        },
         dust_split: mk!("dust_split.comp.spv"),
         dust_classify: mk!("dust_classify.comp.spv"),
         dust_compact: mk!("dust_compact.comp.spv"),
@@ -608,6 +619,10 @@ impl PhysicsPipelines {
     if let Some(p) = self.dust_draw_volume_prof {
       discard_pool.discard_pipeline(p, timeline);
     }
+    discard_pool.discard_pipeline(self.dust_draw_small_edge, timeline);
+    if let Some(p) = self.dust_draw_small_edge_prof {
+      discard_pool.discard_pipeline(p, timeline);
+    }
     discard_pool.discard_pipeline(self.dust_split, timeline);
     discard_pool.discard_pipeline(self.dust_classify, timeline);
     discard_pool.discard_pipeline(self.dust_compact, timeline);
@@ -627,7 +642,7 @@ impl PhysicsPipelines {
   pub fn log_pipeline_statistics(&self, instance: &ash::Instance, device: &ash::Device) {
     let ext = ash::khr::pipeline_executable_properties::Device::new(instance, device);
     let dir = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_PROFILE_DIR");
-    let named: [(&str, Option<vk::Pipeline>); 16] = [
+    let named: [(&str, Option<vk::Pipeline>); 18] = [
       ("dust_reproject", Some(self.dust_reproject)),
       ("dust_classify", Some(self.dust_classify)),
       ("dust_compact", Some(self.dust_compact)),
@@ -639,6 +654,8 @@ impl PhysicsPipelines {
       ("dust_draw_queue_prof", self.dust_draw_queue_prof),
       ("dust_draw_volume", Some(self.dust_draw_volume)),
       ("dust_draw_volume_prof", self.dust_draw_volume_prof),
+      ("dust_draw_small_edge", Some(self.dust_draw_small_edge)),
+      ("dust_draw_small_edge_prof", self.dust_draw_small_edge_prof),
       ("dust_specks", Some(self.dust_specks)),
       ("dust_specks_walk", Some(self.dust_specks_walk)),
       ("dust_propagate", Some(self.dust_propagate)),

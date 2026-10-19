@@ -15,8 +15,9 @@
 #
 # Variants: full (AETHERVK_DUST_CADENCE=0, the fully drawn path, with snapshots), aa (the same
 # again: the run-to-run floor), epsE (the cadence at ε = E px), fb (the by-count fallback: its knob
-# arrives with step 5; until then the run is skipped). A cadenced variant whose run reports no
-# cadence telemetry is scored but marked by its path summary (cadence n/a).
+# arrives with step 5; until then the run is skipped). epsE also sets AETHERVK_DUST_CADENCE=1 (the GPU
+# cadence is opt-in). A cadenced variant whose run reports no cadence telemetry is scored but marked
+# by its path summary (cadence n/a).
 set -u
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 B="${OBSERVER_BIN:-$REPO/target/release/examples/dust_observer}"
@@ -56,7 +57,7 @@ pose_args() {
 variant_env() {
   case "$1" in
     full|aa) echo "AETHERVK_DUST_CADENCE=0";;
-    eps*) echo "AETHERVK_DUST_CADENCE_EPS=${1#eps}";;
+    eps*) echo "AETHERVK_DUST_CADENCE=1 AETHERVK_DUST_CADENCE_EPS=${1#eps}";;
     fb) echo "";;
     *) echo "unknown variant $1" >&2; exit 2;;
   esac

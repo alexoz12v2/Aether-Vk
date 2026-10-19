@@ -476,3 +476,26 @@ Outputs:
   - the owner bytes consistent;
   - at least one class image shown (else vacuous).
 - `--lab-table` appends its rows (source `CPU mirror`, speed 0).
+
+## The deferred edge pass and the edge-piece demotion (9A, 2026-10-19)
+
+**The edge pass.** The volume consumer (`dust_draw_volume.comp`) no longer draws small edge pieces itself: it appends a 24-word edge record and moves on. `dust_draw_small_edge.comp` (one lane per record, dispatched indirectly beside the next chunk's producer) runs the fast slices, then either the demotion below or the 4 sigma points, and writes the rows. The records live in two parity-alternating regions of max(n/2, 64) × 96 B each (24 MiB per view at full capacity). A record that does not fit is dropped and counted. The observer prints one line per view:
+
+```
+dust edge pass: N small edge pieces drawn, M of them demoted (ε 1e-3), L lost
+```
+
+L must be 0. The GPU parity test asserts it, and the production runs at 10 m and 5 000 km measured 0.
+
+**The demotion.** With `DUST_SMALL_DEMOTE_EPS` = 1e-3 (production), an edge piece whose predicted error is below ε of its mass is drawn with one projection instead of the 4 sigma points. The one-projection point carries the second-order correction: mass ×(1+μ), mean +δ, covariance +ΔC (on the CPU in `splat.rs` and on the GPU in `dust_scatter.glsl`, bit-consistent). Before the predictor runs, a cheap conservative gate (centre slice + κ) has to pass: the full predictor is evaluated only when the gate is < `DUST_SMALL_DEMOTE_GATE` = 0.5 ε. ε = 0 gives bit-identical images. Measured at 10 m: 213 532 of 2 841 524 edge pieces demoted (7.5 %). At 5 000 km: 213 435 of 229 019 (93 %).
+
+Tests:
+- `small_demotion_calibration` (CPU, `splat.rs`). Two rules, at every ε: sound (worst |ΔL|/(εM) ≤ 1) and accurate (the extra error against the truth ≤ 2e-3). With the correction, ε_cal = 1e-2 passes, with an extra error ≤ 5.2e-5.
+- `small_demotion_tail_survey` (CPU). A tail scene from the nucleus (16 streams, a 0.2 rad cone, 200 / 400 d). It needs a candidate pose with ≥ 200 pieces demoted.
+- `gpu_dust_small_demotion_matches_reference`. Cases 9056/9057 need ≥ 200 pieces demoted, with the GPU count equal to the CPU count. Every `splat_parity` case asserts |GPU − CPU demoted| ≤ the small margins. The tail frames lower `PARITY_MIN_NONZERO` from 300 to 100.
+
+## The budget loop's fallback and the GPU cadence switch (track 7, T6E)
+
+- **The GPU cadence is opt-in.** It runs only with `AETHERVK_DUST_CADENCE=1`. `scripts/lab_cadence_capture.sh`'s eps variants now set it. Captures taken before 2026-10-19 14:50 drew their eps rows in full (cadence off).
+- **The by-count fallback.** When the loop is at its last rung, it keeps the K highest-δ clusters fresh. Under the fallback, class k also needs 2N_k·Δt ≤ θ·age, with θ = `DUST_CADENCE_FALLBACK_SHAPE` = 0.25. So clusters younger than 2N₀Δt/θ (25.6 h at 1 d/s) stay fresh: the near-nucleus dust has the smallest δ and would otherwise go stale first. With θ = 0 (everywhere except under the fallback) the old rule holds word for word, and the CPU and GPU agree bit for bit. The test `fallback_keeps_the_nucleus_fresh` checks that the youngest 1 % and the 1 % nearest the nucleus are 100 % fresh, for a still camera and a following one.
+- **The class images keep the frame's level count (T6E).** The 48-frame path check now passes: Σ ratio 0.9993–1.00015 over frames 40–47 (it was 0.985 before).

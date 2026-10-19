@@ -347,9 +347,17 @@ void dust_volume_draw(DustPacket p, uint ra, uint rc, float exposure, uint level
             DUST_PROF_END(vcentre)
         } else if (cls == DUST_VOLUME_CLASS_SMALL) {
             DustSmallPoint s0, s1, s2, s3, s4;
+            DustSmallEdge ed;
             DUST_PROF_BEGIN(vsmallpts)
-            dust_volume_small_points(q, eye, r0, r1, r3, tv, W, H, meanRef, renorm, s0, s1, s2, s3, s4);
+            bool edge = dust_volume_small_points(q, eye, r0, r1, r3, tv, W, H, meanRef, renorm, s0, s1, s2, s3, s4, ed);
             DUST_PROF_END(vsmallpts)
+            // track 9A (t9a2d): an edge piece is drawn by the edge pass (dust_draw_small_edge.comp)
+            // from its record: its inputs, range, level, colour, depth bits and seed
+            if (edge) {
+                dust_small_edge_put(pc.pyramid, (pc.flags & DUST_VIEW_EDGE_ODD) != 0u, ed, r, lev, color, depthBits,
+                                    pieceSeed);
+                continue;
+            }
             // only the texels its points cover (dust::volume_scatter)
             ivec4 rs = dust_volume_small_range(s0, s1, s2, s3, s4, r, sz);
             if (rs.y < rs.x || rs.w < rs.z) continue;
