@@ -214,7 +214,7 @@ for file in assets/*.comp assets/sim/*.comp; do
             # AETHERVK_DUST_PROFILE=1 on a device with VK_KHR_shader_clock): `.prof` before the
             # vmm infix, as PhysicsPipelines' mk!() rewrites the name.
             case "$base" in
-                dust_splat.comp|dust_draw_queue.comp|dust_draw_volume.comp|dust_split.comp)
+                dust_splat.comp|dust_draw_queue.comp|dust_draw_volume.comp|dust_split.comp|dust_draw_small_edge.comp)
                     compile_one "$file" comp "-DDUST_PROFILE=1 $vmm_flag" "${file%.comp}.comp.prof${vmm_infix}.spv"
                     compile_one "$file" comp "-DDUST_PROFILE=1 -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.prof${vmm_infix}.d.spv"
                     ;;

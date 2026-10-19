@@ -920,6 +920,21 @@ impl SimulationContext {
       })
       .ok()
   }
+  /// The deferred edge pieces of `pe`'s last drawn frame (track 9A, t9a2d;
+  /// `dust::DUST_VEDGE_DRAWN` / `_LOST` / `_DEMOTED`): small pieces the edge pass drew, pieces a
+  /// full region refused (lost, not drawn), and of the drawn those it demoted (t9a2e); `None`
+  /// without a view or a device. Waits for the GPU (diagnostics).
+  pub fn dust_vedge_counts(&self, pe: crate::gpu::PresentationEngineHandle) -> Option<(u32, u32, u32)> {
+    use crate::gpu::WeakRenderFrontendExt;
+    let frontend = self.render_proxy.0.as_frontend()?;
+    frontend
+      .with_device(self.render_proxy.1, |device| {
+        let vulkan_device: &crate::gpu_backends::vulkan::device::Device =
+          device.as_any().downcast_ref().ok_or(crate::gpu_err!("not a Vulkan device"))?;
+        vulkan_device.dust_vedge_counts(pe)
+      })
+      .ok()
+  }
   /// `pe`'s last frame's volumetric deposits above the per-add cap, split into several adds
   /// (`dust::DUST_VQUEUE_SPLIT_ADDS`); `None` without a view or a device. Waits for the GPU.
   pub fn dust_volume_split_adds(&self, pe: crate::gpu::PresentationEngineHandle) -> Option<u32> {

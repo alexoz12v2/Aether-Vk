@@ -10414,19 +10414,41 @@ fn dust_queue_offsets_and_dispatch_are_portable() {
     assert!(DUST_VQUEUE_LOST < DUST_VQUEUE_SPILL_OFFSET && DUST_VQUEUE_SPILL_OFFSET < DUST_VQUEUE_HEADER_WORDS as usize);
     let word15 = o.vspill - o.vqueue;
     assert_eq!(o.vqueue + word15, o.vspill, "{records}");
-    // its records (structure-of-arrays at its capacity's stride, at most its records) end at the
-    // allocation's end
+    // its records (structure-of-arrays at its capacity's stride, at most its records) end where
+    // the deferred edge pieces' region 0 begins
     for cap in [o.vspill_records, (o.vspill_records / 2).max(1), 1] {
       let last = o.vspill + DUST_VQUEUE_HEADER_WORDS + (DUST_VQUEUE_RECORD_WORDS - 1) * cap + cap - 1;
-      assert!(last < o.end, "{records}: spill {cap}");
+      assert!(last < o.vedge[0], "{records}: spill {cap}");
     }
-    assert_eq!(o.end, o.vspill + DUST_VQUEUE_HEADER_WORDS + o.vspill_records * DUST_VQUEUE_RECORD_WORDS);
+    assert_eq!(o.vedge[0], o.vspill + DUST_VQUEUE_HEADER_WORDS + o.vspill_records * DUST_VQUEUE_RECORD_WORDS);
+    // track 9A (t9a2d): the edge regions, placed as dust_vedge_base computes them from word 15 and
+    // word 9 (the spill's records and a region's: n / 4 and n / 2, at least 64), each record's
+    // last word (structure-of-arrays at the capacity's stride, at most the region's records)
+    // before the next region or the allocation's end
+    let glsl_vedge = |word9: u32, odd: bool| {
+      let n = if word9 == 0 { DUST_VQUEUE_CAPACITY } else { word9.min(DUST_VQUEUE_CAPACITY) };
+      let e0 = (o.vqueue + (o.vspill - o.vqueue)) + DUST_VQUEUE_HEADER_WORDS + (n / 4).max(64) * DUST_VQUEUE_RECORD_WORDS;
+      if odd { e0 + DUST_VQUEUE_HEADER_WORDS + (n / 2).max(64) * DUST_VEDGE_RECORD_WORDS } else { e0 }
+    };
+    assert_eq!(o.vedge_records, (records / 2).max(64), "{records}");
+    assert_eq!(dust_vedge_records(records), o.vedge_records, "{records}");
+    assert_eq!(glsl_vedge(records, false), o.vedge[0], "{records}");
+    assert_eq!(glsl_vedge(records, true), o.vedge[1], "{records}");
+    assert!(DUST_VEDGE_DRAWN > 4 && DUST_VEDGE_LOST > 4 && DUST_VEDGE_LOST < DUST_VQUEUE_HEADER_WORDS as usize);
+    for (k, next) in [(0usize, o.vedge[1]), (1, o.end)] {
+      for cap in [o.vedge_records, (o.vedge_records / 2).max(1), 1] {
+        let last = o.vedge[k] + DUST_VQUEUE_HEADER_WORDS + (DUST_VEDGE_RECORD_WORDS - 1) * cap + cap - 1;
+        assert!(last < next, "{records}: edge region {k} at {cap}");
+      }
+    }
+    assert_eq!(o.end, o.vedge[1] + DUST_VQUEUE_HEADER_WORDS + o.vedge_records * DUST_VEDGE_RECORD_WORDS);
     // no u32 overflow in the word arithmetic (the host's u64 bytes from it)
     let wide = DUST_QUEUE_WORDS as u64
       + (DUST_VQUEUE_HEADER_WORDS + records * DUST_VQUEUE_RECORD_WORDS) as u64
       + DUST_SQUEUE_WORDS as u64
       + dust_spill_words(o.spill_slots) as u64
-      + (DUST_VQUEUE_HEADER_WORDS + o.vspill_records * DUST_VQUEUE_RECORD_WORDS) as u64;
+      + (DUST_VQUEUE_HEADER_WORDS + o.vspill_records * DUST_VQUEUE_RECORD_WORDS) as u64
+      + 2 * (DUST_VQUEUE_HEADER_WORDS + o.vedge_records * DUST_VEDGE_RECORD_WORDS) as u64;
     assert_eq!(wide, o.end as u64);
   }
   // the full volume queue: the former constant placement; 0 in word 9 means the full capacity
@@ -10438,9 +10460,10 @@ fn dust_queue_offsets_and_dispatch_are_portable() {
   let small = dust_queue_offsets(16_384);
   assert!(small.end < full.end);
   std::println!(
-    "[queue offsets] full {} MiB (volume spill {} MiB), 16 384 records {} MiB, 64 records {} MiB",
+    "[queue offsets] full {} MiB (volume spill {} MiB, edge regions {} MiB), 16 384 records {} MiB, 64 records {} MiB",
     full.end as u64 * 4 >> 20,
-    (full.end - full.vspill) as u64 * 4 >> 20,
+    (full.vedge[0] - full.vspill) as u64 * 4 >> 20,
+    (full.end - full.vedge[0]) as u64 * 4 >> 20,
     small.end as u64 * 4 >> 20,
     dust_queue_offsets(64).end as u64 * 4 >> 20
   );

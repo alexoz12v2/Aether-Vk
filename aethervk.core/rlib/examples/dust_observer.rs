@@ -2644,6 +2644,17 @@ fn main() {
         "[observer] dust volume queue: {drawn} packets drawn by the consumer, {overflowed} overflowed → {spilled} spilled / {lost} lost, {chunks} chunks; {} volume deposits split above the per-add cap",
         ctx.dust_volume_split_adds(pe).map_or("?".to_string(), |n| n.to_string())
       ));
+      // track 9A (t9a2d): the small edge pieces the consumer deferred to the edge pass, and (t9a2e)
+      // those the pass demoted (one projection a slice with the predicted terms, not the sigma
+      // points: the demotion firing in this frame)
+      let (edge_drawn, edge_lost, edge_demoted) = ctx.dust_vedge_counts(pe).map_or(
+        ("?".to_string(), "?".to_string(), "?".to_string()),
+        |(d, l, m)| (d.to_string(), l.to_string(), m.to_string()),
+      );
+      log_line(&format!(
+        "[observer] dust edge pass: {edge_drawn} small edge pieces drawn, {edge_demoted} of them demoted (ε {:.0e}), {edge_lost} lost (a full region refused them)",
+        aethervk_core_rlib::scene::dust::DUST_SMALL_DEMOTE_EPS
+      ));
     }
     // the shader-clock profiler's counters of the last drawn frame (`AETHERVK_DUST_PROFILE=1`,
     // `dust_profile.glsl`): the stages' shares, the per-unit costs, the thread tail, the

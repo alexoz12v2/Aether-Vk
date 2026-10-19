@@ -745,10 +745,13 @@ DustSmallPoint dust_volume_small_edge(uint q, bool five, vec3 mean, vec3 g, floa
 }
 
 // Track 9A, the edge-piece demotion (dust::DUST_SMALL_DEMOTE_EPS, dust::volume_small_demote_err):
-// an edge piece keeps its one projection a slice when its predicted in-frame light change, sigma
+// an edge piece keeps its one projection a slice (with its predicted second-order terms,
+// dust_small_demote_slice) when its gate (dust_small_demote_gate) is under DUST_SMALL_DEMOTE_GATE x
+// the constant and its predicted in-frame light change, sigma
 // points against one projection, mass-weighted over its slices, is under the constant (strict; 0:
 // the branch folds away, D3's decisions as before)
-const float DUST_SMALL_DEMOTE_EPS = 0.0;
+const float DUST_SMALL_DEMOTE_EPS = 0.001;
+const float DUST_SMALL_DEMOTE_GATE = 0.5;
 const float DUST_SMALL_DEMOTE_KAPPA = 0.1;
 const float DUST_SMALL_DEMOTE_SAFETY = 1.25;
 const float DUST_SMALL_INV_SQRT_2PI = 0.3989423;
@@ -766,23 +769,55 @@ void dust_small_demote_edge(float tv, float u, float al, out float dP, out float
     pu = tv < -1.0 ? DUST_SMALL_INV_SQRT_2PI * ea / -tv : 1.0;
 }
 
-// The predicted change of slice q's in-frame light (sigma points against one projection) as a
-// fraction of its mass; -1 when not predicted (dust::volume_small_demote_err: the second-order mass
-// term mu, mean shift delta and covariance change of the 4 sigma points' J3-weighted moments, bounded
-// edge by edge on the frame's rectangle integral, x DUST_SMALL_DEMOTE_SAFETY)
-float dust_small_demote_err(uint q, bool five, vec3 mean, vec3 g, float x1, float x2, float y1, float y2,
-                            float w1, float w2, vec3 r0, vec3 r1, vec3 r3, vec3 t, float W, float H) {
+// Track 9A (t9a2c): the demotion's gate (dust::small_demote_gate): from the centre slice's one
+// projection c and its sigma points' relative depth spread kap = sqrt2 max|r3.lat_i| / w (the first
+// order of every predicted term), the in-frame light an edge of the frame can carry over
+// (kap / sqrt(2 pi)) (e^(-ax^2/2) py + px e^(-ay^2/2)), ax, ay the signed distances (sigma) from the
+// mean to the nearer edge of each axis, px, py the marginals' upper bounds (Mills beyond 1 sigma
+// outside); 3.4e38 when the centre is behind the eye or kap is out of the predictor's range. A piece
+// is predicted only when this is under DUST_SMALL_DEMOTE_GATE x DUST_SMALL_DEMOTE_EPS: about thirty
+// operations and two exponentials in place of the predictor for most of the edge pieces it would not
+// demote (part of the rule: the CPU applies the same gate)
+float dust_small_demote_gate(DustSmallPoint c, vec3 mean, vec3 r3, float t3, float w1, float w2, float W, float H) {
+    float w0 = dot(r3, mean) + t3;
+    if (!(w0 > 0.0)) return 3.4e38;
+    // (the centre slice's kappa_i as dust_small_demote_terms computes them)
+    float iw = 1.0 / w0;
+    float kap = DUST_UT2_NODE * max(abs(w1 * iw), abs(w2 * iw));
+    if (!(kap < DUST_SMALL_DEMOTE_KAPPA)) return 3.4e38;
+    float isx = c.ix * DUST_SQRT_2, isy = c.iy * DUST_SQRT_2;
+    float ax = min(c.mx, W - c.mx) * isx;
+    float ay = min(c.my, H - c.my) * isy;
+    float ex = exp(-0.5 * ax * ax);
+    float ey = exp(-0.5 * ay * ay);
+    float pxu = ax < -1.0 ? DUST_SMALL_INV_SQRT_2PI * ex / -ax : 1.0;
+    float pyu = ay < -1.0 ? DUST_SMALL_INV_SQRT_2PI * ey / -ay : 1.0;
+    return kap * DUST_SMALL_INV_SQRT_2PI * (ex * pyu + pxu * ey);
+}
+
+// Track 9A: one predicted slice's second-order terms (dust::SmallDemoteTerms): the mass term mu,
+// the J3-weighted mean shift dx, dy (px), the one projection's lateral covariance cxx, cyy, cxy
+// (px^2) and the sigma points' change of it dcxx, dcyy, dcxy, the one projection's mean mx, my (px)
+struct DustSmallTerms {
+    float mu, dx, dy, cxx, cyy, cxy, dcxx, dcyy, dcxy, mx, my;
+};
+
+// The second-order terms of slice q (dust::small_demote_terms); false when not predicted (behind
+// the eye, sqrt2 |kappa_i| >= DUST_SMALL_DEMOTE_KAPPA, no Jacobian; k is then unset)
+bool dust_small_demote_terms(uint q, bool five, vec3 mean, vec3 g, float x1, float x2, float y1, float y2,
+                             float w1, float w2, vec3 r0, vec3 r1, vec3 r3, vec3 t, float W, float H,
+                             out DustSmallTerms k) {
     vec3 xq = mean + g * dust_small_node(q, five).x;
     float w = dot(r3, xq) + t.z;
-    if (!(w > 0.0)) return -1.0;
+    if (!(w > 0.0)) return false;
     float iw = 1.0 / w;
     float k1 = w1 * iw, k2 = w2 * iw;
-    if (!(DUST_UT2_NODE * max(abs(k1), abs(k2)) < DUST_SMALL_DEMOTE_KAPPA)) return -1.0;
+    if (!(DUST_UT2_NODE * max(abs(k1), abs(k2)) < DUST_SMALL_DEMOTE_KAPPA)) return false;
     float ndx = (dot(r0, xq) + t.x) * iw;
     float ndy = (dot(r1, xq) + t.y) * iw;
     vec3 c = cross(r0 - r3 * ndx, r1 - r3 * ndy);
     float cn2 = dot(c, c);
-    if (!(cn2 > 0.0)) return -1.0;
+    if (!(cn2 > 0.0)) return false;
     float icn = 1.0 / cn2;
     float al1 = (x1 - ndx * w1) * iw, al2 = (x2 - ndx * w2) * iw;
     float be1 = (y1 - ndy * w1) * iw, be2 = (y2 - ndy * w2) * iw;
@@ -806,6 +841,21 @@ float dust_small_demote_err(uint q, bool five, vec3 mean, vec3 g, float x1, floa
     float dcxx = a1 * a1 * f1 + a2 * a2 * f2 - mu * cxx - dx * dx;
     float dcyy = b1 * b1 * f1 + b2 * b2 * f2 - mu * cyy - dy * dy;
     float dcxy = a1 * b1 * f1 + a2 * b2 * f2 - mu * cxy - dx * dy;
+    k.mu = mu; k.dx = dx; k.dy = dy;
+    k.cxx = cxx; k.cyy = cyy; k.cxy = cxy;
+    k.dcxx = dcxx; k.dcyy = dcyy; k.dcxy = dcxy;
+    k.mx = (ndx * 0.5 + 0.5) * W;
+    k.my = (ndy * 0.5 + 0.5) * H;
+    return true;
+}
+
+// The predicted change of a predicted slice's in-frame light (sigma points against one projection)
+// as a fraction of its mass, from its terms k (dust::volume_small_demote_err: the second-order mass
+// term mu, mean shift delta and covariance change of the 4 sigma points' J3-weighted moments, bounded
+// edge by edge on the frame's rectangle integral, x DUST_SMALL_DEMOTE_SAFETY)
+float dust_small_demote_err_of(DustSmallTerms k, float W, float H) {
+    float mu = k.mu, dx = k.dx, dy = k.dy, cxx = k.cxx, cyy = k.cyy, cxy = k.cxy;
+    float dcxx = k.dcxx, dcyy = k.dcyy, dcxy = k.dcxy, mx = k.mx, my = k.my;
     float lx = dcxx / (2.0 * cxx);
     float ly = dcyy / (2.0 * cyy);
     float sx = sqrt(cxx);
@@ -813,8 +863,6 @@ float dust_small_demote_err(uint q, bool five, vec3 mean, vec3 g, float x1, floa
     float isc = 1.0 / sqrt(cxx * cyy);
     float rho = cxy * isc;
     float drho = dcxy * isc - rho * (lx + ly);
-    float mx = (ndx * 0.5 + 0.5) * W;
-    float my = (ndy * 0.5 + 0.5) * H;
     float tl = mx / sx, tr = (W - mx) / sx;
     float tb = my / sy, tt = (H - my) / sy;
     float s = DUST_SMALL_DEMOTE_SAFETY;
@@ -845,26 +893,78 @@ DustSmallPoint dust_small_none() {
     return o;
 }
 
+// Track 9A (t9a2): a demoted slice's one projection of mass mq (> 0) with its predicted second-order
+// terms k applied (dust::volume_small_demote_fix): mass x (1 + mu), mean + delta, covariance + its
+// change (the variances floored at 1e-6 px^2, rho clamped as dust_small_finish): the sigma points'
+// moments to second order. k.mx, k.my are the one projection's mean, bit for bit the fast point's
+DustSmallPoint dust_small_demote_fix_of(DustSmallTerms k, float mq) {
+    float cxx = max(k.cxx + k.dcxx, 1e-6);
+    float cyy = max(k.cyy + k.dcyy, 1e-6);
+    float rhoRaw = (k.cxy + k.dcxy) * inversesqrt(cxx * cyy);
+    float rho = (isnan(rhoRaw) || isinf(rhoRaw)) ? 0.0 : clamp(rhoRaw, -DUST_SMALL_RHO_MAX, DUST_SMALL_RHO_MAX);
+    float m = mq * (1.0 + k.mu);
+    if (!(m > 0.0) || isinf(m)) return dust_small_none();
+    DustSmallPoint o;
+    o.mx = k.mx + k.dx;
+    o.my = k.my + k.dy;
+    o.ix = inversesqrt(cxx) * DUST_SMALL_INV_SQRT2;
+    o.iy = inversesqrt(cyy) * DUST_SMALL_INV_SQRT2;
+    o.rho = rho;
+    o.m = m;
+    return o;
+}
+
+// Track 9A (t9a2b): slice q's prediction and its corrected one projection from one evaluation of its
+// terms (dust::volume_small_demote_err and dust::volume_small_demote_fix on the same terms, which
+// die here: nothing of the slice but p and the returned change outlives the call). Returns the
+// predicted change as a fraction of the slice's mass (-1 when not predicted, p then none); p the
+// slice's one projection of mass mq with its terms applied
+float dust_small_demote_slice(uint q, bool five, vec3 mean, vec3 g, float x1, float x2, float y1, float y2,
+                              float w1, float w2, vec3 r0, vec3 r1, vec3 r3, vec3 t, float W, float H, float mq,
+                              out DustSmallPoint p) {
+    DustSmallTerms k;
+    p = dust_small_none();
+    if (!dust_small_demote_terms(q, five, mean, g, x1, x2, y1, y2, w1, w2, r0, r1, r3, t, W, H, k)) return -1.0;
+    p = dust_small_demote_fix_of(k, mq);
+    return dust_small_demote_err_of(k, W, H);
+}
+
+// Track 9A (t9a2d): an edge small piece's inputs as the consumer computed them, the record the edge
+// pass (dust_draw_small_edge.comp) draws it from (dust_small_edge_put / _get): its centre, its depth
+// axis g (3 sigma bounded), the lateral axes' six dots against the projection's rows, its mass and
+// its slices' radiance weights
+struct DustSmallEdge {
+    vec3 mean;
+    vec3 g;
+    float x1, x2, y1, y2, w1, w2;
+    float massW;
+    float wr0, wr1, wr2;
+};
+
 // The three depth points of a small volumetric piece (dust::volume_small_points), as three
 // values (no array). Live across the slices: mean, g, the lateral axes' six dots, the mass and the
 // slices' weights. Round 3: the weights and the fast projections of every slice as one
 // straight-line block (independent chains the scheduler overlaps), then the edge decision on s0
-// as before; an edge piece redraws every slice by sigma points (its fast s1, s2 discarded).
+// as before. Track 9A (t9a2d): the consumer never draws an edge piece: it returns true with the
+// piece's inputs in ed (s0..s4 then unused), and the consumer defers it to the edge pass
+// (dust_small_edge_put), which draws it by dust_volume_small_edge_points (the demotion or the
+// sigma points); so neither the predictor nor the sigma points are code of the consumer.
 // Profile parts (DUST_PROF_K1C0): vsmprep the prelude, vsmfast the weights, the fast slices and
-// the decision (every piece), vsmedge an edge piece's slices; the pieces by path counted
-void dust_volume_small_points(DustVolumePiece pc_, vec3 eye, vec3 r0, vec3 r1, vec3 r3, vec3 t, float W, float H,
+// the decision (every piece); an interior piece counted by its path here, an edge piece by the pass
+bool dust_volume_small_points(DustVolumePiece pc_, vec3 eye, vec3 r0, vec3 r1, vec3 r3, vec3 t, float W, float H,
                               vec3 meanRef, float renorm, out DustSmallPoint s0, out DustSmallPoint s1,
-                              out DustSmallPoint s2, out DustSmallPoint s3, out DustSmallPoint s4) {
+                              out DustSmallPoint s2, out DustSmallPoint s3, out DustSmallPoint s4,
+                              out DustSmallEdge ed) {
     s0 = dust_small_none(); s1 = dust_small_none(); s2 = dust_small_none(); s3 = dust_small_none(); s4 = dust_small_none();
     DUST_PROF_BEGIN(vsmprep)
     vec3 lq = dust_l_mul(pc_.l, pc_.qw);
     vec3 mean = eye - lq;
     float dn = sqrt(dot(lq, lq));
-    if (!(dn > 0.0)) { DUST_PROF_END(vsmprep) return; }
+    if (!(dn > 0.0)) { DUST_PROF_END(vsmprep) return false; }
     vec3 e = lq * (-1.0 / dn);
     vec3 lte = dust_lt_mul(pc_.l, e);
     float se = sqrt(dot(lte, lte));
-    if (!(se > 0.0)) { DUST_PROF_END(vsmprep) return; }
+    if (!(se > 0.0)) { DUST_PROF_END(vsmprep) return false; }
     vec3 z = lte * (1.0 / se);
     vec3 g = dust_l_mul(pc_.l, z);
     float sgn = z.z >= 0.0 ? 1.0 : -1.0;
@@ -925,53 +1025,105 @@ void dust_volume_small_points(DustVolumePiece pc_, vec3 eye, vec3 r0, vec3 r1, v
         edge = s0.mx - ex < 0.0 || s0.mx + ex > W || s0.my - ey < 0.0 || s0.my + ey > H;
     }
     DUST_PROF_END(vsmfast)
-    if (edge) {
-        DUST_PROF_BEGIN(vsmedge)
-        // track 9A: the demotion (dust::volume_small_points: the slices' predictions in order, the
-        // mass-weighted mean against DUST_SMALL_DEMOTE_EPS, strict); vsmedge holds its cost
-        bool demote = false;
-        if (DUST_SMALL_DEMOTE_EPS > 0.0 && s0.m > 0.0 && s1.m > 0.0 && s2.m > 0.0
-            && (!five || (s3.m > 0.0 && s4.m > 0.0))) {
-            float e0 = dust_small_demote_err(0u, five, mean, g, x1, x2, y1, y2, w1, w2, r0, r1, r3, t, W, H);
-            float e1 = dust_small_demote_err(1u, five, mean, g, x1, x2, y1, y2, w1, w2, r0, r1, r3, t, W, H);
-            float e2 = dust_small_demote_err(2u, five, mean, g, x1, x2, y1, y2, w1, w2, r0, r1, r3, t, W, H);
-            float e3 = 0.0, e4 = 0.0;
-            if (five) {
-                e3 = dust_small_demote_err(3u, five, mean, g, x1, x2, y1, y2, w1, w2, r0, r1, r3, t, W, H);
-                e4 = dust_small_demote_err(4u, five, mean, g, x1, x2, y1, y2, w1, w2, r0, r1, r3, t, W, H);
-            }
-            if (e0 >= 0.0 && e1 >= 0.0 && e2 >= 0.0 && e3 >= 0.0 && e4 >= 0.0) {
-                float acc = s0.m * e0;
-                acc += s1.m * e1;
-                acc += s2.m * e2;
-                float ms = s0.m + s1.m + s2.m;
-                if (five) {
-                    acc += s3.m * e3;
-                    acc += s4.m * e4;
-                    ms += s3.m;
-                    ms += s4.m;
-                }
-                demote = acc / ms < DUST_SMALL_DEMOTE_EPS;
-            }
-        }
-        if (!demote) {
-            s0 = dust_volume_small_edge(0u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr0, r0, r1, r3, t, W, H);
-            s1 = dust_volume_small_edge(1u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr1, r0, r1, r3, t, W, H);
-            s2 = dust_volume_small_edge(2u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr2, r0, r1, r3, t, W, H);
-            if (five) {
-                s3 = dust_volume_small_edge(3u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr3, r0, r1, r3, t, W, H);
-                s4 = dust_volume_small_edge(4u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr4, r0, r1, r3, t, W, H);
-            }
-        }
-        DUST_PROF_END(vsmedge)
-        if (demote) {
-            DUST_PROF_COUNT(small_fast, 1u)
-        } else {
-            DUST_PROF_COUNT(small_edge, 1u)
-        }
-    } else {
+    // (t9a2d: the edge piece's record; dead in the caller unless edge)
+    ed.mean = mean;
+    ed.g = g;
+    ed.x1 = x1; ed.x2 = x2; ed.y1 = y1; ed.y2 = y2; ed.w1 = w1; ed.w2 = w2;
+    ed.massW = massW;
+    ed.wr0 = wr0; ed.wr1 = wr1; ed.wr2 = wr2;
+    if (!edge) {
         DUST_PROF_COUNT(small_fast, 1u)
     }
+    return edge;
+}
+
+// Track 9A (t9a2d): an edge small piece's depth points in the edge pass (dust_draw_small_edge.comp;
+// dust::volume_small_points' edge branch), from the inputs the consumer recorded: the one projection
+// of every slice again (dust_volume_small_fast on the same inputs: the consumer's points), then the
+// demotion (the slices' predictions in order against DUST_SMALL_DEMOTE_EPS, each demoted slice
+// corrected in place: t9a2b's sequential prefix) or the 4 lateral sigma points a slice. The 5-point
+// depth rule is off in production (dust::DUST_K1C_D_GH5), as in the consumer. Profile parts: vsmfast
+// the one projections, vsmedge the demotion and the sigma points; the piece counted by its path.
+// Returns whether the piece was demoted (t9a2e: the pass counts them, DUST_VEDGE_DEMOTED)
+bool dust_volume_small_edge_points(DustSmallEdge ed, vec3 r0, vec3 r1, vec3 r3, vec3 t, float W, float H,
+                                   out DustSmallPoint s0, out DustSmallPoint s1, out DustSmallPoint s2,
+                                   out DustSmallPoint s3, out DustSmallPoint s4) {
+    bool five = false;
+    vec3 mean = ed.mean, g = ed.g;
+    float x1 = ed.x1, x2 = ed.x2, y1 = ed.y1, y2 = ed.y2, w1 = ed.w1, w2 = ed.w2;
+    float massW = ed.massW;
+    float wr0 = ed.wr0, wr1 = ed.wr1, wr2 = ed.wr2, wr3 = 1.0, wr4 = 1.0;
+    s3 = dust_small_none(); s4 = dust_small_none();
+    DUST_PROF_BEGIN(vsmfast)
+    s0 = dust_volume_small_fast(0u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr0, r0, r1, r3, t, W, H);
+    s1 = dust_volume_small_fast(1u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr1, r0, r1, r3, t, W, H);
+    s2 = dust_volume_small_fast(2u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr2, r0, r1, r3, t, W, H);
+    DUST_PROF_END(vsmfast)
+    DUST_PROF_BEGIN(vsmedge)
+    // track 9A: the demotion (dust::volume_small_points: the gate (t9a2c, on the fast centre slice:
+    // a few operations, so most edge pieces that keep the sigma points never reach the predictor),
+    // then the slices' predictions in order, the mass-weighted mean against DUST_SMALL_DEMOTE_EPS,
+    // strict); vsmedge holds its cost.
+    // t9a2b: the fast points' masses are kept and the fast points die; each slice is predicted
+    // and corrected from one evaluation of its terms (dust_small_demote_slice, its corrected
+    // point written in place: an edge piece that is not demoted overwrites every slice below),
+    // and the next slice is evaluated only while the running sum acc / ms is under the constant.
+    // The sum only grows (m > 0, e >= 0, each rounding monotone), so a prefix at or over the
+    // constant means the full sum is too: the decision is the full rule's exactly, the slices
+    // are sequential (no two slices' terms live at once) and most edge pieces that keep the
+    // sigma points stop after the centre slice
+    bool demote = false;
+    if (DUST_SMALL_DEMOTE_EPS > 0.0 && s0.m > 0.0 && s1.m > 0.0 && s2.m > 0.0
+        && (!five || (s3.m > 0.0 && s4.m > 0.0))
+        && dust_small_demote_gate(s0, mean, r3, t.z, w1, w2, W, H) < DUST_SMALL_DEMOTE_GATE * DUST_SMALL_DEMOTE_EPS) {
+        float m0 = s0.m, m1 = s1.m, m2 = s2.m, m3 = s3.m, m4 = s4.m;
+        float ms = m0 + m1 + m2;
+        if (five) {
+            ms += m3;
+            ms += m4;
+        }
+        float e = dust_small_demote_slice(0u, five, mean, g, x1, x2, y1, y2, w1, w2, r0, r1, r3, t, W, H, m0, s0);
+        float acc = m0 * e;
+        bool go = e >= 0.0 && acc / ms < DUST_SMALL_DEMOTE_EPS;
+        if (go) {
+            e = dust_small_demote_slice(1u, five, mean, g, x1, x2, y1, y2, w1, w2, r0, r1, r3, t, W, H, m1, s1);
+            acc += m1 * e;
+            go = e >= 0.0 && acc / ms < DUST_SMALL_DEMOTE_EPS;
+        }
+        if (go) {
+            e = dust_small_demote_slice(2u, five, mean, g, x1, x2, y1, y2, w1, w2, r0, r1, r3, t, W, H, m2, s2);
+            acc += m2 * e;
+            go = e >= 0.0 && acc / ms < DUST_SMALL_DEMOTE_EPS;
+        }
+        if (five && go) {
+            e = dust_small_demote_slice(3u, five, mean, g, x1, x2, y1, y2, w1, w2, r0, r1, r3, t, W, H, m3, s3);
+            acc += m3 * e;
+            go = e >= 0.0 && acc / ms < DUST_SMALL_DEMOTE_EPS;
+        }
+        if (five && go) {
+            e = dust_small_demote_slice(4u, five, mean, g, x1, x2, y1, y2, w1, w2, r0, r1, r3, t, W, H, m4, s4);
+            acc += m4 * e;
+            go = e >= 0.0 && acc / ms < DUST_SMALL_DEMOTE_EPS;
+        }
+        demote = go;
+    }
+    if (!demote) {
+        s0 = dust_volume_small_edge(0u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr0, r0, r1, r3, t, W, H);
+        s1 = dust_volume_small_edge(1u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr1, r0, r1, r3, t, W, H);
+        s2 = dust_volume_small_edge(2u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr2, r0, r1, r3, t, W, H);
+        if (five) {
+            s3 = dust_volume_small_edge(3u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr3, r0, r1, r3, t, W, H);
+            s4 = dust_volume_small_edge(4u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr4, r0, r1, r3, t, W, H);
+        }
+    }
+    DUST_PROF_END(vsmedge)
+    if (demote) {
+        DUST_PROF_COUNT(small_fast, 1u)
+    } else {
+        DUST_PROF_COUNT(small_edge, 1u)
+    }
+    // t9a2e: whether the piece was demoted (the edge pass counts them, DUST_VEDGE_DEMOTED)
+    return demote;
 }
 
 // the texels a small piece's points cover (their +-DUST_SMALL_COVER sigma) within its range r
@@ -1402,6 +1554,97 @@ uint dust_vspill_base(DustUintBuffer pyr) {
 // the support plane, 27-29 the Sun direction, 30 r_h (AU), 31 open ends (bit 0 start, bit 1
 // end). Macros: a struct argument would be copied per call.
 #define DUST_VQUEUE_WORD(base, cap, r, w) ((base) + DUST_VQUEUE_HEADER_WORDS + (w) * (cap) + (r))
+
+// ── Track 9A (t9a2d): the deferred edge pieces (dust::DUST_VEDGE_*) ───────────────────────────────
+// Two regions after the volume spill's records (dust::dust_queue_offsets' vedge), each a header in
+// the volume queue's format (words 0-2 the edge pass's indirect dispatch, 3 the raw append counter,
+// 4 the capacity: dust_vqueue_append and dust_vqueue_capacity serve it; 5 the frame's pieces drawn,
+// 6 those refused) and dust::dust_vedge_records records of DUST_VEDGE_RECORD_WORDS words,
+// structure-of-arrays at the capacity's stride. A chunk's consumer (both drains) appends its edge
+// small pieces to the region of the chunk's parity (DUST_VIEW_EDGE_ODD), and dust_draw_small_edge.comp
+// draws them beside the next chunk's producer (Device::cmd_dust_splat), so the pass costs no extra
+// serialisation; the deposits are the consumer's order-free atomics, so the pyramid is the same
+// wherever a piece is drawn. A piece the region refuses is dropped and counted (word 6, the pass's
+// raw - held; logged by the host); word 7 counts the pieces the pass demoted (t9a2e: one projection
+// a slice with the predicted terms, DUST_VEDGE_DEMOTED). Words: 0-2 mean, 3-5 g, 6-11 x1 x2 y1 y2 w1 w2, 12 mass, 13-15
+// the slices' weights, 16 the range's x0 | x1 << 16, 17 its y0 | y1 << 16 (texels of its level,
+// each < 2^16), 18 the level, 19-21 colour, 22 the depth bits, 23 the piece's rounding seed.
+const uint DUST_VEDGE_RECORD_WORDS = 24u;
+const uint DUST_VEDGE_DRAWN = 5u;
+const uint DUST_VEDGE_LOST = 6u;
+const uint DUST_VEDGE_DEMOTED = 7u;
+// a region's records for a view of n volume records (dust::dust_vedge_records), and the volume
+// spill's (dust::dust_vspill_records: the regions' place)
+uint dust_vedge_records_of(uint n) { return max(n / 2u, 64u); }
+uint dust_vspill_records_of(uint n) { return max(n / 4u, 64u); }
+uint dust_vedge_base(DustUintBuffer pyr, bool odd) {
+    uint vbase = dust_vqueue_base(pyr);
+    uint n = pyr.v[vbase + DUST_VQUEUE_RECORDS];
+    n = n == 0u ? DUST_VQUEUE_CAPACITY : min(n, DUST_VQUEUE_CAPACITY);
+    uint e0 = dust_vspill_base(pyr) + DUST_VQUEUE_HEADER_WORDS + dust_vspill_records_of(n) * DUST_VQUEUE_RECORD_WORDS;
+    return odd ? e0 + DUST_VQUEUE_HEADER_WORDS + dust_vedge_records_of(n) * DUST_VEDGE_RECORD_WORDS : e0;
+}
+// the consumer's append of an edge piece: its inputs, its range r at level lev, its colour, depth
+// bits and rounding seed (refused when the region is full: dropped, counted by the pass)
+void dust_small_edge_put(DustUintBuffer pyr, bool odd, DustSmallEdge ed, ivec4 r, uint lev, vec3 color,
+                         uint depthBits, uint seed) {
+    uint ebase = dust_vedge_base(pyr, odd);
+    uint i = dust_vqueue_append(pyr, ebase);
+    if (i == 0xFFFFFFFFu) return;
+    uint cap = dust_vqueue_capacity(pyr, ebase);
+    uint a = ebase + DUST_VQUEUE_HEADER_WORDS + i;
+    pyr.v[a + 0u * cap] = floatBitsToUint(ed.mean.x);
+    pyr.v[a + 1u * cap] = floatBitsToUint(ed.mean.y);
+    pyr.v[a + 2u * cap] = floatBitsToUint(ed.mean.z);
+    pyr.v[a + 3u * cap] = floatBitsToUint(ed.g.x);
+    pyr.v[a + 4u * cap] = floatBitsToUint(ed.g.y);
+    pyr.v[a + 5u * cap] = floatBitsToUint(ed.g.z);
+    pyr.v[a + 6u * cap] = floatBitsToUint(ed.x1);
+    pyr.v[a + 7u * cap] = floatBitsToUint(ed.x2);
+    pyr.v[a + 8u * cap] = floatBitsToUint(ed.y1);
+    pyr.v[a + 9u * cap] = floatBitsToUint(ed.y2);
+    pyr.v[a + 10u * cap] = floatBitsToUint(ed.w1);
+    pyr.v[a + 11u * cap] = floatBitsToUint(ed.w2);
+    pyr.v[a + 12u * cap] = floatBitsToUint(ed.massW);
+    pyr.v[a + 13u * cap] = floatBitsToUint(ed.wr0);
+    pyr.v[a + 14u * cap] = floatBitsToUint(ed.wr1);
+    pyr.v[a + 15u * cap] = floatBitsToUint(ed.wr2);
+    pyr.v[a + 16u * cap] = uint(r.x) | (uint(r.y) << 16u);
+    pyr.v[a + 17u * cap] = uint(r.z) | (uint(r.w) << 16u);
+    pyr.v[a + 18u * cap] = lev;
+    pyr.v[a + 19u * cap] = floatBitsToUint(color.x);
+    pyr.v[a + 20u * cap] = floatBitsToUint(color.y);
+    pyr.v[a + 21u * cap] = floatBitsToUint(color.z);
+    pyr.v[a + 22u * cap] = depthBits;
+    pyr.v[a + 23u * cap] = seed;
+}
+// the edge pass's read of record i of the region at ebase (capacity cap): the inputs into ed, the
+// range, level, colour, depth bits and seed
+void dust_small_edge_get(DustUintBuffer pyr, uint ebase, uint cap, uint i, out DustSmallEdge ed, out ivec4 r,
+                         out uint lev, out vec3 color, out uint depthBits, out uint seed) {
+    uint a = ebase + DUST_VQUEUE_HEADER_WORDS + i;
+    ed.mean = vec3(uintBitsToFloat(pyr.v[a + 0u * cap]), uintBitsToFloat(pyr.v[a + 1u * cap]),
+                   uintBitsToFloat(pyr.v[a + 2u * cap]));
+    ed.g = vec3(uintBitsToFloat(pyr.v[a + 3u * cap]), uintBitsToFloat(pyr.v[a + 4u * cap]),
+                uintBitsToFloat(pyr.v[a + 5u * cap]));
+    ed.x1 = uintBitsToFloat(pyr.v[a + 6u * cap]);
+    ed.x2 = uintBitsToFloat(pyr.v[a + 7u * cap]);
+    ed.y1 = uintBitsToFloat(pyr.v[a + 8u * cap]);
+    ed.y2 = uintBitsToFloat(pyr.v[a + 9u * cap]);
+    ed.w1 = uintBitsToFloat(pyr.v[a + 10u * cap]);
+    ed.w2 = uintBitsToFloat(pyr.v[a + 11u * cap]);
+    ed.massW = uintBitsToFloat(pyr.v[a + 12u * cap]);
+    ed.wr0 = uintBitsToFloat(pyr.v[a + 13u * cap]);
+    ed.wr1 = uintBitsToFloat(pyr.v[a + 14u * cap]);
+    ed.wr2 = uintBitsToFloat(pyr.v[a + 15u * cap]);
+    uint rxy = pyr.v[a + 16u * cap], rzw = pyr.v[a + 17u * cap];
+    r = ivec4(int(rxy & 0xFFFFu), int(rxy >> 16u), int(rzw & 0xFFFFu), int(rzw >> 16u));
+    lev = pyr.v[a + 18u * cap];
+    color = vec3(uintBitsToFloat(pyr.v[a + 19u * cap]), uintBitsToFloat(pyr.v[a + 20u * cap]),
+                 uintBitsToFloat(pyr.v[a + 21u * cap]));
+    depthBits = pyr.v[a + 22u * cap];
+    seed = pyr.v[a + 23u * cap];
+}
 
 // ── The sub-packet queue (dust::DUST_SQUEUE_*) ──────────────────────────────────────────────────
 // After the volume queue (DUST_VQUEUE_WORDS): per chunk, the packets dust_splat.comp's lanes

@@ -980,6 +980,16 @@ impl DustView {
     self.layout.total_words + self.image_words
   }
 
+  /// the pyramid whose queue region (from [`Self::queue_word`]) a diagnostic download reads; an
+  /// error in CPU particle mode, whose host pyramids end with the frame pyramid (a copy past their
+  /// end faulted the copy engine: Xid 31, device lost)
+  fn queue_pyramid(&self) -> GpuResult<&DustBuffer> {
+    if crate::gpu_backends::vulkan::physics::is_cpu_particles_mode() {
+      return Err(gpu_err!("CPU particle mode: the dust view has no queues"));
+    }
+    self.pyramid.as_ref().ok_or(gpu_err!("dust view has no pyramid"))
+  }
+
   /// CPU mode: the host pyramid (buffer, mapped words) of frame `frame`
   fn cpu_pyramid(&self, frame: u64) -> Option<(&DustBuffer, *mut u8)> {
     let k = (frame % DUST_READBACK_SLOTS as u64) as usize;
@@ -2131,6 +2141,20 @@ impl Device {
           (view.queue_word() + dust::DUST_QUEUE_WORDS) as u64 * 4,
           bytemuck::cast_slice(&vq),
         );
+        // track 9A (t9a2d): the deferred edge pieces' two regions: empty, their dispatch (0, 1, 1),
+        // their capacity, the frame's counts (words 5-6) zero (words 0-4 again per chunk)
+        let mut ve = [0u32; dust::DUST_VQUEUE_HEADER_WORDS as usize];
+        ve[1] = 1;
+        ve[2] = 1;
+        ve[4] = offsets.vedge_records;
+        for base in offsets.vedge {
+          self.device.cmd_update_buffer(
+            cmd,
+            pyramid.buffer,
+            (view.queue_word() + base) as u64 * 4,
+            bytemuck::cast_slice(&ve),
+          );
+        }
       }
     }
     Ok((DustViewParams {
@@ -2520,6 +2544,10 @@ impl Device {
       pc.flags & dust::DUST_VIEW_VOLUME_SPILL == 0,
       "cmd_dust_splat: the caller's flags carry the host-internal DUST_VIEW_VOLUME_SPILL bit"
     );
+    assert!(
+      pc.flags & dust::DUST_VIEW_EDGE_ODD == 0,
+      "cmd_dust_splat: the caller's flags carry the host-internal DUST_VIEW_EDGE_ODD bit"
+    );
     let res = self.res.read();
     let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
     let sys = mgr.systems.get(&id).ok_or(gpu_err!("dust system {} not found", id))?;
@@ -2618,9 +2646,14 @@ impl Device {
       Some(p) if profiling => p,
       _ => self.kernels.pipelines.dust_split,
     };
+    let edge_pass = match self.kernels.pipelines.dust_draw_small_edge_prof {
+      Some(p) if profiling => p,
+      _ => self.kernels.pipelines.dust_draw_small_edge,
+    };
     self.kernels.pipelines.assert_pc_size(producer, core::mem::size_of_val(&pc));
     self.kernels.pipelines.assert_pc_size(consumer, core::mem::size_of_val(&pc));
     self.kernels.pipelines.assert_pc_size(splitter, core::mem::size_of_val(&pc));
+    self.kernels.pipelines.assert_pc_size(edge_pass, core::mem::size_of_val(&pc));
     // the tier in chunks of clusters (`dust::DUST_VQUEUE_*`): per chunk the volume queue and
     // volume spill headers (empty, the range [first, end), the capacities), the producer over
     // the range, the splitter, then the consumer over the queue's records and again over the
@@ -2668,21 +2701,41 @@ impl Device {
     let vbase = (view.queue_word() + offsets.vqueue) as u64 * 4;
     let sbase = (view.queue_word() + offsets.squeue) as u64 * 4;
     let vsbase = (view.queue_word() + offsets.vspill) as u64 * 4;
-    // the consumer's second dispatch of each chunk drains the volume spill (host-internal flag)
+    // track 9A (t9a2d): the deferred edge pieces' regions, by chunk parity
+    let vebase = [
+      (view.queue_word() + offsets.vedge[0]) as u64 * 4,
+      (view.queue_word() + offsets.vedge[1]) as u64 * 4,
+    ];
+    // the consumer's second dispatch of each chunk drains the volume spill (host-internal flag);
+    // both drains of an odd chunk append their edge pieces to region 1, the edge pass of an odd
+    // chunk drains it (host-internal flag)
     let mut pc_spill = pc;
     pc_spill.flags |= dust::DUST_VIEW_VOLUME_SPILL;
+    let with_parity = |p: DustSplatPushConstants, odd: bool| {
+      let mut p = p;
+      if odd {
+        p.flags |= dust::DUST_VIEW_EDGE_ODD;
+      }
+      p
+    };
     // the consumer's (and the previous producer's) storage writes → the header update
     let to_update = vk::MemoryBarrier2::default()
       .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
       .src_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE | vk::AccessFlags2::SHADER_STORAGE_READ)
       .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
       .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE);
-    // the header update → the producer's reads and writes
+    // the header update → the producer's reads and writes; and (track 9A, t9a2d) the previous
+    // chunk's consumer → the edge pass beside this producer: its records and indirect dispatch
+    // (the consumer's writes already ordered before the update by `to_update`; named here too)
     let to_producer = vk::MemoryBarrier2::default()
-      .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
-      .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-      .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
-      .dst_access_mask(vk::AccessFlags2::SHADER_STORAGE_READ | vk::AccessFlags2::SHADER_STORAGE_WRITE);
+      .src_stage_mask(vk::PipelineStageFlags2::TRANSFER | vk::PipelineStageFlags2::COMPUTE_SHADER)
+      .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE | vk::AccessFlags2::SHADER_STORAGE_WRITE)
+      .dst_stage_mask(vk::PipelineStageFlags2::DRAW_INDIRECT | vk::PipelineStageFlags2::COMPUTE_SHADER)
+      .dst_access_mask(
+        vk::AccessFlags2::INDIRECT_COMMAND_READ
+          | vk::AccessFlags2::SHADER_STORAGE_READ
+          | vk::AccessFlags2::SHADER_STORAGE_WRITE,
+      );
     // the producer's records and header → the consumer's indirect dispatch and reads
     let to_consumer = vk::MemoryBarrier2::default()
       .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
@@ -2699,12 +2752,13 @@ impl Device {
       let end = first.saturating_add(chunk).min(count);
       let hdr = [0u32, 1, 1, 0, vqueue_capacity, first, end];
       unsafe {
-        if first > 0 {
-          self.device.synchronization2.cmd_pipeline_barrier2(
-            cmd,
-            &vk::DependencyInfo::default().memory_barriers(core::slice::from_ref(&to_update)),
-          );
-        }
+        // (track 9A, t9a2d: at the first chunk too: the previous call's last edge pass and
+        // consumer, recorded back to back with this call by the frame's tier loop with no barrier
+        // between, read the headers and regions this update rewrites)
+        self.device.synchronization2.cmd_pipeline_barrier2(
+          cmd,
+          &vk::DependencyInfo::default().memory_barriers(core::slice::from_ref(&to_update)),
+        );
         self.device.cmd_update_buffer(cmd, pyramid.buffer, vbase, bytemuck::cast_slice(&hdr));
         // the tier's ring words: the range offsets → slots (words 7–9 are the frame's counters)
         let ring = [first_slot, capacity.wrapping_sub(1)];
@@ -2722,10 +2776,32 @@ impl Device {
         // `to_update` / `to_producer` barriers as the main header)
         let vshdr = [0u32, 1, 1, 0, vspill_capacity];
         self.device.cmd_update_buffer(cmd, pyramid.buffer, vsbase, bytemuck::cast_slice(&vshdr));
+        // track 9A (t9a2d): this chunk's edge region (its parity's): empty, its dispatch (0, 1, 1),
+        // its capacity (words 5-6, the frame's counts, kept). The other region holds the previous
+        // chunk's edge pieces, drained below beside the producer; the chunk before that one's
+        // pass, which read this region, finished before `to_update`
+        let odd = chunks & 1 == 1;
+        let vehdr = [0u32, 1, 1, 0, offsets.vedge_records];
+        self.device.cmd_update_buffer(cmd, pyramid.buffer, vebase[odd as usize], bytemuck::cast_slice(&vehdr));
         self.device.synchronization2.cmd_pipeline_barrier2(
           cmd,
           &vk::DependencyInfo::default().memory_barriers(core::slice::from_ref(&to_producer)),
         );
+        // the previous chunk's edge pieces (`dust_draw_small_edge.comp`), beside this producer: no
+        // barrier between the two (the pass writes the pyramid's texels and frame words by
+        // order-free atomics and reads only its region; the producer touches neither); the
+        // splitter's barrier below orders it before this chunk's consumer
+        if chunks > 0 && !nodraw {
+          self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, edge_pass);
+          self.device.cmd_push_constants(
+            cmd,
+            self.kernels.pipelines.pipeline_layout,
+            vk::ShaderStageFlags::COMPUTE,
+            0,
+            bytemuck::bytes_of(&with_parity(pc, !odd)),
+          );
+          self.device.cmd_dispatch_indirect(cmd, pyramid.buffer, vebase[!odd as usize]);
+        }
         // the enumerator: a warp per cluster, a lane per sub-packet (`dust_splat.comp`)
         self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, producer);
         self.device.cmd_push_constants(
@@ -2761,7 +2837,7 @@ impl Device {
             self.kernels.pipelines.pipeline_layout,
             vk::ShaderStageFlags::COMPUTE,
             0,
-            bytemuck::bytes_of(&pc),
+            bytemuck::bytes_of(&with_parity(pc, odd)),
           );
           self.device.cmd_dispatch_indirect(cmd, pyramid.buffer, vbase);
           // the same consumer over the chunk's volume spill (the records the queue refused). No
@@ -2774,7 +2850,7 @@ impl Device {
             self.kernels.pipelines.pipeline_layout,
             vk::ShaderStageFlags::COMPUTE,
             0,
-            bytemuck::bytes_of(&pc_spill),
+            bytemuck::bytes_of(&with_parity(pc_spill, odd)),
           );
           self.device.cmd_dispatch_indirect(cmd, pyramid.buffer, vsbase);
         }
@@ -2783,6 +2859,25 @@ impl Device {
       first = end;
       if first >= count {
         break;
+      }
+    }
+    // the last chunk's edge pieces, after its consumer (track 9A, t9a2d)
+    if !nodraw {
+      let odd = (chunks - 1) & 1 == 1;
+      unsafe {
+        self.device.synchronization2.cmd_pipeline_barrier2(
+          cmd,
+          &vk::DependencyInfo::default().memory_barriers(core::slice::from_ref(&to_consumer)),
+        );
+        self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, edge_pass);
+        self.device.cmd_push_constants(
+          cmd,
+          self.kernels.pipelines.pipeline_layout,
+          vk::ShaderStageFlags::COMPUTE,
+          0,
+          bytemuck::bytes_of(&with_parity(pc, odd)),
+        );
+        self.device.cmd_dispatch_indirect(cmd, pyramid.buffer, vebase[odd as usize]);
       }
     }
     view.host.lock().vqueue_chunks_frame += chunks;
@@ -3112,7 +3207,7 @@ impl Device {
       let res = self.res.read();
       let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
       let view = mgr.views.get(&pe).ok_or(gpu_err!("dust view of PE {} absent", pe.0))?;
-      let pyramid = view.pyramid.as_ref().ok_or(gpu_err!("dust view has no pyramid"))?;
+      let pyramid = view.queue_pyramid()?;
       let off = (view.queue_word() + dust::dust_queue_offsets(view.vqueue_records).spill) as u64 * 4;
       (pyramid.buffer, off, view.spill_slots)
     };
@@ -3169,7 +3264,7 @@ impl Device {
       let res = self.res.read();
       let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
       let view = mgr.views.get(&pe).ok_or(gpu_err!("dust view of PE {} absent", pe.0))?;
-      let pyramid = view.pyramid.as_ref().ok_or(gpu_err!("dust view has no pyramid"))?;
+      let pyramid = view.queue_pyramid()?;
       (pyramid.buffer, view.queue_word() as u64 * 4)
     };
     let w: alloc::vec::Vec<u32> = pod_vec(&self.dust_download_bytes(buffer, base, 32)?);
@@ -3253,7 +3348,7 @@ impl Device {
       let res = self.res.read();
       let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
       let view = mgr.views.get(&pe).ok_or(gpu_err!("dust view of PE {} absent", pe.0))?;
-      let pyramid = view.pyramid.as_ref().ok_or(gpu_err!("dust view has no pyramid"))?;
+      let pyramid = view.queue_pyramid()?;
       (
         pyramid.buffer,
         (view.queue_word() + dust::dust_queue_offsets(view.vqueue_records).squeue) as u64 * 4,
@@ -3270,7 +3365,7 @@ impl Device {
       let res = self.res.read();
       let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
       let view = mgr.views.get(&pe).ok_or(gpu_err!("dust view of PE {} absent", pe.0))?;
-      let pyramid = view.pyramid.as_ref().ok_or(gpu_err!("dust view has no pyramid"))?;
+      let pyramid = view.queue_pyramid()?;
       (pyramid.buffer, (view.queue_word() + dust::DUST_QUEUE_WORDS) as u64 * 4)
     };
     let w: alloc::vec::Vec<u32> =
@@ -3286,7 +3381,7 @@ impl Device {
       let res = self.res.read();
       let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
       let view = mgr.views.get(&pe).ok_or(gpu_err!("dust view of PE {} absent", pe.0))?;
-      let pyramid = view.pyramid.as_ref().ok_or(gpu_err!("dust view has no pyramid"))?;
+      let pyramid = view.queue_pyramid()?;
       (
         pyramid.buffer,
         (view.queue_word() + dust::DUST_QUEUE_WORDS) as u64 * 4,
@@ -3305,12 +3400,36 @@ impl Device {
       let res = self.res.read();
       let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
       let view = mgr.views.get(&pe).ok_or(gpu_err!("dust view of PE {} absent", pe.0))?;
-      let pyramid = view.pyramid.as_ref().ok_or(gpu_err!("dust view has no pyramid"))?;
+      let pyramid = view.queue_pyramid()?;
       (pyramid.buffer, (view.queue_word() + dust::DUST_QUEUE_WORDS) as u64 * 4)
     };
     let w: alloc::vec::Vec<u32> =
       pod_vec(&self.dust_download_bytes(buffer, base, dust::DUST_VQUEUE_HEADER_WORDS as u64 * 4)?);
     Ok((w[dust::DUST_VQUEUE_SPILL_DRAWN], w[dust::DUST_VQUEUE_LOST]))
+  }
+
+  /// `pe`'s last frame's deferred edge pieces (track 9A, t9a2d; diagnostics, waits for the GPU):
+  /// the small pieces the edge pass drew, those a full region refused (lost: not drawn) and, of
+  /// the drawn, those it demoted (t9a2e), both regions summed ([`dust::DUST_VEDGE_DRAWN`] /
+  /// [`dust::DUST_VEDGE_LOST`] / [`dust::DUST_VEDGE_DEMOTED`])
+  pub fn dust_vedge_counts(&self, pe: gpu::PresentationEngineHandle) -> GpuResult<(u32, u32, u32)> {
+    let (buffer, bases) = {
+      let res = self.res.read();
+      let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
+      let view = mgr.views.get(&pe).ok_or(gpu_err!("dust view of PE {} absent", pe.0))?;
+      let pyramid = view.queue_pyramid()?;
+      let o = dust::dust_queue_offsets(view.vqueue_records);
+      (pyramid.buffer, o.vedge.map(|b| (view.queue_word() + b) as u64 * 4))
+    };
+    let (mut drawn, mut lost, mut demoted) = (0u32, 0u32, 0u32);
+    for base in bases {
+      let w: alloc::vec::Vec<u32> =
+        pod_vec(&self.dust_download_bytes(buffer, base, dust::DUST_VQUEUE_HEADER_WORDS as u64 * 4)?);
+      drawn = drawn.wrapping_add(w[dust::DUST_VEDGE_DRAWN]);
+      lost = lost.wrapping_add(w[dust::DUST_VEDGE_LOST]);
+      demoted = demoted.wrapping_add(w[dust::DUST_VEDGE_DEMOTED]);
+    }
+    Ok((drawn, lost, demoted))
   }
 
   /// The shader-clock profiler's counters of `pe`'s last drawn frame
@@ -3326,7 +3445,7 @@ impl Device {
       let res = self.res.read();
       let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
       let view = mgr.views.get(&pe).ok_or(gpu_err!("dust view of PE {} absent", pe.0))?;
-      let pyramid = view.pyramid.as_ref().ok_or(gpu_err!("dust view has no pyramid"))?;
+      let pyramid = view.queue_pyramid()?;
       (pyramid.buffer, view.queue_word() as u64 * 4, view.host.lock().frame)
     };
     let w: alloc::vec::Vec<u32> =

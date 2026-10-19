@@ -1,0 +1,109 @@
+// @assets/sim/dust_draw_small_edge.comp
+//
+// Track 9A (t9a2d), the edge pass: one lane per small piece the volume consumer deferred
+// (dust_draw_volume.comp: a piece of the small class whose centre slice's 3 sigma crosses the
+// frame, dust_small_edge_put), dispatched indirectly beside the next chunk's producer
+// (Device::cmd_dust_splat; the last chunk's after its consumer). Every lane is an edge piece, so
+// the demotion's prediction and the sigma points run in coherent warps in a pipeline of their own,
+// and the consumer holds neither. The piece is drawn as the consumer drew it before t9a2d: its one
+// projections from the same inputs, then the demoted (corrected one projection) or the sigma
+// points' slices (dust_volume_small_edge_points), its covered texels' rectangle integrals with its
+// own rounding seed (dust_volume_segment_small), the peak and the level into the frame words. The
+// deposits are order-free atomics, so the pyramid is the same as an in-place draw. The same push
+// constants as the splat (dust::DustSplatPushConstants). No CPU mirror: dust::volume_scatter
+// draws every piece in place, the same drawing.
+#version 450 core
+#extension GL_GOOGLE_include_directive : require
+#ifdef DUST_PROFILE
+#extension GL_ARB_shader_clock : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#endif
+#include "dust_common.glsl"
+#include "dust_scatter.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PushConstants {
+    DustMomentsBuffer moments;  // 0
+    DustRenderBuffer  render;   // 8
+    DustUintBuffer    pyramid;  // 16: header + levels + measure grid + the queues
+    uint  liveCount;            // 24
+    uint  flags;                // 28
+    float exposure;             // 32
+    float invUnit;              // 36
+    uint  color;                // 40
+    float albedo;               // 44
+    mat4  mvp;                  // 48
+    vec4  eyeLocal;             // 112
+} pc;                           // 128 bytes
+
+// t9a2e: the workgroup's demoted pieces, added once to the region's DUST_VEDGE_DEMOTED (one global
+// atomic a workgroup)
+shared uint dust_edge_demoted;
+
+// record i of the region at ebase (0: none, 1: drawn by the sigma points, 2: drawn demoted). Lane 0
+// counts the region's held pieces and its refusals into the region's frame words (DUST_VEDGE_DRAWN /
+// _LOST)
+uint dust_draw_small_edge_record(uint i, uint ebase) {
+    uint raw = pc.pyramid.v[ebase + 3u];
+    uint cap = dust_vqueue_capacity(pc.pyramid, ebase);
+    uint n = min(raw, cap);
+    if (i == 0u) {
+        atomicAdd(pc.pyramid.v[ebase + DUST_VEDGE_DRAWN], n);
+        atomicAdd(pc.pyramid.v[ebase + DUST_VEDGE_LOST], raw - n);
+    }
+    if (i >= n) return 0u;
+    DustSmallEdge ed;
+    ivec4 r;
+    uint lev, depthBits, seed;
+    vec3 color;
+    dust_small_edge_get(pc.pyramid, ebase, cap, i, ed, r, lev, color, depthBits, seed);
+    dust_pyr_split_word = pc.pyramid.v[DUST_PYR_SPLIT_DEPTH];
+    float W = float(pc.pyramid.v[DUST_PYR_WIDTH]);
+    float H = float(pc.pyramid.v[DUST_PYR_HEIGHT]);
+    vec3 r0 = vec3(pc.mvp[0][0], pc.mvp[1][0], pc.mvp[2][0]);
+    vec3 r1 = vec3(pc.mvp[0][1], pc.mvp[1][1], pc.mvp[2][1]);
+    vec3 r3 = vec3(pc.mvp[0][3], pc.mvp[1][3], pc.mvp[2][3]);
+    vec3 tv = vec3(pc.mvp[3][0], pc.mvp[3][1], pc.mvp[3][3]);
+    DustSmallPoint s0, s1, s2, s3, s4;
+    DUST_PROF_BEGIN(vsmallpts)
+    bool demoted = dust_volume_small_edge_points(ed, r0, r1, r3, tv, W, H, s0, s1, s2, s3, s4);
+    DUST_PROF_END(vsmallpts)
+    uint off = pc.pyramid.v[DUST_PYR_TABLE + 3u * lev];
+    uint lw = pc.pyramid.v[DUST_PYR_TABLE + 3u * lev + 1u];
+    float sz = float(1u << lev);
+    // only the texels its points cover within its range (dust::volume_scatter), row segments of
+    // DUST_SEGMENT_TEXELS as the consumer's DUST_VOLUME_ROWS
+    ivec4 rs = dust_volume_small_range(s0, s1, s2, s3, s4, r, sz);
+    float peak = 0.0;
+    bool any_ = false;
+    for (int ty = rs.z; ty <= rs.w; ++ty) {
+        for (int xa = rs.x; xa <= rs.y; xa += int(DUST_SEGMENT_TEXELS)) {
+            int xb = min(xa + int(DUST_SEGMENT_TEXELS) - 1, rs.y);
+            DUST_PROF_COUNT(volume_texels, xb - xa + 1)
+            any_ = dust_volume_segment_small(pc.pyramid, pc.invUnit, W, H, sz, color, depthBits, off, lw, seed, ty, xa,
+                                             xb, s0, s1, s2, s3, s4, peak)
+                || any_;
+        }
+    }
+    if (peak > 0.0) atomicMax(pc.pyramid.v[DUST_PYR_TAU_MAX], floatBitsToUint(peak));
+    if (any_) atomicOr(pc.pyramid.v[DUST_PYR_LEVEL_MASK], 1u << lev);
+    return demoted ? 2u : 1u;
+}
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    uint ebase = dust_vedge_base(pc.pyramid, (pc.flags & DUST_VIEW_EDGE_ODD) != 0u);
+    if (gl_LocalInvocationIndex == 0u) dust_edge_demoted = 0u;
+    barrier();
+    uint ran = dust_draw_small_edge_record(i, ebase);
+    if (ran == 2u) atomicAdd(dust_edge_demoted, 1u);
+    barrier();
+    if (gl_LocalInvocationIndex == 0u && dust_edge_demoted > 0u)
+        atomicAdd(pc.pyramid.v[ebase + DUST_VEDGE_DEMOTED], dust_edge_demoted);
+#ifdef DUST_PROFILE
+    // every lane reaches this (none returns early from main): the subgroup reductions need them all
+    DUST_PROF_FLUSH_EDGE(pc.pyramid, dust_queue_base(pc.pyramid))
+#endif
+}

@@ -57,6 +57,7 @@ const uint DUST_PROF_WORDS_END     = 128u; // (DUST_QUEUE_HEADER_WORDS = 128)
 #define DUST_PROF_FLUSH_QUEUE(pyr, base)      dust_prof_flush_queue(pyr, base);
 #define DUST_PROF_FLUSH_VOLUME(pyr, base, ran) dust_prof_flush_volume(pyr, base, ran);
 #define DUST_PROF_FLUSH_SPLIT(pyr, base, ran)  dust_prof_flush_split(pyr, base, ran);
+#define DUST_PROF_FLUSH_EDGE(pyr, base)        dust_prof_flush_edge(pyr, base);
 
 // the splat's stage sums (cycles) and counts, per thread
 uint dust_prof_thread = 0u, dust_prof_setup = 0u, dust_prof_subpk = 0u, dust_prof_packet = 0u,
@@ -193,6 +194,13 @@ void dust_prof_flush_volume(DustUintBuffer pyr, uint base, bool ran) {
     dust_prof_flush_k1c(pyr, base);
     dust_prof_max32(pyr, base + DUST_PROF_CMAX, ran ? dust_prof_thread : 0u);
 }
+// track 9A (t9a2d): the edge pass (dust_draw_small_edge.comp): its pieces' K1c parts and paths and
+// their texels with the consumer's (its lanes' own cycles in the K1c words only); every lane of the
+// subgroup must reach this
+void dust_prof_flush_edge(DustUintBuffer pyr, uint base) {
+    dust_prof_add64(pyr, base + DUST_PROF_CTEXELS, dust_prof_n_volume_texels);
+    dust_prof_flush_k1c(pyr, base);
+}
 #else
 #define DUST_PROF_BEGIN_AS(t)
 #define DUST_PROF_END_AS(s, t)
@@ -203,4 +211,5 @@ void dust_prof_flush_volume(DustUintBuffer pyr, uint base, bool ran) {
 #define DUST_PROF_FLUSH_QUEUE(pyr, base)
 #define DUST_PROF_FLUSH_VOLUME(pyr, base, ran)
 #define DUST_PROF_FLUSH_SPLIT(pyr, base, ran)
+#define DUST_PROF_FLUSH_EDGE(pyr, base)
 #endif
