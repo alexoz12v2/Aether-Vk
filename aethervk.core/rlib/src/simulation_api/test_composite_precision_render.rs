@@ -19,6 +19,14 @@
 //! row; (3) GlobalDepth: a nucleus-only pixel reads (4, its distance ± 2·ulp(D)), a track pixel
 //! and a sky pixel the (−1, −1) sentinel. Printed: the counts, the max |Δz| among the misordered.
 //! Before the precision fix the ordering floor is ~60 km·(D/AU) (§1.2): the test fails.
+//!
+//! The oblique cases (track 9F) repeat the scene along forward = (−1, −1, 0)/√2 from (1, 1.5, 0)
+//! AU (off the hidden Sun's diagonal) with screen up = (−1/2, 1/2, 1/√2) (a 45° roll), camera
+//! rotation in f64. On the axis-aligned view the f32 cast error of the camera-relative track
+//! points (~(0, −D, 0) AU) lies along the view and the row check cannot see it; here the x and y
+//! cast errors (½ ulp(D/√2) each) reach the screen's vertical: the pre-anchor path would put the
+//! track's row 30–250 px off (`cast_row_error_px` predicts the cast part and asserts the view keeps
+//! exposing it), the anchored path keeps it within the 1 px of the row check.
 
 use super::{components_api::CameraParams, *};
 use alloc::format;
@@ -134,6 +142,9 @@ const W: u32 = 512;
 const H: u32 = 512;
 const AU_TO_KM: f64 = 149_597_870.7;
 const CAM: [f64; 3] = [1.0, 1.0, 0.0];
+/// Camera position of the oblique views: off the diagonal through the Sun (from (1, 1, 0) the
+/// oblique line of sight runs through the hidden Sun and its indicator).
+const CAM_OBLIQUE: [f64; 3] = [1.0, 1.5, 0.0];
 /// A depth layer of its own: the empty scene's Earth subtree is layer 1, the Sun 2, the comet 3
 /// (`scene_api.rs`: "every micro frame needs its own depth layer").
 const LAYER: u32 = 4;
@@ -174,7 +185,102 @@ fn track_offset(d: f64, tx: f64) -> (f64, f64) {
   (s, z + s * s / ((s * s + f * f).sqrt() + f))
 }
 
-fn run_composite_precision(d_au: f64) {
+/// The line of sight. `right = forward × up` (the engine's screen convention,
+/// `frame::camera_screen_axes`); local −X, −Y, +Z map to right, forward, up.
+struct View {
+  cam: [f64; 3],
+  right: [f64; 3],
+  forward: [f64; 3],
+  up: [f64; 3],
+  /// the nucleus (frame origin) = cam + d·forward, exact in f32 (the frame's TransformComponent)
+  nucleus: [f64; 3],
+  /// |nucleus − cam| (AU)
+  d_au: f64,
+  oblique: bool,
+}
+
+/// `oblique = false`: the first runs' view (identity rotation, nucleus (1, 1 − D, 0)).
+/// `oblique = true`: forward (−1, −1, 0)/√2, up (−1/2, 1/2, 1/√2). Why the roll: with up = +Z the
+/// up row of viewProj is (0, 0, −f) and every track point has z = 0 exactly; with up =
+/// (−1, 1, 0)/√2 and the track along ±Z, x = y on every point and the two cast errors are equal:
+/// both are blind. With the roll, x − y varies with the lateral offset, the x and y roundings
+/// differ, and their difference is across the view, vertically.
+fn view_for(d_au: f64, oblique: bool) -> View {
+  if !oblique {
+    return View {
+      cam: CAM,
+      right: [-1.0, 0.0, 0.0],
+      forward: [0.0, -1.0, 0.0],
+      up: [0.0, 0.0, 1.0],
+      nucleus: [CAM[0], CAM[1] - d_au, CAM[2]],
+      d_au,
+      oblique,
+    };
+  }
+  let a = core::f64::consts::FRAC_1_SQRT_2;
+  // nucleus = cam − h·(1, 1, 0) with h exact in f32: exact in f32 and exactly on the diagonal
+  let h = (d_au * a) as f32 as f64;
+  let cam = CAM_OBLIQUE;
+  let nucleus = [cam[0] - h, cam[1] - h, cam[2]];
+  assert!(nucleus.iter().all(|&c| c as f32 as f64 == c), "oblique nucleus {nucleus:?} not exact in f32");
+  View {
+    cam,
+    right: [-0.5, 0.5, -a],
+    forward: [-a, -a, 0.0],
+    up: [-0.5, 0.5, a],
+    nucleus,
+    d_au: h * core::f64::consts::SQRT_2,
+    oblique,
+  }
+}
+
+/// The f64 camera rotation of `v`: its matrix columns are the images of local X, Y, Z, i.e.
+/// (−right, −forward, up); the trace > 0 branch of the matrix → quaternion conversion.
+fn rotation_for(v: &View) -> aethervk_oshal_rlib::math::vector::vec4f64::Quat64 {
+  let neg = |a: [f64; 3]| [-a[0], -a[1], -a[2]];
+  let col = [neg(v.right), neg(v.forward), v.up];
+  let m = |i: usize, j: usize| col[j][i];
+  let tr = m(0, 0) + m(1, 1) + m(2, 2);
+  assert!(tr > 0.0, "rotation_for: trace {tr}");
+  let w = (1.0 + tr).sqrt() * 0.5;
+  let k = 0.25 / w;
+  aethervk_oshal_rlib::math::vector::vec4f64::Quat64::from_components(
+    (m(2, 1) - m(1, 2)) * k,
+    (m(0, 2) - m(2, 0)) * k,
+    (m(1, 0) - m(0, 1)) * k,
+    w,
+  )
+}
+
+/// The pre-anchor track path's row error at view `v` from the f32 cast alone
+/// (`trajectory_rte::camera_relative_control_points`: `(−cam) + p` in f64, then `as f32`): the
+/// largest |row offset| (px) over the vertices of the 32-step tessellation with 3 ≤ |s| ≤ 11 km
+/// (the row check's off-disc columns). The GPU's f32 `viewProj · cp` adds roundings of the same
+/// size, which this does not model (an f32 emulation of the vertex shader under four evaluation
+/// orders gave 33–253 px on the oblique views, 0 on the axis-aligned ones).
+fn cast_row_error_px(v: &View, cps: &[[f64; 3]], focal_px: f64) -> f64 {
+  let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  let rel: alloc::vec::Vec<[f64; 3]> =
+    cps.iter().map(|p| core::array::from_fn(|i| -v.cam[i] + p[i])).collect();
+  let err: alloc::vec::Vec<[f64; 3]> =
+    rel.iter().map(|r| core::array::from_fn(|i| r[i] as f32 as f64 - r[i])).collect();
+  let mut worst = 0.0f64;
+  for k in 0..=32 {
+    let t = k as f64 / 32.0;
+    let o = 1.0 - t;
+    let b = [o * o * o, 3.0 * o * o * t, 3.0 * o * t * t, t * t * t];
+    let s = -HALF_LEN_KM + 2.0 * HALF_LEN_KM * t;
+    if !(3.0..=11.0).contains(&s.abs()) {
+      continue;
+    }
+    let up_err: f64 = (0..4).map(|i| b[i] * dot(v.up, err[i])).sum();
+    let depth: f64 = (0..4).map(|i| b[i] * dot(v.forward, rel[i])).sum();
+    worst = worst.max((focal_px * up_err / depth).abs());
+  }
+  worst
+}
+
+fn run_composite_precision(d_au: f64, oblique: bool) {
   let _render_lock = crate::simulation_api::lock_render_callback_tests();
   TASK_ID.store(0, Ordering::Release);
 
@@ -204,9 +310,16 @@ fn run_composite_precision(d_au: f64) {
     scene_id: 0,
   };
 
-  let tag = format!("[composite_precision D={d_au} AU]");
-  // the nucleus, D ahead along −Y (all values exact in f32)
-  let nucleus = [CAM[0], CAM[1] - d_au, CAM[2]];
+  let tag = if oblique {
+    format!("[composite_precision D={d_au} AU oblique]")
+  } else {
+    format!("[composite_precision D={d_au} AU]")
+  };
+  // the nucleus, D ahead along the line of sight (all values exact in f32)
+  let v = view_for(d_au, oblique);
+  let nucleus = v.nucleus;
+  // |nucleus − camera| (AU): d_au itself on the axis-aligned view, h·√2 on the oblique one
+  let d_au = v.d_au;
   let scale_f32 = (1.0 / AU_TO_KM) as f32;
   let d_km = d_au * AU_TO_KM;
   // vertical FOV; the engine projects with `fov as f64`
@@ -302,27 +415,47 @@ fn run_composite_precision(d_au: f64) {
           use aethervk_oshal_rlib::math::vector::Vector3;
           [t.position.x(), t.position.y(), t.position.z()]
         });
-        println!("[composite_precision D={d_au} AU] hiding the scene's frame on layer {layer} at {pos:?} AU");
+        println!("{tag} hiding the scene's frame on layer {layer} at {pos:?} AU");
         let _ = g.scene.add_component(id, crate::scene::HiddenComponent {});
       }
 
       // ── the tilted red track: child of root (macro layer), absolute AU control points ──
-      // (lateral s, depth z) km → world: x = N.x − s (screen right = −X), y = N.y − z (−Y ahead)
+      // (lateral s, depth z) km → world: N + s·right + z·forward; on the axis-aligned view the
+      // first runs' expression, x = N.x − s (screen right = −X), y = N.y − z (−Y ahead)
       let p = |s_km: f64| {
         let z_km = DEPTH0_KM + SLOPE * s_km;
-        [
-          nucleus[0] - s_km / AU_TO_KM,
-          nucleus[1] - z_km / AU_TO_KM,
-          nucleus[2],
-        ]
+        if v.oblique {
+          [0usize, 1, 2].map(|i| nucleus[i] + (s_km * v.right[i] + z_km * v.forward[i]) / AU_TO_KM)
+        } else {
+          [
+            nucleus[0] - s_km / AU_TO_KM,
+            nucleus[1] - z_km / AU_TO_KM,
+            nucleus[2],
+          ]
+        }
       };
+      let cps = straight_track(p(-HALF_LEN_KM), p(HALF_LEN_KM));
+      // the view must let the row check see the old error: without the anchored path the f32
+      // cast of the camera-relative control points alone moves the track's row this much
+      let predicted_px = cast_row_error_px(&v, &cps, focal_px);
+      println!(
+        "{tag} pre-anchor path, f32 cast of the control points alone: track row off by up to \
+         {predicted_px:.2} px off the disc (the row check allows 1 px)"
+      );
+      if v.oblique {
+        assert!(
+          predicted_px >= 8.0,
+          "{tag} the oblique view no longer exposes the f32 cast error to the row check \
+           ({predicted_px:.2} px predicted)"
+        );
+      }
       let e = g.scene.spawn_entity("prec_track");
       g.scene.set_parent(e, Some(root));
       let _ = g.scene.add_component(e, crate::scene::TransformComponent::default());
       let _ = g.scene.add_component(
         e,
         crate::scene::trajectory::TrajectoryComponent::from_f64(
-          straight_track(p(-HALF_LEN_KM), p(HALF_LEN_KM)),
+          cps,
           [1.0, 0.0, 0.0, 1.0],
           LINE_WIDTH,
           0,
@@ -331,15 +464,28 @@ fn run_composite_precision(d_au: f64) {
       );
     }
 
-    // ── camera: identity rotation (forward −Y), Earth-observer near/far ──
+    // ── camera: identity rotation (forward −Y), or the oblique view's in f64 (a HighRes
+    // transform: the renderer's view comes from `global_transform_f64`; an f32 quaternion is
+    // ~1e-7 rad off, ~15 km at 1 AU), Earth-observer near/far ──
+    let cam_rot = v.oblique.then(|| rotation_for(&v));
     let cam_id = ctx.spawn_entity(scene_id, "prec_cam").unwrap();
     ctx
       .add_transform_component(
         scene_id,
         cam_id,
-        Vec3f32::from_components(CAM[0] as f32, CAM[1] as f32, CAM[2] as f32),
-        Quat::identity(),
+        Vec3f32::from_components(v.cam[0] as f32, v.cam[1] as f32, v.cam[2] as f32),
+        cam_rot.map(|q| q.to_quat()).unwrap_or(Quat::identity()),
         Vec3f32::from_components(1.0, 1.0, 1.0),
+      )
+      .unwrap();
+    // The camera component before the f64 rotation: `add_camera_component` (re)adds the
+    // HighResTransformComponent from the f32 TransformComponent, overwriting one written earlier
+    // (the first oblique runs rendered the f32 quaternion: the disc 79 px right, 8 px down).
+    ctx
+      .add_camera_component(
+        scene_id,
+        cam_id,
+        CameraParams::new_perspective(fov, W as f32 / H as f32, 1e-9, 10.0),
       )
       .unwrap();
     // The camera is a child of root. (Without a common ancestor
@@ -353,14 +499,36 @@ fn run_composite_precision(d_au: f64) {
       let root = g.root_entity;
       let cam: crate::scene::EntityId = slotmap::KeyData::from_ffi(cam_id).into();
       g.scene.set_parent(cam, Some(root));
+      if let Some(q) = cam_rot {
+        use aethervk_oshal_rlib::math::{
+          quaternion::Quaternion,
+          vector::{Vector3, vec3f64::Vec3f64},
+        };
+        let added = g.scene.add_component(
+          cam,
+          crate::scene::HighResTransformComponent {
+            position: Vec3f64::from_components(v.cam[0], v.cam[1], v.cam[2]),
+            rotation: q,
+            scale: Vec3f32::from_components(1.0, 1.0, 1.0),
+          },
+        );
+        assert!(added.is_ok(), "{tag} camera HighResTransformComponent not added");
+        // the axes the renderer will use (`CameraRenderData::new_f64` on `global_transform_f64`)
+        let r = g.scene.global_transform_f64(cam).expect("camera global transform").rotation;
+        let axis = |x: f64, y: f64, z: f64| {
+          let a = r.rotate_vector(Vec3f64::from_components(x, y, z));
+          [a.x(), a.y(), a.z()]
+        };
+        for (name, got, want) in [
+          ("right", axis(-1.0, 0.0, 0.0), v.right),
+          ("forward", axis(0.0, -1.0, 0.0), v.forward),
+          ("up", axis(0.0, 0.0, 1.0), v.up),
+        ] {
+          let err = (0..3).map(|i| (got[i] - want[i]).abs()).fold(0.0, f64::max);
+          assert!(err <= 1e-12, "{tag} camera {name} {got:?}, expected {want:?}");
+        }
+      }
     }
-    ctx
-      .add_camera_component(
-        scene_id,
-        cam_id,
-        CameraParams::new_perspective(fov, W as f32 / H as f32, 1e-9, 10.0),
-      )
-      .unwrap();
 
     let pe = ctx.create_presentation_engine(scene_id, W, H).unwrap();
     PE_ID.store(pe.0, Ordering::Release);
@@ -375,6 +543,17 @@ fn run_composite_precision(d_au: f64) {
 
     let (color, gdepth) =
       wait_and_download(ctx, W, H, 15_000).expect("no frame rendered within 15 s");
+    // the f64 camera rotation survived to the rendered frames
+    if let Some(q) = cam_rot {
+      let scene_ctx = ctx.get_scene(scene_id).unwrap();
+      let g = scene_ctx.read();
+      let cam: crate::scene::EntityId = slotmap::KeyData::from_ffi(cam_id).into();
+      let r = g
+        .scene
+        .with_component(cam, |c: &crate::scene::HighResTransformComponent| c.rotation)
+        .expect("camera HighResTransformComponent");
+      assert!(r == q, "{tag} camera f64 rotation replaced after setup: {r:?}, set {q:?}");
+    }
     let px = |x: u32, y: u32| &color[((y * W + x) * 4) as usize..((y * W + x) * 4 + 4) as usize];
     let gd = |x: u32, y: u32| gdepth[(y * W + x) as usize];
     let tan_x = |x: u32| (x as f64 + 0.5 - W as f64 * 0.5) / focal_px;
@@ -572,10 +751,20 @@ fn run_composite_precision(d_au: f64) {
 
 #[test]
 fn test_composite_precision_1au() {
-  run_composite_precision(1.0);
+  run_composite_precision(1.0, false);
 }
 
 #[test]
 fn test_composite_precision_5au() {
-  run_composite_precision(5.0);
+  run_composite_precision(5.0, false);
+}
+
+#[test]
+fn test_composite_precision_oblique_1au() {
+  run_composite_precision(1.0, true);
+}
+
+#[test]
+fn test_composite_precision_oblique_5au() {
+  run_composite_precision(5.0, true);
 }

@@ -123,3 +123,40 @@ fn fault_address_map_names_registered_buffers() {
     unregister_address_range("TestBufB");
   });
 }
+
+/// A burst of 20 pools' worth of graphics command buffers (more than the 17 the old free cap of 16
+/// took back) returns at once, three times: after each drain no pending pool is left with nothing
+/// in flight, `pending` is empty, and the next burst allocates (with the old cap, 3 pools stuck
+/// idle in `pending` per drain and the allocation failed once they filled it).
+#[test]
+fn command_pools_take_back_every_pool_after_a_burst() {
+  setup_assets_dir();
+  let (_pool_arc, render_frontend, render_device_handle, _) =
+    setup_render_frontend_for_tests(false);
+  let res = render_frontend.with_device(render_device_handle, |device| {
+    let vulkan_device: &crate::gpu_backends::vulkan::device::Device =
+      device.as_any().downcast_ref().unwrap();
+    let tid = this_thread::id();
+    let family = vulkan_device.get_graphics_queue().family_index;
+    let pools = vulkan_device.res.read().command_pools.clone().unwrap();
+    for round in 0..3 {
+      for _ in 0..20 * 32 {
+        let (cmd, _native) = vulkan_device.get_command_buffer_and_native()?;
+        ScopedCommandBuffer::new(device, cmd, None)?.submit()?;
+      }
+      unsafe { vulkan_device.device.device_wait_idle() }.unwrap();
+      // everything has completed: return every discarded command buffer
+      let items = vulkan_device.res.read().discard_pool.pop_ready_items(u64::MAX);
+      crate::gpu_backends::vulkan::device::DiscardPool::destroy_items_lock_free(
+        &vulkan_device.device,
+        items,
+      );
+      let (pending, idle, free) = pools.pool_counts(tid, family).unwrap();
+      std::println!("round {round}: pending {pending} (idle {idle}), free {free}");
+      assert_eq!(idle, 0, "round {round}: {idle} idle pools stuck in pending");
+      assert_eq!(pending, 0, "round {round}: {pending} pools left in pending");
+    }
+    crate::types::GpuResult::Ok(())
+  });
+  assert!(res.is_ok(), "burst allocation failed");
+}

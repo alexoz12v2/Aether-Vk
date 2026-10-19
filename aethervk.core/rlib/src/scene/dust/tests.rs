@@ -11138,6 +11138,7 @@ fn reprojection_error_follows_the_rate_rule() {
     a_w_m: [0.0; 3],
     eps_px: 1.0,
     frame_px: px as f32,
+    shape_frac: 0.0,
   };
   // 1 024 clusters spread over the tiers' compact ranges, outside the eye's cloud, each at two
   // shifts: D (≈ 1–5 px) and D / 5 (sub-pixel, where the class rule admits clusters)
@@ -12717,6 +12718,102 @@ fn cadence_image_projection_offsets_the_viewport() {
   assert!((ratio - 1.0).abs() <= 5e-3, "the image view's composite Σ differs by {:.3e}", ratio - 1.0);
 }
 
+/// The class images keep the frame's level count (round 15). The 48-frame lab path at 480 × 300
+/// lost a constant light per shown set (2.8·10⁷, 5.6·10⁷, 9.8·10⁷ counts·px²; Σ ratio 0.997 →
+/// 0.985, its per-frame "drift" only the full draw's Σ falling 1 % a frame): its 736 × 428 class
+/// images had 11 levels against the frame's 10, the volume bias took the eye-inside clouds to the
+/// image's level 10, and `reproject_add` reads only the frame's levels. Here: the image geometry
+/// has the frame's level count at the lab viewport, the tests' 128² / 256² and 1280 × 800; and an
+/// old cloud around the eye (σ 1 km, its mean 17 m from the eye) drawn at the volume bias 9 (the
+/// lab's) and 15 into the class image of a frozen view, reprojected (`Unit`) to that view yawed by
+/// 0–4 frames of the lab's 0.1667°, keeps the full redraw's Σ counts within 0.5 % (before the fix
+/// the image's light sat on its level 10 and the reprojected Σ was 0).
+#[test]
+fn cadence_image_keeps_the_frame_levels() {
+  use super::cadence::{CadenceConfig, CadenceView, ReprojectFactor, ShownImage, pyramid_light, reproject_add};
+  for &(w, h) in &[(480u32, 300u32), (128, 128), (256, 256), (1280, 800)] {
+    let fl = PyramidLayout::new(w, h).level_count();
+    let il = CadenceConfig::full().image_geom(w, h).layout.level_count();
+    std::println!("image levels {w}x{h}: frame {fl}, class image {il}");
+    assert_eq!(il, fl, "{w}x{h}: the class image has {il} levels against the frame's {fl}");
+  }
+  let (w, h) = (480u32, 300u32);
+  let layout = PyramidLayout::new(w, h);
+  let geom = CadenceConfig::full().image_geom(w, h);
+  let hn = PYRAMID_HEADER_WORDS as usize;
+  let anchor: V3 = [0.0; 3];
+  let fwd0: V3 = unit([1.0, 0.3, -0.2]);
+  let up0: V3 = [0.0, 0.0, 1.0];
+  let upv0 = cross64(unit(cross64(fwd0, up0)), fwd0);
+  let view_at = |frames: f64| CadenceView {
+    view_rot: cad_view_rot(cad_rotate(fwd0, upv0, (frames * 0.1667f64).to_radians()), up0),
+    proj: cad_persp(60f64.to_radians(), w as f64 / h as f64),
+    eye_m: [0.0; 3],
+    units_per_m: 1.0,
+    width: w,
+    height: h,
+  };
+  // an old cloud around the eye: σ 1 km, its mean 17 m from the eye
+  let cloud = Packet {
+    mean: [12.0, -8.0, 10.0],
+    cov: [1.0e6, 0.0, 0.0, 1.0e6, 0.0, 1.0e6],
+    seg: [0.0; 3],
+    flux: 1.0e3,
+    open: [false; 2],
+    rho: [1.0; 2],
+    seg_t: [0.0; 3],
+  };
+  let draw = |v: &CadenceView, lay: &PyramidLayout, inv_unit: f32, bias: u32| -> alloc::vec::Vec<u32> {
+    let mvp = v.mvp(anchor);
+    let sv = SplitView::of(&mvp, v.eye_local(anchor));
+    assert!(is_volumetric(&cloud, &sv), "the eye is inside the cloud");
+    let mut p = alloc::vec![0u32; lay.total_words as usize];
+    p[..hn].copy_from_slice(&cad_header(lay));
+    VolumeStats { evals: 0, bias, axis: DUST_VOLUME_AXIS_CHORD }.store(&mut p);
+    volume_scatter(&cloud, 1.0, &mvp, &sv, &Photometry::NONE, [1.0; 3], lay, inv_unit, &mut p);
+    p
+  };
+  let vs = view_at(0.0);
+  // the unit: the peak τ per px² (a texel then holds at most its area in counts)
+  let tau_max = f32::from_bits(draw(&vs, &layout, 1.0, 0)[PYR_TAU_MAX as usize]);
+  assert!(tau_max > 0.0 && tau_max.is_finite(), "τ_max {tau_max}");
+  let (inv_unit, unit_v) = (1.0 / tau_max, tau_max);
+  let mut worst = 0.0f64;
+  for bias in [9u32, DUST_VOLUME_BIAS_MAX] {
+    let img = draw(&vs.image_view(&geom), &geom.layout, inv_unit, bias);
+    let img_mask = img[PYR_LEVEL_MASK as usize];
+    for f in 0..=4u32 {
+      let v = view_at(f as f64);
+      let map = v.map_to_image(&vs, &geom).expect("map");
+      let mut frame = alloc::vec![0u32; layout.total_words as usize];
+      frame[..hn].copy_from_slice(&cad_header(&layout));
+      reproject_add(
+        &layout,
+        &mut frame,
+        &[ShownImage { words: &img, map, unit: unit_v, layout: Some(&geom.layout) }],
+        unit_v,
+        0x5eed,
+        ReprojectFactor::Unit,
+      );
+      let full = draw(&v, &layout, inv_unit, bias);
+      let (lr, lf) = (pyramid_light(&layout, &frame), pyramid_light(&layout, &full));
+      assert!(lf > 0.0, "bias {bias} yaw {f}: the full draw is empty");
+      let ratio = lr / lf;
+      std::println!(
+        "eye-inside cloud, bias {bias}, yaw {f} frames: level masks image {img_mask:#x} / full {:#x}, Σ reprojected / full {ratio:.6}",
+        full[PYR_LEVEL_MASK as usize]
+      );
+      worst = worst.max((ratio - 1.0).abs());
+      assert!(
+        (ratio - 1.0).abs() <= 5e-3,
+        "bias {bias} yaw {f} frames: Σ reprojected / full {ratio:.6} (image level mask {img_mask:#x}, the frame has {} levels)",
+        layout.level_count()
+      );
+    }
+  }
+  std::println!("eye-inside cloud: worst |Σ ratio − 1| {worst:.3e}");
+}
+
 /// The margin's edge (plan step 3, the margin): a class image drawn at the frozen view with a 0.2
 /// margin (64 px at 256 px) is reprojected to the view yawed so that the viewport's edge moves 28
 /// px (inside the budget m − G = 32 px): the whole viewport is covered (`image_covers`, every
@@ -12936,6 +13033,297 @@ fn cadence_folds_into_the_largest_admitted_class() {
   assert_eq!(by_class[2], 0, "class 64 classified over its budget");
   // class 8 takes only clusters whose rate caps them at N = 8 (none in this still scene)
   assert!(by_class[0] as u64 <= hist[1], "a cluster folded below the largest admitted class ({} into class 8, {} rate-capped at 8)", by_class[0], hist[1]);
+}
+
+// ─── The budget loop (temporal reuse step 5) ─────────────────────────────────
+
+/// A synthetic frame-time model for the loop: the frame costs `fixed + per · fresh(ε)` with
+/// `fresh(ε) = F · ε₀ / ε` (the rate-fresh set shrinks as ε grows), scaled by the lod and budget
+/// knobs, so the loop sees "over" until every knob is at its ceiling
+fn budget_model(k: &super::cadence::BudgetKnobs, over: bool) -> super::cadence::BudgetSample {
+  let fresh = (240_000.0 * 4.0 / k.eps_px as f64).max(1.0) as u32;
+  // over: 20 ms fixed + 0.1 µs per fresh cluster (never fits); under: 1 ms + 1 ns per cluster
+  let fresh_ms = if over { 1.0e-4 } else { 1.0e-6 } * fresh as f64;
+  let fixed = if over { 20.0 } else { 1.0 };
+  super::cadence::BudgetSample { frame: 0, total_ms: fixed + fresh_ms, fresh_ms, fresh }
+}
+
+/// Drives `b` with the model for `frames` frames (readback 4 frames late, as the view's); returns
+/// the knobs after each move, with the frame of the move
+fn budget_drive(b: &mut super::cadence::BudgetLoop, frames: u64, start: u64, over: bool) -> alloc::vec::Vec<(u64, super::cadence::BudgetKnobs)> {
+  let mut moves = alloc::vec::Vec::new();
+  // the knobs each frame was drawn with (a sample reads its own frame's)
+  let mut drawn: alloc::vec::Vec<super::cadence::BudgetKnobs> = alloc::vec::Vec::new();
+  for now in start..start + frames {
+    if now >= start + 4 {
+      let f = now - 4;
+      let mut s = budget_model(&drawn[(f - start) as usize], over);
+      s.frame = f;
+      if b.observe(&s, now) {
+        moves.push((now, b.knobs()));
+      }
+    }
+    drawn.push(b.knobs());
+  }
+  moves
+}
+
+/// The loop moves its knobs in the plan's order (item 7): over the budget ε 4 → 16 px by × 1.25,
+/// then lod 4 → 8 px, then the EWA / volume budgets ÷ 2 → ÷ 8, then the by-count fallback (ε as
+/// a count knob while the fresh set is over K, then the longest class × 2, × 4), then the
+/// verdict state; under half the budget back in the reverse order to the rest rung. A move waits
+/// for `DUST_BUDGET_SAMPLES` samples of frames drawn after the previous one.
+#[test]
+fn budget_loop_moves_the_knobs_in_order() {
+  use super::cadence::*;
+  let mut b = BudgetLoop::new(8.0, BudgetPins::default());
+  let k0 = b.knobs();
+  assert_eq!((k0.eps_px, k0.lod_px, k0.budget_shift, k0.fallback, k0.n_level), (DUST_CADENCE_EPS_LOOP_START, DUST_LOD_PX_DEFAULT, 0, false, 0));
+  let up = budget_drive(&mut b, 2000, 100, true);
+  let phase = |k: &BudgetKnobs| if k.n_level > 0 { 4 } else if k.fallback { 3 } else if k.budget_shift > 0 { 2 } else if k.lod_px > DUST_LOD_PX_DEFAULT { 1 } else { 0 };
+  let mut prev = (100u64, k0);
+  for (i, &(f, k)) in up.iter().enumerate() {
+    std::println!(
+      "[budget loop] up {i}: frame {f}: ε {} lod {} ÷{} fallback {} N {} saturated {}",
+      k.eps_px, k.lod_px, 1u32 << k.budget_shift, k.fallback, k.n_level, k.saturated
+    );
+    let p = prev.1;
+    assert!(phase(&k) >= phase(&p), "move {i}: the order went back ({p:?} → {k:?})");
+    assert!(k.eps_px >= p.eps_px && k.lod_px >= p.lod_px && k.budget_shift >= p.budget_shift && k.n_level >= p.n_level, "move {i}: a knob went down while over: {p:?} → {k:?}");
+    if k.lod_px > DUST_LOD_PX_DEFAULT {
+      assert!(k.eps_px >= DUST_CADENCE_EPS_MAX, "move {i}: lod moved before ε reached its ceiling");
+    }
+    if k.budget_shift > 0 {
+      assert_eq!(k.lod_px, DUST_LOD_PX_MAX, "move {i}: the budgets moved before lod reached its ceiling");
+    }
+    if k.fallback {
+      assert_eq!(k.budget_shift, DUST_BUDGET_SHIFT_MAX, "move {i}: the fallback before the budgets' ceiling");
+    }
+    if !k.fallback {
+      assert!(k.eps_px <= DUST_CADENCE_EPS_MAX, "move {i}: ε {} beyond the ladder's ceiling off the fallback", k.eps_px);
+    }
+    // every move waits for DUST_BUDGET_SAMPLES samples of frames drawn after the last one,
+    // read back 4 frames late
+    assert!(f - prev.0 >= DUST_BUDGET_SAMPLES as u64 + 3, "move {i} at frame {f} only {} frames after the last", f - prev.0);
+    prev = (f, k);
+  }
+  let last = b.knobs();
+  assert!(last.saturated && last.fallback && last.n_level == DUST_BUDGET_N_LEVELS, "the loop did not reach the verdict state: {last:?}");
+  assert_eq!(b.classes(&[8, 16, 64]), alloc::vec![8, 16, 256]);
+  assert_eq!(b.staleness_frames(&[8, 16, 64]), 512);
+  // the fallback's ε grew while the fresh set was over K, then the N raises took over
+  let fb: alloc::vec::Vec<&BudgetKnobs> = up.iter().map(|(_, k)| k).filter(|k| k.fallback).collect();
+  assert!(fb.iter().any(|k| k.eps_px > DUST_CADENCE_EPS_MAX && k.n_level == 0), "the fallback never raised ε");
+  // down: the reverse order, back to the rest rung
+  let down = budget_drive(&mut b, 3000, 3000, false);
+  let mut prev = last;
+  for (i, &(f, k)) in down.iter().enumerate() {
+    std::println!(
+      "[budget loop] down {i}: frame {f}: ε {} lod {} ÷{} fallback {} N {}",
+      k.eps_px, k.lod_px, 1u32 << k.budget_shift, k.fallback, k.n_level
+    );
+    assert!(phase(&k) <= phase(&prev), "down move {i}: the order went forward ({prev:?} → {k:?})");
+    assert!(k.eps_px <= prev.eps_px && k.lod_px <= prev.lod_px && k.budget_shift <= prev.budget_shift && k.n_level <= prev.n_level, "down move {i}: a knob went up: {prev:?} → {k:?}");
+    if prev.n_level > 0 {
+      assert_eq!(k.eps_px, prev.eps_px, "down move {i}: the fallback's ε moved before the N level reached 0");
+    }
+    if k.budget_shift < DUST_BUDGET_SHIFT_MAX {
+      assert!(!k.fallback, "down move {i}: the budgets moved inside the fallback");
+    }
+    if k.lod_px < DUST_LOD_PX_MAX {
+      assert_eq!(k.budget_shift, 0, "down move {i}: lod moved before the budgets were back");
+    }
+    if k.eps_px < DUST_CADENCE_EPS_MAX {
+      assert_eq!(k.lod_px, DUST_LOD_PX_DEFAULT, "down move {i}: ε moved before lod was back");
+    }
+    prev = k;
+  }
+  let rest = b.knobs();
+  assert_eq!((rest.eps_px, rest.lod_px, rest.budget_shift, rest.fallback, rest.n_level, rest.saturated), (k0.eps_px, k0.lod_px, 0, false, 0, false), "not back at rest");
+  assert_eq!(b.rung, 0);
+}
+
+/// One spike never moves a knob (`DUST_BUDGET_SAMPLES` consecutive samples decide); a sample of a
+/// frame drawn before the last move is never counted; the 2× band holds
+#[test]
+fn budget_loop_ignores_spikes_and_latency() {
+  use super::cadence::*;
+  let mut b = BudgetLoop::new(8.0, BudgetPins::default());
+  let s = |frame: u64, ms: f64| BudgetSample { frame, total_ms: ms, fresh_ms: 0.5 * ms, fresh: 1000 };
+  // in the band (4–8 ms): nothing moves, whatever the count
+  for f in 0..100u64 {
+    assert!(!b.observe(&s(f, 6.0), f + 4), "moved inside the band at frame {f}");
+  }
+  // one reset-like spike between band samples
+  assert!(!b.observe(&s(100, 300.0), 104));
+  assert!(!b.observe(&s(101, 6.0), 105));
+  assert!(!b.observe(&s(102, 6.0), 106));
+  assert_eq!(b.rung, 0, "a spike moved the ladder");
+  // three over: one move, at the frame being begun
+  assert!(!b.observe(&s(103, 12.0), 107));
+  assert!(!b.observe(&s(104, 12.0), 108));
+  assert!(b.observe(&s(105, 12.0), 109), "three samples over did not move");
+  assert_eq!((b.rung, b.since), (1, 109));
+  // samples of frames drawn before the move (105..108) are not counted
+  for f in 106..109u64 {
+    assert!(!b.observe(&s(f, 30.0), f + 4));
+    assert!(b.ratios.is_empty(), "a sample of frame {f} (before the move at 109) was counted");
+  }
+  // NaN timings are skipped
+  assert!(!b.observe(&s(110, f64::NAN), 114));
+  assert!(b.ratios.is_empty());
+}
+
+/// A pinned knob's rungs are skipped: with ε and lod pinned the ladder is the budgets, the fallback
+/// goes straight to the N raises and ε stays pinned throughout; the specks' cap shrinks over its
+/// share and is released under half of it
+#[test]
+fn budget_loop_skips_pinned_knobs() {
+  use super::cadence::*;
+  let pins = BudgetPins { eps_px: Some(2.0), lod_px: Some(6.0), budget_shift: None };
+  let mut b = BudgetLoop::new(8.0, pins);
+  assert_eq!(b.ladder, alloc::vec![BudgetRung::Eps(0), BudgetRung::Budget(1), BudgetRung::Budget(2), BudgetRung::Budget(3)]);
+  let up = budget_drive(&mut b, 600, 0, true);
+  for (_, k) in &up {
+    assert_eq!((k.eps_px, k.lod_px), (2.0, 6.0), "a pinned knob moved: {k:?}");
+  }
+  let fb: alloc::vec::Vec<u32> = up.iter().filter(|(_, k)| k.fallback).map(|(_, k)| k.n_level).collect();
+  assert_eq!(fb, alloc::vec![0, 1, 2], "the pinned-ε fallback is the N raises only");
+  assert!(b.knobs().saturated);
+  // the specks: 4 ms of 8 (over a quarter) → 0.8 × the radius; 0.5 ms (under an eighth) → × 1.25
+  // until released at the measured radius
+  let near = |c: Option<f32>, v: f32| c.is_some_and(|c| (c - v).abs() <= 1e-5 * v);
+  let c = b.observe_specks(4.0, 10.0);
+  assert!(near(c, 8.0), "{c:?}");
+  let c = b.observe_specks(4.0, 10.0);
+  assert!(near(c, 6.4), "{c:?}");
+  let c = b.observe_specks(0.5, 10.0);
+  assert!(near(c, 8.0), "{c:?}");
+  assert_eq!(b.observe_specks(0.5, 10.0), None);
+  assert_eq!(b.observe_specks(1.5, 10.0), None, "inside the band the cap stays as it is");
+}
+
+/// The by-count fallback keeps the nucleus vicinity fresh (plan item 7). The rate alone does not:
+/// at the fallback's ε the rate-fresh set (fresh iff `δ₀ · 2N₀ > ε`, the window terms 0) is the
+/// top K by δ (px per frame), and the young dust at the nucleus has the smallest δ of the scene.
+/// With a still camera every cluster moves by the comet's orbital step and δ ranks the depth (the
+/// near-eye slab of the coma; the nucleus sits mid-depth); with a camera following the comet δ
+/// ranks the motion relative to the nucleus (the 2 m/s ejection against the old dust's radiation
+/// drift and extent growth). Both left the youngest 1 % and the 1 % nearest the nucleus at 0 %
+/// fresh (track 7's first run; printed here as the θ = 0 control). Under the fallback the class
+/// rule keeps the shape bound θ = `DUST_CADENCE_FALLBACK_SHAPE`: class `k` also needs
+/// `2N_k · Δt ≤ θ · age`, so every cluster younger than `2N₀ Δt / θ` (25.6 h at Δt 1 440 s, N₀ 8)
+/// is fresh — the protected set P. Checked cluster by cluster at 1 day per second (Δt = 1 440 s
+/// per frame) for both cameras: δ independent of ε and θ; fresh iff `δ₀ · 2N₀ > ε` or
+/// `2N₀ Δt > θ · age` (the θ = 0 control: iff the former); ε where the loop's count search leaves
+/// it for K = 10 % of the clusters in all (the K − |P|-th largest δ₀ outside P, `2N₀ ·` it): at
+/// most K fresh (P plus the rate's strictly larger, exactly: `16 δ` is exact); |P| ≤ K / 2 (tier
+/// 0's 4 096 slots over 30 days: ~146 of 6 144 predicted); the youngest 1 % and the 1 % nearest
+/// the nucleus fresh (printed, ≥ 90 %).
+#[test]
+fn fallback_keeps_the_nucleus_fresh() {
+  use super::cadence::{CadenceView, DUST_CADENCE_AGE_MIN_S, DUST_CADENCE_FALLBACK_SHAPE, RateInputs, cadence_rate};
+  let (tiers, radius) = cad_scene();
+  let anchor = tiers[0].0.anchor_m;
+  let px = 256u32;
+  let fwd0: V3 = unit([1.0, 0.3, -0.2]);
+  let up0: V3 = [0.0, 0.0, 1.0];
+  let dist = 3.0 * radius;
+  let eye0 = [anchor[0] - fwd0[0] * dist, anchor[1] - fwd0[1] * dist, anchor[2] - fwd0[2] * dist];
+  let view = CadenceView {
+    view_rot: cad_view_rot(fwd0, up0),
+    proj: cad_persp(60f64.to_radians(), 1.0),
+    eye_m: eye0,
+    units_per_m: 1.0,
+    width: px,
+    height: px,
+  };
+  let classes = [8u32, 16, 64];
+  let dt = 1440.0f32;
+  let theta = DUST_CADENCE_FALLBACK_SHAPE;
+  // the protected set: class 0's shape bound fails (cadence_rate's f32 operations, in its order)
+  let young = |age: f32| !(2.0 * classes[0] as f32 * dt <= theta * age.max(DUST_CADENCE_AGE_MIN_S));
+  // the nucleus's heliocentric velocity: the youngest cluster's (its 2 m/s ejection aside)
+  let mut v_nuc = [0.0f32; 3];
+  let mut age_min = f32::INFINITY;
+  for (_, (_, m)) in &tiers {
+    for mm in m.iter().filter(|mm| mm.flux() > 0.0) {
+      if mm.age() < age_min {
+        age_min = mm.age();
+        v_nuc = mm.helio_velocity();
+      }
+    }
+  }
+  let following = [v_nuc[0] * dt, v_nuc[1] * dt, v_nuc[2] * dt];
+  for (tag, d_eye) in [("still camera", [0.0f32; 3]), ("following camera", following)] {
+    let inputs =
+      |eps: f32, shape: f32| RateInputs { dt_s: dt, d_eye_m: d_eye, a_w_m: [0.0; 3], eps_px: eps, frame_px: px as f32, shape_frac: shape };
+    // (δ₀, age, distance from the tier's anchor (the nucleus at its tick), tier, index)
+    let mut all: alloc::vec::Vec<(f32, f32, f32, usize, usize)> = alloc::vec::Vec::new();
+    for (ti, (ds, (r, m))) in tiers.iter().enumerate() {
+      let pc = cad_pc(&view, ds.anchor_m, r.len() as u32, 1.0);
+      let eye = [pc.eye_local[0], pc.eye_local[1], pc.eye_local[2]];
+      for i in 0..r.len() {
+        if !(m[i].flux() > 0.0) {
+          continue;
+        }
+        let rate = cadence_rate(&m[i], streak_pred(r, i).map(|q| &m[q]), &pc.mvp, eye, px, px, &classes, &inputs(1.0, 0.0));
+        let c = m[i].mean();
+        all.push((rate.delta_px[0], m[i].age(), (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt(), ti, i));
+      }
+    }
+    let n = all.len();
+    assert!(n >= 1000, "{n} clusters");
+    let k = n / 10;
+    let n_young = all.iter().filter(|a| young(a.1)).count();
+    assert!(n_young <= k / 2, "{tag}: the protected set ({n_young} clusters younger than {:.1} h) is over half of K = {k}", 2.0 * classes[0] as f32 * dt / theta / 3600.0);
+    // the rate's top K − |P| outside P: ε at 2N₀ times the (K − |P|)-th largest δ₀ there
+    let mut by_delta: alloc::vec::Vec<f32> = all.iter().filter(|a| !young(a.1)).map(|a| a.0).collect();
+    by_delta.sort_by(|a, b| b.partial_cmp(a).unwrap_or(core::cmp::Ordering::Equal));
+    let delta_k = by_delta[k - n_young];
+    assert!(delta_k.is_finite() && delta_k > 0.0, "{tag}: the K-th rate {delta_k}");
+    let eps = 2.0 * classes[0] as f32 * delta_k;
+    // per cluster at (ε, θ) and the θ = 0 control; δ independent of both
+    let mut fresh = alloc::vec![false; n];
+    let mut control = alloc::vec![false; n];
+    let mut nfresh = 0usize;
+    for (j, &(d0, age, _, ti, i)) in all.iter().enumerate() {
+      let (ds, (r, m)) = &tiers[ti];
+      let pc = cad_pc(&view, ds.anchor_m, r.len() as u32, 1.0);
+      let eye = [pc.eye_local[0], pc.eye_local[1], pc.eye_local[2]];
+      let pred = streak_pred(r, i).map(|q| &m[q]);
+      let rate = cadence_rate(&m[i], pred, &pc.mvp, eye, px, px, &classes, &inputs(eps, theta));
+      let rate0 = cadence_rate(&m[i], pred, &pc.mvp, eye, px, px, &classes, &inputs(eps, 0.0));
+      assert_eq!(rate.delta_px[0].to_bits(), d0.to_bits(), "{tag}: δ depends on ε or θ (tier {ti} cluster {i})");
+      assert_eq!(rate0.delta_px[0].to_bits(), d0.to_bits(), "{tag}: δ depends on ε (tier {ti} cluster {i})");
+      let rate_fresh = !(d0 * 2.0 * classes[0] as f32 <= eps);
+      fresh[j] = rate.class == 0;
+      control[j] = rate0.class == 0;
+      nfresh += fresh[j] as usize;
+      assert_eq!(control[j], rate_fresh, "{tag}: tier {ti} cluster {i}: δ₀ {d0} at ε {eps}, θ 0: class {}", rate0.class);
+      assert_eq!(fresh[j], rate_fresh || young(age), "{tag}: tier {ti} cluster {i}: δ₀ {d0}, age {age} s at ε {eps}, θ {theta}: class {}", rate.class);
+    }
+    assert!(nfresh <= k, "{tag}: {nfresh} fresh for K = {k} ({n_young} protected)");
+    let share = |flags: &[bool], key: &dyn Fn(&(f32, f32, f32, usize, usize)) -> f32| -> f64 {
+      let mut idx: alloc::vec::Vec<usize> = (0..n).collect();
+      idx.sort_by(|&a, &b| key(&all[a]).partial_cmp(&key(&all[b])).unwrap_or(core::cmp::Ordering::Equal));
+      let m = (n / 100).max(1);
+      idx[..m].iter().filter(|&&j| flags[j]).count() as f64 / m as f64
+    };
+    let (young_s, near_s) = (share(&fresh, &|a| a.1), share(&fresh, &|a| a.2));
+    let (young_c, near_c) = (share(&control, &|a| a.1), share(&control, &|a| a.2));
+    std::println!(
+      "[fallback] {tag}: {n} clusters, K = {k} ({n_young} protected: younger than {:.1} h; the rate's top {} at δ₀ > {delta_k:.3} px/frame, ε {eps:.1} px at Δt 1 440 s): {nfresh} fresh; the youngest 1 % fresh {:.1} % (θ = 0: {:.1} %), the 1 % nearest the nucleus {:.1} % (θ = 0: {:.1} %)",
+      2.0 * classes[0] as f32 * dt / theta / 3600.0,
+      k - n_young,
+      100.0 * young_s,
+      100.0 * young_c,
+      100.0 * near_s,
+      100.0 * near_c
+    );
+    assert!(young_s >= 0.9, "{tag}: the youngest clusters left the fresh set: {:.1} %", 100.0 * young_s);
+    assert!(near_s >= 0.9, "{tag}: the clusters near the nucleus left the fresh set: {:.1} %", 100.0 * near_s);
+  }
 }
 
 /// The time reset (the GPU track's finding, 2026-10-18: a frame one simulated day after 15 still

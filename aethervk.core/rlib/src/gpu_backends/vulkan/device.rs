@@ -1847,7 +1847,7 @@ impl Device {
       QueueRole::Graphics => false,
       _ => true,
     };
-    let (cmd_id, cmd_pool_arc, current_timeline, discard_pool_ptr) = {
+    let (cmd_id, cmd_pool_arc, discard_pool_ptr) = {
       let res_guard = self.res.read();
       let cmd_id = if is_compute {
         self.kernels.next_cmd_id.fetch_add(1, core::sync::atomic::Ordering::SeqCst)
@@ -1860,9 +1860,13 @@ impl Device {
       } else {
         &res_guard.discard_pool
       });
-      // the *completed* counter of the role's queue: the allocation retry loop recycles the
-      // command buffers discarded at or below it, so it must never be a value still in flight
-      let current_timeline = if is_compute {
+      (cmd_id, cmd_pool_arc, discard_pool_ptr)
+    };
+    // the *completed* counter of the role's queue, re-read on every retry: the allocation retry
+    // loop recycles the command buffers discarded at or below it, so it must never be a value
+    // still in flight, and a value captured once never sees the GPU progress the loop waits for
+    let completed_timeline = || -> u64 {
+      if is_compute {
         unsafe {
           self
             .device
@@ -1871,9 +1875,8 @@ impl Device {
         }
         .unwrap_or(0)
       } else {
-        res_guard.get_timeline_semaphore_cached_value()
-      };
-      (cmd_id, cmd_pool_arc, current_timeline, discard_pool_ptr)
+        self.res.read().timeline_manager.refresh_cached_value().unwrap_or(0)
+      }
     };
 
     let family_index = if is_compute {
@@ -1890,7 +1893,7 @@ impl Device {
         unsafe { discard_pool_ptr.as_ref_unchecked() },
         family_index,
         CommandBufferId(cmd_id),
-        current_timeline,
+        &completed_timeline,
       )
     }?;
 

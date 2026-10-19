@@ -196,19 +196,19 @@ vec2 dust_volume_screen_at(float Lk[6], vec3 x, float w, vec3 g, float gg, vec3 
 // centred) with nB pieces when hasB; piece i * nB + j; without axis b the chord-only arithmetic)
 // (the view: the mvp's rows r0, r1, r3 and translations t = (t0, t1, t3), the eye; the packet's
 // flux and density ramp rho)
-DustVolumePiece dust_volume_piece(uint k, float flux, vec2 rho, float exposure, vec3 axMean, float S[6], vec3 segA,
-                                  uint nA, float cvarA, vec3 segB, uint nB, float cvarB, bool hasB, float W, float H,
-                                  vec3 r0, vec3 r1, vec3 r3, vec3 t, vec3 eye, float fPx, uint levels,
-                                  bool withLevel) {
-    float t0 = t.x, t1 = t.y, t3 = t.z;
+// The covariance every piece of a packet has (dust::volume_pieces: the base S plus the spacing
+// terms of the axes, the same for every piece k; only the mean and the flux depend on k), its
+// Cholesky factor Lk and its diagonal skd = (Sk[0], Sk[3], Sk[5]). Split out of
+// dust_volume_piece (step 9C) so that the volume consumer's pass B builds it once and keeps it in
+// the lane's workgroup slots; dust_volume_piece = dust_volume_piece_cov + dust_volume_piece_at,
+// the same operations in the same order
+void dust_volume_piece_cov(float S[6], vec3 segA, uint nA, float cvarA, vec3 segB, uint nB, float cvarB, bool hasB,
+                           out float Lk[6], out vec3 skd) {
     float cvar = cvarA;
     float invN = 1.0 / float(nA);
     vec3 h = segA * invN;
     float invB = 1.0 / float(nB);
     vec3 hb = segB * invB;
-    uint i = k / nB, j = k % nB;
-    float uk = (float(i) + 0.5) * invN;
-    vec3 meanK = axMean + segA * uk;
     float Sk[6];
     Sk[0] = S[0] + cvar * h.x * h.x;
     Sk[1] = S[1] + cvar * h.x * h.y;
@@ -216,23 +216,37 @@ DustVolumePiece dust_volume_piece(uint k, float flux, vec2 rho, float exposure, 
     Sk[3] = S[3] + cvar * h.y * h.y;
     Sk[4] = S[4] + cvar * h.y * h.z;
     Sk[5] = S[5] + cvar * h.z * h.z;
-    float fluxK = flux * (rho.x + (rho.y - rho.x) * uk) * invN;
     if (hasB) {
-        float vk = (float(j) + 0.5) * invB - 0.5;
-        meanK = meanK + segB * vk;
         Sk[0] += cvarB * hb.x * hb.x;
         Sk[1] += cvarB * hb.x * hb.y;
         Sk[2] += cvarB * hb.x * hb.z;
         Sk[3] += cvarB * hb.y * hb.y;
         Sk[4] += cvarB * hb.y * hb.z;
         Sk[5] += cvarB * hb.z * hb.z;
+    }
+    dust_cholesky3(Sk, Lk);
+    skd = vec3(Sk[0], Sk[3], Sk[5]);
+}
+// piece k from its packet's shared covariance (Lk, skd: dust_volume_piece_cov)
+DustVolumePiece dust_volume_piece_at(uint k, float flux, vec2 rho, float exposure, vec3 axMean, float Lk[6], vec3 skd,
+                                     vec3 segA, uint nA, vec3 segB, uint nB, bool hasB, float W, float H,
+                                     vec3 r0, vec3 r1, vec3 r3, vec3 t, vec3 eye, float fPx, uint levels,
+                                     bool withLevel) {
+    float t0 = t.x, t1 = t.y, t3 = t.z;
+    float invN = 1.0 / float(nA);
+    float invB = 1.0 / float(nB);
+    uint i = k / nB, j = k % nB;
+    float uk = (float(i) + 0.5) * invN;
+    vec3 meanK = axMean + segA * uk;
+    float fluxK = flux * (rho.x + (rho.y - rho.x) * uk) * invN;
+    if (hasB) {
+        float vk = (float(j) + 0.5) * invB - 0.5;
+        meanK = meanK + segB * vk;
         fluxK *= invB;
     }
-    float Lk[6];
-    dust_cholesky3(Sk, Lk);
     vec3 qw = dust_cholesky_solve3(Lk, eye - meanK);
     bool full = dot(qw, qw) < DUST_VOLUME_SIGMAS * DUST_VOLUME_SIGMAS;
-    vec3 ext = vec3(3.0 * sqrt(Sk[0]), 3.0 * sqrt(Sk[3]), 3.0 * sqrt(Sk[5]));
+    vec3 ext = vec3(3.0 * sqrt(skd.x), 3.0 * sqrt(skd.y), 3.0 * sqrt(skd.z));
     float x0 = 1e30, x1 = -1e30, y0 = 1e30, y1 = -1e30;
     if (!full) {
         for (uint c = 0u; c < 8u; ++c) {
@@ -302,7 +316,7 @@ DustVolumePiece dust_volume_piece(uint k, float flux, vec2 rho, float exposure, 
     }
     float sigPx = sigScr;
     if (full) {
-        float sigK = 2.0 * (Lk[0] * Lk[3] * Lk[5]) / (Sk[0] + Sk[3] + Sk[5]);
+        float sigK = 2.0 * (Lk[0] * Lk[3] * Lk[5]) / (skd.x + skd.y + skd.z);
         vec3 dq = eye - meanK;
         float denK = max(sqrt(dot(dq, dq)), sigK);
         sigPx = min((denK > 0.0 ? sigK / denK : 1.0) * fPx, sigScr);
@@ -311,6 +325,16 @@ DustVolumePiece dust_volume_piece(uint k, float flux, vec2 rho, float exposure, 
     q.line = line;
     q.ls = line != 0u ? dust_volume_level(min(sigScr, 1e30), levels) : 0xFFFFFFFFu;
     return q;
+}
+DustVolumePiece dust_volume_piece(uint k, float flux, vec2 rho, float exposure, vec3 axMean, float S[6], vec3 segA,
+                                  uint nA, float cvarA, vec3 segB, uint nB, float cvarB, bool hasB, float W, float H,
+                                  vec3 r0, vec3 r1, vec3 r3, vec3 t, vec3 eye, float fPx, uint levels,
+                                  bool withLevel) {
+    float Lk[6];
+    vec3 skd;
+    dust_volume_piece_cov(S, segA, nA, cvarA, segB, nB, cvarB, hasB, Lk, skd);
+    return dust_volume_piece_at(k, flux, rho, exposure, axMean, Lk, skd, segA, nA, segB, nB, hasB, W, H, r0, r1, r3,
+                                t, eye, fPx, levels, withLevel);
 }
 
 void dust_volume_pieces(float flux, vec2 rho, float exposure, vec3 axMean, float S[6], vec3 segA, uint nA, float cvarA,
@@ -720,6 +744,100 @@ DustSmallPoint dust_volume_small_edge(uint q, bool five, vec3 mean, vec3 g, floa
     return dust_small_finish(ok, nw.y, massW, wr, tj, ox + dx, oy + dy, cxx, cyy, rhoRaw);
 }
 
+// Track 9A, the edge-piece demotion (dust::DUST_SMALL_DEMOTE_EPS, dust::volume_small_demote_err):
+// an edge piece keeps its one projection a slice when its predicted in-frame light change, sigma
+// points against one projection, mass-weighted over its slices, is under the constant (strict; 0:
+// the branch folds away, D3's decisions as before)
+const float DUST_SMALL_DEMOTE_EPS = 0.0;
+const float DUST_SMALL_DEMOTE_KAPPA = 0.1;
+const float DUST_SMALL_DEMOTE_SAFETY = 1.25;
+const float DUST_SMALL_INV_SQRT_2PI = 0.3989423;
+const float DUST_SMALL_DEMOTE_SLOPE_MAX = 0.60653066;
+
+// one frame edge of a demoted slice's marginal (dust::small_demote_edge): the edge tv sigma from
+// the mean, its move dt = u + |tv| al; the marginal's change bound dP, the Gaussian's dG, e^(-a^2/2)
+// at the closest approach a, the marginal's upper bound pu (Mills beyond 1 sigma outside)
+void dust_small_demote_edge(float tv, float u, float al, out float dP, out float dG, out float ea, out float pu) {
+    float dt = u + abs(tv) * al;
+    float a = max(abs(tv) - dt, 0.0);
+    ea = exp(-0.5 * a * a);
+    dP = DUST_SMALL_INV_SQRT_2PI * dt * ea;
+    dG = dt * (a >= 1.0 ? a * ea : DUST_SMALL_DEMOTE_SLOPE_MAX);
+    pu = tv < -1.0 ? DUST_SMALL_INV_SQRT_2PI * ea / -tv : 1.0;
+}
+
+// The predicted change of slice q's in-frame light (sigma points against one projection) as a
+// fraction of its mass; -1 when not predicted (dust::volume_small_demote_err: the second-order mass
+// term mu, mean shift delta and covariance change of the 4 sigma points' J3-weighted moments, bounded
+// edge by edge on the frame's rectangle integral, x DUST_SMALL_DEMOTE_SAFETY)
+float dust_small_demote_err(uint q, bool five, vec3 mean, vec3 g, float x1, float x2, float y1, float y2,
+                            float w1, float w2, vec3 r0, vec3 r1, vec3 r3, vec3 t, float W, float H) {
+    vec3 xq = mean + g * dust_small_node(q, five).x;
+    float w = dot(r3, xq) + t.z;
+    if (!(w > 0.0)) return -1.0;
+    float iw = 1.0 / w;
+    float k1 = w1 * iw, k2 = w2 * iw;
+    if (!(DUST_UT2_NODE * max(abs(k1), abs(k2)) < DUST_SMALL_DEMOTE_KAPPA)) return -1.0;
+    float ndx = (dot(r0, xq) + t.x) * iw;
+    float ndy = (dot(r1, xq) + t.y) * iw;
+    vec3 c = cross(r0 - r3 * ndx, r1 - r3 * ndy);
+    float cn2 = dot(c, c);
+    if (!(cn2 > 0.0)) return -1.0;
+    float icn = 1.0 / cn2;
+    float al1 = (x1 - ndx * w1) * iw, al2 = (x2 - ndx * w2) * iw;
+    float be1 = (y1 - ndy * w1) * iw, be2 = (y2 - ndy * w2) * iw;
+    vec3 cxv = cross(r1, r3), cyv = cross(r3, r0);
+    vec3 v1 = cxv * al1 + cyv * be1;
+    vec3 v2 = cxv * al2 + cyv * be2;
+    float g1 = dot(c, v1) * icn, g2 = dot(c, v2) * icn;
+    float n1 = max(dot(v1, v1) * icn - g1 * g1, 0.0);
+    float n2 = max(dot(v2, v2) * icn - g2 * g2, 0.0);
+    float mu = (3.0 * k1 * k1 - 3.0 * k1 * g1 + 0.5 * n1) + (3.0 * k2 * k2 - 3.0 * k2 * g2 + 0.5 * n2);
+    float h1 = g1 - 3.0 * k1, h2 = g2 - 3.0 * k2;
+    float a1 = 0.5 * W * al1, a2 = 0.5 * W * al2;
+    float b1 = 0.5 * H * be1, b2 = 0.5 * H * be2;
+    float dx = a1 * h1 + a2 * h2;
+    float dy = b1 * h1 + b2 * h2;
+    float f1 = 20.0 * k1 * k1 - 10.0 * k1 * g1 + n1;
+    float f2 = 20.0 * k2 * k2 - 10.0 * k2 * g2 + n2;
+    float cxx = max(a1 * a1 + a2 * a2, 1e-6);
+    float cyy = max(b1 * b1 + b2 * b2, 1e-6);
+    float cxy = a1 * b1 + a2 * b2;
+    float dcxx = a1 * a1 * f1 + a2 * a2 * f2 - mu * cxx - dx * dx;
+    float dcyy = b1 * b1 * f1 + b2 * b2 * f2 - mu * cyy - dy * dy;
+    float dcxy = a1 * b1 * f1 + a2 * b2 * f2 - mu * cxy - dx * dy;
+    float lx = dcxx / (2.0 * cxx);
+    float ly = dcyy / (2.0 * cyy);
+    float sx = sqrt(cxx);
+    float sy = sqrt(cyy);
+    float isc = 1.0 / sqrt(cxx * cyy);
+    float rho = cxy * isc;
+    float drho = dcxy * isc - rho * (lx + ly);
+    float mx = (ndx * 0.5 + 0.5) * W;
+    float my = (ndy * 0.5 + 0.5) * H;
+    float tl = mx / sx, tr = (W - mx) / sx;
+    float tb = my / sy, tt = (H - my) / sy;
+    float s = DUST_SMALL_DEMOTE_SAFETY;
+    float ux = s * abs(dx) / sx, uy = s * abs(dy) / sy;
+    float alx = s * abs(lx), aly = s * abs(ly);
+    float adr = s * abs(drho), amu = s * abs(mu);
+    float dPl, dGl, eal, pul, dPr, dGr, ear, pur, dPb, dGb, eab, pub, dPt, dGt, eat, put;
+    dust_small_demote_edge(tl, ux, alx, dPl, dGl, eal, pul);
+    dust_small_demote_edge(tr, ux, alx, dPr, dGr, ear, pur);
+    dust_small_demote_edge(tb, uy, aly, dPb, dGb, eab, pub);
+    dust_small_demote_edge(tt, uy, aly, dPt, dGt, eat, put);
+    float dpx = dPl + dPr, dpy = dPb + dPt;
+    float dgx = dGl + dGr, dgy = dGb + dGt;
+    float gx = max(eal, ear), gy = max(eab, eat);
+    float pxu = min(min(1.0, pul), pur);
+    float pyu = min(min(1.0, pub), put);
+    float arho = min(abs(rho), DUST_SMALL_RHO_MAX);
+    return amu * (pxu * pyu + arho * DUST_INV_2PI * gx * gy)
+         + (1.0 + amu) * (dpx * (pyu + dpy) + pxu * dpy
+                          + (arho + adr) * DUST_INV_2PI * (dgx * (gy + dgy) + gx * dgy)
+                          + adr * DUST_INV_2PI * gx * gy);
+}
+
 // a small piece's empty point (m = 0: none)
 DustSmallPoint dust_small_none() {
     DustSmallPoint o;
@@ -809,15 +927,48 @@ void dust_volume_small_points(DustVolumePiece pc_, vec3 eye, vec3 r0, vec3 r1, v
     DUST_PROF_END(vsmfast)
     if (edge) {
         DUST_PROF_BEGIN(vsmedge)
-        s0 = dust_volume_small_edge(0u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr0, r0, r1, r3, t, W, H);
-        s1 = dust_volume_small_edge(1u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr1, r0, r1, r3, t, W, H);
-        s2 = dust_volume_small_edge(2u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr2, r0, r1, r3, t, W, H);
-        if (five) {
-            s3 = dust_volume_small_edge(3u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr3, r0, r1, r3, t, W, H);
-            s4 = dust_volume_small_edge(4u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr4, r0, r1, r3, t, W, H);
+        // track 9A: the demotion (dust::volume_small_points: the slices' predictions in order, the
+        // mass-weighted mean against DUST_SMALL_DEMOTE_EPS, strict); vsmedge holds its cost
+        bool demote = false;
+        if (DUST_SMALL_DEMOTE_EPS > 0.0 && s0.m > 0.0 && s1.m > 0.0 && s2.m > 0.0
+            && (!five || (s3.m > 0.0 && s4.m > 0.0))) {
+            float e0 = dust_small_demote_err(0u, five, mean, g, x1, x2, y1, y2, w1, w2, r0, r1, r3, t, W, H);
+            float e1 = dust_small_demote_err(1u, five, mean, g, x1, x2, y1, y2, w1, w2, r0, r1, r3, t, W, H);
+            float e2 = dust_small_demote_err(2u, five, mean, g, x1, x2, y1, y2, w1, w2, r0, r1, r3, t, W, H);
+            float e3 = 0.0, e4 = 0.0;
+            if (five) {
+                e3 = dust_small_demote_err(3u, five, mean, g, x1, x2, y1, y2, w1, w2, r0, r1, r3, t, W, H);
+                e4 = dust_small_demote_err(4u, five, mean, g, x1, x2, y1, y2, w1, w2, r0, r1, r3, t, W, H);
+            }
+            if (e0 >= 0.0 && e1 >= 0.0 && e2 >= 0.0 && e3 >= 0.0 && e4 >= 0.0) {
+                float acc = s0.m * e0;
+                acc += s1.m * e1;
+                acc += s2.m * e2;
+                float ms = s0.m + s1.m + s2.m;
+                if (five) {
+                    acc += s3.m * e3;
+                    acc += s4.m * e4;
+                    ms += s3.m;
+                    ms += s4.m;
+                }
+                demote = acc / ms < DUST_SMALL_DEMOTE_EPS;
+            }
+        }
+        if (!demote) {
+            s0 = dust_volume_small_edge(0u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr0, r0, r1, r3, t, W, H);
+            s1 = dust_volume_small_edge(1u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr1, r0, r1, r3, t, W, H);
+            s2 = dust_volume_small_edge(2u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr2, r0, r1, r3, t, W, H);
+            if (five) {
+                s3 = dust_volume_small_edge(3u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr3, r0, r1, r3, t, W, H);
+                s4 = dust_volume_small_edge(4u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr4, r0, r1, r3, t, W, H);
+            }
         }
         DUST_PROF_END(vsmedge)
-        DUST_PROF_COUNT(small_edge, 1u)
+        if (demote) {
+            DUST_PROF_COUNT(small_fast, 1u)
+        } else {
+            DUST_PROF_COUNT(small_edge, 1u)
+        }
     } else {
         DUST_PROF_COUNT(small_fast, 1u)
     }

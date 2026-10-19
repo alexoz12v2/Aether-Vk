@@ -487,6 +487,28 @@ pub fn take_volume_small_paths() -> [u64; 2] {
 }
 #[cfg(any(test, feature = "std"))]
 std::thread_local! {
+  /// the small pieces this thread's [`volume_small_points`] demoted, and those at a decision's
+  /// margin ([`take_volume_small_margins`])
+  static VOLUME_SMALL_MARGINS: core::cell::Cell<[u64; 3]> = const { core::cell::Cell::new([0; 3]) };
+}
+/// Tests: since the last call, the small pieces demoted from the sigma points to one projection
+/// (track 9A, counted in [`take_volume_small_paths`]' first word), those whose D3 decision sat at
+/// its margin (the centre slice's 3σ within 10⁻³ σ of the frame's edge) and those whose demotion
+/// did (the predictor within 10⁻³ ε of ε); resets them. A float boundary can move such a piece
+/// between the mirrors' paths: the GPU/CPU path counts agree within the last two
+/// (`splat_parity`).
+#[cfg(any(test, feature = "std"))]
+pub fn take_volume_small_margins() -> [u64; 3] {
+  VOLUME_SMALL_MARGINS.with(|c| c.replace([0; 3]))
+}
+#[cfg(all(test, feature = "std"))]
+std::thread_local! {
+  /// Tests: the piece predictor of the last [`volume_small_points`] call (NaN: not evaluated —
+  /// an interior piece, ε = 0, or a slice without a prediction; the calibration's hook)
+  static SMALL_DEMOTE_LAST_E: core::cell::Cell<f32> = const { core::cell::Cell::new(f32::NAN) };
+}
+#[cfg(any(test, feature = "std"))]
+std::thread_local! {
   /// the volumetric texel deposits this thread split into several adds ([`take_volume_split_adds`])
   static VOLUME_SPLIT_ADDS: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
 }
@@ -966,6 +988,14 @@ pub struct PyramidLayout {
 
 impl PyramidLayout {
   pub fn new(width: u32, height: u32) -> Self {
+    Self::new_capped(width, height, PYRAMID_MAX_LEVELS)
+  }
+
+  /// [`Self::new`] with at most `max_levels` levels (clamped to `1..=PYRAMID_MAX_LEVELS`): the
+  /// coarsest level is wider than 1 × 1 when the size needs more. The cadence's class images keep
+  /// their frame's level count this way (`CadenceConfig::image_geom`).
+  pub fn new_capped(width: u32, height: u32, max_levels: u32) -> Self {
+    let cap = max_levels.clamp(1, PYRAMID_MAX_LEVELS);
     let (width, height) = (width.max(1), height.max(1));
     let mut levels = alloc::vec::Vec::new();
     let mut off = PYRAMID_HEADER_WORDS;
@@ -973,7 +1003,7 @@ impl PyramidLayout {
     loop {
       levels.push((off, w, h));
       off += w * h * PYRAMID_TEXEL_WORDS;
-      if (w == 1 && h == 1) || levels.len() as u32 == PYRAMID_MAX_LEVELS {
+      if (w == 1 && h == 1) || levels.len() as u32 >= cap {
         break;
       }
       w = w.div_ceil(2);
@@ -3172,9 +3202,14 @@ impl VolumeStats {
   /// [`DUST_VOLUME_FRAME_BUDGET`] (up to [`DUST_VOLUME_BIAS_MAX`]; a level quarters a packet's
   /// texels), one less (down to 0) below an eighth of it, else unchanged.
   pub fn suggested_bias(&self) -> u32 {
-    if self.evals > DUST_VOLUME_FRAME_BUDGET {
+    self.suggested_bias_for(DUST_VOLUME_FRAME_BUDGET)
+  }
+
+  /// [`Self::suggested_bias`] against `budget` evaluations (the budget loop's knob, step 5)
+  pub fn suggested_bias_for(&self, budget: u32) -> u32 {
+    if self.evals > budget {
       (self.bias + 1).min(DUST_VOLUME_BIAS_MAX)
-    } else if self.evals < DUST_VOLUME_FRAME_BUDGET / 8 {
+    } else if self.evals < budget / 8 {
       self.bias.saturating_sub(1)
     } else {
       self.bias
@@ -3451,7 +3486,11 @@ impl EwaStats {
   /// budget)⌉` at once (a level quarters a capped packet's texels); below an eighth of it, one
   /// down; else unchanged.
   pub fn suggested_bias(&self) -> u32 {
-    let budget = DUST_EWA_FRAME_BUDGET as u64;
+    self.suggested_bias_for(DUST_EWA_FRAME_BUDGET as u64)
+  }
+
+  /// [`Self::suggested_bias`] against `budget` texels (the budget loop's knob, step 5)
+  pub fn suggested_bias_for(&self, budget: u64) -> u32 {
     if self.texels > budget {
       let ratio = self.texels as f64 / budget as f64;
       let up = (ratio.ln() / 4f64.ln()).ceil().max(1.0) as u32;
@@ -4258,6 +4297,183 @@ pub const DUST_SMALL_COVER: f32 = 4.0;
 /// rectangle term, [`volume_small_points`])
 pub const DUST_SMALL_RHO_MAX: f32 = 0.9;
 
+/// Track 9A, the edge-piece demotion: a small piece that step D3 sends to the 4 sigma points a
+/// slice (its centre slice's 3σ crosses the frame's edge) keeps its one projection a slice when the
+/// predicted change of its in-frame light, sigma points against one projection, as a fraction of
+/// its mass ([`volume_small_demote_err`], mass-weighted over the slices), is **under** this. Strict:
+/// at 0 the predictor is not evaluated and every decision is D3's, bit for bit. Mirror of
+/// `DUST_SMALL_DEMOTE_EPS` (dust_scatter.glsl); the value comes from
+/// `small_points_tests::small_demotion_calibration` (its ε_cal). CPU lab override:
+/// `AETHERVK_DUST_LAB_SMALL_EPS` ([`small_demote_eps`]).
+pub const DUST_SMALL_DEMOTE_EPS: f32 = 0.0;
+/// The predictor's range: a slice is predicted only when its lateral sigma points' relative depth
+/// change `√2 |κ_i|` (`κ_i = r3·lat_i / w`) is under this (every sigma point in front of the eye,
+/// the series' third-order terms ≲ 10⁻³ of the second-order ones); otherwise not demoted
+pub const DUST_SMALL_DEMOTE_KAPPA: f32 = 0.1;
+/// The factor on the predicted second-order terms (μ, δ, the σ and ρ changes): the offline f64
+/// check (2 × 10⁴ pieces) found |actual| / E ≤ 0.995 at 1 and ≤ 0.80 at 1.25
+pub const DUST_SMALL_DEMOTE_SAFETY: f32 = 1.25;
+/// `1 / √(2π)`
+pub const DUST_SMALL_INV_SQRT_2PI: f32 = 0.398_942_3;
+/// `e^{-1/2}`: the largest `τ e^{-τ²/2}`
+pub const DUST_SMALL_DEMOTE_SLOPE_MAX: f32 = 0.606_530_66;
+
+#[cfg(any(test, feature = "std"))]
+std::thread_local! {
+  /// tests: this thread's ε in place of the process's ([`set_small_demote_eps_test`]; NaN: none)
+  static SMALL_DEMOTE_EPS_TEST: core::cell::Cell<f32> = const { core::cell::Cell::new(f32::NAN) };
+}
+/// Tests: this thread's draws demote with `eps` (`None`: the process's, `AETHERVK_DUST_LAB_SMALL_EPS`
+/// or [`DUST_SMALL_DEMOTE_EPS`]); CPU only, the GLSL has its constant
+#[cfg(any(test, feature = "std"))]
+pub fn set_small_demote_eps_test(eps: Option<f32>) {
+  SMALL_DEMOTE_EPS_TEST.with(|c| c.set(eps.unwrap_or(f32::NAN)));
+}
+/// the lab's ε (f32 bits; `u32::MAX`: not read yet)
+static LAB_SMALL_EPS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(u32::MAX);
+/// The ε of [`volume_small_points`]' demotion: the test hook's, else the lab's
+/// (`AETHERVK_DUST_LAB_SMALL_EPS=<ε ≥ 0>`, CPU only, read once per process), else
+/// [`DUST_SMALL_DEMOTE_EPS`] (the GPU's)
+fn small_demote_eps() -> f32 {
+  use core::sync::atomic::Ordering::Relaxed;
+  #[cfg(any(test, feature = "std"))]
+  {
+    let t = SMALL_DEMOTE_EPS_TEST.with(|c| c.get());
+    if !t.is_nan() {
+      return t;
+    }
+  }
+  let b = LAB_SMALL_EPS.load(Relaxed);
+  if b != u32::MAX {
+    return f32::from_bits(b);
+  }
+  let v = lab_knob("AETHERVK_DUST_LAB_SMALL_EPS").filter(|v| *v >= 0.0).unwrap_or(DUST_SMALL_DEMOTE_EPS);
+  LAB_SMALL_EPS.store(v.to_bits(), Relaxed);
+  v
+}
+
+/// One frame edge of a demoted slice's marginal ([`volume_small_demote_err`]): the edge `tv` σ
+/// from the mean (positive inside), its predicted move `dt = u + |tv| al` (σ) under the mean's
+/// shift `u` (σ) and the σ's relative change `al`; returns the bound of the marginal's change
+/// there `dP = φ(a) dt` (mean value theorem: `φ` decreases in `|τ|`, `a = max(0, |tv| − dt)` the
+/// closest the edge comes to the mean), of its Gaussian's change `dG = dt · sup τ e^{-τ²/2}`
+/// over the move, `e^{-a²/2}` (≥ the Gaussian at the edge) and the marginal's upper bound `pu`
+/// (Mills: `Φ(tv) ≤ φ(tv) / |tv|` beyond 1 σ outside). Mirror of `dust_small_demote_edge`.
+fn small_demote_edge(tv: f32, u: f32, al: f32) -> (f32, f32, f32, f32) {
+  let dt = u + tv.abs() * al;
+  let a = (tv.abs() - dt).max(0.0);
+  let ea = <f32 as FloatLike>::exp(-0.5 * a * a);
+  let dp = DUST_SMALL_INV_SQRT_2PI * dt * ea;
+  let dg = dt * if a >= 1.0 { a * ea } else { DUST_SMALL_DEMOTE_SLOPE_MAX };
+  let pu = if tv < -1.0 { DUST_SMALL_INV_SQRT_2PI * ea / -tv } else { 1.0 };
+  (dp, dg, ea, pu)
+}
+
+/// Track 9A: the predicted change of one small slice's in-frame light, its 4 lateral sigma points
+/// (D3's edge path) against its one projection (the fast path), as a fraction of the slice's mass;
+/// `−1` when not predicted (the slice behind the eye, `√2 |κ_i|` ≥ [`DUST_SMALL_DEMOTE_KAPPA`], no
+/// Jacobian). `xq` the slice's centre, `d` the lateral axes' dots `[x1 x2 y1 y2 w1 w2]`
+/// (`r0·lat_i`, `r1·lat_i`, `r3·lat_i`), `t` the projection's offsets `(m03, m13, m33)`.
+///
+/// With `s` a sigma point's offset along `lat_i` (±√2), its ndc is `n + s α_i / (1 + s κ_i)`
+/// (`κ_i = r3·lat_i / w`, `α_i`, `β_i` the Jacobian's columns in ndc) and its J3 weight
+/// `|c(s)| / |c₀| · (1 + s κ_i)⁻²` (`c` affine in ndc: `c(n) = c₀ + Δnx (r1 × r3) + Δny (r3 × r0)`,
+/// so `|c|/|c₀| = 1 + s γ_i + s²(ν_i²/2 − κ_i γ_i)`, `γ_i = c₀·v_i / |c₀|²`, `ν_i²` the rest of
+/// `|v_i|² / |c₀|²`). To second order the rule's moments (E s² = 1, E s⁴ = 2 per axis) give the mass
+/// term `μ = Σ_i 3κ_i² − 3κ_iγ_i + ν_i²/2` (the sigma points' J3 sum over the one projection's,
+/// less 1), the J3-weighted mean shift `δ = Σ_i p_i (γ_i − 3κ_i)` (`p_i` the column in px) and the
+/// covariance change `Σ_i p_i p_iᵀ (20κ_i² − 10κ_iγ_i + ν_i²) − μ C − δδᵀ`. Their effect on the
+/// in-frame rectangle integral (`¼ fx fy + ρ/2π gx gy` over the frame, [`volume_scatter`]'s small
+/// branch) is bounded edge by edge ([`small_demote_edge`]): the marginals' change, the ρ term's
+/// shape and ρ's own change, and the mass term on the marginals' upper bounds; every predicted
+/// term × [`DUST_SMALL_DEMOTE_SAFETY`]. Mirror of `dust_small_demote_err`.
+#[allow(clippy::too_many_arguments)]
+fn volume_small_demote_err(
+  xq: [f32; 3],
+  d: [f32; 6],
+  r0: [f32; 3],
+  r1: [f32; 3],
+  r3: [f32; 3],
+  t: [f32; 3],
+  wf: f32,
+  hf: f32,
+) -> f32 {
+  let [x1, x2, y1, y2, w1, w2] = d;
+  let w = dot3(r3, xq) + t[2];
+  if !(w > 0.0) {
+    return -1.0;
+  }
+  let iw = 1.0 / w;
+  let (k1, k2) = (w1 * iw, w2 * iw);
+  if !(DUST_UT2_NODE * k1.abs().max(k2.abs()) < DUST_SMALL_DEMOTE_KAPPA) {
+    return -1.0;
+  }
+  let ndx = (dot3(r0, xq) + t[0]) * iw;
+  let ndy = (dot3(r1, xq) + t[1]) * iw;
+  let c = cross3(sub3(r0, scale3(r3, ndx)), sub3(r1, scale3(r3, ndy)));
+  let cn2 = dot3(c, c);
+  if !(cn2 > 0.0) {
+    return -1.0;
+  }
+  let icn = 1.0 / cn2;
+  // the Jacobian's lateral columns in ndc, and c's change along them
+  let (al1, al2) = ((x1 - ndx * w1) * iw, (x2 - ndx * w2) * iw);
+  let (be1, be2) = ((y1 - ndy * w1) * iw, (y2 - ndy * w2) * iw);
+  let (cxv, cyv) = (cross3(r1, r3), cross3(r3, r0));
+  let v1 = add3(scale3(cxv, al1), scale3(cyv, be1));
+  let v2 = add3(scale3(cxv, al2), scale3(cyv, be2));
+  let (g1, g2) = (dot3(c, v1) * icn, dot3(c, v2) * icn);
+  let n1 = (dot3(v1, v1) * icn - g1 * g1).max(0.0);
+  let n2 = (dot3(v2, v2) * icn - g2 * g2).max(0.0);
+  // the second-order terms: mass μ, mean shift δ (px), covariance change (px²)
+  let mu = (3.0 * k1 * k1 - 3.0 * k1 * g1 + 0.5 * n1) + (3.0 * k2 * k2 - 3.0 * k2 * g2 + 0.5 * n2);
+  let (h1, h2) = (g1 - 3.0 * k1, g2 - 3.0 * k2);
+  let (a1, a2) = (0.5 * wf * al1, 0.5 * wf * al2);
+  let (b1, b2) = (0.5 * hf * be1, 0.5 * hf * be2);
+  let dx = a1 * h1 + a2 * h2;
+  let dy = b1 * h1 + b2 * h2;
+  let f1 = 20.0 * k1 * k1 - 10.0 * k1 * g1 + n1;
+  let f2 = 20.0 * k2 * k2 - 10.0 * k2 * g2 + n2;
+  let cxx = (a1 * a1 + a2 * a2).max(1e-6);
+  let cyy = (b1 * b1 + b2 * b2).max(1e-6);
+  let cxy = a1 * b1 + a2 * b2;
+  let dcxx = a1 * a1 * f1 + a2 * a2 * f2 - mu * cxx - dx * dx;
+  let dcyy = b1 * b1 * f1 + b2 * b2 * f2 - mu * cyy - dy * dy;
+  let dcxy = a1 * b1 * f1 + a2 * b2 * f2 - mu * cxy - dx * dy;
+  let lx = dcxx / (2.0 * cxx);
+  let ly = dcyy / (2.0 * cyy);
+  let sx = <f32 as FloatLike>::sqrt(cxx);
+  let sy = <f32 as FloatLike>::sqrt(cyy);
+  let isc = 1.0 / <f32 as FloatLike>::sqrt(cxx * cyy);
+  let rho = cxy * isc;
+  let drho = dcxy * isc - rho * (lx + ly);
+  // the frame's edges in σ from the slice's mean (positive inside)
+  let mx = (ndx * 0.5 + 0.5) * wf;
+  let my = (ndy * 0.5 + 0.5) * hf;
+  let (tl, tr) = (mx / sx, (wf - mx) / sx);
+  let (tb, tt) = (my / sy, (hf - my) / sy);
+  let s = DUST_SMALL_DEMOTE_SAFETY;
+  let (ux, uy) = (s * dx.abs() / sx, s * dy.abs() / sy);
+  let (alx, aly) = (s * lx.abs(), s * ly.abs());
+  let (adr, amu) = (s * drho.abs(), s * mu.abs());
+  let el = small_demote_edge(tl, ux, alx);
+  let er = small_demote_edge(tr, ux, alx);
+  let eb = small_demote_edge(tb, uy, aly);
+  let et = small_demote_edge(tt, uy, aly);
+  let (dpx, dpy) = (el.0 + er.0, eb.0 + et.0);
+  let (dgx, dgy) = (el.1 + er.1, eb.1 + et.1);
+  let (gx, gy) = (el.2.max(er.2), eb.2.max(et.2));
+  let pxu = 1.0f32.min(el.3).min(er.3);
+  let pyu = 1.0f32.min(eb.3).min(et.3);
+  let arho = rho.abs().min(DUST_SMALL_RHO_MAX);
+  amu * (pxu * pyu + arho * DUST_INV_2PI * gx * gy)
+    + (1.0 + amu)
+      * (dpx * (pyu + dpy)
+        + pxu * dpy
+        + (arho + adr) * DUST_INV_2PI * (dgx * (gy + dgy) + gx * dgy)
+        + adr * DUST_INV_2PI * gx * gy)
+}
+
 /// The optical depth per px² of a volumetric piece along the ray on the two planes of constant
 /// ndc `a_row`, `b_row` (in front of the eye): the closed form of [`volume_scatter`], the support
 /// and the eye cut ([`ray_kept`]), the photometry at the ray's nearest point. `−1` when the planes
@@ -4700,11 +4916,61 @@ fn volume_small_points(
     if c.m > 0.0 {
       let (ex, ey) = (3.0 / (c.ix * core::f32::consts::SQRT_2), 3.0 / (c.iy * core::f32::consts::SQRT_2));
       edge = c.mx - ex < 0.0 || c.mx + ex > wf || c.my - ey < 0.0 || c.my + ey > hf;
+      #[cfg(any(test, feature = "std"))]
+      {
+        // D3's margin: the 3σ edge within 1e-3 σ of the frame's
+        let (sx, sy) = (ex / 3.0, ey / 3.0);
+        let margin = ((c.mx - ex).abs() / sx)
+          .min((c.mx + ex - wf).abs() / sx)
+          .min((c.my - ey).abs() / sy)
+          .min((c.my + ey - hf).abs() / sy);
+        if margin < 1e-3 {
+          VOLUME_SMALL_MARGINS.with(|v| {
+            let mut a = v.get();
+            a[1] += 1;
+            v.set(a);
+          });
+        }
+      }
     } else {
       edge = true;
     }
   }
-  if edge {
+  // track 9A: an edge piece whose predicted in-frame light change (the sigma points' against the
+  // one projection's, mass-weighted over its slices, [`volume_small_demote_err`]) is under ε keeps
+  // its one projection a slice. Strict, and not evaluated at ε = 0: D3's decision bit for bit. The
+  // GLSL computes the same slices' predictions in the same order (dust_volume_small_points)
+  let mut demoted = false;
+  #[cfg(all(test, feature = "std"))]
+  SMALL_DEMOTE_LAST_E.with(|c| c.set(f32::NAN));
+  if edge && fast {
+    let eps = small_demote_eps();
+    if eps > 0.0 && out[..n].iter().all(|p| p.m > 0.0) {
+      let d = [x1, x2, y1, y2, w1, w2];
+      let t = [m(0, 3), m(1, 3), m(3, 3)];
+      let (mut acc, mut ms, mut ok) = (0.0f32, 0.0f32, true);
+      for q in 0..n {
+        let e = volume_small_demote_err(xq_of(q), d, r0, r1, r3, t, wf, hf);
+        ok &= e >= 0.0;
+        acc += out[q].m * e;
+        ms += out[q].m;
+      }
+      if ok {
+        let e = acc / ms;
+        demoted = e < eps;
+        #[cfg(all(test, feature = "std"))]
+        SMALL_DEMOTE_LAST_E.with(|c| c.set(e));
+        #[cfg(any(test, feature = "std"))]
+        VOLUME_SMALL_MARGINS.with(|v| {
+          let mut a = v.get();
+          a[0] += demoted as u64;
+          a[2] += ((e - eps).abs() <= 1e-3 * eps) as u64;
+          v.set(a);
+        });
+      }
+    }
+  }
+  if edge && !demoted {
     for q in 0..n {
       out[q] = edge_point(q, wr[q]);
     }
@@ -4714,7 +4980,7 @@ fn volume_small_points(
   #[cfg(any(test, feature = "std"))]
   VOLUME_SMALL_PATHS.with(|c| {
     let mut v = c.get();
-    v[edge as usize] += 1;
+    v[(edge && !demoted) as usize] += 1;
     c.set(v);
   });
   out
@@ -4971,6 +5237,8 @@ mod small_points_tests {
       ("sigma points everywhere", DUST_K1C_D_COVER),
     ];
     let mut failures = std::vec::Vec::new();
+    // (track 9A's demotion off: F10 had none)
+    set_small_demote_eps_test(Some(0.0));
     for (name, mask) in masks {
       set_k1c_d_test(Some(mask));
       let (mut n_pieces, mut paths_old, mut paths_new, mut flips, mut worst) = (0u32, [0u64; 2], [0u64; 2], 0u32, [0.0f64; 6]);
@@ -5166,8 +5434,265 @@ mod small_points_tests {
       }
     }
     set_k1c_d_test(None);
+    set_small_demote_eps_test(None);
     let shown: std::vec::Vec<_> = failures.iter().take(20).cloned().collect();
     assert!(failures.is_empty(), "{} failures, the first: {shown:#?}", failures.len());
+  }
+
+  /// Acklam's inverse of the normal CDF (relative error ~10⁻⁹; the calibration's QMC truth)
+  fn ndtri(p: f64) -> f64 {
+    const A: [f64; 6] = [-3.969683028665376e1, 2.209460984245205e2, -2.759285104469687e2, 1.383577518672690e2, -3.066479806614716e1, 2.506628277459239];
+    const B: [f64; 5] = [-5.447609879822406e1, 1.615858368580409e2, -1.556989798598866e2, 6.680131188771972e1, -1.328068155288572e1];
+    const C: [f64; 6] = [-7.784894002430293e-3, -3.223964580411365e-1, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783];
+    const D: [f64; 4] = [7.784695709041462e-3, 3.224671290700398e-1, 2.445134137142996, 3.754408661907416];
+    let p = p.clamp(1e-15, 1.0 - 1e-15);
+    let tail = |q: f64| (((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q + C[5]) / ((((D[0] * q + D[1]) * q + D[2]) * q + D[3]) * q + 1.0);
+    if p < 0.02425 {
+      tail((-2.0 * p.ln()).sqrt())
+    } else if p > 1.0 - 0.02425 {
+      -tail((-2.0 * (1.0 - p).ln()).sqrt())
+    } else {
+      let q = p - 0.5;
+      let r = q * q;
+      (((((A[0] * r + A[1]) * r + A[2]) * r + A[3]) * r + A[4]) * r + A[5]) * q / (((((B[0] * r + B[1]) * r + B[2]) * r + B[3]) * r + B[4]) * r + 1.0)
+    }
+  }
+
+  /// the radical inverse of `i` in base `b` (Halton)
+  fn halton(mut i: u32, b: u32) -> f64 {
+    let (mut f, mut r) = (1.0f64, 0.0f64);
+    while i > 0 {
+      f /= b as f64;
+      r += f * (i % b) as f64;
+      i /= b;
+    }
+    r
+  }
+
+  /// Track 9A's calibration and soundness test (the edge-piece demotion, [`volume_small_demote_err`]).
+  /// The pieces of `factored_small_points_match_the_f10_build` (12 000: σ/d 10⁻³..0.3, anisotropic
+  /// and rotated, means over and a fifth around the 480 × 300 frame, eyes at 200 m and 5·10⁶ m)
+  /// without albedo or support (both paths share the weights and the kept mass: the light compared
+  /// is the geometry's); each piece D3 sends to the sigma points and whose slices all have a
+  /// prediction is drawn by both paths (the ε hook at +∞ keeps it on one projection, at 0 on the
+  /// sigma points), its in-frame light `L` being the frame's rectangle integral of its points
+  /// (`volume_scatter`'s small branch). Its truth `T` is the bounded Gaussian's (|z| ≤ 3, the 3σ
+  /// ball the paths' spread is matched to) light in the frame, `∫ J3 · 1[in frame]`, by 2 × 8 192
+  /// Halton points (bases 2, 3, 5, two Cranley–Patterson shifts: their half difference is the
+  /// QMC error printed), in f64. Asserts:
+  /// (a) soundness at every ε of the grid: a piece with E < ε moves its in-frame light by at most
+  ///     ε of its mass (+ 10⁻⁶ of it, the f32 floor);
+  /// (b) ε = 0 evaluates no predictor and demotes nothing (D3's decisions bit for bit);
+  /// (c) ε_cal, the largest grid ε that passes (a) and whose demoted pieces' extra error against
+  ///     the truth, Σ (|L_fast − T| − |L_sigma − T|), is at most 2·10⁻³ of their Σ T (the gate's
+  ///     0.5 % over 2.5), is ≥ [`DUST_SMALL_DEMOTE_EPS`].
+  /// Prints per ε the demoted share of the edge pieces (near / far eye), the worst |ΔL| / (ε M),
+  /// the extra error, the signed change of the edge pieces' total in-frame light (the expected move
+  /// of an image's small edge light) and the QMC error.
+  #[test]
+  fn small_demotion_calibration() {
+    let (w, h) = (480u32, 300u32);
+    let (wf, hf) = (w as f32, h as f32);
+    let tan_h = (30.0f32).to_radians().tan();
+    let mut state = 0x9a_ca1b_5a11_u64;
+    let mut rnd = || -> f32 {
+      state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+      ((state >> 40) as f32) * (1.0 / 16_777_216.0)
+    };
+    const GRID: [f32; 5] = [1e-4, 3e-4, 1e-3, 3e-3, 1e-2];
+    const NQ: u32 = 8192;
+    let hal: std::vec::Vec<[f64; 3]> = (1..=NQ).map(|i| [halton(i, 2), halton(i, 3), halton(i, 5)]).collect();
+    let in_frame = |pts: &[VolumeSmallPoint; 5]| -> f64 {
+      let mut acc = 0.0f64;
+      for q in pts.iter().filter(|q| q.m > 0.0) {
+        let (uxa, uxb) = ((0.0 - q.mx) * q.ix, (wf - q.mx) * q.ix);
+        let (uya, uyb) = ((0.0 - q.my) * q.iy, (hf - q.my) * q.iy);
+        let fx = erf(uxb) - erf(uxa);
+        let fy = erf(uyb) - erf(uya);
+        let gx = <f32 as FloatLike>::exp(-uxb * uxb) - <f32 as FloatLike>::exp(-uxa * uxa);
+        let gy = <f32 as FloatLike>::exp(-uyb * uyb) - <f32 as FloatLike>::exp(-uya * uya);
+        acc += (q.m * (0.25 * fx * fy + q.rho * DUST_INV_2PI * gx * gy)) as f64;
+      }
+      acc
+    };
+    set_k1c_d_test(Some(DUST_K1C_D_PRODUCTION));
+    let (mut n_edge, mut n_pred, mut n_none) = (0u32, 0u32, 0u32);
+    let mut n_dem = [[0u32; 2]; 5];
+    let mut worst = [0.0f64; 5];
+    let (mut excess, mut tsum, mut dsum, mut qerr) = ([0.0f64; 5], [0.0f64; 5], [0.0f64; 5], [0.0f64; 5]);
+    let (mut edge_light, mut ratio_max) = (0.0f64, 0.0f64);
+    let mut failures = std::vec::Vec::new();
+    for case in 0..12_000u32 {
+      let far = case % 2 == 1;
+      let ez = if far { 5.0e6f32 } else { 200.0 };
+      let mut mvp = [0.0f32; 16];
+      mvp[0] = hf / (wf * tan_h);
+      mvp[5] = 1.0 / tan_h;
+      mvp[10] = -1e-3;
+      mvp[11] = -1.0;
+      mvp[15] = ez;
+      let eye = [0.0f32, 0.0, ez];
+      let (px, py) = ((-0.2 + 1.4 * rnd()) * wf, (-0.2 + 1.4 * rnd()) * hf);
+      let d = if far { 2.0e3 * (1.0e3f32).powf(rnd()) } else { 5.0 * (20.0f32).powf(rnd()) };
+      let v = [(2.0 * px / wf - 1.0) * tan_h * wf / hf, (2.0 * py / hf - 1.0) * tan_h, -1.0];
+      let vn = (v[0] * v[0] + v[1] * v[1] + 1.0).sqrt();
+      let mean = [v[0] / vn * d, v[1] / vn * d, ez + v[2] / vn * d];
+      let sd = 1.0e-3 * (300.0f32).powf(rnd());
+      let sig = [sd * d, sd * d * (0.25 + 0.75 * rnd()), sd * d * (0.25 + 0.75 * rnd())];
+      let (a, b) = (rnd() * 6.283, rnd() * 6.283);
+      let (ca, sa, cb, sb) = (a.cos(), a.sin(), b.cos(), b.sin());
+      let ry = [[ca, 0.0, sa], [0.0, 1.0, 0.0], [-sa, 0.0, ca]];
+      let rx = [[1.0, 0.0, 0.0], [0.0, cb, -sb], [0.0, sb, cb]];
+      let mut r = [[0.0f32; 3]; 3];
+      for i in 0..3 {
+        for j in 0..3 {
+          for k in 0..3 {
+            r[i][j] += rx[i][k] * ry[k][j];
+          }
+        }
+      }
+      let mut cov = [[0.0f32; 3]; 3];
+      for i in 0..3 {
+        for j in 0..3 {
+          for k in 0..3 {
+            cov[i][j] += r[i][k] * sig[k] * sig[k] * r[j][k];
+          }
+        }
+      }
+      let l = cholesky3(&[cov[0][0], cov[0][1], cov[0][2], cov[1][1], cov[1][2], cov[2][2]]);
+      let pc = VolumePiece {
+        l,
+        qw: cholesky_solve3(&l, sub3(eye, mean)),
+        k: 1.0 / (2.0 * core::f32::consts::PI * l[0] * l[3] * l[5]),
+        ..VolumePiece::default()
+      };
+      let phot = Photometry { albedo: 0.0, sun: [0.3, 0.5, 0.812_404], r_h_au: 1.0, support: [0.0; 4], origin: f32::NAN };
+      // (b): ε = 0 evaluates nothing, demotes nothing
+      set_small_demote_eps_test(Some(0.0));
+      let _ = take_volume_small_paths();
+      let _ = take_volume_small_margins();
+      let sigma = volume_small_points(&pc, eye, &mvp, wf, hf, &phot, mean, 1.0);
+      let paths0 = take_volume_small_paths();
+      let marg0 = take_volume_small_margins();
+      let e_at_0 = SMALL_DEMOTE_LAST_E.with(|c| c.get());
+      if marg0[0] != 0 || !e_at_0.is_nan() {
+        failures.push(std::format!("case {case}: ε = 0 demoted {} (E {e_at_0})", marg0[0]));
+      }
+      if paths0[1] == 0 {
+        continue;
+      }
+      n_edge += 1;
+      // the forced one projection: every piece with a prediction
+      set_small_demote_eps_test(Some(f32::INFINITY));
+      let fast = volume_small_points(&pc, eye, &mvp, wf, hf, &phot, mean, 1.0);
+      let e = SMALL_DEMOTE_LAST_E.with(|c| c.get()) as f64;
+      if e.is_nan() || !e.is_finite() {
+        n_none += 1;
+        continue;
+      }
+      n_pred += 1;
+      let m_tot: f64 = fast.iter().map(|p| p.m as f64).sum();
+      let (lf, ls) = (in_frame(&fast), in_frame(&sigma));
+      let act = (lf - ls).abs() / m_tot;
+      edge_light += ls;
+      if e > 1e-7 {
+        ratio_max = ratio_max.max(act / e);
+      }
+      // the truth, for the pieces some grid ε demotes
+      let truth = if e < GRID[4] as f64 {
+        let lq = l_mul(&pc.l, pc.qw);
+        let mu = [(eye[0] - lq[0]) as f64, (eye[1] - lq[1]) as f64, (eye[2] - lq[2]) as f64];
+        let lf64: [f64; 6] = core::array::from_fn(|k| pc.l[k] as f64);
+        let (r0, r1, r3) = ([mvp[0] as f64, mvp[4] as f64, mvp[8] as f64], [mvp[1] as f64, mvp[5] as f64, mvp[9] as f64], [mvp[3] as f64, mvp[7] as f64, mvp[11] as f64]);
+        let (t0, t1, t3) = (mvp[12] as f64, mvp[13] as f64, mvp[15] as f64);
+        let d3 = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        let mut est = [0.0f64; 2];
+        for est_k in est.iter_mut() {
+          let shift = [rnd() as f64, rnd() as f64, rnd() as f64];
+          let (mut acc, mut kept) = (0.0f64, 0u32);
+          for u in &hal {
+            let z: [f64; 3] = core::array::from_fn(|k| ndtri((u[k] + shift[k]).fract()));
+            if z[0] * z[0] + z[1] * z[1] + z[2] * z[2] > 9.0 {
+              continue;
+            }
+            kept += 1;
+            let x = [
+              mu[0] + lf64[0] * z[0],
+              mu[1] + lf64[1] * z[0] + lf64[3] * z[1],
+              mu[2] + lf64[2] * z[0] + lf64[4] * z[1] + lf64[5] * z[2],
+            ];
+            let ww = d3(r3, x) + t3;
+            if !(ww > 0.0) {
+              continue;
+            }
+            let (nx, ny) = ((d3(r0, x) + t0) / ww, (d3(r1, x) + t1) / ww);
+            let (sxp, syp) = ((nx * 0.5 + 0.5) * wf as f64, (ny * 0.5 + 0.5) * hf as f64);
+            if !(sxp >= 0.0 && sxp <= wf as f64 && syp >= 0.0 && syp <= hf as f64) {
+              continue;
+            }
+            let p = [r0[0] - nx * r3[0], r0[1] - nx * r3[1], r0[2] - nx * r3[2]];
+            let q = [r1[0] - ny * r3[0], r1[1] - ny * r3[1], r1[2] - ny * r3[2]];
+            let c = [p[1] * q[2] - p[2] * q[1], p[2] * q[0] - p[0] * q[2], p[0] * q[1] - p[1] * q[0]];
+            acc += 0.25 * wf as f64 * hf as f64 * d3(c, c).sqrt() / (ww * ww);
+          }
+          *est_k = acc / kept.max(1) as f64;
+        }
+        Some((0.5 * (est[0] + est[1]), 0.5 * (est[0] - est[1]).abs()))
+      } else {
+        None
+      };
+      for (k, &eps) in GRID.iter().enumerate() {
+        if !(e < eps as f64) {
+          continue;
+        }
+        n_dem[k][far as usize] += 1;
+        worst[k] = worst[k].max(act / eps as f64);
+        if act > eps as f64 + 1e-6 {
+          failures.push(std::format!(
+            "case {case}: ε {eps:.0e}: E {e:.3e} but the light moved {act:.3e} of the mass (fast {fast:?} sigma {sigma:?})"
+          ));
+        }
+        dsum[k] += lf - ls;
+        if let Some((t, qe)) = truth {
+          excess[k] += (lf - t).abs() - (ls - t).abs();
+          tsum[k] += t;
+          qerr[k] += qe;
+        }
+      }
+    }
+    set_k1c_d_test(None);
+    set_small_demote_eps_test(None);
+    std::println!(
+      "[small demotion] {n_edge} edge pieces (D3) of 12 000, {n_pred} with a prediction, {n_none} without; |ΔL| / E at most {ratio_max:.3} (E > 1e-7)"
+    );
+    let mut eps_cal = 0.0f32;
+    for (k, &eps) in GRID.iter().enumerate() {
+      let nd = n_dem[k][0] + n_dem[k][1];
+      let extra = excess[k] / tsum[k].max(1e-300);
+      let sound = worst[k] <= 1.0 + 1e-6 / eps as f64;
+      let ok = sound && extra <= 2e-3;
+      if ok {
+        eps_cal = eps;
+      }
+      std::println!(
+        "[small demotion] ε {eps:.0e}: demoted {nd} ({:.1} % of the edge pieces; near {} far {}), worst |ΔL| / (ε M) {:.3}, extra error vs the truth {:+.3e} of their light (QMC ±{:.1e}), edge light moved {:+.3e}{}",
+        100.0 * nd as f64 / n_edge.max(1) as f64,
+        n_dem[k][0],
+        n_dem[k][1],
+        worst[k],
+        extra,
+        qerr[k] / tsum[k].max(1e-300),
+        dsum[k] / edge_light.max(1e-300),
+        if ok { "" } else { " (fails the rule)" }
+      );
+    }
+    std::println!("[small demotion] ε_cal = {eps_cal:.0e}; production DUST_SMALL_DEMOTE_EPS = {DUST_SMALL_DEMOTE_EPS:.0e}");
+    let shown: std::vec::Vec<_> = failures.iter().take(20).cloned().collect();
+    assert!(failures.is_empty(), "{} failures, the first: {shown:#?}", failures.len());
+    assert!(
+      DUST_SMALL_DEMOTE_EPS <= eps_cal,
+      "the production ε {DUST_SMALL_DEMOTE_EPS:.0e} is above the calibrated {eps_cal:.0e}"
+    );
   }
 }
 

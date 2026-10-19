@@ -1533,11 +1533,41 @@ fn splat_parity(
     }
     let _ = dust::take_volume_class_counts();
     let _ = dust::take_volume_small_paths();
+    let _ = dust::take_volume_small_margins();
     let _ = dust::take_volume_split_adds();
     dust::splat_tier(&moments, &render, &pc, &flow, 0, &layout, &mut cpu);
     let classes = dust::take_volume_class_counts();
     let small_paths = dust::take_volume_small_paths();
+    let small_margins = dust::take_volume_small_margins();
     let split_adds = dust::take_volume_split_adds();
+    // track 9A: the small pieces' paths on both mirrors at the count level, from the profiler's
+    // words when the `.prof` shaders drew this frame (`gpu_dust_small_paths_match_reference`): a
+    // decision on a float boundary (D3's 3σ within 1e-3 σ of the frame's edge, the predictor
+    // within 1e-3 ε of ε) moves one piece between the paths, so each count agrees within the
+    // reference's pieces at those margins
+    if let Ok(p) = device.dust_profile_counters(pe) {
+      if p.any() {
+        let gf = p.word(dust::DUST_PROF_SMALL_PATHS) as u64;
+        let ge = p.word(dust::DUST_PROF_SMALL_PATHS + 1) as u64;
+        let margin = small_margins[1] + small_margins[2];
+        std::println!(
+          "[dust gpu] splat parity case {id}: small pieces by one projection a slice gpu {gf} cpu {}, by 4 sigma points gpu {ge} cpu {}; demoted cpu {} (ε {:.0e}); at a margin cpu: D3 {}, ε {}",
+          small_paths[0],
+          small_paths[1],
+          small_margins[0],
+          dust::DUST_SMALL_DEMOTE_EPS,
+          small_margins[1],
+          small_margins[2]
+        );
+        assert!(
+          gf.abs_diff(small_paths[0]) <= margin && ge.abs_diff(small_paths[1]) <= margin,
+          "case {id}: small paths gpu ({gf}, {ge}) cpu ({}, {}), margin {margin}",
+          small_paths[0],
+          small_paths[1]
+        );
+        PARITY_SMALL_PATHS_COMPARED.store(true, core::sync::atomic::Ordering::SeqCst);
+      }
+    }
     let gpu_split_adds = device.dust_volume_split_adds(pe).unwrap_or(u32::MAX);
     PARITY_VOLUME_CLASSES.lock().unwrap_or_else(|e| e.into_inner()).push((id, classes));
     std::println!(
@@ -2177,6 +2207,35 @@ fn gpu_dust_splat_matches_reference_volume_texel_integral() {
   assert!(all[2] > 0, "no sub-ray piece drawn: {all:?}");
 }
 
+/// whether a [`splat_parity`] compared the small pieces' path counts (the profiler's words)
+static PARITY_SMALL_PATHS_COMPARED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Track 9A: the small pieces' paths (one projection a slice — interior and demoted edge pieces —
+/// and 4 sigma points a slice) on both mirrors at the count level, in the 2 000 km bias-6 scene of
+/// `gpu_dust_splat_matches_reference_volume_texel_integral` (its small class): the `.prof` shaders
+/// draw the parity frames (their pyramid is the production one word for word,
+/// `gpu_dust_profile_counters_are_consistent`), and `splat_parity` compares their path words with
+/// the reference's within the pieces at a decision's margin. Needs `VK_KHR_shader_clock`.
+#[test]
+fn gpu_dust_small_paths_match_reference() {
+  use crate::gpu_backends::vulkan::physics::DUST_PROFILE_OVERRIDE;
+  struct Reset;
+  impl Drop for Reset {
+    fn drop(&mut self) {
+      DUST_PROFILE_OVERRIDE.store(false, core::sync::atomic::Ordering::Relaxed);
+    }
+  }
+  DUST_PROFILE_OVERRIDE.store(true, core::sync::atomic::Ordering::Relaxed);
+  let _reset = Reset;
+  PARITY_SMALL_PATHS_COMPARED.store(false, core::sync::atomic::Ordering::SeqCst);
+  let classes = volume_texel_integral_parity(9053, 6, 2.0e6);
+  assert!(classes[1] > 0, "no small piece drawn: {classes:?}");
+  assert!(
+    PARITY_SMALL_PATHS_COMPARED.load(core::sync::atomic::Ordering::SeqCst),
+    "the profiler's words were empty (no VK_KHR_shader_clock, or the .prof shaders did not draw): the small paths were not compared"
+  );
+}
+
 /// Stress: a full tier (every slot emitted) propagated 40 times with the moments, as a heavy
 /// frame does; must not fault the device.
 #[test]
@@ -2537,6 +2596,18 @@ fn gpu_dust_volume_queue_draws_the_same_pyramid() {
       device.dust_set_vqueue_mode(pe, None);
       std::println!(
         "[dust vqueue] {name}: (drawn by the consumer, overflowed, chunks, spill drawn, lost): default {default_counts:?}, off (spill only) {off_counts:?}, capacity 5 {overflow_counts:?}, capacity 5 + spill 3 {lossy_counts:?}, chunk 100 {chunked_counts:?}"
+      );
+      // the pyramids' FNV-1a hashes (step 9C: a consumer change that must keep the image word for
+      // word is checked by these lines' equality before and after it)
+      let fnv = |a: &[u32]| a.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &w| (h ^ w as u64).wrapping_mul(0x100_0000_01b3));
+      std::println!(
+        "[dust vqueue] {name}: pyramid hash default {:016x}, off {:016x}, capacity 5 {:016x}, chunk 100 {:016x}, serial {:016x} ({} words)",
+        fnv(&default),
+        fnv(&off),
+        fnv(&overflow),
+        fnv(&chunked),
+        fnv(&serial),
+        default.len()
       );
       assert!(off.iter().any(|&v| v != 0), "{name}: the frame drew nothing");
       // every case: overflowed = spill drawn + lost (the spill drain's counts)

@@ -689,6 +689,8 @@ struct FrameRec {
   dust_gpu: Option<aethervk_core_rlib::gpu_backends::vulkan::device::dust::DustGpuTimings>,
   /// the shader-clock profiler's counters of the last drawn frame (`AETHERVK_DUST_PROFILE=1`)
   dust_profile: Option<aethervk_core_rlib::scene::dust::DustProfileCounters>,
+  /// the budget loop's telemetry as JSON (`DustBudgetTelemetry::to_json`; "null" without one)
+  dust_budget: String,
   passes_logged: String,
   /// the frame against its Monte-Carlo truth (`--mc`)
   mc: Option<McRec>,
@@ -1230,7 +1232,7 @@ impl FrameRec {
       })
       .collect();
     format!(
-      "{{\"frame\":{},\"epoch\":\"{}\",\"epoch_target\":\"{}\",\"since_ignition_s\":{},\"seek_ok\":{},\"r_helio_au\":{:.6},\"comet_au\":{},\"tiers\":[{}],\"coma_radius_km\":{:.3},\"camera\":{{\"pos_au\":{},\"quat_xyzw\":[{:.9},{:.9},{:.9},{:.9}],\"half_height_au\":{:.9},\"half_height_km\":{:.1},\"m_per_px_nucleus\":{:.6e}}},\"nucleus_px\":[{:.2},{:.2}],\"nucleus_rgb\":[{},{},{}],\"mean_luminance\":{:.4},\"p99_luminance\":{:.2},\"nonblack_fraction\":{:.6},\"mc\":{},\"specks\":{},\"exposure\":{},\"hue_ramp\":[{}],\"render_task\":{},\"render_ms\":{:.2},\"dust_gpu\":{},\"dust_profile\":{},\"dust_log\":\"{}\"}}",
+      "{{\"frame\":{},\"epoch\":\"{}\",\"epoch_target\":\"{}\",\"since_ignition_s\":{},\"seek_ok\":{},\"r_helio_au\":{:.6},\"comet_au\":{},\"tiers\":[{}],\"coma_radius_km\":{:.3},\"camera\":{{\"pos_au\":{},\"quat_xyzw\":[{:.9},{:.9},{:.9},{:.9}],\"half_height_au\":{:.9},\"half_height_km\":{:.1},\"m_per_px_nucleus\":{:.6e}}},\"nucleus_px\":[{:.2},{:.2}],\"nucleus_rgb\":[{},{},{}],\"mean_luminance\":{:.4},\"p99_luminance\":{:.2},\"nonblack_fraction\":{:.6},\"mc\":{},\"specks\":{},\"exposure\":{},\"hue_ramp\":[{}],\"render_task\":{},\"render_ms\":{:.2},\"dust_gpu\":{},\"dust_profile\":{},\"dust_budget\":{},\"dust_log\":\"{}\"}}",
       self.index,
       self.epoch,
       self.epoch_target,
@@ -1315,6 +1317,7 @@ impl FrameRec {
         t.reused
       )),
       self.dust_profile.as_ref().map_or(String::from("null"), dust_profile_json),
+      self.dust_budget,
       self.passes_logged.replace('"', "'"),
     )
   }
@@ -2612,6 +2615,12 @@ fn main() {
           calls.join(" / "),
           t.specks_ms
         ));
+        // the budget loop (step 5): knobs, the cadence, the feedback regimes, the work by target
+        if let Some(b) = ctx.dust_budget_telemetry(pe) {
+          for l in b.lines() {
+            log_line(&format!("[observer] {l}"));
+          }
+        }
       }
       None => log_line("[observer] dust GPU: no timings (no timestamp queries, or none measured yet)"),
     }
@@ -3098,6 +3107,7 @@ fn main() {
       render_ms,
       dust_gpu,
       dust_profile: dust_profile_last,
+      dust_budget: ctx.dust_budget_telemetry(pe).map_or_else(|| "null".to_string(), |b| b.to_json()),
       passes_logged: String::new(),
       mc: mc_rec,
       exposure: ctx.dust_exposure(pe),
@@ -3242,7 +3252,7 @@ fn main() {
     let layout = d::PyramidLayout::new(args.width, args.height);
     let light_of = |pyr: &[u32]| -> f64 {
       let unit = f32::from_bits(pyr.get(d::PYR_UNIT as usize).copied().unwrap_or(0)) as f64;
-      d::cadence::pyramid_light(&layout, pyr) * unit
+      frame_light(&layout, pyr) * unit
     };
     let mut path_problems: Vec<String> = Vec::new();
     let mut timings: std::collections::BTreeMap<u64, aethervk_core_rlib::gpu_backends::vulkan::device::dust::DustGpuTimings> =
@@ -8169,6 +8179,26 @@ fn run_lab(dir: &Path, frame: u32, lab_truth: usize) -> i32 {
 
 // ───────────────────── temporal reuse step 4: the camera path and the image score ─────────────────────
 
+/// The light of a pyramid in counts: Σ over the composited levels (`PYR_LEVEL_MASK`) of every
+/// texel's count; × `PYR_UNIT` it is Σ τ·px² as `composite_sample` reads it (a level-ℓ texel's τ
+/// per px is `count · unit / 4^ℓ` over its 4^ℓ px), whole texels (a coarse texel's overhang beyond
+/// the frame included). Not `cadence::pyramid_light` (Σ count · 4^ℓ), which weights level ℓ by an
+/// extra 4^ℓ: a level-11 1×1 texel holding 3 % of a 1 km frame's light is 99.9 % of it.
+fn frame_light(layout: &aethervk_core_rlib::scene::dust::PyramidLayout, pyr: &[u32]) -> f64 {
+  use aethervk_core_rlib::scene::dust as d;
+  let mask = pyr[d::PYR_LEVEL_MASK as usize];
+  let mut t = 0.0f64;
+  for (l, &(off, w, h)) in layout.levels.iter().enumerate() {
+    if mask & (1 << l) == 0 {
+      continue;
+    }
+    for i in 0..(w * h) {
+      t += pyr[(off + i * d::PYRAMID_TEXEL_WORDS) as usize] as f64;
+    }
+  }
+  t
+}
+
 /// the side of the score's blocks (px): the 60-px block rms of [`lab_score`]
 const LAB_BLOCK_PX: usize = 60;
 /// a block enters the block rms when its truth (or reference) light is at least this share of the
@@ -8988,6 +9018,7 @@ fn run_lab_path(dir: &Path, args: &Args) -> i32 {
   let words_differ = |a: &[u32], b: &[u32]| a[hn..levels_end].iter().zip(&b[hn..levels_end]).filter(|(x, y)| x != y).count();
   // the full draws (every ε compares with them)
   let mut full_light: Vec<f64> = Vec::with_capacity(nf);
+  let mut full_pl: Vec<f64> = Vec::with_capacity(nf);
   let mut full0: Vec<u32> = Vec::new();
   let mut full_last: Vec<u32> = Vec::new();
   for k in 0..nf {
@@ -8998,8 +9029,14 @@ fn run_lab_path(dir: &Path, args: &Args) -> i32 {
     for (ti, t) in tiers.iter().enumerate() {
       d::splat_tier_parallel(&t.4[..n_t[ti]], &t.3[..n_t[ti]], &pcs[ti], &t.1, t.2, &layout, &mut p, threads);
     }
-    full_light.push(cad::pyramid_light(&layout, &p));
-    println!("lab path full {k}: Σ {:.6e} (counts × px²), {:.1} s", full_light[k], t1.elapsed().as_secs_f64());
+    full_light.push(frame_light(&layout, &p));
+    full_pl.push(cad::pyramid_light(&layout, &p));
+    println!(
+      "lab path full {k}: light Σ counts {:.6e} (cadence::pyramid_light Σ counts·4^ℓ {:.6e}), {:.1} s",
+      full_light[k],
+      full_pl[k],
+      t1.elapsed().as_secs_f64()
+    );
     if k == 0 {
       full0 = p.clone();
     }
@@ -9064,6 +9101,7 @@ fn run_lab_path(dir: &Path, args: &Args) -> i32 {
     let mut fails: Vec<String> = Vec::new();
     let mut last: Vec<u32> = Vec::new();
     let mut shown_frames = 0usize;
+    let mut admitted_prev: Vec<bool> = Vec::new();
     let (mut last_fresh, mut last_d3, mut last_built, mut last_share) = (0usize, 0u32, 0usize, f64::NAN);
     let unit_now = 1.0 / tiers[0].0.inv_unit;
     for k in 0..nf {
@@ -9118,13 +9156,16 @@ fn run_lab_path(dir: &Path, args: &Args) -> i32 {
       if let Err(e) = st.check_owner_bytes() {
         fails.push(format!("frame {k}: owner bytes: {e}"));
       }
-      let lf = cad::pyramid_light(&layout, &fp);
+      // the check's light: Σ counts of the composited levels (`frame_light`); the cadence's own
+      // `pyramid_light` ratio printed beside it
+      let lf = frame_light(&layout, &fp);
       let ratio = lf / full_light[k].max(1e-300);
+      let ratio_pl = cad::pyramid_light(&layout, &fp) / full_pl[k].max(1e-300);
       let fresh: usize = rep.fresh.iter().map(|v| v.len()).sum();
       let shown: usize = st.tiers.values().map(|t| t.lists.iter().flatten().map(|l| l[0].len()).sum::<usize>()).sum();
       shown_frames += (rep.images_shown > 0) as usize;
       println!(
-        "lab path ε {eps} {k}: mode {:?} reset {:?} fresh {fresh} ({:.1} % of {live_total}) shown {shown} images {} built {} d3 {} aborts {} swaps {:?} classified {:?} hist {:?}: Σ ratio {ratio:.5}",
+        "lab path ε {eps} {k}: mode {:?} reset {:?} fresh {fresh} ({:.1} % of {live_total}) shown {shown} images {} built {} d3 {} aborts {} swaps {:?} classified {:?} hist {:?}: Σ ratio {ratio:.5} (pyramid_light {ratio_pl:.5})",
         rep.mode,
         rep.reset,
         100.0 * fresh as f64 / live_total.max(1) as f64,
@@ -9136,6 +9177,41 @@ fn run_lab_path(dir: &Path, args: &Args) -> i32 {
         rep.classified,
         rep.class_hist
       );
+      // the aborts in full (the rate rule, the motion budget, the predicted displacement, the
+      // coverage of a shown image)
+      for a in &rep.aborts {
+        let why = match a.reason {
+          cad::ABORT_RATE => "rate",
+          cad::ABORT_BUDGET => "budget",
+          cad::ABORT_PREDICTION => "prediction",
+          cad::ABORT_COVERAGE => "coverage",
+          _ => "?",
+        };
+        println!(
+          "lab path ε {eps} {k}: abort class {} phase {} list {} ({}) by {why}: {} entries, excess {:.4} px vs bound {:.4} px, g_max {:.4e} px/m, shown kept {} for {} frames",
+          a.k,
+          a.p,
+          a.list,
+          ["shown", "build", "pending"].get(a.list as usize).copied().unwrap_or("?"),
+          a.entries,
+          a.excess_px,
+          a.bound_px,
+          a.g_max,
+          a.shown_entries,
+          a.ghost_frames_left
+        );
+      }
+      // the class admission by the motion budget (`2N · U(N) ≤ m − G`), when it changes
+      let admitted: Vec<bool> = (0..st.cfg.classes.len()).map(|c| st.class_admitted(c)).collect();
+      if admitted != admitted_prev {
+        let b = st.motion_budget();
+        let u: Vec<[f32; 2]> = (0..st.cfg.classes.len()).map(|c| st.motion_window(c)).collect();
+        println!(
+          "lab path ε {eps} {k}: classes {:?} admitted {admitted:?} (motion window U per class {u:?} px, budget {b:?} px)",
+          st.cfg.classes
+        );
+        admitted_prev = admitted;
+      }
       for c in &rep.cycles {
         println!(
           "lab path ε {eps} {k}: cycle class {} phase {}: the ended build's D3 rejected {} of {} ({:.1} %); the shown images hold {:.2} % of the frame's light",
@@ -9165,8 +9241,23 @@ fn run_lab_path(dir: &Path, args: &Args) -> i32 {
         last = fp;
       }
     }
+    // the earliest path frame a class image can show: the smallest class's first cycle starts at
+    // path frame 1 (frame 0 is the First frame, the cycles count the frames after it), its
+    // classify fills the pending list, the next start promotes it to the build (N frames), the
+    // start after shows it: 1 + 2·N_min (class 8: frame 17, its second phase 21; class 16: 33/41)
+    let n_min = st.cfg.classes.iter().copied().min().unwrap_or(8) as usize;
+    let earliest = 1 + 2 * n_min;
     if shown_frames == 0 {
-      fails.push("vacuous: no class image was shown on any frame (D3 or the rate kept everything fresh)".into());
+      if nf > earliest {
+        fails.push(format!(
+          "vacuous: no class image was shown on any frame, though frame {earliest} is the earliest a class-{n_min} image can show"
+        ));
+      } else {
+        println!(
+          "lab path ε {eps}: {nf} frames cannot show a class image (the earliest is frame {earliest}): the vacuous rule is not applied; run ≥ {} frames",
+          earliest + 2 * n_min
+        );
+      }
     }
     let Some(rx) = img(&last) else {
       eprintln!("lab path: the cadence's last pyramid has no τ image");

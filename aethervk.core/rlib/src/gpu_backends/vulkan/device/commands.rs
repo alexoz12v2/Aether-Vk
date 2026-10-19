@@ -41,8 +41,14 @@ impl From<CommandBufferHandle> for CommandBufferId {
 const MAX_BUFFERS_PER_POOL: usize = 32;
 /// Cap the number of pool tracking structs in pending state
 const MAX_PENDING_TRACKED_POOL: usize = 24;
-/// Cap the number of pool tracking structs in free state
-const MAX_FREE_TRACKED_POOL: usize = 16;
+/// Cap the number of pool tracking structs in free state. Equal to the pending cap, so that
+/// `move_pending_to_free_at` never fails for capacity: a new pool is created only while `free` is
+/// empty and `pending` has room, so a (thread, family) owns at most 1 + MAX_PENDING_TRACKED_POOL
+/// pools; the pool being moved is pending and another is active, so `free` holds at most
+/// MAX_PENDING_TRACKED_POOL − 1 of them before the move. (At 16, a burst of more than 17 pools
+/// returning at once left the surplus idle in `pending` for good, and `pending` filled with them.)
+const MAX_FREE_TRACKED_POOL: usize = MAX_PENDING_TRACKED_POOL;
+const _: () = assert!(MAX_FREE_TRACKED_POOL >= MAX_PENDING_TRACKED_POOL);
 
 /// Tracks a single Vulkan Command Pool and its bump-allocated buffers
 #[repr(C)]
@@ -196,6 +202,26 @@ impl QueueFamilyPoolsInner {
   /// `free`.
   pub(crate) fn can_rotate(&self) -> bool {
     self.pending.len() < self.pending.capacity() && !self.free.is_empty()
+  }
+
+  /// Moves every pending pool with no buffer in flight to `free`, resetting it with `reset`.
+  /// `recycle` moves a pool when its last buffer returns; this sweep is the backstop for a move
+  /// that failed there (its error is only logged by the discard pool). Returns the pools moved.
+  pub(crate) fn reclaim_idle_pending<F>(&mut self, mut reset: F) -> Result<usize, MovePoolError>
+  where
+    F: FnMut(&mut TrackedPool) -> ash::prelude::VkResult<()>,
+  {
+    let mut moved = 0;
+    let mut i = self.pending.len();
+    // back to front: a move shifts only the pools after `i`, which are already visited
+    while i > 0 {
+      i -= 1;
+      if self.pending[i].in_flight == 0 {
+        self.move_pending_to_free_at(i, Some(&mut reset))?;
+        moved += 1;
+      }
+    }
+    Ok(moved)
   }
 
   // Moves `active` to `pending`, and allocates a new pool directly into `active`.
@@ -397,6 +423,7 @@ impl CommandPools {
     // - Chunk Rotation: Seal and rotate the active pool if full
     if inner.active.next_free_index >= MAX_BUFFERS_PER_POOL {
       use alloc::string::ToString;
+      inner.reclaim_idle_pending(|p: &mut TrackedPool| p.reset_memory(device))?;
       if inner.can_rotate() {
         inner
           .rotate_active_pool()
@@ -511,6 +538,25 @@ impl CommandPools {
   }
 }
 
+impl CommandPools {
+  /// `(pending, pending with nothing in flight, free)` of a (thread, family) pool set, for tests
+  #[cfg(test)]
+  pub(crate) fn pool_counts(
+    &self,
+    tid: ThreadId,
+    queue_family_index: u32,
+  ) -> Option<(usize, usize, usize)> {
+    use super::utils::RwLockable;
+    let qfp = self.registry.get(&(tid, queue_family_index))?;
+    let inner = qfp.inner.read();
+    Some((
+      inner.pending.len(),
+      inner.pending.iter().filter(|p| p.in_flight == 0).count(),
+      inner.free.len(),
+    ))
+  }
+}
+
 impl DeviceResource for CommandPools {
   fn cleanup(&mut self, device: &super::LogicalDevice) {
     use super::utils::RwLockable;
@@ -526,5 +572,69 @@ impl DeviceResource for CommandPools {
     }
 
     self.registry.clear();
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn fake_pool(id: u64, in_flight: usize) -> TrackedPool {
+    let mut p: TrackedPool = bytemuck::Zeroable::zeroed();
+    p.id = id;
+    p.in_flight = in_flight;
+    p.next_free_index = MAX_BUFFERS_PER_POOL;
+    p
+  }
+
+  fn empty_inner() -> alloc::boxed::Box<QueueFamilyPoolsInner> {
+    // as `QueueFamilyPools::create_and_insert`: the zeroed state is valid
+    unsafe { alloc::boxed::Box::<QueueFamilyPoolsInner>::new_zeroed().assume_init() }
+  }
+
+  fn fake_reset(p: &mut TrackedPool) -> ash::prelude::VkResult<()> {
+    p.in_flight = 0;
+    p.next_free_index = 0;
+    Ok(())
+  }
+
+  /// The largest population a (thread, family) reaches, one active pool and a full pending queue
+  /// (pools are created only while `free` is empty), returns completely: every pending pool whose
+  /// last buffer comes back moves to `free`, oldest first, none stays idle in `pending`.
+  #[test]
+  fn every_pending_pool_fits_in_free_when_all_return_at_once() {
+    let mut q = empty_inner();
+    q.active = fake_pool(0, 0);
+    for id in 1..=MAX_PENDING_TRACKED_POOL as u64 {
+      q.pending.push(fake_pool(id, 1)).unwrap();
+    }
+    while !q.pending.is_empty() {
+      q.pending[0].in_flight -= 1;
+      q.move_pending_to_free_at(0, Some(fake_reset))
+        .expect("free must hold every pool that can be pending");
+    }
+    assert_eq!(q.free.len(), MAX_PENDING_TRACKED_POOL);
+    assert!(q.free.iter().all(|p| p.in_flight == 0 && p.next_free_index == 0));
+  }
+
+  /// The sweep moves exactly the idle pending pools, resets each once, keeps the busy ones in order.
+  #[test]
+  fn reclaim_moves_idle_pending_pools_and_keeps_busy_ones() {
+    let mut q = empty_inner();
+    for (id, in_flight) in [(1, 0), (2, 3), (3, 0), (4, 0), (5, 1)] {
+      q.pending.push(fake_pool(id, in_flight)).unwrap();
+    }
+    let mut resets = 0;
+    let moved = q
+      .reclaim_idle_pending(|p: &mut TrackedPool| {
+        resets += 1;
+        fake_reset(p)
+      })
+      .unwrap();
+    assert_eq!((moved, resets), (3, 3));
+    let busy: alloc::vec::Vec<u64> = q.pending.iter().map(|p| p.id).collect();
+    assert_eq!(busy, [2, 5]);
+    assert_eq!(q.free.len(), 3);
+    assert!(q.free.iter().all(|p| p.in_flight == 0 && p.next_free_index == 0));
   }
 }

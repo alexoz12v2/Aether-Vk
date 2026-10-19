@@ -189,7 +189,7 @@ void scatter(DustScreenPacket P, vec3 color, uint levels) {
 
 // Splits a packet for the perspective (dust_split_step: clipped at the eye plane, sliced by
 // depth) and projects and scatters every leaf as it is found (dust::project_split_scatter): an
-// explicit stack of DUST_SPLIT_DEPTH_MAX + 1 nodes, depth first, the same loop as the host
+// walk without a stack (a path code; below), depth first, the same loop as the host
 // mirror dust::split_packet_with. Every packet splits to the frame's depth limit depthMax (the
 // host-written DUST_PYR_SPLIT_DEPTH word). The children made are counted in
 // DUST_PYR_SPLIT_CHILDREN: the host lowers the next frame's depth when they pass
@@ -203,9 +203,6 @@ void dust_project_split_scatter_one(vec3 mean, float S[6], vec3 d, float flux, f
                                 float shellDMax, uint volumeAxis) {
     DUST_PROF_BEGIN(packet)
     DUST_PROF_COUNT(packets, 1u)
-    DustPacket stack[DUST_SPLIT_DEPTH_MAX + 1u];
-    uint levelOf[DUST_SPLIT_DEPTH_MAX + 1u];
-    bool clippedOf[DUST_SPLIT_DEPTH_MAX + 1u];
     DustPacket p0;
     p0.mean = mean; p0.S = S; p0.seg = d; p0.flux = flux;
     p0.openStart = openStart; p0.openEnd = openEnd; p0.rho = rho; p0.segT = segT;
@@ -291,80 +288,133 @@ void dust_project_split_scatter_one(vec3 mean, float S[6], vec3 d, float flux, f
     // the in-frame gate (dust::split_packet_with): once a split of this thread finds the frame's
     // children past DUST_FRAME_HARD_FACTOR budgets, its packets split no further (depth 0)
     uint dMax = depthMax;
-    for (uint it = 0u; it < nItems; ++it) {
-    if (conic) {
-        float w;
-        if (!dust_conic_piece(p0, sup, wO, csn, cv0, cDC, cCut, it / DUST_SUPPORT_TRUNC_SLABS, it % DUST_SUPPORT_TRUNC_SLABS, stack[0], w)) continue;
-        stack[0].flux = w * renorm;
-    } else if (trunc) {
-        uint j = it / DUST_SUPPORT_TRUNC_SLABS, e = it % DUST_SUPPORT_TRUNC_SLABS;
-        float w;
-        if (!dust_support_trunc_piece(p0, sup, sn, v0, dust_trunc_bound(bounds, j), dust_trunc_bound(bounds, j + 1u), j, e, stack[0], w)) continue;
-        stack[0].flux = w * renorm;
-    } else {
-        stack[0] = p0;
-    }
-    levelOf[0] = 0u; clippedOf[0] = false;
-    uint n = 1u;
-    while (n > 0u) {
-        DUST_PROF_BEGIN(split)
-        DUST_PROF_COUNT(nodes, 1u)
-        n--;
-        DustPacket q = stack[n];
-        uint level = levelOf[n];
-        bool clipped = clippedOf[n];
-        DustPacket a, b;
-        int step = dust_split_step(q, clipped, level, dMax, pc.eyeLocal.xyz, fwd, perspective, false, a, b);
-        bool leaf = false;
-        if (step == DUST_SPLIT_DROP) {
-            if (!dust_counting) atomicMax(pc.pyramid.v[DUST_PYR_SPLIT_DROPPED_FLUX], floatBitsToUint(max(q.flux, 0.0)));
-        } else if (step == DUST_SPLIT_KEEP || step == DUST_SPLIT_VOLUME) {
-            // the speck shell's hand-over (dust::split_packet_with): wholly inside, the specks'
-            // (not drawn); across the boundary, split once more while the depth allows, else
-            // drawn with the fraction of its mass outside
-            int cls = dust_shell_classify(q, pc.eyeLocal.xyz, shellDMax);
-            bool draw = false;
-            if (cls == DUST_SHELL_OUTSIDE) {
-                draw = true;
-            } else if (cls == DUST_SHELL_STRADDLES) {
-                int forced = level < min(dMax, DUST_SPLIT_DEPTH_MAX)
-                    ? dust_split_step(q, clipped, level, dMax, pc.eyeLocal.xyz, fwd, perspective, true, a, b)
-                    : DUST_SPLIT_KEEP;
-                if (forced == DUST_SPLIT_SPLIT) {
+    // Each item's split tree walked depth first without a stack (track 9D, option (b); the stack
+    // was the splitter's local memory): the node in registers; a split goes on with its first
+    // child a, and its second child b is recomputed when its turn comes, from the item's root
+    // along the path code (bit L: the child taken at the split from level L, 1 = b). The turn
+    // order is the stack's: a node done, the next is the b of the deepest split on the path whose
+    // a was taken (findMSB of the pending bits), the stack's top. A replay step is
+    // dust_split_step with force at DUST_SPLIT_DEPTH_MAX: on a node the first visit clipped or
+    // split (naturally or shell-forced) it returns the same CLIP or SPLIT with the same children
+    // (the drop and clip tests come first and read neither force nor the depth limit; a split's
+    // want and level tests hold under force). Replays draw nothing and count nothing (no seed, no
+    // SPLIT_CHILDREN atomic, no node count): every side effect is a first visit's, in the old
+    // order. A shell-forced split is its own iteration on the same node (`forced`, its first step
+    // in `natural`), so first visits, forced splits and replays share one dust_split_step.
+    uint it = 0u;                    // the item (piece) whose tree is walked
+    uint path = 0u;                  // bit L: the child taken at the split from level L (1 = b)
+    uint target = 0u;                // replaying: the level of the b being recomputed
+    bool load = true;                // (re)load item it's root
+    bool replay = false;             // the node is on the path to that b
+    bool forced = false;             // the node's shell-forced split is next
+    int natural = DUST_SPLIT_KEEP;   // a forced node's first step (KEEP or VOLUME)
+    DustPacket q;
+    uint level = 0u;
+    bool clipped = false;
+    while (it < nItems) {
+        if (load) {
+            bool ok = true;
+            float w = 0.0;
+            if (conic) {
+                ok = dust_conic_piece(p0, sup, wO, csn, cv0, cDC, cCut, it / DUST_SUPPORT_TRUNC_SLABS, it % DUST_SUPPORT_TRUNC_SLABS, q, w);
+            } else if (trunc) {
+                uint j = it / DUST_SUPPORT_TRUNC_SLABS, e = it % DUST_SUPPORT_TRUNC_SLABS;
+                ok = dust_support_trunc_piece(p0, sup, sn, v0, dust_trunc_bound(bounds, j), dust_trunc_bound(bounds, j + 1u), j, e, q, w);
+            } else {
+                q = p0;
+            }
+            if (conic || trunc) q.flux = w * renorm;
+            level = 0u;
+            clipped = false;
+            load = false;
+            // an empty piece: the next item (a replayed root loaded on its first visit: never here)
+            if (!ok) { it++; path = 0u; replay = false; load = true; }
+        } else {
+            DUST_PROF_BEGIN(split)
+            bool first = !replay && !forced;
+            DUST_PROF_COUNT(nodes, first ? 1u : 0u)
+            DustPacket a, b;
+            int step = dust_split_step(q, clipped, level, first ? dMax : DUST_SPLIT_DEPTH_MAX, pc.eyeLocal.xyz, fwd, perspective, !first, a, b);
+            bool done = false, draw = false;
+            int drawAs = step;
+            if (replay) {
+                if (step == DUST_SPLIT_CLIP) {
+                    q = a; clipped = true;
+                } else if (step == DUST_SPLIT_SPLIT) {
+                    q = ((path >> level) & 1u) != 0u ? b : a;
+                    level++;
+                    clipped = false;
+                    replay = level < target;
+                } else {
+                    // (unreachable, see above: ends the walk below this node, never loops)
+                    replay = false; done = true;
+                }
+            } else if (forced) {
+                // the speck shell's forced split (dust::split_packet_with)
+                forced = false;
+                if (step == DUST_SPLIT_SPLIT) {
                     if (!dust_counting && atomicAdd(pc.pyramid.v[DUST_PYR_SPLIT_CHILDREN], 2u) > DUST_FRAME_HARD_FACTOR * DUST_SPLIT_BUDGET && dust_frame_gates_on()) dMax = 0u;
-                    stack[n] = b; levelOf[n] = level + 1u; clippedOf[n] = false;
-                    stack[n + 1u] = a; levelOf[n + 1u] = level + 1u; clippedOf[n + 1u] = false;
-                    n += 2u;
+                    path &= ~(1u << level);
+                    q = a; level++; clipped = false;
                 } else {
                     q.flux *= dust_shell_outside_fraction(q, pc.eyeLocal.xyz, shellDMax);
-                    draw = q.flux > 0.0;
+                    draw = q.flux > 0.0; drawAs = natural; done = true;
                 }
+            } else if (step == DUST_SPLIT_DROP) {
+                if (!dust_counting) atomicMax(pc.pyramid.v[DUST_PYR_SPLIT_DROPPED_FLUX], floatBitsToUint(max(q.flux, 0.0)));
+                done = true;
+            } else if (step == DUST_SPLIT_KEEP || step == DUST_SPLIT_VOLUME) {
+                // the speck shell's hand-over (dust::split_packet_with): wholly inside, the specks'
+                // (not drawn); across the boundary, split once more while the depth allows, else
+                // drawn with the fraction of its mass outside
+                int cls = dust_shell_classify(q, pc.eyeLocal.xyz, shellDMax);
+                if (cls == DUST_SHELL_STRADDLES && level < min(dMax, DUST_SPLIT_DEPTH_MAX)) {
+                    forced = true; natural = step;
+                } else {
+                    if (cls == DUST_SHELL_OUTSIDE) {
+                        draw = true;
+                    } else if (cls == DUST_SHELL_STRADDLES) {
+                        q.flux *= dust_shell_outside_fraction(q, pc.eyeLocal.xyz, shellDMax);
+                        draw = q.flux > 0.0;
+                    }
+                    done = true;
+                }
+            } else if (step == DUST_SPLIT_CLIP) {
+                q = a; clipped = true;
+            } else {
+                if (!dust_counting && atomicAdd(pc.pyramid.v[DUST_PYR_SPLIT_CHILDREN], 2u) > DUST_FRAME_HARD_FACTOR * DUST_SPLIT_BUDGET && dust_frame_gates_on()) dMax = 0u;
+                path &= ~(1u << level);
+                q = a; level++; clipped = false;
             }
             if (draw) {
-                if (step == DUST_SPLIT_VOLUME) dust_volume_emit(q, exposure, color, levels, W, H, volumeBias, volumeAxis);
-                else leaf = true;
+                if (drawAs == DUST_SPLIT_VOLUME) {
+                    dust_volume_emit(q, exposure, color, levels, W, H, volumeBias, volumeAxis);
+                } else {
+                    DustScreenPacket SP;
+                    DUST_PROF_BEGIN(project)
+                    bool on = dust_project_packet(q.mean, q.S, q.seg, q.flux, exposure, pc.mvp, W, H, pc.eyeLocal.xyz, q.openStart, q.openEnd, q.rho, SP);
+                    DUST_PROF_END(project)
+                    if (on) {
+                        DUST_PROF_COUNT(leaves, 1u)
+                        scatter(SP, color, levels);
+                    }
+                }
             }
-        } else if (step == DUST_SPLIT_CLIP) {
-            stack[n] = a; levelOf[n] = level; clippedOf[n] = true;
-            n++;
-        } else {
-            if (!dust_counting && atomicAdd(pc.pyramid.v[DUST_PYR_SPLIT_CHILDREN], 2u) > DUST_FRAME_HARD_FACTOR * DUST_SPLIT_BUDGET && dust_frame_gates_on()) dMax = 0u;
-            stack[n] = b; levelOf[n] = level + 1u; clippedOf[n] = false;
-            stack[n + 1u] = a; levelOf[n + 1u] = level + 1u; clippedOf[n + 1u] = false;
-            n += 2u;
-        }
-        if (leaf) {
-            DustScreenPacket SP;
-            DUST_PROF_BEGIN(project)
-            bool on = dust_project_packet(q.mean, q.S, q.seg, q.flux, exposure, pc.mvp, W, H, pc.eyeLocal.xyz, q.openStart, q.openEnd, q.rho, SP);
-            DUST_PROF_END(project)
-            if (on) {
-                DUST_PROF_COUNT(leaves, 1u)
-                scatter(SP, color, levels);
+            if (done) {
+                // the next node: the b of the deepest split on the path whose a was taken
+                uint pending = ~path & ((1u << level) - 1u);
+                if (pending == 0u) {
+                    it++; path = 0u;
+                } else {
+                    uint L = uint(findMSB(pending));
+                    path = (path & ((1u << L) - 1u)) | (1u << L);
+                    target = L + 1u;
+                    replay = true;
+                }
+                load = true;
             }
+            DUST_PROF_END(split)
         }
-        DUST_PROF_END(split)
-    }
     }
     dust_phot_support = sup;
     dust_phot_has_origin = hasO;
@@ -380,21 +430,24 @@ void dust_project_split_scatter(vec3 mean, float S[6], vec3 d, float flux, float
                                 float shellDMax, uint volumeAxis) {
     uint n = (pc.pyramid.v[DUST_PYR_SPLIT_DEPTH] >> 24u) & 0xFu;
     vec3 h = 0.5 * segT;
-    if (n <= 1u || !(dot(h, h) > 0.0)) {
-        dust_project_split_scatter_one(mean, S, d, flux, exposure, openStart, openEnd, rho, segT, color, levels,
-                                       W, H, fwd, perspective, depthMax, volumeBias, shellDMax, volumeAxis);
-        return;
+    // one call site of dust_project_split_scatter_one (track 9D): the driver inlines every call
+    // site with its own copy of the function's locals, and two sites held two split stacks; the
+    // whole leaf (n <= 1) is the loop's single pass with its arguments passed unchanged
+    bool whole = n <= 1u || !(dot(h, h) > 0.0);
+    uint subs = whole ? 1u : n;
+    float fn = float(max(n, 1u));
+    float Sh[6] = S;
+    if (!whole) {
+        float k = DUST_CHORD_VAR_FACTOR;
+        float q = 1.0 - 1.0 / float(n * n);
+        Sh[0] = S[0] - k * q * h.x * h.x; Sh[1] = S[1] - k * q * h.x * h.y; Sh[2] = S[2] - k * q * h.x * h.z;
+        Sh[3] = S[3] - k * q * h.y * h.y; Sh[4] = S[4] - k * q * h.y * h.z; Sh[5] = S[5] - k * q * h.z * h.z;
     }
-    float k = DUST_CHORD_VAR_FACTOR;
-    float q = 1.0 - 1.0 / float(n * n);
-    float Sh[6];
-    Sh[0] = S[0] - k * q * h.x * h.x; Sh[1] = S[1] - k * q * h.x * h.y; Sh[2] = S[2] - k * q * h.x * h.z;
-    Sh[3] = S[3] - k * q * h.y * h.y; Sh[4] = S[4] - k * q * h.y * h.z; Sh[5] = S[5] - k * q * h.z * h.z;
-    for (uint jj = 0u; jj < n; ++jj) {
-        float off = -1.0 + float(2u * jj + 1u) / float(n);
-        dust_project_split_scatter_one(mean + h * off, Sh, d, flux / float(n), exposure, openStart, openEnd, rho,
-                                       segT * (1.0 / float(n)), color, levels, W, H, fwd, perspective, depthMax,
-                                       volumeBias, shellDMax, volumeAxis);
+    for (uint jj = 0u; jj < subs; ++jj) {
+        float off = -1.0 + float(2u * jj + 1u) / fn;
+        dust_project_split_scatter_one(whole ? mean : mean + h * off, Sh, d, whole ? flux : flux / fn, exposure,
+                                       openStart, openEnd, rho, whole ? segT : segT * (1.0 / fn), color, levels,
+                                       W, H, fwd, perspective, depthMax, volumeBias, shellDMax, volumeAxis);
     }
 }
 

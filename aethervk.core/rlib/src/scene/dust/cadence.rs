@@ -210,12 +210,19 @@ impl CadenceConfig {
     [m(w), m(h)]
   }
 
-  /// The class images' geometry for a `w × h` viewport
+  /// The class images' geometry for a `w × h` viewport: the viewport plus the margins, with **the
+  /// frame's level count** ([`PyramidLayout::new_capped`]; the image's coarsest level may then be
+  /// 2 × 1). A build draws by its image's level count (the top-level clamp, the volume bias, the
+  /// gate level) and [`reproject_add`] reads only the frame's levels: with one level more
+  /// (480 × 300 → 736 × 428, 11 levels against 10) the volume bias took the eye-inside clouds to
+  /// the image's level 10, which nothing read, and the lab path lost ~96 % of the shown images'
+  /// light (Σ ratio 0.9854 at frame 47; round 15, `cadence_image_keeps_the_frame_levels`).
   pub fn image_geom(&self, w: u32, h: u32) -> ImageGeom {
     let margin = self.margin_px(w, h);
+    let levels = PyramidLayout::new(w, h).level_count();
     ImageGeom {
       margin,
-      layout: PyramidLayout::new(w + 2 * margin[0], h + 2 * margin[1]),
+      layout: PyramidLayout::new_capped(w + 2 * margin[0], h + 2 * margin[1], levels),
     }
   }
 
@@ -565,6 +572,10 @@ pub struct RateInputs {
   pub eps_px: f32,
   /// `max(width, height)` (px): the enclosing term's scale of a relative change
   pub frame_px: f32,
+  /// the by-count fallback's shape bound θ (0: off, the rule without it): class `k` also needs
+  /// `2N_k · Δt ≤ θ · age`, the age floored at [`DUST_CADENCE_AGE_MIN_S`]
+  /// ([`DUST_CADENCE_FALLBACK_SHAPE`], [`BudgetKnobs::shape_frac`])
+  pub shape_frac: f32,
 }
 
 /// What [`cadence_rate`] says of one cluster.
@@ -577,7 +588,8 @@ pub struct ClusterRate {
   /// test's `g_max` is its maximum over a list)
   pub g_px_per_m: f32,
   pub enclosing: bool,
-  /// 0 = fresh, `k + 1` = class index `k` (the largest with `δ_k · 2N_k ≤ ε`)
+  /// 0 = fresh, `k + 1` = class index `k` (the largest with `δ_k · 2N_k ≤ ε` and, with a shape
+  /// bound θ, `2N_k · Δt ≤ θ · age`)
   pub class: u8,
 }
 
@@ -639,8 +651,10 @@ fn len3(a: [f32; 3]) -> f32 {
 /// - `δ_k = d1 + d2 + d3 + d4 + a_w(N_k) · g`, `g` (px/m) the Jacobian's Frobenius norm at the
 ///   near point, `frame_px / σ_min` when enclosing (a cloud around the eye whose smallest axis
 ///   is below [`DUST_CADENCE_SIGMA_MIN_M`] is fresh);
-/// - the class: the largest `k` with `δ_k · 2N_k ≤ ε`, else fresh. A cluster without flux or with
-///   a non-finite rate is fresh.
+/// - the class: the largest `k` with `δ_k · 2N_k ≤ ε` and, with the by-count fallback's shape
+///   bound θ = [`RateInputs::shape_frac`] `> 0`, `2N_k · Δt ≤ θ · age` (the age as in d2), else
+///   fresh. A cluster without flux or with a non-finite rate is fresh. θ = 0 (off the fallback):
+///   the shape bound passes every class, the rule is the ε rule alone.
 #[allow(clippy::too_many_arguments)]
 pub fn cadence_rate(
   m: &DustMoments,
@@ -770,10 +784,15 @@ pub fn cadence_rate_near(
     enclosing,
     class: 0,
   };
+  // the by-count fallback's shape bound (θ = 0: off, every class passes it); the GPU mirror
+  // (dust_cad_rate) evaluates the same two f32 products and the same comparison
+  let shape_on = inp.shape_frac > 0.0;
+  let th_age = inp.shape_frac * age;
   for k in 0..nc {
     let dk = base + inp.a_w_m[k] * g;
     out.delta_px[k] = if dk.is_finite() { dk } else { f32::INFINITY };
-    if dk.is_finite() && dk * 2.0 * classes[k] as f32 <= inp.eps_px {
+    let shape_ok = !shape_on || 2.0 * classes[k] as f32 * dt <= th_age;
+    if dk.is_finite() && dk * 2.0 * classes[k] as f32 <= inp.eps_px && shape_ok {
       out.class = k as u8 + 1;
     }
   }
@@ -1396,6 +1415,9 @@ pub fn frozen_at(fv: &CadenceView, nucleus_m: [f64; 3]) -> CadenceView {
 #[derive(Debug, Clone)]
 pub struct DustCadenceState {
   pub cfg: CadenceConfig,
+  /// the rate rule's shape bound θ ([`RateInputs::shape_frac`]; 0: off, the default; the budget
+  /// loop's fallback sets [`DUST_CADENCE_FALLBACK_SHAPE`] through [`BudgetKnobs::shape_frac`])
+  pub shape_frac: f32,
   /// drawn frames since the last reset (builds pause on reused frames)
   pub drawn_frame: u64,
   /// by tier key; the frame's tiers come in key order of their [`TierMeta`]s
@@ -1644,6 +1666,7 @@ impl DustCadenceState {
     let n = cfg.classes.len() * cfg.phases as usize;
     Self {
       cfg,
+      shape_frac: 0.0,
       drawn_frame: 0,
       tiers: alloc::collections::BTreeMap::new(),
       images: alloc::vec![ClassImage::default(); n],
@@ -1979,6 +2002,7 @@ impl DustCadenceState {
       a_w_m: self.window_terms(),
       eps_px: self.cfg.eps_px,
       frame_px: f.view.width.max(f.view.height) as f32,
+      shape_frac: self.shape_frac,
     });
     // F1: aborts
     if reset.is_none() {
@@ -2631,5 +2655,372 @@ impl DustCadenceState {
     }
     fnv(&mut hsh, self.de_hist.len() as u64);
     hsh
+  }
+}
+
+// ─── The budget loop (step 5: option B on top of A) ─────────────────────────
+
+/// ε where the budget loop starts (px); step 3's tests keep [`DUST_CADENCE_EPS_DEFAULT`]
+pub const DUST_CADENCE_EPS_LOOP_START: f32 = 4.0;
+/// the ε ladder's ceiling (px): the last ε that is an on-screen tolerance
+pub const DUST_CADENCE_EPS_MAX: f32 = 16.0;
+/// the by-count fallback's ε ceiling (px): every finite rate is admitted (the fallback's ε is a
+/// count knob: the fresh set is the top-K by δ outside the protected set of
+/// [`DUST_CADENCE_FALLBACK_SHAPE`], the staleness bound is `2N` frames)
+pub const DUST_CADENCE_EPS_FALLBACK_MAX: f32 = 1.0e6;
+/// the by-count fallback's shape bound θ ([`RateInputs::shape_frac`]): under the fallback a
+/// cluster is held in class `k` only while `2N_k · Δt ≤ θ · age`. ε as a count knob admits every
+/// finite on-screen rate, and the rate (px per frame) is smallest where the image is brightest:
+/// the young dust at the nucleus (its 2 m/s ejection against the old dust's radiation drift with
+/// a following camera; mid-depth of the coma with a still one) — at 1 d/s the top 10 % by δ held
+/// none of the youngest 1 % or of the 1 % nearest the nucleus (`fallback_keeps_the_nucleus_fresh`).
+/// A cluster's extent grows ∝ its age, so over its `2N_k` stale frames it reshapes by
+/// `2N_k Δt / age` of itself: θ bounds that relative change whatever ε, and every cluster younger
+/// than `2N₀ Δt / θ` is fresh (25.6 h at Δt 1 440 s and N₀ 8: ~3.6 % of tier 0's 30 days). The
+/// fresh set is that protected set P plus the rate's top by δ; the loop's ε search counts both
+/// in the measured fresh count ([`BudgetSample::fresh`]), so K is spent on the rate's top
+/// `K − |P|`. A P over K alone leaves ε at its ceiling, then the N raises (which keep N₀ and so P)
+/// and the verdict: P is the fallback's floor, `|P| ≈ live₀ · 2N₀ Δt / (θ · TTL)`.
+pub const DUST_CADENCE_FALLBACK_SHAPE: f32 = 0.25;
+/// the ladder's step of a knob
+pub const DUST_BUDGET_STEP: f32 = 1.25;
+/// the frame budget the loop holds (ms; `AETHERVK_DUST_BUDGET_MS`): the app's 8 ms at 1280×800
+pub const DUST_BUDGET_MS_DEFAULT: f64 = 8.0;
+/// the EWA and volume feedback budgets are halved up to this many times (the in-frame hard gates
+/// stay at `DUST_FRAME_HARD_FACTOR` × the default budgets)
+pub const DUST_BUDGET_SHIFT_MAX: u32 = 3;
+/// the fallback's raises of the longest class (× 2 each: 64 → 128 → 256)
+pub const DUST_BUDGET_N_LEVELS: u32 = 2;
+/// measured frames at one setting before the loop decides
+pub const DUST_BUDGET_SAMPLES: usize = 3;
+/// the share of the budget the fallback sizes the fresh set for (K)
+pub const DUST_BUDGET_HEADROOM: f64 = 0.9;
+/// the specks' share of the budget (their shell-radius cap is the specks' time knob)
+pub const DUST_BUDGET_SPECKS_SHARE: f64 = 0.25;
+
+/// One rung of the budget loop's ladder (a pinned knob's rungs are left out)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BudgetRung {
+  /// ε = `min(START · 1.25^i, MAX)` (rung `Eps(0)` is the rest state)
+  Eps(u32),
+  /// lod_px = `min(DEFAULT · 1.25^i, MAX)`
+  Lod(u32),
+  /// the EWA and volume feedback budgets `>> i`
+  Budget(u32),
+}
+
+/// The knobs a [`BudgetLoop`] holds this frame
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BudgetKnobs {
+  pub eps_px: f32,
+  pub lod_px: f32,
+  /// the EWA and volume feedback budgets are `>> budget_shift`
+  pub budget_shift: u32,
+  /// the by-count fallback is on (ε is then a count knob)
+  pub fallback: bool,
+  /// the longest class is `× 2^n_level`
+  pub n_level: u32,
+  /// every knob at its ceiling and still over the budget (the verdict state)
+  pub saturated: bool,
+}
+
+impl BudgetKnobs {
+  /// The cadence's shape bound θ under these knobs ([`RateInputs::shape_frac`]):
+  /// [`DUST_CADENCE_FALLBACK_SHAPE`] under the by-count fallback, else 0 (off: the ε rule alone)
+  pub fn shape_frac(&self) -> f32 {
+    if self.fallback { DUST_CADENCE_FALLBACK_SHAPE } else { 0.0 }
+  }
+}
+
+/// Pinned knobs (`AETHERVK_DUST_CADENCE_EPS`, `AETHERVK_DUST_LOD_PX`, `AETHERVK_DUST_BUDGET_SHIFT`)
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct BudgetPins {
+  pub eps_px: Option<f32>,
+  pub lod_px: Option<f32>,
+  pub budget_shift: Option<u32>,
+}
+
+impl BudgetPins {
+  pub fn from_env() -> Self {
+    let var = aethervk_oshal_rlib::os::env::var;
+    let f = |n: &str| var(n).and_then(|v| v.trim().parse::<f32>().ok()).filter(|v| v.is_finite() && *v >= 0.0);
+    Self {
+      eps_px: f("AETHERVK_DUST_CADENCE_EPS").filter(|v| *v > 0.0),
+      lod_px: f("AETHERVK_DUST_LOD_PX"),
+      budget_shift: var("AETHERVK_DUST_BUDGET_SHIFT").and_then(|v| v.trim().parse::<u32>().ok()).map(|s| s.min(DUST_BUDGET_SHIFT_MAX)),
+    }
+  }
+}
+
+/// One measured, drawn, cadenced frame (the loop never sees a reused or a full-draw frame)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BudgetSample {
+  /// the view's frame number the timings are of
+  pub frame: u64,
+  pub total_ms: f64,
+  /// the fresh splat (`DustGpuTimings::splat_only_ms`)
+  pub fresh_ms: f64,
+  /// the clusters drawn fresh (the cadence's newest state)
+  pub fresh: u32,
+}
+
+impl BudgetSample {
+  /// The fallback's K: the budget left after the frame's other costs over the measured cost per
+  /// fresh cluster; `None` without a measured cost
+  pub fn k_target(&self, budget_ms: f64) -> Option<u32> {
+    if !(self.fresh > 0 && self.fresh_ms > 0.0 && self.total_ms.is_finite()) {
+      return None;
+    }
+    let per = self.fresh_ms / self.fresh as f64;
+    let avail = DUST_BUDGET_HEADROOM * budget_ms - (self.total_ms - self.fresh_ms);
+    // (a float → u32 cast truncates toward zero and saturates: the floor of a positive quotient)
+    Some(if avail > 0.0 { (avail / per) as u32 } else { 0 })
+  }
+}
+
+/// `x · 1.25^i`, capped
+fn budget_step_pow(x: f32, i: u32, cap: f32) -> f32 {
+  let mut v = x;
+  for _ in 0..i {
+    v *= DUST_BUDGET_STEP;
+  }
+  v.min(cap)
+}
+
+/// The ε rungs: `Eps(0)` .. the first index whose value reaches [`DUST_CADENCE_EPS_MAX`]
+fn budget_eps_rungs() -> u32 {
+  let mut i = 0;
+  while budget_step_pow(DUST_CADENCE_EPS_LOOP_START, i, DUST_CADENCE_EPS_MAX) < DUST_CADENCE_EPS_MAX {
+    i += 1;
+  }
+  i
+}
+
+/// The lod rungs: `Lod(1)` .. the first reaching `DUST_LOD_PX_MAX`
+fn budget_lod_rungs() -> u32 {
+  let mut i = 0;
+  while budget_step_pow(super::DUST_LOD_PX_DEFAULT, i, super::DUST_LOD_PX_MAX) < super::DUST_LOD_PX_MAX {
+    i += 1;
+  }
+  i
+}
+
+/// The frame-time loop (plan item 7): a ladder ε → lod → budgets, then the by-count fallback
+/// (ε as a count knob, then the longest class's N), moved up when [`DUST_BUDGET_SAMPLES`]
+/// consecutive samples at one setting are all over the budget, down (reverse order) when all are
+/// under half of it. Host only: the device feeds it samples ([`Self::observe`]) and applies
+/// [`Self::knobs`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct BudgetLoop {
+  pub budget_ms: f64,
+  pub pins: BudgetPins,
+  pub ladder: alloc::vec::Vec<BudgetRung>,
+  /// the ladder index
+  pub rung: usize,
+  /// the fallback's ε and N level (`None`: on the ladder)
+  pub fallback: Option<(f32, u32)>,
+  pub saturated: bool,
+  /// the ratios `total / budget` measured at this setting (newest last)
+  pub ratios: alloc::vec::Vec<f64>,
+  /// samples of frames before this one were recorded before the last move
+  pub since: u64,
+  /// an exponential average of the ratio (weight 1/4; telemetry)
+  pub ema: f64,
+  /// the last sample's K (the fallback's arithmetic; telemetry)
+  pub k_last: Option<u32>,
+  pub moves: u32,
+  /// the specks' shell radius cap (local m; `None`: uncapped)
+  pub shell_cap_m: Option<f32>,
+  /// the cadence's class lengths before the fallback raised any (the device keeps them here)
+  pub base_classes: Option<alloc::vec::Vec<u32>>,
+}
+
+impl BudgetLoop {
+  pub fn new(budget_ms: f64, pins: BudgetPins) -> Self {
+    let mut ladder = alloc::vec![BudgetRung::Eps(0)];
+    if pins.eps_px.is_none() {
+      ladder.extend((1..=budget_eps_rungs()).map(BudgetRung::Eps));
+    }
+    if pins.lod_px.is_none() {
+      ladder.extend((1..=budget_lod_rungs()).map(BudgetRung::Lod));
+    }
+    if pins.budget_shift.is_none() {
+      ladder.extend((1..=DUST_BUDGET_SHIFT_MAX).map(BudgetRung::Budget));
+    }
+    Self {
+      budget_ms: if budget_ms > 0.0 && budget_ms.is_finite() { budget_ms } else { DUST_BUDGET_MS_DEFAULT },
+      pins,
+      ladder,
+      rung: 0,
+      fallback: None,
+      saturated: false,
+      ratios: alloc::vec::Vec::new(),
+      since: 0,
+      ema: f64::NAN,
+      k_last: None,
+      moves: 0,
+      shell_cap_m: None,
+      base_classes: None,
+    }
+  }
+
+  /// `AETHERVK_DUST_BUDGET_LOOP=0`: `None` (the loop off); else the env's budget and pins
+  pub fn from_env() -> Option<Self> {
+    let var = aethervk_oshal_rlib::os::env::var;
+    if var("AETHERVK_DUST_BUDGET_LOOP").is_some_and(|v| v.trim() == "0") {
+      return None;
+    }
+    let ms = var("AETHERVK_DUST_BUDGET_MS").and_then(|v| v.trim().parse::<f64>().ok()).unwrap_or(DUST_BUDGET_MS_DEFAULT);
+    Some(Self::new(ms, BudgetPins::from_env()))
+  }
+
+  /// The knobs of the current setting
+  pub fn knobs(&self) -> BudgetKnobs {
+    let (mut ei, mut li, mut bi) = (0u32, 0u32, 0u32);
+    for r in &self.ladder[..=self.rung] {
+      match *r {
+        BudgetRung::Eps(i) => ei = i,
+        BudgetRung::Lod(i) => li = i,
+        BudgetRung::Budget(i) => bi = i,
+      }
+    }
+    let ladder_eps = self.pins.eps_px.unwrap_or_else(|| budget_step_pow(DUST_CADENCE_EPS_LOOP_START, ei, DUST_CADENCE_EPS_MAX));
+    let (eps_px, n_level) = match self.fallback {
+      Some((e, n)) => (self.pins.eps_px.unwrap_or(e), n),
+      None => (ladder_eps, 0),
+    };
+    BudgetKnobs {
+      eps_px,
+      lod_px: self.pins.lod_px.unwrap_or_else(|| budget_step_pow(super::DUST_LOD_PX_DEFAULT, li, super::DUST_LOD_PX_MAX)),
+      budget_shift: self.pins.budget_shift.unwrap_or(bi),
+      fallback: self.fallback.is_some(),
+      n_level,
+      saturated: self.saturated,
+    }
+  }
+
+  /// The class lengths of `base` under the fallback's N level (the longest `× 2^n`)
+  pub fn classes(&self, base: &[u32]) -> alloc::vec::Vec<u32> {
+    let mut c = base.to_vec();
+    if let Some(l) = c.last_mut() {
+      *l <<= self.knobs().n_level;
+    }
+    c
+  }
+
+  /// Folds one sample taken at view frame `now` (the frame being begun: a move applies to it);
+  /// returns whether the knobs moved
+  pub fn observe(&mut self, s: &BudgetSample, now: u64) -> bool {
+    if s.frame < self.since || !(s.total_ms.is_finite() && s.total_ms >= 0.0) {
+      return false;
+    }
+    let r = s.total_ms / self.budget_ms;
+    self.ema = if self.ema.is_nan() { r } else { self.ema + (r - self.ema) * 0.25 };
+    self.k_last = s.k_target(self.budget_ms);
+    self.ratios.push(r);
+    if self.ratios.len() > DUST_BUDGET_SAMPLES {
+      self.ratios.remove(0);
+    }
+    if self.ratios.len() < DUST_BUDGET_SAMPLES {
+      return false;
+    }
+    let lo = self.ratios.iter().copied().fold(f64::INFINITY, f64::min);
+    let hi = self.ratios.iter().copied().fold(0.0, f64::max);
+    let moved = if lo > 1.0 {
+      self.up(lo, s)
+    } else if hi < 0.5 {
+      self.down()
+    } else {
+      false
+    };
+    if moved {
+      self.ratios.clear();
+      self.since = now;
+      self.moves += 1;
+    }
+    moved
+  }
+
+  fn up(&mut self, lo: f64, s: &BudgetSample) -> bool {
+    let top = self.ladder.len() - 1;
+    let Some((eps, n)) = self.fallback else {
+      if self.rung < top {
+        let steps = if lo < 2.0 { 1 } else if lo < 8.0 { 2 } else { 3 };
+        self.rung = (self.rung + steps).min(top);
+      } else {
+        let e = self.knobs().eps_px;
+        self.fallback = Some(((e * DUST_BUDGET_STEP).min(DUST_CADENCE_EPS_FALLBACK_MAX), 0));
+      }
+      return true;
+    };
+    let k = s.k_target(self.budget_ms);
+    let fresh_over = k.is_none_or(|k| s.fresh > k);
+    if fresh_over && self.pins.eps_px.is_none() && eps < DUST_CADENCE_EPS_FALLBACK_MAX {
+      let f = k.map_or(4.0, |k| s.fresh as f32 / k.max(1) as f32).clamp(DUST_BUDGET_STEP, 16.0);
+      self.fallback = Some(((eps * f).min(DUST_CADENCE_EPS_FALLBACK_MAX), n));
+      return true;
+    }
+    if n < DUST_BUDGET_N_LEVELS {
+      self.fallback = Some((eps, n + 1));
+      return true;
+    }
+    self.saturated = true;
+    false
+  }
+
+  fn down(&mut self) -> bool {
+    self.saturated = false;
+    if let Some((eps, n)) = self.fallback {
+      if n > 0 {
+        self.fallback = Some((eps, n - 1));
+      } else if self.pins.eps_px.is_none() && eps / DUST_BUDGET_STEP > DUST_CADENCE_EPS_MAX {
+        self.fallback = Some((eps / DUST_BUDGET_STEP, 0));
+      } else {
+        self.fallback = None;
+      }
+      return true;
+    }
+    if self.rung > 0 {
+      self.rung -= 1;
+      return true;
+    }
+    false
+  }
+
+  /// The specks' shell cap from one frame's speck time and the measured (uncapped) radius:
+  /// over [`DUST_BUDGET_SPECKS_SHARE`] of the budget → 0.8 × the radius in use; under half of
+  /// it → × 1.25, removed once at the measured radius. Returns the cap.
+  pub fn observe_specks(&mut self, specks_ms: f64, measured_m: f32) -> Option<f32> {
+    if !(specks_ms.is_finite() && measured_m > 0.0) {
+      return self.shell_cap_m;
+    }
+    let share = specks_ms / self.budget_ms;
+    let used = self.shell_cap_m.map_or(measured_m, |c| c.min(measured_m));
+    if share > DUST_BUDGET_SPECKS_SHARE {
+      self.shell_cap_m = Some(0.8 * used);
+    } else if share < 0.5 * DUST_BUDGET_SPECKS_SHARE {
+      if let Some(c) = self.shell_cap_m {
+        let up = c * DUST_BUDGET_STEP;
+        self.shell_cap_m = if up >= measured_m { None } else { Some(up) };
+      }
+    }
+    self.shell_cap_m
+  }
+
+  /// the staleness bound (frames) of the classes `base` under the current N level: `2 · N_max`
+  pub fn staleness_frames(&self, base: &[u32]) -> u32 {
+    2 * self.classes(base).last().copied().unwrap_or(0)
+  }
+
+  /// the loop's state for the telemetry: `"saturated"`, `"settling"` (fewer samples than
+  /// [`DUST_BUDGET_SAMPLES`] at this setting) or `"hold"`
+  pub fn state_name(&self) -> &'static str {
+    if self.saturated {
+      "saturated"
+    } else if self.ratios.len() < DUST_BUDGET_SAMPLES {
+      "settling"
+    } else {
+      "hold"
+    }
   }
 }
