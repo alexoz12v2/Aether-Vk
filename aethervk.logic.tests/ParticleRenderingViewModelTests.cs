@@ -8,7 +8,8 @@ using Xunit;
 
 namespace AetherVk.Logic.Tests;
 
-/// <summary>The Settings "Particle rendering" section: the dust volume detail (preferences.json).</summary>
+/// <summary>The Settings "Particle rendering" section: the dust volume detail and temporal reuse
+/// tolerance (preferences.json).</summary>
 public sealed class ParticleRenderingViewModelTests : IDisposable
 {
   private readonly string _dir = Path.Combine(Path.GetTempPath(), "avk_particles_" + Guid.NewGuid().ToString("N"));
@@ -119,5 +120,126 @@ public sealed class ParticleRenderingViewModelTests : IDisposable
     var p2 = LoadPrefs();
     Assert.Equal(4, p2.DustVolumeDetail);
     Assert.Equal(4, new ParticleRenderingViewModel(null, p2).VolumeDetail);
+  }
+
+  [Fact]
+  public void ClampReuseTolerance_KeepsOff_AndTakesTheLargestPowerOfTwoBelow()
+  {
+    Assert.Equal(0, ParticleRenderingViewModel.ClampReuseTolerance(-5));
+    Assert.Equal(0, ParticleRenderingViewModel.ClampReuseTolerance(0));
+    Assert.Equal(1, ParticleRenderingViewModel.ClampReuseTolerance(1));
+    Assert.Equal(2, ParticleRenderingViewModel.ClampReuseTolerance(3));
+    Assert.Equal(4, ParticleRenderingViewModel.ClampReuseTolerance(7));
+    Assert.Equal(16, ParticleRenderingViewModel.ClampReuseTolerance(17));
+    Assert.Equal(16, ParticleRenderingViewModel.ClampReuseTolerance(1000));
+    foreach (int px in ParticleRenderingViewModel.ReuseToleranceSteps)
+      Assert.Equal(px, ParticleRenderingViewModel.ClampReuseTolerance(px));
+  }
+
+  /// <summary>No stored value: off (every frame drawn fresh), and building the section sends nothing
+  /// (the app pushes the stored value at startup).</summary>
+  [Fact]
+  public void ReuseTolerance_DefaultsToOff_AndConstructionSendsNothing()
+  {
+    var (vm, runtime, prefs) = Build();
+    Assert.Equal(ParticleRenderingViewModel.ReuseToleranceDefault, vm.ReuseTolerance);
+    Assert.Equal(0, vm.ReuseTolerance);
+    Assert.Equal(0, vm.ReuseToleranceIndex);
+    Assert.Equal(0, prefs.DustReuseTolerance);
+    Assert.Equal(new[] { "Off", "1 px", "2 px", "4 px", "8 px", "16 px" }, vm.ReuseToleranceOptions);
+    runtime.Verify(r => r.SetDustReuseTolerance(It.IsAny<int>()), Times.Never);
+  }
+
+  [Fact]
+  public void ReuseTolerance_IsSentClampedAndStored()
+  {
+    var (vm, runtime, prefs) = Build();
+    vm.ReuseTolerance = 4;
+    runtime.Verify(r => r.SetDustReuseTolerance(4), Times.Once);
+    Assert.Equal(4, prefs.DustReuseTolerance);
+    Assert.Equal(3, vm.ReuseToleranceIndex);
+
+    vm.ReuseTolerance = 3;
+    Assert.Equal(2, vm.ReuseTolerance);
+    runtime.Verify(r => r.SetDustReuseTolerance(2), Times.Once);
+    runtime.Verify(r => r.SetDustReuseTolerance(3), Times.Never);
+    vm.ReuseTolerance = -7;
+    Assert.Equal(0, vm.ReuseTolerance);
+    runtime.Verify(r => r.SetDustReuseTolerance(0), Times.Once);
+    runtime.Verify(r => r.SetDustReuseTolerance(-7), Times.Never);
+    vm.ReuseTolerance = 1000;
+    Assert.Equal(16, vm.ReuseTolerance);
+    runtime.Verify(r => r.SetDustReuseTolerance(16), Times.Once);
+    Assert.Equal(16, prefs.DustReuseTolerance);
+
+    // the picker's index
+    vm.ReuseToleranceIndex = 2;
+    Assert.Equal(2, vm.ReuseTolerance);
+    runtime.Verify(r => r.SetDustReuseTolerance(2), Times.Exactly(2));
+    vm.ReuseToleranceIndex = -1; // a cleared picker
+    Assert.Equal(2, vm.ReuseTolerance);
+  }
+
+  /// <summary>The two settings are independent: changing one sends nothing for the other.</summary>
+  [Fact]
+  public void ReuseTolerance_AndVolumeDetail_DoNotCrossDispatch()
+  {
+    var (vm, runtime, prefs) = Build();
+    vm.ReuseTolerance = 8;
+    runtime.Verify(r => r.SetDustVolumeDetail(It.IsAny<int>()), Times.Never);
+    vm.VolumeDetail = 2;
+    runtime.Verify(r => r.SetDustReuseTolerance(It.IsAny<int>()), Times.Once);
+    Assert.Equal(8, prefs.DustReuseTolerance);
+    Assert.Equal(2, prefs.DustVolumeDetail);
+  }
+
+  [Fact]
+  public void ReuseTolerance_SurvivesARestart()
+  {
+    var (vm, _, _) = Build();
+    vm.ReuseTolerance = 8;
+
+    var prefs2 = LoadPrefs();
+    Assert.Equal("loaded", prefs2.LoadOutcome);
+    Assert.Equal(8, prefs2.DustReuseTolerance);
+    Assert.Contains("\"dust_reuse_px\": 8", File.ReadAllText(PrefsPath));
+    var runtime2 = new Mock<INativeRuntimeService>();
+    var vm2 = new ParticleRenderingViewModel(runtime2.Object, prefs2);
+    Assert.Equal(8, vm2.ReuseTolerance);
+    Assert.Equal(4, vm2.ReuseToleranceIndex);
+    runtime2.Verify(r => r.SetDustReuseTolerance(It.IsAny<int>()), Times.Never);
+  }
+
+  /// <summary>A file without the key (written before the setting) means off; a hand-edited value
+  /// off the steps clamps, a negative one is off.</summary>
+  [Fact]
+  public void ReuseTolerance_MissingKeyMeansOff_AndAnOffStepValueClamps()
+  {
+    Directory.CreateDirectory(_dir);
+    File.WriteAllText(PrefsPath, "{\"format_version\": 1, \"theme\": \"dark\"}");
+    var p = LoadPrefs();
+    Assert.Equal("loaded", p.LoadOutcome);
+    Assert.Equal(0, p.DustReuseTolerance);
+
+    File.WriteAllText(PrefsPath, "{\"format_version\": 1, \"dust_reuse_px\": 5}");
+    var p2 = LoadPrefs();
+    Assert.Equal(4, p2.DustReuseTolerance);
+    Assert.Equal(4, new ParticleRenderingViewModel(null, p2).ReuseTolerance);
+
+    File.WriteAllText(PrefsPath, "{\"format_version\": 1, \"dust_reuse_px\": -3}");
+    Assert.Equal(0, LoadPrefs().DustReuseTolerance);
+  }
+
+  /// <summary>The off item follows the localized label; the selection stays.</summary>
+  [Fact]
+  public void ReuseToleranceOffLabel_RelabelsTheFirstItem()
+  {
+    var (vm, runtime, _) = Build();
+    vm.ReuseTolerance = 4;
+    vm.ReuseToleranceOffLabel = "Disattivato";
+    Assert.Equal("Disattivato", vm.ReuseToleranceOptions[0]);
+    Assert.Equal("4 px", vm.ReuseToleranceOptions[3]);
+    Assert.Equal(3, vm.ReuseToleranceIndex);
+    runtime.Verify(r => r.SetDustReuseTolerance(It.IsAny<int>()), Times.Once);
   }
 }

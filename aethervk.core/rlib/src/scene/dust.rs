@@ -187,6 +187,29 @@ pub fn volume_detail_from_flags(flags: u32) -> u32 {
   (DUST_VOLUME_DETAIL_MAX >> ((flags >> DUST_FLAGS_VOLUME_DETAIL_SHIFT) & 7)).max(DUST_VOLUME_DETAIL_MIN)
 }
 
+/// Default "temporal reuse tolerance" (Settings › Particle rendering), in px: 0 = off, every
+/// frame drawn fresh (today's image). A value ε > 0 runs the cadence (`dust::cadence`): clusters
+/// whose on-screen motion over their class's window stays within ε px are reused from a class
+/// image instead of drawn again. Faster, with reuse errors up to ε px.
+pub const DUST_REUSE_PX_DEFAULT: u32 = 0;
+/// Largest accepted temporal reuse tolerance (px); the steps are 0 and the powers of two up to it
+pub const DUST_REUSE_PX_MAX: u32 = 16;
+
+/// Clamps a temporal reuse tolerance: 0 stays 0 (off), any other value becomes the largest power
+/// of two `≤ min(v, DUST_REUSE_PX_MAX)`
+pub fn clamp_reuse_px(v: u32) -> u32 {
+  if v == 0 { 0 } else { 1 << (31 - v.min(DUST_REUSE_PX_MAX).leading_zeros()) }
+}
+
+/// The temporal reuse tolerance a scene starts with: `AETHERVK_DUST_REUSE_PX` (clamped) or
+/// [`DUST_REUSE_PX_DEFAULT`]
+pub fn dust_reuse_px_default() -> u32 {
+  aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_REUSE_PX")
+    .and_then(|v| v.trim().parse::<u32>().ok())
+    .map(clamp_reuse_px)
+    .unwrap_or(DUST_REUSE_PX_DEFAULT)
+}
+
 // ─── View aids: tracers and flow (`first_particles.rdc` / `second_particles.rdc`) ───
 // In the wide view (25 km/px) dust moves 2–150 m/s relative to the nucleus: 63 s of sim time moved
 // every particle by 0.005 px, so the coma looked like one shape sliding with the comet. And ~1 M

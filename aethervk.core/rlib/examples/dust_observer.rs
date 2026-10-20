@@ -7679,7 +7679,10 @@ fn run_lab(dir: &Path, frame: u32, lab_truth: usize) -> i32 {
     }
     None
   };
-  let (stored_truth, stored_counts) = if drawn_inputs.is_none() {
+  // `OBSERVER_LAB_DUMP=<path>`: write the replayed pyramid's words there and stop after the splat
+  // (no truth needed: render against render, e.g. `pyrcmp.py` of two level-of-detail settings)
+  let dump = std::env::var("OBSERVER_LAB_DUMP").ok().map(PathBuf::from);
+  let (stored_truth, stored_counts) = if drawn_inputs.is_none() && dump.is_none() {
     let Some(t) = read_f32_file(&dir.join(format!("mc_{frame:03}_truth.f32"))) else {
       eprintln!("lab: no mc_{frame:03}_truth.f32 (run with OBSERVER_MC_RAW=<out>/mc_{frame:03})");
       return 2;
@@ -7974,6 +7977,11 @@ fn run_lab(dir: &Path, frame: u32, lab_truth: usize) -> i32 {
   // over the clusters (does a long tail of a few clusters carry the frame's GPU time?)
   let work_log = d::take_work_log();
   print_work_log(&work_log);
+  if let Some(path) = dump {
+    std::fs::write(&path, bytemuck::cast_slice::<u32, u8>(&pyr)).expect("lab: write OBSERVER_LAB_DUMP");
+    println!("lab: replay pyramid written to {}", path.display());
+    return 0;
+  }
   // `OBSERVER_LAB_CADENCE=1`: the temporal-reuse study on this frame (the per-cluster on-screen
   // rate and the cadence classes' packet load per simulation speed and tolerance)
   if std::env::var("OBSERVER_LAB_CADENCE").is_ok_and(|v| v.trim() == "1") {

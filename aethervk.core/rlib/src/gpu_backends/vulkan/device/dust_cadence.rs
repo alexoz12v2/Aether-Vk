@@ -858,6 +858,19 @@ impl Device {
     }
     let admitted: alloc::vec::Vec<bool> = (0..c.nc()).map(|k| c.class_admitted(k)).collect();
     c.admitted = admitted;
+    // `AETHERVK_DUST_CADENCE_LOG=1`: the motion budget's inputs per frame (diagnostics)
+    if aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_CADENCE_LOG").is_some_and(|v| v.trim() == "1") {
+      aethervk_oshal_rlib::log!(
+        "[Dust cadence] motion: last {:?}, budget {:?}, windows {:?}, admitted {:?}, margin {:?}, eye step {:?} m, dt {} s",
+        c.motion_hist.back(),
+        c.motion_budget(),
+        (0..c.nc()).map(|k| c.motion_window(k)).collect::<alloc::vec::Vec<_>>(),
+        c.admitted,
+        c.geom.as_ref().map(|g| g.margin),
+        de,
+        dt
+      );
+    }
     c.prev = Some(PrevFrame {
       view: f.view,
       eye_m: f.view.eye_m,
@@ -1993,17 +2006,42 @@ impl Device {
       .sum()
   }
 
-  /// The frame loop's switch (until the user's gate makes it the default): with
-  /// `AETHERVK_DUST_CADENCE=1` a view without a cadence gets one by the memory rule
-  /// (`CadenceConfig::from_env`: the classes, phases, ε and margin knobs); `AETHERVK_DUST_CADENCE=0`
-  /// or unset removes it. Returns whether the view runs the cadence.
-  pub fn dust_cadence_auto(&self, pe: gpu::PresentationEngineHandle) -> bool {
-    let want = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_CADENCE").is_some_and(|v| v.trim() == "1");
+  /// The frame loop's switch: the scene's temporal reuse tolerance `reuse_px` (ε px, 0 = off)
+  /// turns the view's cadence on with ε = `reuse_px` (no budget loop: the image is what the setting
+  /// promises); `AETHERVK_DUST_CADENCE=1` turns it on whatever the setting (the diagnostic path,
+  /// with the budget loop), `AETHERVK_DUST_CADENCE=0` off. A view without a cadence gets one by the
+  /// memory rule (`CadenceConfig::from_env`: the classes, phases, ε and margin knobs;
+  /// `AETHERVK_DUST_CADENCE_EPS` overrides the setting's ε). Returns whether the view runs the cadence.
+  pub fn dust_cadence_auto(&self, pe: gpu::PresentationEngineHandle, reuse_px: u32) -> bool {
+    let var = aethervk_oshal_rlib::os::env::var;
+    let env = var("AETHERVK_DUST_CADENCE");
+    let want = match env.as_deref().map(str::trim) {
+      Some("1") => true,
+      Some("0") => false,
+      _ => reuse_px > 0,
+    };
+    // the setting's ε (the env knob and the budget loop's own ε win)
+    let eps = (reuse_px > 0 && var("AETHERVK_DUST_CADENCE_EPS").is_none()).then_some(reuse_px as f32);
     let active = self.dust_cadence_active(pe);
     if want == active {
+      if active && let Some(e) = eps {
+        let res = self.res.read();
+        if let Some(entry) = res.dust_manager.as_ref().and_then(|m| m.cadence.get(&pe)) {
+          entry.lock().cfg.eps_px = e;
+        }
+      }
       return active;
     }
-    let cfg = if want { CadenceConfig::from_env(self.dust_device_local_bytes()) } else { None };
+    let cfg = if want {
+      CadenceConfig::from_env(self.dust_device_local_bytes()).map(|mut c| {
+        if let Some(e) = eps {
+          c.eps_px = e;
+        }
+        c
+      })
+    } else {
+      None
+    };
     if let Err(e) = self.dust_cadence_enable(pe, cfg) {
       aethervk_oshal_rlib::log!("[Dust cadence] view {}: {e}", pe.0);
       return false;

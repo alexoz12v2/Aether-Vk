@@ -551,4 +551,13 @@
   <data name="Tabs_Settings_VolumeDetailHint" xml:space="preserve">
     <value>Più basso: più veloce, polvere volumetrica più grossolana</value>
   </data>
+  <data name="Tabs_Settings_ReuseTolerance" xml:space="preserve">
+    <value>Tolleranza di riuso temporale</value>
+  </data>
+  <data name="Tabs_Settings_ReuseToleranceHint" xml:space="preserve">
+    <value>Riusa la polvere che si è spostata di meno di questi pixel invece di ridisegnarla. Disattivato ridisegna ogni fotogramma; valori più alti sono più veloci ma possono sbavare la polvere in movimento.</value>
+  </data>
+  <data name="Tabs_Settings_ReuseToleranceOff" xml:space="preserve">
+    <value>Disattivato</value>
+  </data>
 </root>

@@ -550,4 +550,13 @@
   <data name="Tabs_Settings_VolumeDetailHint" xml:space="preserve">
     <value>Lower: faster, coarser volumetric dust</value>
   </data>
+  <data name="Tabs_Settings_ReuseTolerance" xml:space="preserve">
+    <value>Temporal reuse tolerance</value>
+  </data>
+  <data name="Tabs_Settings_ReuseToleranceHint" xml:space="preserve">
+    <value>Reuses dust that moved less than this many pixels instead of drawing it again. Off draws every frame fresh; higher values are faster but can smear moving dust.</value>
+  </data>
+  <data name="Tabs_Settings_ReuseToleranceOff" xml:space="preserve">
+    <value>Off</value>
+  </data>
 </root>

@@ -585,7 +585,11 @@ impl DustBudgetTelemetry {
     if let Some(c) = self.cadence.as_ref() {
       let t = c.timings;
       out.push(format!(
-        "dust GPU: cadence: images {}, class hist fresh/N… {:?}, D3 {} at build / {} at classify, shown light {:.4}, ghosts {} ({:.4}), aborts rate/budget/prediction/coverage {:?}; ms: builds {} (per pair {}), classify {}, reproject {}, fresh splat {}",
+        "dust GPU: cadence: mode {:?}, reset {:?}, admitted {:?}, lists (k, p, [shown, build, pending]) {:?}, images {}, class hist fresh/N… {:?}, D3 {} at build / {} at classify, shown light {:.4}, ghosts {} ({:.4}), aborts rate/budget/prediction/coverage {:?}; ms: builds {} (per pair {}), classify {}, reproject {}, fresh splat {}",
+        c.mode,
+        c.reset,
+        c.admitted,
+        c.lists,
         c.images_shown,
         c.class_hist,
         c.d3_rejected,
@@ -1927,8 +1931,12 @@ impl Device {
     // cadence on (reused frames included), full without it
     host.slot_regime[slot] = if cad_active { 1 } else { 0 };
     host.slot_probe[slot] = false;
-    // the budget loop lives with the cadence
-    if cad_active && host.budget.is_none() && !cpu {
+    // the budget loop lives with the cadence's diagnostic path (`AETHERVK_DUST_CADENCE=1`, or
+    // `AETHERVK_DUST_BUDGET_LOOP=1` with the setting): the setting alone keeps its ε
+    let loop_wanted = ["AETHERVK_DUST_CADENCE", "AETHERVK_DUST_BUDGET_LOOP"]
+      .iter()
+      .any(|n| aethervk_oshal_rlib::os::env::var(n).is_some_and(|v| v.trim() == "1"));
+    if cad_active && host.budget.is_none() && !cpu && loop_wanted {
       host.budget = dust::cadence::BudgetLoop::from_env();
     } else if !cad_active {
       host.budget = None;
