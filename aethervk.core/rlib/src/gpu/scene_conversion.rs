@@ -301,6 +301,7 @@ impl SceneConversionExt2 for Scene {
       ui_call: None,
       text2_call: None,
       dust_softening: crate::scene::dust::DUST_SOFTENING_DEFAULT,
+      dust_volume_detail: crate::scene::dust::DUST_VOLUME_DETAIL_DEFAULT,
       dust_view_flags: 0,
       dust_flow: Default::default(),
       dust_view: Default::default(),
@@ -1848,6 +1849,8 @@ impl Scene {
               state,
               eye_m,
               nucleus_m,
+              // the render thread stamps the scene's setting (`RenderScene::set_dust_volume_detail`)
+              volume_detail: crate::scene::dust::DUST_VOLUME_DETAIL_DEFAULT,
             }
           })
           .collect();

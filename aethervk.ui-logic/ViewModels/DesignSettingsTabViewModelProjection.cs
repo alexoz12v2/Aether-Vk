@@ -23,6 +23,8 @@ public partial class DesignSettingsTabViewModel
 
   public InputBindingsViewModel InputBindings { get; } = DesignBindings();
 
+  public ParticleRenderingViewModel ParticleRendering { get; } = new(null, null);
+
   private static InputBindingsViewModel DesignBindings()
   {
     var r = new Input.InputRegistry();

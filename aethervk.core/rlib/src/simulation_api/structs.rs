@@ -1355,6 +1355,10 @@ pub struct SceneContext {
   /// asinh softening (f32 bits) of the dust display stretch, see `dust::display_stretch`
   /// ("dust visibility" slider, `AETHERVK_DUST_SOFTENING` default override)
   pub dust_softening: Arc<core::sync::atomic::AtomicU32>,
+  /// dust volume detail (pieces per volumetric packet, `dust::clamp_volume_detail`), see
+  /// `SimulationContext::set_dust_volume_detail` ("Volume detail" setting,
+  /// `AETHERVK_DUST_VOLUME_DETAIL` default override)
+  pub dust_volume_detail: Arc<core::sync::atomic::AtomicU32>,
   /// dust view aids (`dust::DUST_VIEW_TRACERS` | `dust::DUST_VIEW_FLOW`), see
   /// `SimulationContext::set_dust_view_flags`
   pub dust_view_flags: Arc<core::sync::atomic::AtomicU32>,
@@ -1456,6 +1460,12 @@ impl SceneContext {
           .map(crate::scene::dust::clamp_dust_softening)
           .unwrap_or(crate::scene::dust::DUST_SOFTENING_DEFAULT)
           .to_bits(),
+      )),
+      dust_volume_detail: Arc::new(core::sync::atomic::AtomicU32::new(
+        aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_VOLUME_DETAIL")
+          .and_then(|v| v.trim().parse::<u32>().ok())
+          .map(crate::scene::dust::clamp_volume_detail)
+          .unwrap_or(crate::scene::dust::DUST_VOLUME_DETAIL_DEFAULT),
       )),
       dust_view_flags: Arc::new(core::sync::atomic::AtomicU32::new(
         crate::scene::dust::dust_view_flags_default(),

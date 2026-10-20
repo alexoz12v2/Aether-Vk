@@ -686,6 +686,20 @@ impl SimulationContext {
     Some(s)
   }
 
+  /// Sets the dust volume detail ("Volume detail": the pieces a volumetric packet is drawn with,
+  /// 16 = every piece, the default), clamped to the largest power of two `≤ detail` in
+  /// `[DUST_VOLUME_DETAIL_MIN, DUST_VOLUME_DETAIL_MAX]`. Returns the value applied, or `None`
+  /// without the scene. Visual only: picked up by the next rendered frame.
+  pub fn set_dust_volume_detail(&self, scene_id: u64, detail: u32) -> Option<u32> {
+    let scene_arc = self.scenes.read().get_scene(scene_id)?;
+    let d = crate::scene::dust::clamp_volume_detail(detail);
+    scene_arc
+      .read()
+      .dust_volume_detail
+      .store(d, core::sync::atomic::Ordering::Relaxed);
+    Some(d)
+  }
+
   /// Sets the dust view aids: [`crate::scene::dust::DUST_VIEW_TRACERS`] (bright dots on a sparse
   /// set of real particles) and [`crate::scene::dust::DUST_VIEW_FLOW`] (synchrone pulses travelling
   /// outward). Other bits are ignored. Returns the flags applied, or `None` without the scene.
