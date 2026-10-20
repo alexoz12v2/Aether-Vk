@@ -366,7 +366,36 @@ fn sqrt32(x: f32) -> f32 {
   <f32 as aethervk_oshal_rlib::math::FloatLike>::sqrt(x)
 }
 
+/// `(built, shown)`: the list entries a frame drew into its build images (per tier slot and
+/// pair, `min(step, build length − cursor)`, the cursor before the frame's advance) and the
+/// entries of the shown lists, from a state readback (`CADS_TP*` words). The feedback's full-frame
+/// estimate scales the builds' counters by `shown / built` (`dust::full_frame_estimate`).
+pub fn cads_work_members(st: &[u32], nt: usize, nc: usize, np: usize) -> (u32, u32) {
+  let (mut built, mut shown) = (0u32, 0u32);
+  for t in 0..nt {
+    for k in 0..nc {
+      for p in 0..np {
+        let tp = cads_tp(t, k, p);
+        if tp + 4 >= st.len() {
+          continue;
+        }
+        let (len, cursor, step) = (st[tp + 1], st[tp + 3], st[tp + 4]);
+        built = built.saturating_add(step.min(len.saturating_sub(cursor)));
+        shown = shown.saturating_add(st[tp]);
+      }
+    }
+  }
+  (built, shown)
+}
+
 impl DustCadenceGpu {
+  /// [`cads_work_members`] of the newest state readback (`None` before one)
+  pub fn work_members(&self) -> Option<(u32, u32)> {
+    let st = self.last_state.as_ref()?;
+    let nt = self.tiers.values().map(|t| t.t + 1).max().unwrap_or(0);
+    Some(cads_work_members(st, nt, self.nc(), self.np()))
+  }
+
   fn nc(&self) -> usize {
     self.cfg.classes.len().min(DUST_CADENCE_MAX_CLASSES)
   }

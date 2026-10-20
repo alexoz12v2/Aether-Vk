@@ -479,6 +479,8 @@ pub struct DustViewHost {
   /// probe was recorded ([`Device::cmd_dust_budget_probe`])
   slot_regime: [u8; DUST_READBACK_SLOTS],
   slot_probe: [bool; DUST_READBACK_SLOTS],
+  /// the cadenced frames' build work per member ([`full_frame_estimate`]; `None` after a full draw)
+  build_rate: Option<BuildRate>,
   /// the last readback's regime and its counters by target
   pub last_regime: u8,
   pub targets: Option<TargetCounters>,
@@ -525,6 +527,47 @@ pub struct TargetCounters {
 pub const DUST_PROBE_WORDS: u32 = 4;
 /// the header words the target probe copies: split children, EWA texels, volume evaluations
 pub const DUST_PROBE_HEADER_WORDS: [u32; 3] = [dust::PYR_SPLIT_CHILDREN, dust::PYR_EWA_TEXELS, dust::PYR_VOLUME_EVALS];
+
+/// A cadenced frame's counters ([`DUST_PROBE_HEADER_WORDS`]) as a full draw's estimate: the fresh
+/// pass's as measured plus the builds' scaled by `shown / built` (the shown images' members over
+/// the members this frame drew into the build images: each shown member was drawn once, at its
+/// build, at about the rate of this frame's build members). A cadenced frame draws a fraction of
+/// a full draw's work, and its feedback on the raw counters walks the biases finer than a full
+/// draw ever draws: 1 km, still camera, the volume bias 14 → 8 over 60 frames, the class images
+/// built at bias 8–10 put 5 % of the light on levels 9–10 the full draw leaves empty (light ratio
+/// 1.057). `built == 0`: the raw counters (no build this frame says nothing about the images).
+///
+/// The builds' rate is a ratio of decayed sums over the cadenced frames ([`BuildRate`]): one
+/// frame's ratio swings with its cursors (a cycle's last step is short, a swap frame builds
+/// nothing), and one 4.3e8-texel estimate at 1 km kicked the EWA bias off the full draw's.
+pub fn full_frame_estimate(fresh: [u32; 3], rate: &BuildRate, shown: u32) -> [u32; 3] {
+  core::array::from_fn(|i| {
+    let b = if rate.built > 0.0 { rate.builds[i] * shown as f64 / rate.built } else { 0.0 };
+    (fresh[i] as f64 + b).min(u32::MAX as f64) as u32
+  })
+}
+
+/// The cadenced frames' build work per member built: decayed sums (weight
+/// `1 − 1 / BUILD_RATE_FRAMES` per frame) of the builds' counters and of the members they drew
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct BuildRate {
+  pub builds: [f64; 3],
+  pub built: f64,
+}
+
+/// the frames [`BuildRate`]'s sums look back over (the shortest class's cycle)
+pub const BUILD_RATE_FRAMES: f64 = 8.0;
+
+impl BuildRate {
+  /// one cadenced frame folded in: its builds' counters and the members they drew
+  pub fn fold(&mut self, builds: [u32; 3], built: u32) {
+    let keep = 1.0 - 1.0 / BUILD_RATE_FRAMES;
+    for i in 0..3 {
+      self.builds[i] = self.builds[i] * keep + builds[i] as f64;
+    }
+    self.built = self.built * keep + built as f64;
+  }
+}
 
 /// The budget loop's telemetry of a view ([`Device::dust_budget_telemetry`]): the knobs, the
 /// loop's state, the feedback regimes, the counters by target and the cadence's own telemetry
@@ -772,6 +815,7 @@ impl Default for DustViewHost {
       fb_cad: None,
       slot_regime: [0; DUST_READBACK_SLOTS],
       slot_probe: [false; DUST_READBACK_SLOTS],
+      build_rate: None,
       last_regime: 0,
       targets: None,
       restored: 0,
@@ -809,6 +853,10 @@ impl DustViewHost {
     if split.children > dust::DUST_SPLIT_BUDGET {
       self.split_depth_over = self.split_depth_over.min(split.depth);
     }
+    // (inside the band, or a raise refused, the state stays as it is, not the frame's own
+    // depth: a frame read back was drawn DUST_READBACK_SLOTS frames ago, and writing its depth
+    // back made the slots DUST_READBACK_SLOTS chains apart, each a fixed point of the band — 1 km,
+    // cadenced: the EWA bias 0 on even frames, 1 on odd ones, for a hundred frames)
     let next = if split.children > dust::DUST_SPLIT_BUDGET {
       let ratio = split.children as f32 / dust::DUST_SPLIT_BUDGET as f32;
       let down = (<f32 as aethervk_oshal_rlib::math::FloatLike>::ln(ratio)
@@ -817,8 +865,8 @@ impl DustViewHost {
       split.depth.saturating_sub(down.max(1))
     } else {
       let up = split.suggested_depth();
-      if up >= self.split_depth_over {
-        split.depth
+      if up == split.depth || up >= self.split_depth_over {
+        self.split_depth
       } else {
         up
       }
@@ -843,8 +891,11 @@ impl DustViewHost {
       let ratio = vol.evals as f64 / vol_budget as f64;
       let up = (ratio.ln() / 4f64.ln()).ceil().max(1.0) as u32;
       (vol.bias + up).min(dust::DUST_VOLUME_BIAS_MAX)
-    } else {
+    } else if vol.evals < vol_budget / 8 {
       vol.suggested_bias_for(vol_budget)
+    } else {
+      // inside the band: the state stays (as the split depth's)
+      self.volume_bias
     };
     if bias != self.volume_bias {
       aethervk_oshal_rlib::log!(
@@ -858,7 +909,12 @@ impl DustViewHost {
     self.volume_bias = bias;
     let ewa = dust::EwaStats::load(header);
     let ewa_budget = (dust::DUST_EWA_FRAME_BUDGET as u64) >> self.budget_shift();
-    let ewa_bias = ewa.suggested_bias_for(ewa_budget);
+    // inside the band [budget / 8, budget]: the state stays (as the split depth's)
+    let ewa_bias = if ewa.texels > ewa_budget || ewa.texels < ewa_budget / 8 {
+      ewa.suggested_bias_for(ewa_budget)
+    } else {
+      self.ewa_bias
+    };
     if ewa_bias != self.ewa_bias {
       aethervk_oshal_rlib::log!(
         "[Dust EWA] {:.3e} texels at bias {} (budget {:.3e}): bias {} for the next frames",
@@ -1765,9 +1821,12 @@ impl Device {
     let rb_words = DustView::readback_words(&view.layout) as usize;
     // the view's cadence (the budget loop runs with it) and its newest fresh count (taken
     // before the host lock: the two locks are never held together here)
-    let (cad_active, cad_fresh) = match mgr.cadence.get(&pe) {
-      Some(c) => (true, c.lock().last_state.as_ref().map(|s| s[cadence::CADS_FRESH])),
-      None => (false, None),
+    let (cad_active, cad_fresh, cad_members) = match mgr.cadence.get(&pe) {
+      Some(c) => {
+        let c = c.lock();
+        (true, c.last_state.as_ref().map(|s| s[cadence::CADS_FRESH]), c.work_members())
+      }
+      None => (false, None, None),
     };
     let mut host = view.host.lock();
     let slot = (host.frame % DUST_READBACK_SLOTS as u64) as usize;
@@ -1790,13 +1849,6 @@ impl Device {
         let (header, rest) = words.split_at(dust::PYRAMID_HEADER_WORDS as usize);
         let (rest, vqueue) = rest.split_at(rest.len() - dust::DUST_VQUEUE_HEADER_WORDS as usize);
         let (level, queue) = rest.split_at(rest.len() - dust::DUST_QUEUE_HEADER_WORDS as usize);
-        // the feedback of the regime the frame was drawn in: full draws and cadenced frames learn
-        // apart (cheap cadenced frames never lower a full draw's biases); the cadence off loads
-        // and stores regime 0 only: today's single state
-        host.feedback_load(regime_rb);
-        host.absorb(header, level, 1 << lvl, unit);
-        host.feedback_store(regime_rb);
-        host.last_regime = regime_rb;
         // the counters by target (the probe after the builds; fresh = the frame's less them)
         host.targets = if host.slot_probe[slot] {
           let off = DUST_READBACK_SLOTS * rb_words * 4 + slot * DUST_PROBE_WORDS as usize * 4;
@@ -1807,6 +1859,34 @@ impl Device {
         } else {
           None
         };
+        // the feedback of the regime the frame was drawn in: full draws and cadenced frames learn
+        // apart (cheap cadenced frames never lower a full draw's biases); the cadence off loads
+        // and stores regime 0 only: today's single state. A cadenced frame learns from its
+        // full-draw estimate (`full_frame_estimate`), not its own fraction of the work
+        // (`AETHERVK_DUST_FEEDBACK_RAW=1`: the raw counters, the A/B)
+        let estimate = match (regime_rb, host.targets, cad_members) {
+          (1, Some(t), Some((built, shown)))
+            if !aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_FEEDBACK_RAW").is_some_and(|v| v.trim() == "1") =>
+          {
+            let rate = host.build_rate.get_or_insert_with(BuildRate::default);
+            rate.fold(t.builds, built);
+            let mut h = header.to_vec();
+            for (i, v) in full_frame_estimate(t.fresh, rate, shown).into_iter().enumerate() {
+              h[DUST_PROBE_HEADER_WORDS[i] as usize] = v;
+            }
+            Some(h)
+          }
+          (1, ..) => None,
+          _ => {
+            // a full draw: the next cadenced run measures its builds afresh
+            host.build_rate = None;
+            None
+          }
+        };
+        host.feedback_load(regime_rb);
+        host.absorb(estimate.as_deref().unwrap_or(header), level, 1 << lvl, unit);
+        host.feedback_store(regime_rb);
+        host.last_regime = regime_rb;
         // the packet queue of that frame: records drawn, packets appended (the rest in-thread)
         // (header word 0 is the dispatch's x, at most `DUST_QUEUE_DISPATCH_X`: not the count)
         let held = dust::dust_queue_held(queue);

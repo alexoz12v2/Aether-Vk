@@ -3438,6 +3438,16 @@ fn main() {
         entries.len(),
         t_step.elapsed().as_secs_f64() * 1e3
       ));
+      // `AETHERVK_DUST_CADENCE_LOG=1`: the cadence's newest readback per path frame (diagnostics;
+      // it lags the frame by the readback slots)
+      if std::env::var("AETHERVK_DUST_CADENCE_LOG").is_ok_and(|v| v.trim() == "1")
+        && let Some(c) = ctx.dust_budget_telemetry(pe).and_then(|b| b.cadence)
+      {
+        log_line(&format!(
+          "[observer] cadence at path frame {k}: mode {:?}, reset {:?}, swaps {:?}, admitted {:?}, fresh {}/{}, lists {:?}, hist {:?}, aborts {:?}, images {}, shown light {:.4}, ghosts {}",
+          c.mode, c.reset, c.swaps, c.admitted, c.fresh, c.live, c.lists, c.class_hist, c.aborts, c.images_shown, c.shown_light_share, c.ghost_entries
+        ));
+      }
     }
     // flush the timestamps (the readback lags DUST_READBACK_SLOTS frames): a few released frames
     // of the unchanged last view (reused images)
