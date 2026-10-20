@@ -1093,10 +1093,11 @@ pub fn prepare_dust(
       aethervk_oshal_rlib::log!("[Dust] frame begin failed for {id}: {e}");
     }
   }
-  // the cadence (temporal reuse, step 3; `AETHERVK_DUST_CADENCE=1` until the user's gate): its
-  // begin before the propagates (the resets, aborts, swaps, the propagate set); a failure turns
-  // it off for the view (this frame draws everything fresh)
-  let cad_plan = if !reuse && !dust_debug_skip("propagate") && device.dust_cadence_auto(pe) {
+  // the cadence (temporal reuse): on with the scene's "temporal reuse tolerance" (ε px) or
+  // `AETHERVK_DUST_CADENCE=1` (the diagnostic path with the budget loop); its begin before the
+  // propagates (the resets, aborts, swaps, the propagate set); a failure turns it off for the
+  // view (this frame draws everything fresh)
+  let cad_plan = if !reuse && !dust_debug_skip("propagate") && device.dust_cadence_auto(pe, render_scene.dust_reuse_px) {
     device.cmd_checkpoint(cmd, c"dust: cadence");
     // the budget loop's ε and class lengths (step 5); the salt resets the cadence at a changed class length
     let salt = device.dust_budget_apply_cadence(pe);
@@ -1530,7 +1531,7 @@ fn dust_cadence_rewritten_from(s: &crate::scene::dust::DustDrawState, prev: Opti
 
 /// The cadence's fingerprint of the non-view draw inputs (`FrameMeta::fingerprint`: a change resets
 /// every class): per call its system, tier, volume detail, colour, exposure, albedo, TTL, size law
-/// and age band, and the knobs that change the drawing
+/// and age band, the scene's reuse tolerance (its ε) and the knobs that change the drawing
 fn dust_cadence_fingerprint(render_scene: &RenderScene, flags: u32) -> u64 {
   let mut h = 0xcbf2_9ce4_8422_2325u64;
   let mut eat = |b: &[u8]| {
@@ -1539,6 +1540,7 @@ fn dust_cadence_fingerprint(render_scene: &RenderScene, flags: u32) -> u64 {
     }
   };
   eat(&flags.to_le_bytes());
+  eat(&render_scene.dust_reuse_px.to_le_bytes());
   for name in [
     "AETHERVK_DUST_DEBUG_STREAM",
     "AETHERVK_DUST_DEBUG_SAMPLE_MOD",
@@ -1662,6 +1664,7 @@ fn dust_draw_inputs(
   h.u64(render_scene.window_extent[0] as u64 | (render_scene.window_extent[1] as u64) << 32);
   h.u64(flags as u64 | (specks_needed as u64) << 32);
   h.f32s(&[flow.t_hi, flow.t_lo, flow.speed]);
+  h.u64(render_scene.dust_reuse_px as u64);
   for name in [
     "AETHERVK_DUST_DEBUG_STREAM",
     "AETHERVK_DUST_DEBUG_SAMPLE_MOD",
@@ -1810,6 +1813,9 @@ pub struct RenderScene {
   /// dust volume detail of the scene (`SceneContext::dust_volume_detail`), stamped on every dust
   /// call by [`Self::set_dust_volume_detail`]
   pub dust_volume_detail: u32,
+  /// dust temporal reuse tolerance of the scene in px (`SceneContext::dust_reuse_px`, 0 = off):
+  /// ε > 0 runs the view's cadence with that ε (`Device::dust_cadence_auto`)
+  pub dust_reuse_px: u32,
   /// dust view aids (`dust::DUST_VIEW_*`, `SceneContext::dust_view_flags`)
   pub dust_view_flags: u32,
   /// dust flow clock of this frame (`SceneContext::dust_flow_clock`)
@@ -1841,6 +1847,7 @@ impl RenderScene {
       text2_call: None,
       dust_softening: crate::scene::dust::DUST_SOFTENING_DEFAULT,
       dust_volume_detail: crate::scene::dust::DUST_VOLUME_DETAIL_DEFAULT,
+      dust_reuse_px: crate::scene::dust::dust_reuse_px_default(),
       dust_view_flags: 0,
       dust_flow: Default::default(),
       dust_view: Default::default(),
@@ -2900,6 +2907,32 @@ mod dust_volume_detail_tests {
     assert!(rs.depth_layers[0].dust_calls.iter().all(|c| c.volume_detail == 1));
     rs.set_dust_volume_detail(DUST_VOLUME_DETAIL_DEFAULT);
     assert_eq!(fingerprints(&rs), at_default);
+  }
+
+  /// The temporal reuse tolerance starts off and both frame fingerprints change with it: a new ε
+  /// resets every class and no reused frame survives the change
+  #[test]
+  fn the_fingerprints_see_the_reuse_tolerance() {
+    let mut rs = RenderScene::new((TransformComponent::default(), CameraComponent::default()), 0, 0, [800, 600]);
+    if aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_REUSE_PX").is_none() {
+      assert_eq!(rs.dust_reuse_px, dust::DUST_REUSE_PX_DEFAULT);
+    }
+    rs.dust_reuse_px = 0;
+    let mut layer = RenderLayer::new(1, 1.0, Vec3f32::from_array([0.0, 0.0, 0.0]), 0.1, 1000.0);
+    layer.dust_calls = alloc::vec![call(DUST_VOLUME_DETAIL_DEFAULT)];
+    rs.depth_layers.push(layer);
+    let flow = dust::DustFlowUniform::default();
+    let fingerprints = |rs: &RenderScene| (dust_cadence_fingerprint(rs, 0), dust_draw_inputs(rs, 0, &flow, false));
+    let off = fingerprints(&rs);
+    let mut seen = alloc::vec![off];
+    for px in [1, 2, 4, 8, 16] {
+      rs.dust_reuse_px = px;
+      let f = fingerprints(&rs);
+      assert!(seen.iter().all(|s| s.0 != f.0 && s.1 != f.1), "ε {px} px changes both fingerprints");
+      seen.push(f);
+    }
+    rs.dust_reuse_px = 0;
+    assert_eq!(fingerprints(&rs), off);
   }
 }
 

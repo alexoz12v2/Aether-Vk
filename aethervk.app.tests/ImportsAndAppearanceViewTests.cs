@@ -135,6 +135,29 @@ public class CometAppearanceViewTests
     window.Close();
   }
 
+  /// Two Settings views, each bound before it has a window (as every view test builds them): the
+  /// display mode radios of one never touch the other's view model. With a named radio group the
+  /// unrooted views shared one global group and their bindings flipped it forever (the hang of
+  /// any second Settings view test in a run).
+  [AvaloniaFact]
+  public void Display_mode_radios_of_two_views_are_independent()
+  {
+    var vms = new[] { new DesignSettingsTabViewModel(), new DesignSettingsTabViewModel() };
+    var windows = vms.Select(vm => new Window { Content = new SettingsTabView { DataContext = vm }, Width = 500, Height = 1200 }).ToArray();
+    foreach (var w in windows) w.Show();
+    Dispatcher.UIThread.RunJobs();
+    Assert.All(vms, vm => Assert.True(vm.CometAppearance.IsCustomMode));
+
+    vms[0].CometAppearance.IsCustomMode = false;
+    Dispatcher.UIThread.RunJobs();
+    Assert.False(vms[0].CometAppearance.IsCustomMode);
+    Assert.True(vms[1].CometAppearance.IsCustomMode);
+    var radios = ((SettingsTabView)windows[1].Content!).GetLogicalDescendants().OfType<RadioButton>()
+      .Single(r => Equals(r.Content, vms[1].StrDisplayModeCustom));
+    Assert.True(radios.IsChecked);
+    foreach (var w in windows) w.Close();
+  }
+
   [AvaloniaFact]
   public void Custom_radio_is_disabled_without_imported_meshes()
   {

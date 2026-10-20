@@ -1359,6 +1359,10 @@ pub struct SceneContext {
   /// `SimulationContext::set_dust_volume_detail` ("Volume detail" setting,
   /// `AETHERVK_DUST_VOLUME_DETAIL` default override)
   pub dust_volume_detail: Arc<core::sync::atomic::AtomicU32>,
+  /// dust temporal reuse tolerance in px (0 = off, `dust::clamp_reuse_px`), see
+  /// `SimulationContext::set_dust_reuse_px` ("Temporal reuse tolerance" setting,
+  /// `AETHERVK_DUST_REUSE_PX` default override)
+  pub dust_reuse_px: Arc<core::sync::atomic::AtomicU32>,
   /// dust view aids (`dust::DUST_VIEW_TRACERS` | `dust::DUST_VIEW_FLOW`), see
   /// `SimulationContext::set_dust_view_flags`
   pub dust_view_flags: Arc<core::sync::atomic::AtomicU32>,
@@ -1467,6 +1471,7 @@ impl SceneContext {
           .map(crate::scene::dust::clamp_volume_detail)
           .unwrap_or(crate::scene::dust::DUST_VOLUME_DETAIL_DEFAULT),
       )),
+      dust_reuse_px: Arc::new(core::sync::atomic::AtomicU32::new(crate::scene::dust::dust_reuse_px_default())),
       dust_view_flags: Arc::new(core::sync::atomic::AtomicU32::new(
         crate::scene::dust::dust_view_flags_default(),
       )),

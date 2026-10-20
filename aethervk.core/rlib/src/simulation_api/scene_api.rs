@@ -700,6 +700,17 @@ impl SimulationContext {
     Some(d)
   }
 
+  /// Sets the dust temporal reuse tolerance in px ("Temporal reuse tolerance": 0 = off, every
+  /// frame drawn fresh, the default; ε > 0 reuses clusters whose on-screen motion stays within ε
+  /// px), clamped by `dust::clamp_reuse_px`. Returns the value applied, or `None` without the
+  /// scene. Visual only: picked up by the next rendered frame (a change resets the reuse).
+  pub fn set_dust_reuse_px(&self, scene_id: u64, px: u32) -> Option<u32> {
+    let scene_arc = self.scenes.read().get_scene(scene_id)?;
+    let p = crate::scene::dust::clamp_reuse_px(px);
+    scene_arc.read().dust_reuse_px.store(p, core::sync::atomic::Ordering::Relaxed);
+    Some(p)
+  }
+
   /// Sets the dust view aids: [`crate::scene::dust::DUST_VIEW_TRACERS`] (bright dots on a sparse
   /// set of real particles) and [`crate::scene::dust::DUST_VIEW_FLOW`] (synchrone pulses travelling
   /// outward). Other bits are ignored. Returns the flags applied, or `None` without the scene.

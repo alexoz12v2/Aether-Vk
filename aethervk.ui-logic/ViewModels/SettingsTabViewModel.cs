@@ -39,7 +39,8 @@ public partial class SettingsTabViewModel
   /// <summary>Input bindings section (rebind / add / remove chords, reset; saved to preferences.json).</summary>
   public InputBindingsViewModel InputBindings { get; }
 
-  /// <summary>Particle rendering section (dust volume detail; saved to preferences.json).</summary>
+  /// <summary>Particle rendering section (dust volume detail and temporal reuse tolerance; saved to
+  /// preferences.json).</summary>
   public ParticleRenderingViewModel ParticleRendering { get; }
 
   public SettingsTabViewModel(
@@ -133,11 +134,18 @@ public partial class SettingsTabViewModel
 
   private void SubscribeToStrings(ISchedulerProvider schedulerProvider)
   {
-    RefreshStrings();
+    RefreshAllStrings();
     _translationService
       .CultureChanged.Skip(1)
       .ObserveOn(schedulerProvider.MainThread)
-      .Subscribe(_ => RefreshStrings())
+      .Subscribe(_ => RefreshAllStrings())
       .AddDisposableTo(_disposables);
+  }
+
+  /// <summary>The generated strings, then the ones a section shows as picker items.</summary>
+  private void RefreshAllStrings()
+  {
+    RefreshStrings();
+    ParticleRendering.ReuseToleranceOffLabel = StrReuseToleranceOff;
   }
 }

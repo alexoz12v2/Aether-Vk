@@ -9,9 +9,14 @@ namespace AetherVk.Logic.ViewModels;
 ///
 /// <b>Volume detail</b>: the pieces a volumetric dust packet is drawn with, 16 (every piece, the
 /// default: the reference image) down to 1; lower is faster and slightly coarser. Visual only.
-/// An application preference (<c>preferences.json</c>, <see cref="PreferencesService.DustVolumeDetail"/>),
-/// not part of a save: the app pushes the stored value to the runtime at startup, this section
-/// every change at once.
+///
+/// <b>Temporal reuse tolerance</b>: dust that moved less than this many pixels since it was drawn
+/// is reused instead of drawn again; Off (0, the default) draws every frame fresh, 1 up to 16 px
+/// are faster but can smear moving dust. Visual only.
+///
+/// Both are application preferences (<c>preferences.json</c>, <see cref="PreferencesService.DustVolumeDetail"/>,
+/// <see cref="PreferencesService.DustReuseTolerance"/>), not part of a save: the app pushes the
+/// stored values to the runtime at startup, this section every change at once.
 /// </summary>
 public partial class ParticleRenderingViewModel : ObservableObject
 {
@@ -29,6 +34,26 @@ public partial class ParticleRenderingViewModel : ObservableObject
   {
     int p = VolumeDetailMin;
     while (p < VolumeDetailMax && p * 2 <= v)
+      p *= 2;
+    return p;
+  }
+
+  /// <summary>Default reuse tolerance (off: every frame drawn fresh, today's image).</summary>
+  public const int ReuseToleranceDefault = 0;
+  public const int ReuseToleranceMax = 16;
+
+  /// <summary>The reuse picker's steps in pixels, off first (more reuse: faster, coarser).</summary>
+  public static readonly IReadOnlyList<int> ReuseToleranceSteps = new[] { 0, 1, 2, 4, 8, 16 };
+
+  /// <summary>0 and below → 0 (off), otherwise the largest power of two ≤ min(<paramref name="px"/>,
+  /// <see cref="ReuseToleranceMax"/>); mirror of the native clamp of
+  /// <c>avkSimulationContext_setDustReuseTolerance</c>.</summary>
+  public static int ClampReuseTolerance(int px)
+  {
+    if (px <= 0)
+      return 0;
+    int p = 1;
+    while (p < ReuseToleranceMax && p * 2 <= px)
       p *= 2;
     return p;
   }
@@ -64,6 +89,48 @@ public partial class ParticleRenderingViewModel : ObservableObject
     }
   }
 
+  /// <summary>Temporal reuse tolerance in pixels: 0 (off), 1, 2, 4, 8 or 16 (other values clamp
+  /// to a step).</summary>
+  [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(ReuseToleranceIndex))]
+  private int _reuseTolerance = ReuseToleranceDefault;
+
+  /// <summary>The localized label of the off step (the Settings tab sets it on a culture change).</summary>
+  [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(ReuseToleranceOptions))]
+  [NotifyPropertyChangedFor(nameof(ReuseToleranceIndex))]
+  private string _reuseToleranceOffLabel = "Off";
+
+  /// <summary>The reuse picker's items (<see cref="ReuseToleranceSteps"/>): the off label, then "N px".</summary>
+  public IReadOnlyList<string> ReuseToleranceOptions
+  {
+    get
+    {
+      var labels = new string[ReuseToleranceSteps.Count];
+      for (int i = 0; i < labels.Length; i++)
+        labels[i] = ReuseToleranceSteps[i] == 0 ? ReuseToleranceOffLabel : $"{ReuseToleranceSteps[i]} px";
+      return labels;
+    }
+  }
+
+  /// <summary>Picker index over <see cref="ReuseToleranceSteps"/> (a negative index, a cleared
+  /// picker, is ignored).</summary>
+  public int ReuseToleranceIndex
+  {
+    get
+    {
+      for (int i = 0; i < ReuseToleranceSteps.Count; i++)
+        if (ReuseToleranceSteps[i] == ReuseTolerance)
+          return i;
+      return 0;
+    }
+    set
+    {
+      if (value >= 0 && value < ReuseToleranceSteps.Count)
+        ReuseTolerance = ReuseToleranceSteps[value];
+    }
+  }
+
   public ParticleRenderingViewModel(INativeRuntimeService? runtimeService, PreferencesService? preferences)
   {
     _runtimeService = runtimeService;
@@ -71,6 +138,7 @@ public partial class ParticleRenderingViewModel : ObservableObject
     // the runtime already has the stored value (App startup): no push
     _suppressDispatch = true;
     VolumeDetail = preferences?.DustVolumeDetail ?? VolumeDetailDefault;
+    ReuseTolerance = preferences?.DustReuseTolerance ?? ReuseToleranceDefault;
     _suppressDispatch = false;
   }
 
@@ -86,5 +154,19 @@ public partial class ParticleRenderingViewModel : ObservableObject
       return;
     _preferences?.SetDustVolumeDetail(d);
     _runtimeService?.SetDustVolumeDetail(d);
+  }
+
+  partial void OnReuseToleranceChanged(int value)
+  {
+    int px = ClampReuseTolerance(value);
+    if (px != value)
+    {
+      ReuseTolerance = px;
+      return;
+    }
+    if (_suppressDispatch)
+      return;
+    _preferences?.SetDustReuseTolerance(px);
+    _runtimeService?.SetDustReuseTolerance(px);
   }
 }

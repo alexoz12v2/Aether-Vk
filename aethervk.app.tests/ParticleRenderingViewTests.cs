@@ -10,7 +10,8 @@ using Xunit;
 
 namespace AetherVk.AppTests;
 
-/// <summary>The Settings "Particle rendering" section: the volume detail picker (16, 8, 4, 2, 1).</summary>
+/// <summary>The Settings "Particle rendering" section: the volume detail picker (16, 8, 4, 2, 1)
+/// and the temporal reuse tolerance picker (Off, 1, 2, 4, 8, 16 px).</summary>
 public class ParticleRenderingViewTests
 {
   [AvaloniaFact]
@@ -35,6 +36,42 @@ public class ParticleRenderingViewTests
     vm.ParticleRendering.VolumeDetail = 1;
     Dispatcher.UIThread.RunJobs();
     Assert.Equal(4, picker.SelectedIndex);
+    window.Close();
+  }
+
+  [AvaloniaFact]
+  public void ReuseTolerancePicker_ShowsTheSixSteps_AndFollowsTheViewModel()
+  {
+    var vm = new DesignSettingsTabViewModel();
+    var view = new SettingsTabView { DataContext = vm };
+    var window = new Window { Content = view, Width = 600, Height = 1600 };
+    window.Show();
+    var section = view.GetLogicalDescendants().OfType<Expander>().Single(e => e.Name == "ParticleRenderingSection");
+    section.IsExpanded = true;
+    Dispatcher.UIThread.RunJobs();
+
+    var picker = section.GetLogicalDescendants().OfType<ComboBox>().Single(c => c.Name == "ReuseTolerancePicker");
+    Assert.Equal(6, picker.ItemCount);
+    Assert.Equal(0, picker.SelectedIndex);
+    Assert.Equal("Off", picker.Items[0]);
+    Assert.Equal("16 px", picker.Items[5]);
+    Assert.Equal(0, vm.ParticleRendering.ReuseTolerance);
+
+    picker.SelectedIndex = 3;
+    Dispatcher.UIThread.RunJobs();
+    Assert.Equal(4, vm.ParticleRendering.ReuseTolerance);
+    Assert.Equal(16, vm.ParticleRendering.VolumeDetail);
+
+    vm.ParticleRendering.ReuseTolerance = 16;
+    Dispatcher.UIThread.RunJobs();
+    Assert.Equal(5, picker.SelectedIndex);
+
+    // a culture change relabels the off item and keeps the selection
+    vm.ParticleRendering.ReuseToleranceOffLabel = "Disattivato";
+    Dispatcher.UIThread.RunJobs();
+    Assert.Equal("Disattivato", picker.Items[0]);
+    Assert.Equal(5, picker.SelectedIndex);
+    Assert.Equal(16, vm.ParticleRendering.ReuseTolerance);
     window.Close();
   }
 }

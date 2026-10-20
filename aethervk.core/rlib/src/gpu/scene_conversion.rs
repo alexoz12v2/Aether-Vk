@@ -302,6 +302,7 @@ impl SceneConversionExt2 for Scene {
       text2_call: None,
       dust_softening: crate::scene::dust::DUST_SOFTENING_DEFAULT,
       dust_volume_detail: crate::scene::dust::DUST_VOLUME_DETAIL_DEFAULT,
+      dust_reuse_px: crate::scene::dust::dust_reuse_px_default(),
       dust_view_flags: 0,
       dust_flow: Default::default(),
       dust_view: Default::default(),
