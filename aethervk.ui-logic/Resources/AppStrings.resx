@@ -541,4 +541,13 @@
   <data name="Tabs_Settings_ResetBindings" xml:space="preserve">
     <value>Reset to defaults</value>
   </data>
+  <data name="Tabs_Settings_ParticleRendering" xml:space="preserve">
+    <value>Particle rendering</value>
+  </data>
+  <data name="Tabs_Settings_VolumeDetail" xml:space="preserve">
+    <value>Volume detail</value>
+  </data>
+  <data name="Tabs_Settings_VolumeDetailHint" xml:space="preserve">
+    <value>Lower: faster, coarser volumetric dust</value>
+  </data>
 </root>

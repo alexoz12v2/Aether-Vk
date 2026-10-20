@@ -1834,6 +1834,15 @@ impl Device {
             "[Dust] view {}: vqueue {} packets drawn by the consumer, {} overflowed, {} chunks over {} clusters (ppc estimate {:.1})",
             pe.0, vdrawn, voverflowed, host.slot_chunks[slot], clusters, host.vqueue_ppc
           );
+          // (the `.prof` consumer only: 0 0 in production; the mode is `AETHERVK_DUST_PROF_PAIR`)
+          let off = dust::PYR_PROF_PAIR as usize;
+          let pair_mode = (header[dust::PYR_FLAGS as usize] >> dust::DUST_FRAME_PROF_PAIR_SHIFT) & 3;
+          let what = ["offscreen packets, ×256 lane-cycles to their return", "allTop packets, ×256 lane-cycles",
+            "allTop pieces, SMALL ones", "merge-eligible packets, ×256 lane-cycles"][pair_mode as usize];
+          aethervk_oshal_rlib::log!(
+            "[Dust] view {}: profile pair {} ({}): {} {} of {} packets",
+            pe.0, pair_mode, what, header[off], header[off + 1], vdrawn + voverflowed
+          );
         }
       }
     }
@@ -2002,7 +2011,11 @@ impl Device {
         _ => 0,
       }
     });
-    header[dust::PYR_FLAGS as usize] = flags | queue_bits | vqueue_bits | deep_bits;
+    // `AETHERVK_DUST_PROF_PAIR=0..3`: what the `.prof` consumer's profile pair counts
+    let prof_pair_bits = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_PROF_PAIR")
+      .and_then(|v| v.trim().parse::<u32>().ok())
+      .map_or(0, |m| (m & 3) << dust::DUST_FRAME_PROF_PAIR_SHIFT);
+    header[dust::PYR_FLAGS as usize] = flags | queue_bits | vqueue_bits | deep_bits | prof_pair_bits;
     // `AETHERVK_DUST_VOLUME_AXIS=chord|time|grid`: the volumetric packets' piece axes (bits 16–17)
     let volume_axis = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_VOLUME_AXIS")
       .map(|v| dust::volume_axis_from_str(&v))

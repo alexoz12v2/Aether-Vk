@@ -2442,6 +2442,40 @@ fn display_stretch_shows_a_faint_tail_and_saturates_the_coma() {
   assert_eq!(clamp_dust_softening(0.0), DUST_SOFTENING_MIN);
 }
 
+/// The "volume detail" setting: a power of two in [1, 16], carried in the splat flags' bits 8–10
+/// as `log2(16 / detail)`; 0 at the default, so the default leaves the flags word as it was.
+#[test]
+fn volume_detail_clamps_to_powers_of_two_and_round_trips_through_the_flags() {
+  let others = DUST_VIEW_TRACERS
+    | DUST_VIEW_FLOW
+    | DUST_VIEW_DEBUG_STREAM
+    | DUST_VIEW_DEBUG_SAMPLE
+    | (0xFF << 20)
+    | DUST_VIEW_VOLUME_SPILL
+    | DUST_VIEW_EDGE_ODD;
+  for d in [1, 2, 4, 8, 16] {
+    assert_eq!(clamp_volume_detail(d), d);
+    let bits = volume_detail_flag_bits(d);
+    assert_eq!(bits & !(7 << DUST_FLAGS_VOLUME_DETAIL_SHIFT), 0, "bits 8-10 only: {d}");
+    assert_eq!(bits & others, 0);
+    assert_eq!(volume_detail_from_flags(bits), d);
+    assert_eq!(volume_detail_from_flags(bits | others), d, "the other flags leave it: {d}");
+  }
+  assert_eq!(volume_detail_flag_bits(DUST_VOLUME_DETAIL_DEFAULT), 0);
+  assert_eq!(volume_detail_from_flags(0), DUST_VOLUME_DETAIL_DEFAULT);
+  assert_eq!(volume_detail_flag_bits(8), 1 << 8);
+  assert_eq!(volume_detail_flag_bits(1), 4 << 8);
+  assert_eq!(clamp_volume_detail(0), 1);
+  assert_eq!(clamp_volume_detail(3), 2);
+  assert_eq!(clamp_volume_detail(17), 16);
+  assert_eq!(clamp_volume_detail(1000), 16);
+  assert_eq!(clamp_volume_detail(u32::MAX), 16);
+  assert_eq!(volume_detail_flag_bits(3), volume_detail_flag_bits(2));
+  assert_eq!(volume_detail_flag_bits(0), volume_detail_flag_bits(1));
+  // the codes 5-7 are never written; they read as the coarsest
+  assert_eq!(volume_detail_from_flags(7 << DUST_FLAGS_VOLUME_DETAIL_SHIFT), 1);
+}
+
 /// Old tiers keep every grain size: the small, high-β grains carry most of the optical depth and
 /// draw the anti-sunward tail.
 #[test]
@@ -7184,6 +7218,7 @@ fn split_keeps_the_moments_and_the_flux() {
     perspective: true,
     volumetric: true,
     shell: 0.0,
+    volume_detail: DUST_VOLUME_DETAIL_DEFAULT,
   };
   let scale = 1.0e3f32;
   let mut leaves = SplitLeaves::default();
@@ -8904,6 +8939,66 @@ fn classification_is_continuous() {
 /// its case. A band whose mean is behind the eye (only its front flank in view) is drawn by lines
 /// too. The centre ray × area of step A put ~0 for the small pieces and sampled the eye-inside one
 /// off the field (y = 320).
+/// The volume detail (`SplitView::volume_detail`, from `DustSplatPushConstants::flags` bits 8–10,
+/// PARTICLES_PERF round 2): when the frame's bias puts every piece on the 1 × 1 last level, a packet
+/// is cut into at most `detail` pieces (fewer along `seg_t` first, as the evaluation cap). At 16
+/// the plan is unchanged; lower details keep the flux in the top texel (a chord far ahead, no
+/// photometry: within 1 %); below the top level the detail changes nothing.
+#[test]
+fn volume_detail_caps_the_pieces_on_the_top_level() {
+  let (w, h, d) = (480u32, 300u32, 200.0f32);
+  let tan_h = (30.0f32).to_radians().tan();
+  let mut mvp = [0.0f32; 16];
+  mvp[0] = h as f32 / (w as f32 * tan_h);
+  mvp[5] = 1.0 / tan_h;
+  mvp[10] = -1e-3;
+  mvp[11] = -1.0;
+  mvp[15] = d;
+  let eye = [0.0f32, 0.0, d];
+  let layout = PyramidLayout::new(w, h);
+  let levels = layout.level_count();
+  let (off, tw, th) = layout.levels[(levels - 1) as usize];
+  assert_eq!((tw, th), (1, 1), "the top level is 1 × 1");
+  // a chord 400 m long, σ 20 m, 2 km ahead: ~10 pieces
+  let p = Packet { seg: [400.0, 0.0, 0.0], ..rotated_packet([-200.0, 0.0, d - 2000.0], [20.0, 20.0, 20.0], 0.0) };
+  let plan = |detail: u32, bias: u32| {
+    let view = SplitView { volume_detail: detail, ..SplitView::of(&mvp, eye) };
+    volume_plan(&p, &mvp, &view, &layout, bias, DUST_VOLUME_AXIS_CHORD, DUST_VOLUME_MAX_EVALS).expect("drawn")
+  };
+  let top_bias = levels - 1;
+  let full = plan(DUST_VOLUME_DETAIL_DEFAULT, top_bias);
+  assert!(full.pieces >= 8, "the chord is cut into {} pieces", full.pieces);
+  assert_eq!(full.level, levels - 1, "every piece on the top level");
+  let deposit = |detail: u32| -> f64 {
+    let view = SplitView { volume_detail: detail, ..SplitView::of(&mvp, eye) };
+    let mut pyr = alloc::vec![0u32; layout.total_words as usize];
+    pyr[..PYRAMID_HEADER_WORDS as usize].copy_from_slice(&layout.header());
+    VolumeStats {
+      evals: 0,
+      bias: top_bias,
+      axis: DUST_VOLUME_AXIS_CHORD,
+    }
+    .store(&mut pyr);
+    volume_scatter(&p, 1.0, &mvp, &view, &Photometry::NONE, [1.0; 3], &layout, 1.0e6 / p.flux, &mut pyr);
+    pyr[off as usize] as f64
+  };
+  let d16 = deposit(DUST_VOLUME_DETAIL_DEFAULT);
+  assert!(d16 > 0.0, "nothing deposited at detail 16");
+  for detail in [8u32, 4, 2, 1] {
+    let pl = plan(detail, top_bias);
+    assert!(pl.pieces <= detail, "detail {detail}: {} pieces", pl.pieces);
+    let rel = (deposit(detail) - d16).abs() / d16;
+    std::println!("[volume detail] {detail}: {} pieces (16: {}), top texel {rel:.2e} from detail 16", pl.pieces, full.pieces);
+    assert!(rel < 0.01, "detail {detail}: the top texel moved {rel:.3e}");
+    // below the top level the detail changes nothing
+    assert_eq!(plan(detail, 0).pieces, plan(DUST_VOLUME_DETAIL_DEFAULT, 0).pieces, "detail {detail} at bias 0");
+  }
+  // the flag bits round trip into the CPU view
+  for detail in [16u32, 8, 4, 2, 1] {
+    assert_eq!(volume_detail_from_flags(volume_detail_flag_bits(detail) | DUST_VIEW_FLOW), detail);
+  }
+}
+
 #[test]
 fn volume_texel_integral_matches_the_subray_integral() {
   let (w, h, d) = (480u32, 300u32, 200.0f32);

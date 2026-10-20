@@ -2922,6 +2922,369 @@ fn gpu_dust_volume_queue_draws_the_same_pyramid() {
   });
 }
 
+/// The volume consumer's top-level path (PARTICLES_PERF round 2, `dust::DUST_FRAME_TOP_PASS_A`):
+/// with the frame's bias putting every volumetric piece on the 1 × 1 last level, pass A only looks
+/// for a piece on screen and pass B classifies each piece there; the pyramid and the evaluations
+/// counted (`PYR_VOLUME_EVALS`, the host feedback's input) are the same word for word as with pass
+/// A in full (the hook). At bias 0 the path is never taken (both frames the same too). The
+/// perspective view inside the cloud draws volumetric packets only.
+#[test]
+fn gpu_dust_top_level_path_draws_the_same_pyramid() {
+  let id = 9058;
+  with_dust_device(id, |device, capacity, _, _| {
+    let batch = test_batch(1024, 3600.0, 3, capacity);
+    emit(device, id, &batch);
+    let first_slot = batch.first_index & batch.ring_mask;
+    let pe = crate::gpu::PresentationEngineHandle(u64::MAX - 58);
+    let (w, h) = (640u32, 400u32);
+    let flow = dust::DustFlowUniform {
+      t_hi: 1.0e8,
+      t_lo: 0.0,
+      speed: 1.0,
+    };
+    let frame = frame_after(5.0);
+    let d = 200.0f32;
+    let tan_h = (30.0f32).to_radians().tan();
+    let mut persp = [0.0f32; 16];
+    persp[0] = h as f32 / (w as f32 * tan_h);
+    persp[5] = 1.0 / tan_h;
+    persp[10] = -1e-3;
+    persp[11] = -1.0;
+    persp[15] = d;
+    let base_pc = dust::DustSplatPushConstants {
+      moments: 0,
+      render: 0,
+      pyramid: 0,
+      live_count: batch.count,
+      flags: dust::DUST_VIEW_FLOW,
+      exposure: 1.0,
+      inv_unit: 0.0,
+      color: dust::pack_color([1.0, 0.6, 0.2, 1.0]),
+      albedo: 0.04,
+      eye_local: [0.0, 0.0, d, 30.0 * 86400.0],
+      mvp: persp,
+    };
+    let run = |inv_unit: f32| -> (Vec<u32>, f32) {
+      let mut used = inv_unit;
+      let mut cmds = device
+        .run_transient_commands(|cmd| {
+          device.cmd_dust_pre_propagate_barrier(cmd);
+          let view = device.cmd_dust_frame_begin(cmd, pe, [w, h], base_pc.flags, flow)?;
+          let mut pc = base_pc;
+          if !(used > 0.0) {
+            used = 1.0 / view.unit;
+          }
+          pc.inv_unit = used;
+          device.cmd_dust_system_begin(id, pc.flags, flow)?;
+          let (render, moments) = device.cmd_dust_propagate(cmd, id, 0, capacity, first_slot, batch.count, &frame)?;
+          device.cmd_dust_pre_splat_barrier(cmd);
+          device.cmd_dust_splat(cmd, pe, id, 0, first_slot, capacity, render, moments, pc)?;
+          device.cmd_dust_post_splat_barrier(cmd);
+          device.cmd_dust_frame_end(cmd, pe)?;
+          device.cmd_dust_system_end(id)?;
+          Ok(())
+        })
+        .unwrap();
+      cmds.cleanup(&device.device);
+      (device.download_dust_pyramid(pe).unwrap(), used)
+    };
+    let hw = dust::PYRAMID_HEADER_WORDS as usize;
+    let ev = dust::PYR_VOLUME_EVALS as usize;
+    let mut inv_unit = 0.0;
+    for _ in 0..(super::dust::DUST_READBACK_SLOTS + 2) {
+      inv_unit = run(0.0).1;
+    }
+    for bias in [0u32, 15] {
+      device.dust_set_volume_bias(pe, Some(bias));
+      device.dust_set_vqueue_mode(pe, None);
+      let (fast, _) = run(inv_unit);
+      device.dust_set_vqueue_mode(pe, Some(dust::DUST_FRAME_TOP_PASS_A));
+      let (reference, _) = run(inv_unit);
+      device.dust_set_vqueue_mode(pe, None);
+      let levels = fast[dust::PYR_LEVELS as usize];
+      let top = (dust::PYR_TABLE + 3 * (levels - 1)) as usize;
+      let taken = bias + 1 >= levels && fast[top + 1] == 1 && fast[top + 2] == 1;
+      let fnv = |a: &[u32]| a.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &w| (h ^ w as u64).wrapping_mul(0x100_0000_01b3));
+      std::println!(
+        "[dust top path] bias {bias}: {levels} levels, top {}x{}, path taken {taken}; evaluations {} / reference {}; pyramid hash {:016x} / reference {:016x}",
+        fast[top + 1],
+        fast[top + 2],
+        fast[ev],
+        reference[ev],
+        fnv(&fast[hw..]),
+        fnv(&reference[hw..])
+      );
+      assert_eq!(taken, bias == 15, "bias {bias}: the top-level path's condition");
+      assert!(reference[hw..].iter().any(|&v| v != 0), "bias {bias}: the frame drew nothing");
+      assert!(reference[ev] > 0, "bias {bias}: no evaluations counted");
+      assert_eq!(fast[ev], reference[ev], "bias {bias}: the top-level path counted other evaluations");
+      let diff = fast[hw..].iter().zip(&reference[hw..]).filter(|(x, y)| x != y).count();
+      assert_eq!(diff, 0, "bias {bias}: the top-level path drew another pyramid ({diff} words differ)");
+    }
+    device.dust_set_volume_bias(pe, None);
+  });
+}
+
+/// The volume detail (`dust::volume_detail_flag_bits`, the draw's flags bits 8–10; PARTICLES_PERF
+/// round 2): at a bias that puts every volumetric piece on the 1 × 1 last level, detail 16 draws
+/// the same pyramid word for word as flags without the bits, and lower details make fewer
+/// evaluations (detail 1 strictly, in the young view at the end of the emission) with the top texel's
+/// light within 5 % (10 % at detail 1: the phase weights at fewer depth nodes); at bias 0 every detail draws the same pyramid. The top-level path's reference
+/// (`DUST_FRAME_TOP_PASS_A`) cuts the pieces the same way.
+#[test]
+fn gpu_dust_volume_detail_trades_pieces_on_the_top_level() {
+  let id = 9059;
+  with_dust_device(id, |device, capacity, _, _| {
+    // (emitted over 2 days: chords long against the packets' spread, so packets of several pieces)
+    let batch = test_batch(1024, 2.0 * 86400.0, 3, capacity);
+    emit(device, id, &batch);
+    let first_slot = batch.first_index & batch.ring_mask;
+    let pe = crate::gpu::PresentationEngineHandle(u64::MAX - 59);
+    let (w, h) = (640u32, 400u32);
+    let flow = dust::DustFlowUniform {
+      t_hi: 1.0e8,
+      t_lo: 0.0,
+      speed: 1.0,
+    };
+    let tan_h = (30.0f32).to_radians().tan();
+    let hw = dust::PYRAMID_HEADER_WORDS as usize;
+    let ev = dust::PYR_VOLUME_EVALS as usize;
+    // views of the test cloud from inside and from its edge, young and older: the cut needs packets
+    // of several pieces, which not every view has; at least one must
+    // (the cluster level of detail merges samples into long chords, as the far LOD groups of the
+    // app's clouds: pixels per drawn segment, None = the default)
+    let mut cut_somewhere = false;
+    for lod in [None, Some(64.0f32), Some(512.0f32)] {
+    device.dust_set_lod_px(pe, lod);
+    // (2 d: the end of the emission, its young packets narrow against their chords; 5 d: older)
+    for days in [2.0f64, 5.0] {
+      let frame = frame_after(days);
+      for d in [200.0f32, 2.0e3, 2.0e4, 2.0e5] {
+        let mut persp = [0.0f32; 16];
+        persp[0] = h as f32 / (w as f32 * tan_h);
+        persp[5] = 1.0 / tan_h;
+        persp[10] = -1e-3;
+        persp[11] = -1.0;
+        persp[15] = d;
+        let base_pc = dust::DustSplatPushConstants {
+          moments: 0,
+          render: 0,
+          pyramid: 0,
+          live_count: batch.count,
+          flags: dust::DUST_VIEW_FLOW,
+          exposure: 1.0,
+          inv_unit: 0.0,
+          color: dust::pack_color([1.0, 0.6, 0.2, 1.0]),
+          albedo: 0.04,
+          eye_local: [0.0, 0.0, d, 30.0 * 86400.0],
+          mvp: persp,
+        };
+        let run = |inv_unit: f32, extra: u32| -> (Vec<u32>, f32) {
+          std::eprintln!("[detail stage] lod {lod:?} {days} d {d} m extra {extra:#x} inv_unit {inv_unit}");
+          let mut used = inv_unit;
+          let mut cmds = device
+            .run_transient_commands(|cmd| {
+              device.cmd_dust_pre_propagate_barrier(cmd);
+              let view = device.cmd_dust_frame_begin(cmd, pe, [w, h], base_pc.flags, flow)?;
+              let mut pc = base_pc;
+              pc.flags |= extra;
+              if !(used > 0.0) {
+                used = 1.0 / view.unit;
+              }
+              pc.inv_unit = used;
+              device.cmd_dust_system_begin(id, pc.flags, flow)?;
+              let (render, moments) = device.cmd_dust_propagate(cmd, id, 0, capacity, first_slot, batch.count, &frame)?;
+              device.cmd_dust_pre_splat_barrier(cmd);
+              device.cmd_dust_splat(cmd, pe, id, 0, first_slot, capacity, render, moments, pc)?;
+              device.cmd_dust_post_splat_barrier(cmd);
+              device.cmd_dust_frame_end(cmd, pe)?;
+              device.cmd_dust_system_end(id)?;
+              Ok(())
+            })
+            .unwrap();
+          cmds.cleanup(&device.device);
+          (device.download_dust_pyramid(pe).unwrap(), used)
+        };
+        device.dust_set_volume_bias(pe, None);
+        let mut inv_unit = 0.0;
+        for _ in 0..(super::dust::DUST_READBACK_SLOTS + 2) {
+          inv_unit = run(0.0, 0).1;
+        }
+        for bias in [0u32, 15] {
+          device.dust_set_volume_bias(pe, Some(bias));
+          std::eprintln!("[detail stage] bias {bias}");
+          // the host's feedback (split depth, EWA bias) settled first: two frames the same
+          let mut plain = run(inv_unit, 0).0;
+          let mut settled = false;
+          for _ in 0..24 {
+            let next = run(inv_unit, 0).0;
+            settled = next[hw..] == plain[hw..] && next[ev] == plain[ev];
+            plain = next;
+            if settled {
+              break;
+            }
+          }
+          assert!(settled, "{days} d, {d} m, bias {bias}: the frames did not settle in 24");
+          let levels = plain[dust::PYR_LEVELS as usize];
+          let top = (dust::PYR_TABLE + 3 * (levels - 1)) as usize;
+          let top_off = plain[top] as usize;
+          let (d16, _) = run(inv_unit, dust::volume_detail_flag_bits(16));
+          assert!(
+            plain[hw..] == d16[hw..] && plain[ev] == d16[ev],
+            "{days} d, {d} m, bias {bias}: detail 16 drew another pyramid than no detail bits"
+          );
+          for detail in [4u32, 1] {
+            let bits = dust::volume_detail_flag_bits(detail);
+            let (cut, _) = run(inv_unit, bits);
+            device.dust_set_vqueue_mode(pe, Some(dust::DUST_FRAME_TOP_PASS_A));
+            let (cut_ref, _) = run(inv_unit, bits);
+            device.dust_set_vqueue_mode(pe, None);
+            let rel = (cut[top_off] as f64 - plain[top_off] as f64).abs() / (plain[top_off] as f64).max(1.0);
+            std::println!(
+              "[dust volume detail] lod {lod:?}, {days} d, {d} m, bias {bias}, detail {detail}: evaluations {} (16: {}), top texel {} (16: {}, {rel:.2e})",
+              cut[ev], plain[ev], cut[top_off], plain[top_off]
+            );
+            assert!(cut[hw..] == cut_ref[hw..], "{days} d, {d} m, bias {bias}, detail {detail}: the top-level path and its reference differ");
+            if bias == 15 {
+              assert!(cut[ev] <= plain[ev], "{days} d, {d} m, detail {detail}: more evaluations");
+              cut_somewhere |= cut[ev] < plain[ev];
+              // (a saturated or empty top texel says nothing about the light kept)
+              if plain[top_off] > 1000 && plain[top_off] < u32::MAX / 2 {
+                // (detail 1 merges eye-near packets too, their phase weights at one depth node:
+                // measured 5.97e-2 at 2 d, 2 km, LOD 64; the others within 5 %)
+                let tol = if detail == 1 { 0.10 } else { 0.05 };
+                assert!(rel < tol, "{days} d, {d} m, detail {detail}: the top texel moved {rel:.3e}");
+              }
+            } else {
+              assert!(cut[hw..] == plain[hw..], "{days} d, {d} m, detail {detail}: the detail changed a frame below the top level");
+            }
+          }
+        }
+      }
+    }
+    }
+    device.dust_set_lod_px(pe, None);
+    device.dust_set_volume_bias(pe, None);
+    assert!(cut_somewhere, "no view had a volumetric packet of several pieces on the top level: the cut was never exercised");
+  });
+}
+
+/// Repro of the Xid 31 (an out-of-bounds GPU read) at a forced volume bias with a cluster level of
+/// detail on the young cloud (PARTICLES_TRANSCRIPT.md, 2026-10-20): the pose is set by
+/// `AVK_REPRO_BIAS` (default 0), `AVK_REPRO_LOD` (px, default 64; `none` = the default), `AVK_REPRO_D`
+/// (eye height in m, default 2e4) and `AVK_REPRO_DAYS` (default 2), one forced frame after the
+/// host's feedback settled on the unforced ones.
+#[test]
+fn gpu_dust_forced_bias_lod_repro() {
+  let id = 9060;
+  let env_f = |k: &str, d: f64| std::env::var(k).ok().and_then(|v| v.trim().parse::<f64>().ok()).unwrap_or(d);
+  // AVK_REPRO_SEQ=1: the original detail test's order (LOD None then 64; 200 m, 2 km, 20 km; bias 0, 15)
+  let seq = env_f("AVK_REPRO_SEQ", 0.0) != 0.0;
+  let bias1 = env_f("AVK_REPRO_BIAS", 0.0) as u32;
+  let lod1 = match std::env::var("AVK_REPRO_LOD").ok().as_deref() {
+    Some("none") => None,
+    _ => Some(env_f("AVK_REPRO_LOD", 64.0) as f32),
+  };
+  let d1 = env_f("AVK_REPRO_D", 2.0e4) as f32;
+  let days = env_f("AVK_REPRO_DAYS", 2.0);
+  let poses: Vec<(Option<f32>, f32, u32)> = if seq {
+    let mut v = vec![];
+    for lod in [None, Some(64.0f32)] {
+      for d in [200.0f32, 2.0e3, 2.0e4] {
+        for bias in [0u32, 15] {
+          v.push((lod, d, bias));
+        }
+      }
+    }
+    v
+  } else {
+    vec![(lod1, d1, bias1)]
+  };
+  with_dust_device(id, |device, capacity, _, _| {
+    let batch = test_batch(1024, 2.0 * 86400.0, 3, capacity);
+    emit(device, id, &batch);
+    let first_slot = batch.first_index & batch.ring_mask;
+    let pe = crate::gpu::PresentationEngineHandle(u64::MAX - 60);
+    let (w, h) = (640u32, 400u32);
+    let flow = dust::DustFlowUniform { t_hi: 1.0e8, t_lo: 0.0, speed: 1.0 };
+    let tan_h = (30.0f32).to_radians().tan();
+    let frame = frame_after(days);
+    for (lod, d, bias) in poses {
+      let mut persp = [0.0f32; 16];
+      persp[0] = h as f32 / (w as f32 * tan_h);
+      persp[5] = 1.0 / tan_h;
+      persp[10] = -1e-3;
+      persp[11] = -1.0;
+      persp[15] = d;
+      let base_pc = dust::DustSplatPushConstants {
+        moments: 0,
+        render: 0,
+        pyramid: 0,
+        live_count: batch.count,
+        flags: dust::DUST_VIEW_FLOW,
+        exposure: 1.0,
+        inv_unit: 0.0,
+        color: dust::pack_color([1.0, 0.6, 0.2, 1.0]),
+        albedo: 0.04,
+        eye_local: [0.0, 0.0, d, 30.0 * 86400.0],
+        mvp: persp,
+      };
+      let run = |inv_unit: f32| -> f32 {
+        let mut used = inv_unit;
+        let mut cmds = device
+          .run_transient_commands(|cmd| {
+            device.cmd_dust_pre_propagate_barrier(cmd);
+            let view = device.cmd_dust_frame_begin(cmd, pe, [w, h], base_pc.flags, flow)?;
+            let mut pc = base_pc;
+            if !(used > 0.0) {
+              used = 1.0 / view.unit;
+            }
+            pc.inv_unit = used;
+            device.cmd_dust_system_begin(id, pc.flags, flow)?;
+            let (render, moments) = device.cmd_dust_propagate(cmd, id, 0, capacity, first_slot, batch.count, &frame)?;
+            device.cmd_dust_pre_splat_barrier(cmd);
+            device.cmd_dust_splat(cmd, pe, id, 0, first_slot, capacity, render, moments, pc)?;
+            device.cmd_dust_post_splat_barrier(cmd);
+            device.cmd_dust_frame_end(cmd, pe)?;
+            device.cmd_dust_system_end(id)?;
+            Ok(())
+          })
+          .unwrap();
+        cmds.cleanup(&device.device);
+        used
+      };
+      device.dust_set_lod_px(pe, lod);
+      device.dust_set_volume_bias(pe, None);
+      let mut inv_unit = 0.0;
+      for _ in 0..(super::dust::DUST_READBACK_SLOTS + 2) {
+        inv_unit = run(0.0);
+      }
+      std::println!("[dust repro] settled; forced bias {bias}, lod {lod:?}, {d} m, {days} d");
+      device.dust_set_volume_bias(pe, Some(bias));
+      let mut prev: Option<Vec<u32>> = None;
+      for i in 0..3 {
+        run(inv_unit);
+        let words = device.download_dust_pyramid(pe).expect("the forced frame");
+        let hw = dust::PYRAMID_HEADER_WORDS as usize;
+        let diff = prev.as_ref().map(|p| p[hw..].iter().zip(&words[hw..]).filter(|(a, b)| a != b).count());
+        let (bad, first) = (words[dust::PYR_BAD_CODE as usize], words[dust::PYR_BAD_CODE_FIRST as usize]);
+        std::println!(
+          "[dust repro] forced frame {i} done: {} words, words differing from the last frame: {diff:?}, bad codes {} + {} empty rows, first {first:#x}",
+          words.len(),
+          bad & 0xFFFF,
+          bad >> 16
+        );
+        // the codes were once overwritten in shared memory (Xid 31 when unguarded): none may be bad, and equal frames draw equal pyramids
+        assert_eq!(bad, 0, "bias {bias}, lod {lod:?}, {d} m, {days} d, frame {i}: a piece code named a missing pyramid level (first {first:#x})");
+        assert!(diff.unwrap_or(0) == 0, "bias {bias}, lod {lod:?}, {d} m, {days} d, frame {i}: {diff:?} words differ from the previous identical frame");
+        prev = Some(words);
+      }
+    }
+    device.dust_set_lod_px(pe, None);
+    device.dust_set_volume_bias(pe, None);
+  });
+}
+
 /// The shader-clock profiler (`dust_profile.glsl`, `AETHERVK_DUST_PROFILE=1`): with the request
 /// on before the device is created, the `.prof` splat and queue shaders run and their counters
 /// are consistent (the thread count is the live count, the nested timers contain their parts,

@@ -39,6 +39,9 @@ public partial class SettingsTabViewModel
   /// <summary>Input bindings section (rebind / add / remove chords, reset; saved to preferences.json).</summary>
   public InputBindingsViewModel InputBindings { get; }
 
+  /// <summary>Particle rendering section (dust volume detail; saved to preferences.json).</summary>
+  public ParticleRenderingViewModel ParticleRendering { get; }
+
   public SettingsTabViewModel(
     ITranslationService translationService,
     ISchedulerProvider schedulerProvider,
@@ -66,6 +69,7 @@ public partial class SettingsTabViewModel
       translationService,
       schedulerProvider);
     InputBindings = new InputBindingsViewModel(inputRegistry, preferences);
+    ParticleRendering = new ParticleRenderingViewModel(runtimeService, preferences);
     Billboards = new DesktopBillboardsViewModel(
       billboardService,
       assetLibrary,

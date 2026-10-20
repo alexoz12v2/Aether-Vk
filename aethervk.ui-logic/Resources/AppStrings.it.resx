@@ -542,4 +542,13 @@
   <data name="Tabs_Settings_ResetBindings" xml:space="preserve">
     <value>Ripristina predefinite</value>
   </data>
+  <data name="Tabs_Settings_ParticleRendering" xml:space="preserve">
+    <value>Rendering particelle</value>
+  </data>
+  <data name="Tabs_Settings_VolumeDetail" xml:space="preserve">
+    <value>Dettaglio volumetrico</value>
+  </data>
+  <data name="Tabs_Settings_VolumeDetailHint" xml:space="preserve">
+    <value>Più basso: più veloce, polvere volumetrica più grossolana</value>
+  </data>
 </root>

@@ -56,8 +56,9 @@ const uint DUST_VS_L = 8u;       // 6: the pieces' Cholesky factor
 const uint DUST_VS_SKD = 14u;    // 3: the pieces' covariance diagonal
 const uint DUST_VS_BOUND = 17u;  // 12: the 3-sigma bound (l[6], qe, g)
 const uint DUST_VS_FPX = 29u;    // 1: fPx (the gated path's level)
-const uint DUST_VS_CTRL = 30u;   // 1: nA | nB << 5 | K << 10 | axis mode << 13 | hasB << 15 | gated << 16 | levels << 17 (8 bits; 25-31 clear)
+const uint DUST_VS_CTRL = 30u;   // 1: nA | nB << 5 | K << 10 | axis mode << 13 | hasB << 15 | gated << 16 | levels << 17 (8 bits) | top << 25 (26-31 clear)
 const uint DUST_VS_WORDS = 31u;
+uint dust_pk[8];  // XID31-V2: the codes in private memory
 shared uint dust_vs[DUST_VS_WORDS * gl_WorkGroupSize.x];
 uint dust_vs_at(uint c) { return c * gl_WorkGroupSize.x + gl_LocalInvocationIndex; }
 void dust_vs_put(uint c, float v) { dust_vs[dust_vs_at(c)] = floatBitsToUint(v); }
@@ -97,13 +98,13 @@ uint dust_volume_class_code(DustVolumePiece q, uvec2 ck, uint kb, uint lev) {
     uint ax = (ck.x == DUST_VOLUME_CLASS_LINE && q.line != 0u) ? q.line - 1u : 0u;
     return ck.x | ((ck.y - 1u) << 2u) | ((kb - 1u) << 4u) | (ax << 6u) | (lev << 8u);
 }
-// (step 9C: the eight code words in the lane's slots DUST_VS_PK.., not in registers; k < 16)
+// (the eight code words in private memory `dust_pk`: kept in the shared slots DUST_VS_PK.. they were overwritten by an unfound writer
+//  on some frames (garbage levels, Xid 31); k < 16)
 void dust_pack_code(uint k, uint code) {
-    uint i = dust_vs_at(DUST_VS_PK + (k >> 1u));
-    dust_vs[i] = dust_vs[i] | (code << ((k & 1u) * 16u));
+    dust_pk[k >> 1u] |= code << ((k & 1u) * 16u);
 }
 uint dust_unpack_code(uint k) {
-    return (dust_vs[dust_vs_at(DUST_VS_PK + (k >> 1u))] >> ((k & 1u) * 16u)) & 0xFFFFu;
+    return (dust_pk[k >> 1u] >> ((k & 1u) * 16u)) & 0xFFFFu;
 }
 // the texels of a piece's range at a level (the table read)
 uint dust_volume_texels_at(DustVolumePiece q, uint lev) {
@@ -147,7 +148,7 @@ uvec2 dust_volume_class_k(DustVolumePiece q, uvec2 ck, uint K, uint kb) {
 // the last level
 #define DUST_VOLUME_EVALS_PP(out, e2_, e3_, e4_, anyOn_, allTop_, bias_) { \
     out = 0u; e2_ = 0u; e3_ = 0u; e4_ = 0u; \
-    for (uint w_ = 0u; w_ < 8u; ++w_) dust_vs[dust_vs_at(DUST_VS_PK + w_)] = 0u; \
+    for (uint w_ = 0u; w_ < 8u; ++w_) dust_pk[w_] = 0u; \
     anyOn_ = false; allTop_ = true; \
     for (uint k_ = 0u; k_ < nA * nB; ++k_) { \
         DustVolumePiece q_; \
@@ -204,9 +205,55 @@ void dust_volume_draw(DustPacket p, uint ra, uint rc, float exposure, uint level
     // evaluations at the sub-ray limits, the pieces' classes, orders and levels packed
     uint evals, e2, e3, e4;
     bool anyOn, allTop;
+    // (PARTICLES_PERF round 2) the top-level path: the bias puts every piece on the last level
+    // (min(lp + bias, levels - 1), lp >= 0) and that level is 1 x 1, so a piece covers at most one
+    // texel: the evaluations are at most 16 pieces x 16 (DUST_VOLUME_MAX_EVALS), the cap loops
+    // never act and K is 4. Pass A then only asks whether any piece is on screen (the first one
+    // found ends it); pass B classifies each piece at the top level (the gated path's build) and
+    // sums the evaluations into the lane's code slots, which this path does not use. The same
+    // decisions on the same integers: the pyramid is the same word for word (reference:
+    // DUST_FRAME_TOP_PASS_A, dust::DUST_FRAME_TOP_PASS_A)
+    uint topW = pc.pyramid.v[DUST_PYR_TABLE + 3u * (levels - 1u) + 1u];
+    uint topH = pc.pyramid.v[DUST_PYR_TABLE + 3u * (levels - 1u) + 2u];
+    bool topOnly = bias + 1u >= levels && topW == 1u && topH == 1u;
+    bool topKnown = topOnly && (pc.pyramid.v[DUST_PYR_FLAGS] & DUST_FRAME_TOP_PASS_A) == 0u;
+    // the volume detail (the draw's flags bits 8-10, dust::SplitView::volume_detail; 16 by
+    // default, which no plan exceeds): a top-level packet cut into at most that many pieces,
+    // fewer along seg_t first, as the evaluation cap (dust::volume_plan_pieces)
+    if (topOnly) {
+        uint detail = max(16u >> ((pc.flags >> DUST_FLAGS_VOLUME_DETAIL_SHIFT) & 7u), 1u);
+        for (;;) {
+            if (nA * nB <= detail) break;
+            if (nB > 1u) { nB = (nB + 1u) / 2u; cvarB = DUST_VOLUME_PIECE_VAR_CAPPED; }
+            else if (nA > 1u) { nA = (nA + 1u) / 2u; cvarA = DUST_VOLUME_PIECE_VAR_CAPPED; }
+            else break;
+        }
+    }
     DUST_PROF_BEGIN(vclass)
-    DUST_VOLUME_EVALS_PP(evals, e2, e3, e4, anyOn, allTop, bias)
+    if (topKnown) {
+        evals = 0u; e2 = 0u; e3 = 0u; e4 = 0u;
+        anyOn = false; allTop = true;
+        for (uint k_ = 0u; k_ < nA * nB && !anyOn; ++k_) {
+            DustVolumePiece q_;
+            DUST_VOLUME_BUILD(q_, k_)
+            anyOn = q_.on;
+        }
+        dust_pk[0] = 0u;
+    } else {
+        DUST_VOLUME_EVALS_PP(evals, e2, e3, e4, anyOn, allTop, bias)
+    }
     DUST_PROF_END(vclass)
+#ifdef DUST_PROFILE
+    // (PARTICLES_PERF: the profile pair, words DUST_PYR_PROF_PAIR / + 1, by the frame's mode;
+    // the host logs them. 0: the packets found off screen here and their cycles / 256 so far;
+    // 1 / 3: the allTop packets / those whose pieces are all SMALL too, their cycles / 256 up to
+    // the end; 2: the allTop packets' pieces and the SMALL ones among them)
+    uint profMode = (pc.pyramid.v[DUST_PYR_FLAGS] >> DUST_FRAME_PROF_PAIR_SHIFT) & 3u;
+    if (profMode == 0u && !anyOn && !dust_counting) {
+        atomicAdd(pc.pyramid.v[DUST_PYR_PROF_PAIR], 1u);
+        atomicAdd(pc.pyramid.v[DUST_PYR_PROF_PAIR + 1u], (clock2x32ARB().x - dust_prof_t0_vplan) >> 8u);
+    }
+#endif
     if (!anyOn) { DUST_PROF_END(vplan) return; }
     // the evaluation cap on the texels: every piece one level coarser (dust::volume_plan_pieces,
     // the uniform extra), then fewer pieces (along seg_t first); both rare
@@ -223,6 +270,18 @@ void dust_volume_draw(DustPacket p, uint ra, uint rc, float exposure, uint level
         DUST_VOLUME_EVALS_PP(evals, e2, e3, e4, anyOn, allTop, bias + extra)
     }
     uint n = nA * nB;
+#ifdef DUST_PROFILE
+    bool profHit = false;
+    if (profMode >= 1u && allTop && !dust_counting && (profMode == 1u || !topKnown)) {
+        uint nSmall = 0u;
+        for (uint k = 0u; k < n; ++k) nSmall += (dust_unpack_code(k) & 3u) == DUST_VOLUME_CLASS_SMALL ? 1u : 0u;
+        if (profMode == 2u) {
+            atomicAdd(pc.pyramid.v[DUST_PYR_PROF_PAIR], n);
+            atomicAdd(pc.pyramid.v[DUST_PYR_PROF_PAIR + 1u], nSmall);
+        }
+        profHit = profMode == 1u || (profMode == 3u && nSmall == n);
+    }
+#endif
     // the packet's sub-ray limit K: the largest of 4, 3, 2, 1 whose evaluations fit the cap
     // (dust::volume_subray_limit); the evaluations counted are those at K
     uint K = 4u;
@@ -232,8 +291,13 @@ void dust_volume_draw(DustPacket p, uint ra, uint rc, float exposure, uint level
     evals = K == 4u ? e4 : (K == 3u ? e3 : (K == 2u ? e2 : evals));
     // the in-frame gate (dust::volume_scatter): past DUST_FRAME_HARD_FACTOR budgets this frame,
     // every piece at least at dust_gate_level (the evaluations only shrink)
-    uint before = atomicAdd(pc.pyramid.v[DUST_PYR_VOLUME_EVALS], evals);
-    bool gated = dust_frame_gates_on() && before > DUST_FRAME_HARD_FACTOR * DUST_VOLUME_FRAME_BUDGET;
+    // (the top-level path: no piece is below the gate level, and every volumetric packet of the
+    // frame takes this path, so none reads the running sum; pass B adds the evaluations)
+    bool gated = false;
+    if (!topKnown) {
+        uint before = atomicAdd(pc.pyramid.v[DUST_PYR_VOLUME_EVALS], evals);
+        gated = dust_frame_gates_on() && before > DUST_FRAME_HARD_FACTOR * DUST_VOLUME_FRAME_BUDGET;
+    }
     uint depthBits = floatBitsToUint(max(sqrt(dot(eye - p.mean, eye - p.mean)) / DUST_AU_M, 0.0));
     // the support's cut: the flux over the kept mass (dust::volume_scatter; the packet's
     // covariance re-read from its record: not kept live across pass A)
@@ -252,7 +316,7 @@ void dust_volume_draw(DustPacket p, uint ra, uint rc, float exposure, uint level
         dust_vs_put(DUST_VS_SKD + 0u, skd.x); dust_vs_put(DUST_VS_SKD + 1u, skd.y); dust_vs_put(DUST_VS_SKD + 2u, skd.z);
         dust_vs_put(DUST_VS_FPX, fPx);
         dust_vs[dust_vs_at(DUST_VS_CTRL)] = nA | (nB << 5u) | (K << 10u) | (mode << 13u) | ((hasB ? 1u : 0u) << 15u)
-                                          | ((gated ? 1u : 0u) << 16u) | (levels << 17u);
+                                          | ((gated ? 1u : 0u) << 16u) | (levels << 17u) | ((topKnown ? 1u : 0u) << 25u);
     }
     DUST_PROF_END(vplan)
     DUST_PROF_BEGIN(vdraw)
@@ -305,7 +369,16 @@ void dust_volume_draw(DustPacket p, uint ra, uint rc, float exposure, uint level
         uvec2 ck;
         uint kb;
         uint gate = dust_gate_level(levelsk);
-        if (gatedk && lev < gate) {
+        bool topk = ((ctl >> 25u) & 1u) != 0u;
+        if (topk) {
+            // the top-level path: the piece at the last level, its class and bound there (pass
+            // A's build and decisions on it)
+            q = dust_volume_piece_at(k, flux, rho, expo, axMeanK, Lk, skd, segAK, nAk, segBK, nBk, hasBk, W, H, r0, r1,
+                                     r3, tv, eye, fPxK, levelsk, true);
+            lev = levelsk - 1u;
+            ck = dust_volume_class(q, lev, levelsk);
+            kb = dust_volume_order_bound(q, lev, ck.x, levelsk);
+        } else if (gatedk && lev < gate) {
             // past the gate: the piece at the gate level, its class and bound there
             q = dust_volume_piece_at(k, flux, rho, expo, axMeanK, Lk, skd, segAK, nAk, segBK, nBk, hasBk, W, H, r0, r1,
                                      r3, tv, eye, fPxK, levelsk, true);
@@ -316,6 +389,13 @@ void dust_volume_draw(DustPacket p, uint ra, uint rc, float exposure, uint level
             // the piece without its own level (its class packed by pass A: step D3)
             q = dust_volume_piece_at(k, flux, rho, expo, axMeanK, Lk, skd, segAK, nAk, segBK, nBk, hasBk, W, H, r0, r1,
                                      r3, tv, eye, fPxK, levelsk, false);
+            // (a level past the pyramid would read an empty table row and run the range loop away; the
+            // codes in the lane's slots were read back out of range in the Xid 31 investigation)
+            if (lev >= levelsk) {
+                atomicAdd(pc.pyramid.v[DUST_PYR_BAD_CODE], 1u);
+                atomicCompSwap(pc.pyramid.v[DUST_PYR_BAD_CODE_FIRST], 0u, (code & 0xFFFFu) | (k << 16u) | (n << 24u));
+            }
+            lev = min(lev, levelsk - 1u);
             ck = uvec2(code & 3u, ((code >> 2u) & 3u) + 1u);
             kb = ((code >> 4u) & 3u) + 1u;
             if (ck.x == DUST_VOLUME_CLASS_LINE) q.line = ((code >> 6u) & 1u) + 1u;
@@ -323,11 +403,20 @@ void dust_volume_draw(DustPacket p, uint ra, uint rc, float exposure, uint level
         uint off = pc.pyramid.v[DUST_PYR_TABLE + 3u * lev];
         uint lw = pc.pyramid.v[DUST_PYR_TABLE + 3u * lev + 1u];
         uint lh = pc.pyramid.v[DUST_PYR_TABLE + 3u * lev + 2u];
+        if (lw == 0u || lh == 0u) {
+            atomicAdd(pc.pyramid.v[DUST_PYR_BAD_CODE], 0x10000u);
+            continue;
+        }
         float sz = float(1u << lev);
         ivec4 r = dust_volume_range(q, lev, lw, lh);
         if (r.y < r.x || r.w < r.z) continue;
         // the class and order under the limit K and the piece's bound; one loop per class
         uvec2 cks = dust_volume_class_k(q, ck, Kk, kb);
+        // (the top-level path: the piece's evaluations, pass A's t x cost at K = 4)
+        if (topk) {
+            uint tk = uint((r.y - r.x + 1) * (r.w - r.z + 1));
+            dust_pk[0] += tk * dust_volume_texel_cost(cks.x, cks.y);
+        }
         uint cls = cks.x;
         uint kSub = max(cks.y, 1u);
         uint pieceSeed = dust_hash32(seed ^ k);
@@ -376,5 +465,15 @@ void dust_volume_draw(DustPacket p, uint ra, uint rc, float exposure, uint level
     }
     if (peak > 0.0) atomicMax(pc.pyramid.v[DUST_PYR_TAU_MAX], floatBitsToUint(peak));
     if (maskBits != 0u) atomicOr(pc.pyramid.v[DUST_PYR_LEVEL_MASK], maskBits);
+    if (((dust_vs_word(DUST_VS_CTRL) >> 25u) & 1u) != 0u) {
+        uint ev = dust_pk[0];
+        if (ev != 0u) atomicAdd(pc.pyramid.v[DUST_PYR_VOLUME_EVALS], ev);
+    }
     DUST_PROF_END(vdraw)
+#ifdef DUST_PROFILE
+    if (profHit) {
+        atomicAdd(pc.pyramid.v[DUST_PYR_PROF_PAIR], 1u);
+        atomicAdd(pc.pyramid.v[DUST_PYR_PROF_PAIR + 1u], (clock2x32ARB().x - dust_prof_t0_vplan) >> 8u);
+    }
+#endif
 }

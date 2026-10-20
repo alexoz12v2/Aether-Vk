@@ -258,6 +258,11 @@ public interface INativeRuntimeService : IDisposable
   /// (asinh stretch of the accumulated optical depth); clamped natively to [1e-7, 1].</summary>
   bool SetDustSoftening(float softening);
 
+  /// <summary>Dust "Volume detail": the pieces a volumetric dust packet is drawn with, 16 (every
+  /// piece, the default) down to 1 (faster, coarser); clamped natively to the largest power of two
+  /// ≤ <paramref name="detail"/> in [1, 16]. Visual only.</summary>
+  bool SetDustVolumeDetail(int detail);
+
   /// <summary>Dust view aids: bit 0 tracers (bright dots on real particles), bit 1 flow animation
   /// (pulses travelling outward). Visual only.</summary>
   bool SetDustViewFlags(uint flags);
@@ -1266,6 +1271,10 @@ internal unsafe static class PInvokeAetherVkCore
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   [return: MarshalAs(UnmanagedType.U1)]
   public static extern bool avkSimulationContext_setDustSoftening(nint ctx, ulong sceneId, float softening);
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.U1)]
+  public static extern bool avkSimulationContext_setDustVolumeDetail(nint ctx, ulong sceneId, uint detail);
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   [return: MarshalAs(UnmanagedType.U1)]
@@ -2332,6 +2341,9 @@ public sealed class NativeRuntimeService : INativeRuntimeService
 
   public bool SetDustSoftening(float softening) =>
     _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_setDustSoftening(_ctx, _sceneId, softening);
+
+  public bool SetDustVolumeDetail(int detail) =>
+    _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_setDustVolumeDetail(_ctx, _sceneId, (uint)Math.Max(detail, 0));
 
   public bool SetDustViewFlags(uint flags) =>
     _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_setDustViewFlags(_ctx, _sceneId, flags);

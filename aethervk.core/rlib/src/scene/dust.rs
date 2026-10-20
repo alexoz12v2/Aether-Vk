@@ -143,6 +143,50 @@ pub fn clamp_dust_softening(s: f32) -> f32 {
   }
 }
 
+/// Default "volume detail" (Settings › Particle rendering): a volumetric packet is drawn with
+/// every piece, today's image. Lower values (powers of two) draw it with fewer pieces: faster,
+/// slightly coarser.
+pub const DUST_VOLUME_DETAIL_DEFAULT: u32 = 16;
+/// Accepted volume detail range (the powers of two in it)
+pub const DUST_VOLUME_DETAIL_MIN: u32 = 1;
+pub const DUST_VOLUME_DETAIL_MAX: u32 = 16;
+/// [`DustSplatPushConstants::flags`] bits 8–10: `log2(16 / volume detail)`, 0 at the default.
+/// Bits 0–1 and 16–17 are the view's flags (`DUST_VIEW_*`), 20–27 the diagnostics' value,
+/// 28–29 host-internal ([`DUST_VIEW_VOLUME_SPILL`], [`DUST_VIEW_EDGE_ODD`]): 8–10 were free.
+/// Per draw call (`gpu::frame::dust_splat_pc`), never in the frame's `PYR_FLAGS`
+/// (`cmd_dust_frame_begin` gets the view flags only).
+pub const DUST_FLAGS_VOLUME_DETAIL_SHIFT: u32 = 8;
+const _: () = assert!(
+  (7 << DUST_FLAGS_VOLUME_DETAIL_SHIFT)
+    & (DUST_VIEW_TRACERS
+      | DUST_VIEW_FLOW
+      | DUST_VIEW_DEBUG_STREAM
+      | DUST_VIEW_DEBUG_SAMPLE
+      | (0xFF << 20)
+      | DUST_VIEW_VOLUME_SPILL
+      | DUST_VIEW_EDGE_ODD)
+    == 0
+);
+
+/// Clamps a volume detail to the largest power of two `≤ v` in [`DUST_VOLUME_DETAIL_MIN`,
+/// `DUST_VOLUME_DETAIL_MAX`] (0 → 1).
+pub fn clamp_volume_detail(v: u32) -> u32 {
+  let v = v.clamp(DUST_VOLUME_DETAIL_MIN, DUST_VOLUME_DETAIL_MAX);
+  1 << (31 - v.leading_zeros())
+}
+
+/// The push constants' flag bits of a volume detail (clamped first): `log2(16 / detail) << 8`,
+/// so 16 → 0 (the flags word as before the setting), 8 → 1 << 8, …, 1 → 4 << 8
+pub fn volume_detail_flag_bits(detail: u32) -> u32 {
+  (DUST_VOLUME_DETAIL_MAX / clamp_volume_detail(detail)).trailing_zeros() << DUST_FLAGS_VOLUME_DETAIL_SHIFT
+}
+
+/// The volume detail of a push constants' flags word, the inverse of [`volume_detail_flag_bits`]
+/// (the codes 5–7, never written, read as 1)
+pub fn volume_detail_from_flags(flags: u32) -> u32 {
+  (DUST_VOLUME_DETAIL_MAX >> ((flags >> DUST_FLAGS_VOLUME_DETAIL_SHIFT) & 7)).max(DUST_VOLUME_DETAIL_MIN)
+}
+
 // ─── View aids: tracers and flow (`first_particles.rdc` / `second_particles.rdc`) ───
 // In the wide view (25 km/px) dust moves 2–150 m/s relative to the nucleus: 63 s of sim time moved
 // every particle by 0.005 px, so the coma looked like one shape sliding with the comet. And ~1 M

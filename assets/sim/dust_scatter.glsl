@@ -1519,6 +1519,10 @@ const uint DUST_FRAME_VQUEUE_OFF = 1u << 30u;
 // records in one lane with a running ordinal (the former per-cluster thread's order), the
 // word-identical reference for its counting pass and prefix
 const uint DUST_FRAME_SPLIT_SERIAL = 1u << 31u;
+// PYR_FLAGS bit (a test hook through Device::dust_set_vqueue_mode, dust::DUST_FRAME_TOP_PASS_A):
+// the volume consumer runs pass A in full even when every piece is known to land on the 1 x 1
+// last level (the top-level path's word-identical reference)
+const uint DUST_FRAME_TOP_PASS_A = 1u << 2u;
 
 uint dust_vqueue_base(DustUintBuffer pyr) { return dust_queue_base(pyr) + DUST_QUEUE_WORDS; }
 uint dust_vqueue_capacity(DustUintBuffer pyr, uint base) {

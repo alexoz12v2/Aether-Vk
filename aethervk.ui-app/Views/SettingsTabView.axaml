@@ -395,6 +395,22 @@
         </Expander>
       </Border>
 
+      <!-- Particle rendering: dust drawing detail, live, saved to ~/.aethervk/preferences.json -->
+      <Border Classes="accordion">
+        <Expander Header="{Binding StrParticleRendering}" x:Name="ParticleRenderingSection">
+          <StackPanel Spacing="10" Margin="12,8,12,12">
+            <Grid ColumnDefinitions="Auto,16,*">
+              <TextBlock Grid.Column="0" Text="{Binding StrVolumeDetail}" />
+              <ComboBox Grid.Column="2" HorizontalAlignment="Stretch"
+                        x:Name="VolumeDetailPicker"
+                        ItemsSource="{Binding ParticleRendering.VolumeDetailOptions}"
+                        SelectedIndex="{Binding ParticleRendering.VolumeDetailIndex}" />
+            </Grid>
+            <TextBlock Text="{Binding StrVolumeDetailHint}" TextWrapping="Wrap" />
+          </StackPanel>
+        </Expander>
+      </Border>
+
       <!-- Input bindings: edited live, saved to ~/.aethervk/preferences.json -->
       <Border Classes="accordion">
         <Expander Header="{Binding StrInputBindings}" x:Name="InputBindingsSection">

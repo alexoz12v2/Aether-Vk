@@ -52,7 +52,10 @@ const float DUST_STREAK_PHI_INV      = 0.618034;
 const uint  DUST_VIEW_TRACERS        = 1u;
 const uint  DUST_VIEW_FLOW           = 2u;
 const uint  DUST_VIEW_DEBUG_STREAM = 1u << 16u;  // diagnostics: one stream (dust::DUST_VIEW_DEBUG_STREAM)
-const uint  DUST_VIEW_DEBUG_SAMPLE = 1u << 17u;  // diagnostics: one time sample in every m
+const uint  DUST_VIEW_DEBUG_SAMPLE = 1u << 17u;
+// the push constants' flags bits 8-10 (dust::volume_detail_flag_bits): the volume detail as
+// log2(16 / detail); dust_volume_draw cuts a top-level packet into at most 16 >> that pieces
+const uint  DUST_FLAGS_VOLUME_DETAIL_SHIFT = 8u;  // diagnostics: one time sample in every m
 // host-internal (dust::DUST_VIEW_VOLUME_SPILL): dust_draw_volume.comp drains the volume spill
 const uint  DUST_VIEW_VOLUME_SPILL = 1u << 28u;
 // host-internal (dust::DUST_VIEW_EDGE_ODD, track 9A t9a2d): the chunk's parity, the deferred edge
@@ -93,6 +96,8 @@ const uint  DUST_PYR_UNIT             = 15u;  // f32 bits: the fixed-point unit 
 const uint  DUST_WHITE_LEVEL          = 4u;
 const uint  DUST_PYR_TABLE            = 16u;  // per level: offset (words), width, height
 const uint  DUST_PYR_QUEUE_BASE       = 58u;  // the view's queue start in words from this pyramid (host-written; dust::PYR_QUEUE_BASE)
+const uint  DUST_PYR_PROF_PAIR        = 59u;  // .prof consumer only: two counters chosen by DUST_FRAME_PROF_PAIR_SHIFT (dust::PYR_PROF_PAIR)
+const uint  DUST_FRAME_PROF_PAIR_SHIFT = 18u; // PYR_FLAGS bits 18-19 (dust::DUST_FRAME_PROF_PAIR_SHIFT): 0 off screen, 1 allTop, 2 allTop pieces, 3 merge-eligible
 const float DUST_SPLAT_SIGMA_TEXELS   = 2.0;
 const float DUST_PIXEL_FILTER_VAR     = 0.25;
 const float DUST_SPLAT_SIGMAS         = 3.0;
@@ -127,6 +132,8 @@ const uint  DUST_EWA_BIAS_MAX         = 6u;     // dust::DUST_EWA_BIAS_MAX
 const uint  DUST_FRAME_HARD_FACTOR    = 4u;     // dust::DUST_FRAME_HARD_FACTOR: the in-frame gates at this many budgets
 const uint  DUST_PYR_SPLIT_DROPPED_FLUX = 246u; // f32 bits atomicMax: largest flux dropped behind the eye (dust::PYR_SPLIT_DROPPED_FLUX)
 const uint  DUST_PYR_SPLIT_DEPTH      = 247u;  // host-written: bits 0-7 the split depth limit, bits 8-15 the volume level bias, 16-17 the volume axis, 18-21 the EWA bias (dust::PYR_SPLIT_DEPTH)
+const uint  DUST_PYR_BAD_CODE         = 248u;  // atomicAdd: pieces whose packed code named a level past the pyramid or an empty row (dust::PYR_BAD_CODE)
+const uint  DUST_PYR_BAD_CODE_FIRST   = 249u;  // atomicCompSwap from 0: the first such piece's code | k << 16 | n << 24 (dust::PYR_BAD_CODE_FIRST)
 const float DUST_SPLIT_EPS            = 0.1;    // dust::DUST_SPLIT_EPS
 const float DUST_SPLIT_A              = 0.8;    // dust::DUST_SPLIT_A
 const uint  DUST_SPLIT_DEPTH_MAX      = 4u;     // dust::DUST_SPLIT_DEPTH_MAX

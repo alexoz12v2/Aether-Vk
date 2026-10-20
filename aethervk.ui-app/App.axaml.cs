@@ -130,6 +130,10 @@ public partial class App : Application
             var preferences = ServiceProviderServiceExtensions.GetRequiredService<PreferencesService>(Host!.Services);
             preferences.Load();
             _ = inputRegistry;
+            // the dust volume detail (Settings › Particle rendering) is a preference: the scene
+            // starts at 16, the stored value goes to it before the first frame
+            ServiceProviderServiceExtensions.GetRequiredService<INativeRuntimeService>(Host!.Services)
+              .SetDustVolumeDetail(preferences.DustVolumeDetail);
 
             var mainWindowViewModel =
               ServiceProviderServiceExtensions.GetRequiredService<MainWindowViewModel>(
@@ -293,6 +297,7 @@ public class MockNativeRuntimeService : INativeRuntimeService
 
   public bool SetReferenceErrorVisible(bool visible) => true;
   public bool SetDustSoftening(float softening) => true;
+  public bool SetDustVolumeDetail(int detail) => true;
   public bool SetDustViewFlags(uint flags) => true;
   public bool SetDustFlowSpeed(float speed) => true;
 

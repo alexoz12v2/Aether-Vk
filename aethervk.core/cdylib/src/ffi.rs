@@ -757,6 +757,26 @@ pub unsafe extern "C" fn avkSimulationContext_setDustSoftening(
   ctx_ref.set_dust_softening(scene_id, softening).is_some()
 }
 
+/// Sets the dust volume detail of `scene_id` ("Volume detail": the pieces a volumetric dust
+/// packet is drawn with, 16 = every piece, the default; lower is faster and coarser), clamped to
+/// the largest power of two `≤ detail` in `[1, 16]`; returns false without the scene.
+///
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setDustVolumeDetail(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  detail: u32,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  ctx_ref.set_dust_volume_detail(scene_id, detail).is_some()
+}
+
 /// Sets the dust view aids of `scene_id`: bit 0 tracers (bright dots on a sparse set of real
 /// particles), bit 1 flow animation (synchrone pulses travelling outward); other bits are ignored.
 /// Returns false without the scene.

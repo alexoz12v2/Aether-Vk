@@ -21,4 +21,6 @@ public partial interface ISettingsTabViewModel
   DesktopBillboardsViewModel Billboards { get; }
 
   InputBindingsViewModel InputBindings { get; }
+
+  ParticleRenderingViewModel ParticleRendering { get; }
 }

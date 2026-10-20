@@ -125,6 +125,17 @@ pub const PYR_QUEUE_BASE: u32 = 58;
 pub const PYRAMID_MAX_LEVELS: u32 = (PYR_QUEUE_BASE - PYR_TABLE) / 3;
 const _: () = assert!(PYR_TABLE + 3 * PYRAMID_MAX_LEVELS <= PYR_QUEUE_BASE);
 const _: () = assert!(PYR_QUEUE_BASE < PYR_LOD);
+/// diagnostics, the `.prof` volume consumer only (`DUST_PYR_PROF_PAIR`): two counters chosen by
+/// the frame's [`DUST_FRAME_PROF_PAIR_SHIFT`] mode (atomicAdd; 0 in production, the host uploads
+/// the header words as 0 each frame). 0: the packets found off screen at pass A (`!anyOn`), then
+/// their lane cycles / 256 up to that return; 1: the packets whose pieces all land on the last
+/// level (`allTop`), their lane cycles / 256 to the end; 2: those packets' pieces, then the SMALL
+/// ones among them; 3: as 1 for the allTop packets whose pieces are all SMALL
+pub const PYR_PROF_PAIR: u32 = 59;
+const _: () = assert!(PYR_QUEUE_BASE < PYR_PROF_PAIR && PYR_PROF_PAIR + 1 < PYR_LOD);
+/// [`PYR_FLAGS`] bits 18–19 (host-written, `AETHERVK_DUST_PROF_PAIR=0..3`): the mode of
+/// [`PYR_PROF_PAIR`]; read by the `.prof` consumer only
+pub const DUST_FRAME_PROF_PAIR_SHIFT: u32 = 18;
 /// the texels the EWA packets of this frame planned to visit, in units of
 /// [`DUST_EWA_TEXEL_UNIT`] (`atomicAdd` of `⌊band / unit⌋ + 1` per packet after the level choice; the
 /// host mirror adds, a merge sums): the near-field frame cost (a packet near the eye crosses the
@@ -153,6 +164,12 @@ pub const PYR_SPLIT_DROPPED_FLUX: u32 = 246;
 /// its volume work deterministically from these: no run-time gate, so the splat stays
 /// independent of the thread order
 pub const PYR_SPLIT_DEPTH: u32 = 247;
+/// diagnostics of the volume consumer (Xid 31 investigation): the pieces whose packed code named a
+/// level past the pyramid or an empty level row (`atomicAdd`; 0 in a healthy frame), and the first
+/// such piece's `code | k << 16 | n << 24` (`atomicCompSwap` from 0)
+pub const PYR_BAD_CODE: u32 = 248;
+pub const PYR_BAD_CODE_FIRST: u32 = 249;
+/// the same for the codes pass A packs (count, first `code`, first `k`): a bad write, not a bad read
 /// a splat is scattered at the lowest level where its smallest screen σ is this many texels
 pub const DUST_SPLAT_SIGMA_TEXELS: f32 = 2.0;
 /// variance of the pixel low-pass filter added to every projected covariance (px²)
@@ -3236,6 +3253,10 @@ pub struct SplitView {
   /// (`specks::PYR_SPECKS_DMAX`; ≤ 0: none): the continuum gives that mass up
   /// ([`split_packet_with`], `specks::ShellCut`)
   pub shell: f32,
+  /// the volume detail (`DustSplatPushConstants::flags` bits 8–10, [`super::volume_detail_from_flags`];
+  /// [`super::DUST_VOLUME_DETAIL_DEFAULT`] by default): the most pieces a volumetric packet is cut
+  /// into when the frame's bias puts every piece on a 1 × 1 last level ([`volume_plan_pieces`])
+  pub volume_detail: u32,
 }
 
 impl SplitView {
@@ -3247,6 +3268,7 @@ impl SplitView {
       perspective,
       volumetric: perspective,
       shell: 0.0,
+      volume_detail: super::DUST_VOLUME_DETAIL_DEFAULT,
     }
   }
 }
@@ -4073,6 +4095,27 @@ fn volume_plan_pieces(
     } else {
       ax.n_a = ax.n_a.div_ceil(2);
       ax.cvar_a = DUST_VOLUME_PIECE_VAR_CAPPED;
+    }
+  }
+  // the volume detail ([`SplitView::volume_detail`], PARTICLES_PERF round 2): when the bias puts
+  // every piece on a 1 × 1 last level, at most that many pieces, fewer along `seg_t` first
+  // (`dust_volume_draw` before its pass A; 16 changes nothing)
+  {
+    let lc = layout.level_count();
+    let (_, tw, th) = layout.levels[(lc - 1) as usize];
+    if bias + 1 >= lc && tw == 1 && th == 1 {
+      let detail = view.volume_detail.max(1);
+      while ax.n_a * ax.n_b > detail {
+        if ax.n_b > 1 {
+          ax.n_b = ax.n_b.div_ceil(2);
+          ax.cvar_b = DUST_VOLUME_PIECE_VAR_CAPPED;
+        } else if ax.n_a > 1 {
+          ax.n_a = ax.n_a.div_ceil(2);
+          ax.cvar_a = DUST_VOLUME_PIECE_VAR_CAPPED;
+        } else {
+          break;
+        }
+      }
     }
   }
   // the level from the angular σ
@@ -7304,6 +7347,17 @@ pub const DUST_VIEW_EDGE_ODD: u32 = 1 << 29;
 /// walks a cluster's records in one lane with a running ordinal (the former per-cluster thread's
 /// order), the word-identical reference for its counting pass and prefix
 pub const DUST_FRAME_SPLIT_SERIAL: u32 = 1 << 31;
+/// [`PYR_FLAGS`] bit (a test hook through `Device::dust_set_vqueue_mode`): the volume consumer
+/// runs its pass A in full even when the frame's bias puts every piece on a 1 × 1 last level
+/// (`bias + 1 >= levels`). By default it then only looks for a piece on screen (stopping at the
+/// first) and pass B classifies each piece at that level as the gated path does, the evaluations
+/// summed there: at that level a piece covers at most one texel, so the cap loops never act and
+/// the sub-ray limit is 4, and the pyramid and the evaluations are the same word for word
+/// (PARTICLES_PERF round 2; `gpu_dust_top_level_path_draws_the_same_pyramid`)
+pub const DUST_FRAME_TOP_PASS_A: u32 = 1 << 2;
+const _: () = assert!(
+  DUST_FRAME_TOP_PASS_A & (crate::scene::dust::DUST_VIEW_TRACERS | crate::scene::dust::DUST_VIEW_FLOW) == 0
+);
 
 // The packet rounding seeds (mirror of `dust_cluster_seed` / `dust_packet_ord`): per cluster
 // (its ring slot) and per packet in the order the cluster's thread draws them
@@ -8087,6 +8141,7 @@ pub fn splat_tier_range(
   // views, the specks off)
   let mut view = SplitView::of(&pc.mvp, eye);
   view.shell = super::specks::ShellCut::from_header(pyramid, eye).d_max;
+  view.volume_detail = super::volume_detail_from_flags(pc.flags);
   let mut scratch = SplitLeaves::default();
   let n = (pc.live_count as usize).min(moments.len()).min(render.len());
   // `AETHERVK_DUST_PROBE="x,y;x,y"` (diagnostics, CPU particle mode): the clusters' τ at those
@@ -8134,6 +8189,7 @@ pub fn splat_tier_list(
   let eye = [pc.eye_local[0], pc.eye_local[1], pc.eye_local[2]];
   let mut view = SplitView::of(&pc.mvp, eye);
   view.shell = super::specks::ShellCut::from_header(pyramid, eye).d_max;
+  view.volume_detail = super::volume_detail_from_flags(pc.flags);
   let mut scratch = SplitLeaves::default();
   let n = (pc.live_count as usize).min(moments.len()).min(render.len());
   for &i in list {
@@ -8279,6 +8335,7 @@ pub fn splat_tier_probed(
   let eye = [pc.eye_local[0], pc.eye_local[1], pc.eye_local[2]];
   let mut view = SplitView::of(&pc.mvp, eye);
   view.shell = super::specks::ShellCut::from_header(pyramid, eye).d_max;
+  view.volume_detail = super::volume_detail_from_flags(pc.flags);
   let mut scratch = SplitLeaves::default();
   let n = (pc.live_count as usize).min(moments.len()).min(render.len());
   splat_range_probed(

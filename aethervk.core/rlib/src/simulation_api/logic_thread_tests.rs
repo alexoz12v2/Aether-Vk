@@ -1743,6 +1743,38 @@ fn test_set_dust_softening_clamps_and_stores() {
   assert_eq!(ctx.set_dust_softening(scene_id + 999, 1e-3), None);
 }
 
+/// The dust "volume detail" is per scene, clamped to a power of two in [1, 16], and read by the
+/// render thread.
+#[test]
+fn test_set_dust_volume_detail_clamps_and_stores() {
+  let mut ctx = startup_with_planets();
+  let start = Epoch::from_gregorian_utc(2025, 10, 1, 0, 0, 0, 0);
+  let scene_id = ctx
+    .create_empty_scene2(true, start, start + Duration::from_days(10.0))
+    .unwrap()
+    .scene_id;
+  let read = |ctx: &SimulationContext| {
+    let scenes = ctx.scenes.read();
+    let scene_arc = scenes.get_scene(scene_id).unwrap();
+    let g = scene_arc.read();
+    g.dust_volume_detail.load(core::sync::atomic::Ordering::Relaxed)
+  };
+  assert_eq!(read(&ctx), crate::scene::dust::DUST_VOLUME_DETAIL_DEFAULT);
+  assert_eq!(ctx.set_dust_volume_detail(scene_id, 4), Some(4));
+  assert_eq!(read(&ctx), 4);
+  assert_eq!(ctx.set_dust_volume_detail(scene_id, 3), Some(2));
+  assert_eq!(read(&ctx), 2);
+  assert_eq!(
+    ctx.set_dust_volume_detail(scene_id, 0),
+    Some(crate::scene::dust::DUST_VOLUME_DETAIL_MIN)
+  );
+  assert_eq!(
+    ctx.set_dust_volume_detail(scene_id, 1000),
+    Some(crate::scene::dust::DUST_VOLUME_DETAIL_MAX)
+  );
+  assert_eq!(ctx.set_dust_volume_detail(scene_id + 999, 4), None);
+}
+
 /// The change stream lists parents before children whatever their entity ids: a camera spawned
 /// before the Earth (lower id) used to be streamed first, so C# compared this tick's camera with the
 /// previous tick's Earth (0.13 AU apart after a multi-day step: "Earth observer mode invariant

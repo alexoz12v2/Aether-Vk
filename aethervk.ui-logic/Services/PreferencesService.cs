@@ -20,6 +20,8 @@ public sealed class PreferencesFile
   public string Theme { get; set; } = "system";
   public List<string> RecentSaves { get; set; } = [];
   public List<BindingDto>? InputBindings { get; set; }
+  /// <summary>Dust volume detail (Settings › Particle rendering): 16, 8, 4, 2 or 1; missing = 16.</summary>
+  public int? DustVolumeDetail { get; set; }
 }
 
 public sealed class BindingDto
@@ -43,7 +45,7 @@ public sealed class ChordDto
 public partial class PreferencesJsonContext : JsonSerializerContext;
 
 /// <summary>
-/// Application preferences: theme, recent saves and the input bindings of
+/// Application preferences: theme, recent saves, the dust volume detail and the input bindings of
 /// <see cref="InputRegistry"/>. <see cref="Load"/> at startup (after the default bindings are
 /// registered and captured); every change is written at once. A missing, unreadable or newer file
 /// leaves the defaults; an unreadable one is kept as <c>preferences.json.bad</c>.
@@ -75,6 +77,11 @@ public sealed class PreferencesService
   };
 
   public IReadOnlyList<string> RecentSaves => _file.RecentSaves;
+
+  /// <summary>The dust volume detail, clamped (<see cref="ParticleRenderingViewModel.ClampVolumeDetail"/>);
+  /// 16 when the file has none.</summary>
+  public int DustVolumeDetail =>
+    ParticleRenderingViewModel.ClampVolumeDetail(_file.DustVolumeDetail ?? ParticleRenderingViewModel.VolumeDetailDefault);
 
   /// <summary>What <see cref="Load"/> did: "defaults", "loaded", "corrupt", "newer".</summary>
   public string LoadOutcome { get; private set; } = "defaults";
@@ -122,6 +129,12 @@ public sealed class PreferencesService
       AppTheme.Dark => "dark",
       _ => "system",
     };
+    Save();
+  }
+
+  public void SetDustVolumeDetail(int detail)
+  {
+    _file.DustVolumeDetail = ParticleRenderingViewModel.ClampVolumeDetail(detail);
     Save();
   }
 
