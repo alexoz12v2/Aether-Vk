@@ -1560,3 +1560,79 @@ fn gpu_dust_reproject_matches_reference() {
     }
   });
 }
+
+/// a cadenced frame's full-draw estimate: fresh as measured, the builds at the decayed rate per
+/// member times the shown members; one odd frame moves the rate by at most 1 / BUILD_RATE_FRAMES
+/// of its weight; no build ever: fresh alone; saturating at u32::MAX
+#[test]
+fn the_full_frame_estimate_scales_the_builds() {
+  let mut rate = BuildRate::default();
+  assert_eq!(full_frame_estimate([5, 50, 7], &rate, 1000), [5, 50, 7]);
+  rate.fold([10, 200, 1_000_000], 12_000);
+  assert_eq!(full_frame_estimate([5, 50, 7_000_000], &rate, 150_000), [5 + 125, 50 + 2500, 7_000_000 + 12_500_000]);
+  // a steady rate stays the rate
+  for _ in 0..40 {
+    rate.fold([10, 200, 1_000_000], 12_000);
+  }
+  let steady = full_frame_estimate([0, 0, 0], &rate, 150_000);
+  assert!(steady.iter().zip([125u32, 2500, 12_500_000]).all(|(&a, b)| a.abs_diff(b) <= b / 1000 + 1), "{steady:?}");
+  // a frame that built 100 members at the cost of 12 000 (a short last step) barely moves it
+  rate.fold([10, 200, 1_000_000], 100);
+  let after = full_frame_estimate([0, 0, 0], &rate, 150_000)[2] as f64;
+  assert!(after < 12_500_000.0 * 1.2, "{after}");
+  let big = BuildRate { builds: [0.0, 0.0, u32::MAX as f64], built: 1.0 };
+  assert_eq!(full_frame_estimate([0, 0, 1], &big, 4)[2], u32::MAX);
+}
+
+/// the feedback's band keeps the current state: frames drawn at another bias (read back
+/// DUST_READBACK_SLOTS frames late) whose counters sit inside the band do not write their own
+/// bias back, so the in-flight slots cannot settle as separate chains
+#[test]
+fn the_feedback_band_keeps_the_state() {
+  use crate::scene::dust::{DUST_EWA_FRAME_BUDGET, DUST_EWA_TEXEL_UNIT, DUST_VOLUME_FRAME_BUDGET, EwaStats};
+  let header_at = |ewa_bias: u32, ewa_texels: u64, vol_bias: u32, evals: u32| {
+    let mut h = alloc::vec![0u32; dust::PYRAMID_HEADER_WORDS as usize];
+    EwaStats::store_bias(ewa_bias, &mut h);
+    h[dust::PYR_EWA_TEXELS as usize] = (ewa_texels / DUST_EWA_TEXEL_UNIT as u64) as u32;
+    let w = &mut h[dust::PYR_SPLIT_DEPTH as usize];
+    *w = (*w & !(0xFF << 8)) | (vol_bias << 8);
+    h[dust::PYR_VOLUME_EVALS as usize] = evals;
+    // the split inside its band at depth 0 (children between a quarter and the budget)
+    h[dust::PYR_SPLIT_CHILDREN as usize] = dust::DUST_SPLIT_BUDGET / 2;
+    h
+  };
+  let level = alloc::vec![0u32; 16];
+  let mut host = DustViewHost::default();
+  host.ewa_bias = 1;
+  host.volume_bias = 14;
+  host.split_depth = 2;
+  let mid_ewa = DUST_EWA_FRAME_BUDGET as u64 / 4;
+  let mid_vol = DUST_VOLUME_FRAME_BUDGET / 4;
+  // drawn at EWA 0 / volume 12 (an older state), inside both bands: the state stays
+  host.absorb(&header_at(0, mid_ewa, 12, mid_vol), &level, 1, 1.0);
+  assert_eq!((host.ewa_bias, host.volume_bias, host.split_depth), (1, 14, 2));
+  // below the band: one finer than the frame's own bias
+  host.absorb(&header_at(2, DUST_EWA_FRAME_BUDGET as u64 / 16, 13, DUST_VOLUME_FRAME_BUDGET / 16), &level, 1, 1.0);
+  assert_eq!((host.ewa_bias, host.volume_bias), (1, 12));
+  // over the budget: coarser than the frame's own bias
+  host.absorb(&header_at(0, DUST_EWA_FRAME_BUDGET as u64 * 2, 11, DUST_VOLUME_FRAME_BUDGET * 2), &level, 1, 1.0);
+  assert_eq!((host.ewa_bias, host.volume_bias), (1, 12));
+}
+
+/// the build members of a frame are `min(step, length − cursor)` per tier slot and pair (a
+/// finished cursor builds nothing); the shown entries are summed over every pair and tier
+#[test]
+fn cads_work_members_reads_the_cursors() {
+  let mut st = alloc::vec![0u32; CADS_WORDS];
+  let set = |st: &mut [u32], t: usize, k: usize, p: usize, w: [u32; 5]| {
+    st[cads_tp(t, k, p)..cads_tp(t, k, p) + 5].copy_from_slice(&w)
+  };
+  // shown, build, pending, cursor, step
+  set(&mut st, 0, 0, 0, [800, 640, 0, 0, 80]);
+  set(&mut st, 0, 0, 1, [700, 640, 5, 600, 80]);
+  set(&mut st, 0, 2, 1, [6400, 6400, 0, 6400, 100]);
+  set(&mut st, 1, 1, 0, [1600, 1600, 0, 100, 100]);
+  assert_eq!(cads_work_members(&st, 2, 3, 2), (80 + 40 + 0 + 100, 800 + 700 + 6400 + 1600));
+  // a tier slot or class beyond the counts is not read
+  assert_eq!(cads_work_members(&st, 1, 2, 2), (120, 1500));
+}
