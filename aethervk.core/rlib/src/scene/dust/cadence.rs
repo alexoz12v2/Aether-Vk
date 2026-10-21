@@ -146,6 +146,15 @@ pub struct CadenceConfig {
   /// 0 = no margin: an image holds only clusters wholly inside its frozen frame (the footprint
   /// rule, D3)
   pub margin_frac: f32,
+  /// retention: a classify re-takes a member of its class whose rate admits a slower admitted
+  /// class instead of letting it go ([`DustCadenceState::finish`] F2b). Without it the member
+  /// left its class at once and the slower class could take it only once the old class's bits
+  /// were gone: fresh for ~2N′ + N frames (orbit at 1 km: class 16 admitted after class 8, 77 k
+  /// members fresh over frames 45–84 at 255 ms each). A class's bound admits every slower
+  /// class's members (`δ · 2N ≤ ε` for the larger N implies it for the smaller), so the image
+  /// stays within ε; members born or freed later go to the slowest admitted class.
+  /// `AETHERVK_DUST_CADENCE_RETAIN=0`: off (the A/B)
+  pub retain: bool,
 }
 
 /// One class image's geometry: the margin (px per side) and the image's pyramid layout
@@ -171,6 +180,7 @@ impl CadenceConfig {
       phases: DUST_CADENCE_PHASES,
       eps_px: DUST_CADENCE_EPS_DEFAULT,
       margin_frac: DUST_CADENCE_MARGIN_DEFAULT,
+      retain: true,
     }
   }
 
@@ -188,6 +198,7 @@ impl CadenceConfig {
         phases: 1,
         eps_px: DUST_CADENCE_EPS_DEFAULT,
         margin_frac: 0.1,
+        retain: true,
       })
     } else {
       None
@@ -249,6 +260,9 @@ impl CadenceConfig {
       && mf.is_finite()
     {
       c.margin_frac = mf.min(1.0);
+    }
+    if var("AETHERVK_DUST_CADENCE_RETAIN").is_some_and(|v| v.trim() == "0") {
+      c.retain = false;
     }
     Some(c)
   }
@@ -2315,6 +2329,7 @@ impl DustCadenceState {
     if mode == Some(CadenceMode::Run) {
       let inputs = pend.inputs.expect("rate inputs");
       let classes = self.cfg.classes.clone();
+      let retain = self.cfg.retain;
       for &(k, p) in &pend.swaps {
         // a class over its motion budget is not classified until the motion over 2N frames fits
         if !pend.admitted.get(k).copied().unwrap_or(true) {
@@ -2397,6 +2412,8 @@ impl DustCadenceState {
             // the class it goes to: the largest admitted by the motion budget among those the rate
             // admits (a class of N admits every smaller class's bound: δ_k' · 2N_k' ≤ δ_k · 2N_k)
             let target = (0..r.class as usize).rev().find(|&kk| pend.admitted.get(kk).copied().unwrap_or(true));
+            // retention: a member of class k whose target is a slower class stays in k
+            let target = if retain && cls == k + 1 && target.is_some_and(|kk| kk > k) { Some(k) } else { target };
             if footprint_rule && target == Some(k) && !footprint_inside(m, pred, &td.pc.mvp, w, h) {
               rep.d3_at_classify += 1;
               continue;

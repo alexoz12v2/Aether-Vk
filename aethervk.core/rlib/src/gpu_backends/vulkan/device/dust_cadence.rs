@@ -65,6 +65,8 @@ pub const CAD_MAX_TIERS: usize = 8;
 pub const CADF_ADVANCE: u32 = 1;
 pub const CADF_ABORTS: u32 = 2;
 pub const CADF_COVERAGE: u32 = 4;
+/// the classify retains a member whose target is a slower class (`CadenceConfig::retain`)
+pub const CADF_RETAIN: u32 = 8;
 /// the anchor tables: per tier slot, words 0 n, 1 this frame's stamp, then n × (stamp, Δ xyz)
 pub const CAD_ANCH_TIER_WORDS: usize = 2304;
 pub const CAD_ANCH_ENTRY0: usize = 4;
@@ -1010,6 +1012,9 @@ impl Device {
         }
         prm[CADP_COVER] = cover;
       }
+    }
+    if c.cfg.retain {
+      flags |= CADF_RETAIN;
     }
     prm[CADP_FLAGS] = flags;
     prm[CADP_ADMIT] = c.admitted.iter().enumerate().map(|(k, &a)| (a as u32) << k).sum();

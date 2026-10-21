@@ -12301,7 +12301,7 @@ fn cadence_resets_and_aborts() {
   let view = cad_static_view(anchor, radius, px, 3.0);
   let inv_unit = cad_inv_unit(&tiers, &view, &layout, None, 1e-2).expect("τ_max");
   let unit_v = 1.0 / inv_unit;
-  let cfg = CadenceConfig { classes: alloc::vec![8], phases: 2, eps_px: 1.0, margin_frac: 0.0 };
+  let cfg = CadenceConfig { classes: alloc::vec![8], phases: 2, eps_px: 1.0, margin_frac: 0.0, retain: true };
   let warm = |tiers: &mut [(DustDrawState, TierPackets)], view: CadenceView| -> DustCadenceState {
     let mut st = cad_state(cfg.clone());
     for _ in 0..24 {
@@ -12533,7 +12533,7 @@ fn specks_n_eye_counts_every_cluster() {
   let unit_v = 1.0 / inv_unit;
   let d_max = (2e-3 * radius) as f32;
   let budget = 1u32 << 16;
-  let mut st = cad_state(CadenceConfig { classes: alloc::vec![8], phases: 2, eps_px: 1.0, margin_frac: 0.0 });
+  let mut st = cad_state(CadenceConfig { classes: alloc::vec![8], phases: 2, eps_px: 1.0, margin_frac: 0.0, retain: true });
   let mut shell_forced = 0u32;
   for _ in 0..24 {
     let fm = cad_frame_meta(view, t, anchor, unit_v);
@@ -13035,7 +13035,7 @@ fn cadence_budget_aborts_and_readmits() {
   let view = cad_static_view(anchor, radius, px, 3.0);
   let inv_unit = cad_inv_unit(&tiers, &view, &layout, None, 1e-2).expect("τ_max");
   let unit_v = 1.0 / inv_unit;
-  let mut st = cad_state(CadenceConfig { classes: alloc::vec![8], phases: 2, eps_px: 1.0, margin_frac: 0.2 });
+  let mut st = cad_state(CadenceConfig { classes: alloc::vec![8], phases: 2, eps_px: 1.0, margin_frac: 0.2, retain: true });
   for _ in 0..24 {
     let fm = cad_frame_meta(view, t, anchor, unit_v);
     cad_cadence_frame(&mut st, &fm, &mut tiers, &layout, inv_unit, None, &|_, _| {});
@@ -13467,7 +13467,7 @@ fn cadence_resets_on_a_time_jump() {
   let view = cad_static_view(anchor, radius, px, 3.0);
   let inv_unit = cad_inv_unit(&tiers, &view, &layout, None, 1e-2).expect("τ_max");
   let unit_v = 1.0 / inv_unit;
-  let cfg = CadenceConfig { classes: alloc::vec![8], phases: 2, eps_px: 1.0, margin_frac: 0.0 };
+  let cfg = CadenceConfig { classes: alloc::vec![8], phases: 2, eps_px: 1.0, margin_frac: 0.0, retain: true };
   let shown = |st: &super::cadence::DustCadenceState| -> usize {
     st.tiers.values().map(|tc| tc.owner.iter().filter(|&&b| b & OWN_SHOWN != 0).count()).sum()
   };
@@ -13517,4 +13517,84 @@ fn cadence_resets_on_a_time_jump() {
   let (_, plan, _) = cad_cadence_frame(&mut st, &cad_frame_meta(view, t + 48.0, anchor, unit_v), &mut tiers, &layout, inv_unit, None, &|_, _| {});
   std::println!("time jump: resume after a pause: reset {:?}", plan.reset);
   assert_eq!(plan.reset, Some(CadenceReset::Time), "a resume after a pause");
+}
+
+/// Retention (round 5): class 8 is admitted before class 16 (M = 0.2 at 128 px: budget 32 px; a
+/// yaw of 1.5 px per frame admits 2·8·1.5 = 24 px, not 2·16·1.5 = 48), so the still scene's
+/// members fill class 8; the view then stops, and class 16 is admitted once its 32-frame window
+/// is still. With retention the members stay in class 8 (fresh after class 16's admission stays at
+/// its level the frame before, class 16 takes none of them); the control without it shows the gap
+/// the rule removes (measured: every cluster fresh for ~40 frames, 6 164 against 28). The owner bytes
+/// are checked every frame (I1–I4).
+#[test]
+fn cadence_retains_members_when_a_slower_class_is_admitted() {
+  use super::cadence::{CadenceConfig, CadenceView, corner_motion};
+  let px = 128u32;
+  let layout = PyramidLayout::new(px, px);
+  let (mut tiers, radius) = cad_scene();
+  let anchor = tiers[0].0.anchor_m;
+  let t = tiers[0].0.frame.ps_r_t_hi[3] as f64;
+  let view = cad_static_view(anchor, radius, px, 3.0);
+  let inv_unit = cad_inv_unit(&tiers, &view, &layout, None, 1e-2).expect("τ_max");
+  let unit_v = 1.0 / inv_unit;
+  let fwd0: V3 = unit([1.0, 0.3, -0.2]);
+  let up0: V3 = [0.0, 0.0, 1.0];
+  let upv0 = cross64(unit(cross64(fwd0, up0)), fwd0);
+  let yawed = |a: f64| CadenceView { view_rot: cad_view_rot(cad_rotate(fwd0, upv0, a), up0), ..view };
+  // the yaw step whose corner motion is 1.5 px
+  let step = {
+    let (mut lo, mut hi) = (0.0f64, 0.1f64);
+    for _ in 0..60 {
+      let mid = 0.5 * (lo + hi);
+      let d = corner_motion(&yawed(mid).map_from(&view).unwrap(), px, px);
+      if d[0].max(d[1]) < 1.5 { lo = mid } else { hi = mid }
+    }
+    lo
+  };
+  let fresh_of = |rep: &super::cadence::CadenceReport| rep.fresh.iter().map(|f| f.len()).sum::<usize>();
+  let class_entries = |st: &super::cadence::DustCadenceState, k: usize| -> usize {
+    st.tiers.values().map(|tc| tc.lists[k].iter().map(|l| l[0].len() + l[1].len() + l[2].len()).sum::<usize>()).sum()
+  };
+  let run = |retain: bool, tiers: &mut [(DustDrawState, TierPackets)]| {
+    let mut st = cad_state(CadenceConfig { classes: alloc::vec![8, 16], phases: 2, eps_px: 1.0, margin_frac: 0.2, retain });
+    let mut a = 0.0f64;
+    for j in 0..24 {
+      a += step;
+      let (_, _, rep) = cad_cadence_frame(&mut st, &cad_frame_meta(yawed(a), t, anchor, unit_v), tiers, &layout, inv_unit, None, &|_, _| {});
+      st.check_owner_bytes().unwrap_or_else(|e| panic!("retain {retain}, moving frame {j}: {e}"));
+      if j >= 16 {
+        assert_eq!(rep.admitted, alloc::vec![true, false], "retain {retain}, moving frame {j}: the admission");
+      }
+    }
+    let class8 = class_entries(&st, 0);
+    let still = yawed(a);
+    let (mut stills, mut admitted16) = (alloc::vec::Vec::new(), None);
+    for j in 0..96 {
+      let (_, _, rep) = cad_cadence_frame(&mut st, &cad_frame_meta(still, t, anchor, unit_v), tiers, &layout, inv_unit, None, &|_, _| {});
+      st.check_owner_bytes().unwrap_or_else(|e| panic!("retain {retain}, still frame {j}: {e}"));
+      if admitted16.is_none() && rep.admitted.get(1) == Some(&true) {
+        admitted16 = Some(j);
+      }
+      stills.push(fresh_of(&rep));
+    }
+    // the steady fresh count the frame before class 16's admission, and the most fresh from the
+    // admission on (the control's gap lies there)
+    let a16 = admitted16.expect("class 16 never admitted");
+    let (moving_fresh, still_fresh) = (stills[a16 - 1], stills[a16..].iter().copied().max().unwrap_or(0));
+    std::println!("retain {retain}: fresh per still frame {stills:?}");
+    std::println!(
+      "retain {retain}: class 8 entries {class8} after the motion, fresh {moving_fresh} before class 16's admission / ≤ {still_fresh} after it, class 16 admitted at still frame {admitted16:?}, entries at the end: class 8 {} / class 16 {}",
+      class_entries(&st, 0),
+      class_entries(&st, 1)
+    );
+    assert!(class8 > 0, "retain {retain}: the moving phase filled no class-8 list");
+    (moving_fresh, still_fresh, class8, class_entries(&st, 0), class_entries(&st, 1))
+  };
+  let (mf, sf, c8, c8_end, c16_end) = run(true, &mut tiers);
+  assert!(sf <= mf + mf / 10 + 16, "retention: fresh rose from {mf} to {sf} once class 16 was admitted");
+  assert!(c8_end * 10 >= c8 * 9, "retention: class 8 lost its members ({c8} → {c8_end})");
+  assert!(c16_end * 10 <= c8, "retention: class 16 took the retained members ({c16_end} of {c8})");
+  let (mf0, sf0, _, _, c16_end0) = run(false, &mut tiers);
+  assert!(sf0 > 10 * mf0 + 16, "control: no gap without retention (fresh {mf0} → {sf0}): the scenario no longer tests the rule");
+  assert!(c16_end0 > 0, "control: class 16 never took the members");
 }
