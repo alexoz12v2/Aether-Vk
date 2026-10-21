@@ -49,8 +49,12 @@ uvec3 dust_cmp_desc(DustUintBuffer prm, uint set, uint j) {
     uint code = prm.v[DUST_CADP_SWAP0 + sw];
     return uvec3(code & 0xFFu, code >> 8u, set == 0u ? (j & 1u) : 2u);
 }
-bool dust_cmp_member(uint b, uint slot, uvec3 d, uint np) {
-    return (b & DUST_OWN_CLASS_MASK) == d.x + 1u && (b & dust_own_state_bit(d.z)) != 0u && (np != 2u || (slot & 1u) == d.y);
+// a member on the owner byte b or (the handover) on the incoming byte ib, never SHOWN
+bool dust_cmp_member(uint b, uint ib, uint slot, uvec3 d, uint np) {
+    uint bit = dust_own_state_bit(d.z);
+    bool own = (b & DUST_OWN_CLASS_MASK) == d.x + 1u && (b & bit) != 0u;
+    bool inc = (ib & DUST_OWN_CLASS_MASK) == d.x + 1u && (ib & bit) != 0u;
+    return (own || inc) && (np != 2u || (slot & 1u) == d.y);
 }
 
 void main() {
@@ -189,6 +193,7 @@ void main() {
     // COUNT and SCATTER: block gl_WorkGroupID.x, offsets base + 4 lane .. + 3
     uint block = gl_WorkGroupID.x;
     uint o0 = block * DUST_CMP_BLOCK + 4u * lane;
+    uint inc0 = dust_cad_inc0(R, nc, np);
     for (uint j = 0u; j < nl; ++j) {
         uvec3 d = dust_cmp_desc(prm, set, j);
         uint l = (d.x * np + d.y) * 3u + d.z;
@@ -199,7 +204,7 @@ void main() {
             uint o = o0 + i;
             if (o < pc.liveCount) {
                 uint s = (pc.firstSlot + o) & pc.ringMask;
-                if (dust_cmp_member(dust_own_get(pc.sys, rb + s), s, d, np)) { c += 1u; f |= 1u << i; }
+                if (dust_cmp_member(dust_own_get(pc.sys, rb + s), dust_inc_get(pc.sys, inc0, rb + s), s, d, np)) { c += 1u; f |= 1u << i; }
             }
         }
         s_scan[lane] = c;

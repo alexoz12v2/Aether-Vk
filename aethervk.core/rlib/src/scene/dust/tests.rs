@@ -12301,7 +12301,7 @@ fn cadence_resets_and_aborts() {
   let view = cad_static_view(anchor, radius, px, 3.0);
   let inv_unit = cad_inv_unit(&tiers, &view, &layout, None, 1e-2).expect("τ_max");
   let unit_v = 1.0 / inv_unit;
-  let cfg = CadenceConfig { classes: alloc::vec![8], phases: 2, eps_px: 1.0, margin_frac: 0.0, retain: true };
+  let cfg = CadenceConfig { classes: alloc::vec![8], phases: 2, eps_px: 1.0, margin_frac: 0.0, retain: true, handover: true, light_tol: 0.0 };
   let warm = |tiers: &mut [(DustDrawState, TierPackets)], view: CadenceView| -> DustCadenceState {
     let mut st = cad_state(cfg.clone());
     for _ in 0..24 {
@@ -12533,7 +12533,7 @@ fn specks_n_eye_counts_every_cluster() {
   let unit_v = 1.0 / inv_unit;
   let d_max = (2e-3 * radius) as f32;
   let budget = 1u32 << 16;
-  let mut st = cad_state(CadenceConfig { classes: alloc::vec![8], phases: 2, eps_px: 1.0, margin_frac: 0.0, retain: true });
+  let mut st = cad_state(CadenceConfig { classes: alloc::vec![8], phases: 2, eps_px: 1.0, margin_frac: 0.0, retain: true, handover: true, light_tol: 0.0 });
   let mut shell_forced = 0u32;
   for _ in 0..24 {
     let fm = cad_frame_meta(view, t, anchor, unit_v);
@@ -13035,7 +13035,7 @@ fn cadence_budget_aborts_and_readmits() {
   let view = cad_static_view(anchor, radius, px, 3.0);
   let inv_unit = cad_inv_unit(&tiers, &view, &layout, None, 1e-2).expect("τ_max");
   let unit_v = 1.0 / inv_unit;
-  let mut st = cad_state(CadenceConfig { classes: alloc::vec![8], phases: 2, eps_px: 1.0, margin_frac: 0.2, retain: true });
+  let mut st = cad_state(CadenceConfig { classes: alloc::vec![8], phases: 2, eps_px: 1.0, margin_frac: 0.2, retain: true, handover: true, light_tol: 0.0 });
   for _ in 0..24 {
     let fm = cad_frame_meta(view, t, anchor, unit_v);
     cad_cadence_frame(&mut st, &fm, &mut tiers, &layout, inv_unit, None, &|_, _| {});
@@ -13449,6 +13449,100 @@ fn fallback_keeps_the_nucleus_fresh() {
   }
 }
 
+/// The light tolerance τ (`CadenceConfig::light_tol`, round 7c): a class-`N` image shows a cluster
+/// at most `1.5 N` frames after its classify, and a cluster changes its light by about `Δt / age`
+/// of itself a frame, so class `k` also needs `1.5 N_k Δt / age ≤ τ` — the shape bound with
+/// `θ = 4τ/3`, combined with the fallback's by `admission_shape` (the stricter of those on). Checked
+/// on the coma scene cluster by cluster at the observer's step (0.375 s a frame) and at 1 day per
+/// second (1 440 s) with a still camera and with one following the comet (the nucleus's velocity,
+/// as `fallback_keeps_the_nucleus_fresh`; a still camera at 1 day per second admits nothing by ε
+/// alone): every admitted class keeps `1.5 N Δt / age ≤ τ` (f32, the rule's own products), no class
+/// rises against the θ = 0 control, δ is independent of θ, and wherever the control admits ≥ 1 %
+/// of the clusters the bound lowers some (the knob reaches the rule). Prints the shares.
+#[test]
+fn light_tolerance_bounds_the_display_age() {
+  use super::cadence::{CadenceConfig, CadenceView, DUST_CADENCE_AGE_MIN_S, DUST_CADENCE_FALLBACK_SHAPE, DUST_CADENCE_LIGHT_TOL, RateInputs, admission_shape, cadence_rate};
+  let full = CadenceConfig::full();
+  assert_eq!(full.light_tol, DUST_CADENCE_LIGHT_TOL);
+  let theta = full.light_theta();
+  assert_eq!(theta, DUST_CADENCE_LIGHT_TOL * (4.0 / 3.0));
+  assert_eq!(CadenceConfig { light_tol: 0.0, ..full.clone() }.light_theta(), 0.0);
+  assert_eq!(admission_shape(0.0, 0.0), 0.0);
+  assert_eq!(admission_shape(DUST_CADENCE_FALLBACK_SHAPE, 0.0), DUST_CADENCE_FALLBACK_SHAPE);
+  assert_eq!(admission_shape(0.0, theta), theta);
+  assert_eq!(admission_shape(DUST_CADENCE_FALLBACK_SHAPE, theta), theta.min(DUST_CADENCE_FALLBACK_SHAPE));
+  let tau = full.light_tol;
+  let (tiers, radius) = cad_scene();
+  let anchor = tiers[0].0.anchor_m;
+  let px = 256u32;
+  let fwd0: V3 = unit([1.0, 0.3, -0.2]);
+  let dist = 3.0 * radius;
+  let eye0 = [anchor[0] - fwd0[0] * dist, anchor[1] - fwd0[1] * dist, anchor[2] - fwd0[2] * dist];
+  let view = CadenceView {
+    view_rot: cad_view_rot(fwd0, [0.0, 0.0, 1.0]),
+    proj: cad_persp(60f64.to_radians(), 1.0),
+    eye_m: eye0,
+    units_per_m: 1.0,
+    width: px,
+    height: px,
+  };
+  let classes = [8u32, 16, 64];
+  // the nucleus's heliocentric velocity: the youngest cluster's (its 2 m/s ejection aside)
+  let (mut v_nuc, mut age_min) = ([0.0f32; 3], f32::INFINITY);
+  for (_, (_, m)) in &tiers {
+    for mm in m.iter().filter(|mm| mm.flux() > 0.0) {
+      if mm.age() < age_min {
+        age_min = mm.age();
+        v_nuc = mm.helio_velocity();
+      }
+    }
+  }
+  let day = 1440.0f32;
+  let cases = [
+    ("still", 0.375f32, [0.0f32; 3]),
+    ("still", day, [0.0; 3]),
+    ("following", day, [v_nuc[0] * day, v_nuc[1] * day, v_nuc[2] * day]),
+  ];
+  for (tag, dt, d_eye) in cases {
+    let inputs = |shape: f32| RateInputs { dt_s: dt, d_eye_m: d_eye, a_w_m: [0.0; 3], eps_px: 16.0, frame_px: px as f32, shape_frac: shape };
+    let (mut n, mut admitted, mut admitted0, mut lowered) = (0usize, 0usize, 0usize, 0usize);
+    for (ds, (r, m)) in &tiers {
+      let pc = cad_pc(&view, ds.anchor_m, r.len() as u32, 1.0);
+      let eye = [pc.eye_local[0], pc.eye_local[1], pc.eye_local[2]];
+      for i in 0..r.len() {
+        if !(m[i].flux() > 0.0) {
+          continue;
+        }
+        let pred = streak_pred(r, i).map(|q| &m[q]);
+        let rate = cadence_rate(&m[i], pred, &pc.mvp, eye, px, px, &classes, &inputs(admission_shape(0.0, theta)));
+        let rate0 = cadence_rate(&m[i], pred, &pc.mvp, eye, px, px, &classes, &inputs(0.0));
+        for k in 0..classes.len() {
+          assert_eq!(rate.delta_px[k].to_bits(), rate0.delta_px[k].to_bits(), "δ depends on θ (cluster {i}, class {k})");
+        }
+        assert!(rate.class <= rate0.class, "Δt {dt}: cluster {i}: class {} over the control's {}", rate.class, rate0.class);
+        n += 1;
+        admitted0 += (rate0.class > 0) as usize;
+        lowered += (rate.class < rate0.class) as usize;
+        if rate.class > 0 {
+          admitted += 1;
+          let nk = classes[rate.class as usize - 1] as f32;
+          let age = m[i].age().max(DUST_CADENCE_AGE_MIN_S);
+          let change = 1.5 * nk * dt / age;
+          assert!(change <= tau * (1.0 + 1e-5), "Δt {dt}: cluster {i} (age {age} s) in class {nk}: light change {change} over τ {tau}");
+        }
+      }
+    }
+    std::println!(
+      "[light tol] {tag} camera, Δt {dt} s: {n} clusters, {admitted0} admitted by ε alone, {admitted} with τ {tau}, {lowered} lowered ({:.1} %)",
+      100.0 * lowered as f64 / n.max(1) as f64
+    );
+    assert!(n >= 1000, "{n} clusters");
+    if admitted0 * 100 >= n {
+      assert!(lowered > 0, "{tag} camera, Δt {dt}: τ lowered none of the {admitted0} admitted by ε");
+    }
+  }
+}
+
 /// The time reset (the GPU track's finding, 2026-10-18: a frame one simulated day after 15 still
 /// frames kept the day-old class images, an area ratio of 3.48 at 5 000 km). From a warm state
 /// (the static scene, one class of 8 frames in two phases, 24 frames at a still time: Δt = 0, images
@@ -13467,7 +13561,7 @@ fn cadence_resets_on_a_time_jump() {
   let view = cad_static_view(anchor, radius, px, 3.0);
   let inv_unit = cad_inv_unit(&tiers, &view, &layout, None, 1e-2).expect("τ_max");
   let unit_v = 1.0 / inv_unit;
-  let cfg = CadenceConfig { classes: alloc::vec![8], phases: 2, eps_px: 1.0, margin_frac: 0.0, retain: true };
+  let cfg = CadenceConfig { classes: alloc::vec![8], phases: 2, eps_px: 1.0, margin_frac: 0.0, retain: true, handover: true, light_tol: 0.0 };
   let shown = |st: &super::cadence::DustCadenceState| -> usize {
     st.tiers.values().map(|tc| tc.owner.iter().filter(|&&b| b & OWN_SHOWN != 0).count()).sum()
   };
@@ -13556,7 +13650,8 @@ fn cadence_retains_members_when_a_slower_class_is_admitted() {
     st.tiers.values().map(|tc| tc.lists[k].iter().map(|l| l[0].len() + l[1].len() + l[2].len()).sum::<usize>()).sum()
   };
   let run = |retain: bool, tiers: &mut [(DustDrawState, TierPackets)]| {
-    let mut st = cad_state(CadenceConfig { classes: alloc::vec![8, 16], phases: 2, eps_px: 1.0, margin_frac: 0.2, retain });
+    let mut st =
+      cad_state(CadenceConfig { classes: alloc::vec![8, 16], phases: 2, eps_px: 1.0, margin_frac: 0.2, retain, handover: false, light_tol: 0.0 });
     let mut a = 0.0f64;
     for j in 0..24 {
       a += step;
@@ -13597,4 +13692,449 @@ fn cadence_retains_members_when_a_slower_class_is_admitted() {
   let (mf0, sf0, _, _, c16_end0) = run(false, &mut tiers);
   assert!(sf0 > 10 * mf0 + 16, "control: no gap without retention (fresh {mf0} → {sf0}): the scenario no longer tests the rule");
   assert!(c16_end0 > 0, "control: class 16 never took the members");
+}
+
+/// The handover's timeline, enumerated (the proof in `cadence.rs`'s owner-byte doc made
+/// executable): one member, a byte-level model of classes A (N_A) and B (N_B) with rules a–d and
+/// today's swap / promotion / build order. Its rate admits B from frame `c0` on. Every frame the
+/// member must be drawn exactly once (A's shown image + B's shown image + fresh = 1). Without
+/// aborts the move is gapless (never fresh after its first show, B owns it in the end, no collapse
+/// dropped); with an abort of A's or B's lists at any frame it is still never drawn twice.
+#[test]
+fn cadence_handover_timeline_is_exactly_once() {
+  const S: u8 = 4;
+  const BU: u8 = 8;
+  const P: u8 = 16;
+  const I: u8 = 32;
+  // class ids: 1 = A, 2 = B
+  fn cls(b: u8) -> u8 {
+    b & 3
+  }
+  fn drop_empty(b: u8) -> u8 {
+    if b & !3 == 0 { 0 } else { b }
+  }
+  #[derive(Default)]
+  struct M {
+    own: u8,
+    inc: u8,
+    img_build: [bool; 2],
+    img_shown: [bool; 2],
+    dropped: u32,
+  }
+  struct Case {
+    na: u64,
+    nb: u64,
+    off: u64,
+    c0: u64,
+    pos: [u64; 2],
+    abort: [Option<(usize, u64)>; 2],
+  }
+  // the frames simulated and, per frame, the draw count and whether the member was SHOWN
+  let sim = |c: &Case| -> (alloc::vec::Vec<(u32, bool)>, M) {
+    let n = [c.na, c.nb];
+    let starts = |x: usize, f: u64| (f % n[x] + n[x] - c.off % n[x]) % n[x] == 0;
+    let fts = |x: usize, f: u64| {
+      let r = (f % n[x] + n[x] - c.off % n[x]) % n[x];
+      if r == 0 { n[x] } else { n[x] - r }
+    };
+    let mut m = M::default();
+    let mut out = alloc::vec::Vec::new();
+    for f in 0..(c.c0 + 6 * c.nb) {
+      // F1: an abort of class x's build and pending lists
+      for &(x, _) in c.abort.iter().flatten().filter(|a| a.1 == f) {
+        let id = x as u8 + 1;
+        if cls(m.own) == id {
+          m.own = drop_empty(m.own & !(BU | I | P));
+        } else if cls(m.inc) == id {
+          m.inc = drop_empty(m.inc & !(BU | I | P));
+        }
+        m.img_build[x] = false;
+      }
+      // F2a: swaps and promotions, A then B
+      for x in 0..2 {
+        if !starts(x, f) {
+          continue;
+        }
+        let id = x as u8 + 1;
+        if x == 1 && cls(m.inc) == 2 && m.inc & BU != 0 {
+          if m.own == 0 {
+            m.own = m.inc;
+          } else {
+            m.dropped += 1;
+          }
+          m.inc = 0;
+        }
+        if cls(m.own) == id && m.own & S != 0 {
+          m.own = drop_empty(m.own & !S);
+        }
+        m.img_shown[x] = m.img_build[x];
+        m.img_build[x] = false;
+        if cls(m.own) == id && m.own & BU != 0 {
+          let mut nb = m.own & !(BU | I);
+          if m.own & I != 0 {
+            nb |= S;
+          }
+          m.own = drop_empty(nb);
+        }
+        if cls(m.own) == id && m.own & P != 0 {
+          m.own = (m.own & !P) | BU;
+        } else if cls(m.inc) == id && m.inc & P != 0 {
+          m.inc = (m.inc & !P) | BU;
+        }
+      }
+      // F2b: classifies, A then B (the target: B from c0 on)
+      let tgt = if f >= c.c0 { 2u8 } else { 1u8 };
+      if starts(0, f) {
+        let eligible = (cls(m.own) == 1 || (m.own == 0 && m.inc == 0)) && m.own & P == 0;
+        if eligible {
+          let take = if cls(m.own) == 1 && cls(m.inc) == 2 {
+            let s_t = fts(1, f) + if m.inc & BU != 0 { 0 } else { n[1] };
+            s_t > 2 * n[0]
+          } else {
+            // retention without an incoming membership, else its own target
+            cls(m.own) == 1 || tgt == 1
+          };
+          if take {
+            m.own = 1 | (m.own & !3) | P;
+          }
+        }
+      }
+      if starts(1, f) && tgt == 2 {
+        let as_incoming = (cls(m.inc) == 0 || cls(m.inc) == 2)
+          && m.inc & P == 0
+          && (cls(m.own) == 1 || (m.own == 0 && cls(m.inc) == 2));
+        if as_incoming {
+          m.inc = 2 | (m.inc & !3) | P;
+        } else if (cls(m.own) == 2 || (m.own == 0 && m.inc == 0)) && m.own & P == 0 {
+          m.own = 2 | (m.own & !3) | P;
+        }
+      }
+      // F3: the build draw of class x at its cycle position
+      for x in 0..2 {
+        let id = x as u8 + 1;
+        if (f + n[x] - c.off % n[x]) % n[x] != c.pos[x] % n[x] {
+          continue;
+        }
+        if cls(m.own) == id && m.own & BU != 0 {
+          m.own |= I;
+          m.img_build[x] = true;
+        } else if cls(m.inc) == id && m.inc & BU != 0 {
+          m.inc |= I;
+          m.img_build[x] = true;
+        }
+      }
+      // F4–F6: the shown images, then fresh = ¬SHOWN
+      let shown = m.own & S != 0;
+      let count = m.img_shown[0] as u32 + m.img_shown[1] as u32 + (!shown) as u32;
+      out.push((count, shown));
+    }
+    (out, m)
+  };
+  let mut cases = 0u64;
+  for (na, nb) in [(8u64, 16u64), (16, 64), (8, 64)] {
+    for off in [0u64, 4] {
+      let poss = |nn: u64| [0, nn / 2, nn - 1];
+      for c0 in (3 * na)..(3 * na + 2 * nb) {
+        for pa in poss(na) {
+          for pb in poss(nb) {
+            let c = Case { na, nb, off, c0, pos: [pa, pb], abort: [None, None] };
+            let (out, m) = sim(&c);
+            cases += 1;
+            let first = out.iter().position(|x| x.1).unwrap_or_else(|| panic!("never shown: N {na}/{nb} off {off} c0 {c0}"));
+            for (f, &(cnt, sh)) in out.iter().enumerate() {
+              assert_eq!(cnt, 1, "N {na}/{nb} off {off} c0 {c0} pos {pa}/{pb}: frame {f} drawn {cnt} times");
+              assert!(f < first || sh, "N {na}/{nb} off {off} c0 {c0} pos {pa}/{pb}: fresh at frame {f} after its first show (a gap)");
+            }
+            assert_eq!(m.dropped, 0, "N {na}/{nb} off {off} c0 {c0}: a collapse found the owner byte held");
+            assert_eq!(cls(m.own), 2, "N {na}/{nb} off {off} c0 {c0}: B never took the member");
+          }
+          // an abort of either class at any frame of the move: never twice
+          for x in 0..2 {
+            for at in (c0.saturating_sub(nb))..(c0 + 3 * nb) {
+              let c = Case { na, nb, off, c0, pos: [pa, nb - 1], abort: [Some((x, at)), None] };
+              let (out, _) = sim(&c);
+              cases += 1;
+              for (f, &(cnt, _)) in out.iter().enumerate() {
+                assert_eq!(cnt, 1, "N {na}/{nb} off {off} c0 {c0} abort of {x} at {at}: frame {f} drawn {cnt} times");
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  // two aborts (any classes, any frames of the move), 8 → 16
+  let (na, nb) = (8u64, 16u64);
+  for off in [0u64, 4] {
+    for c0 in (3 * na)..(3 * na + 2 * nb) {
+      for x0 in 0..2 {
+        for x1 in 0..2 {
+          for a0 in (c0.saturating_sub(nb))..(c0 + 3 * nb) {
+            for a1 in a0..(c0 + 3 * nb) {
+              let c = Case { na, nb, off, c0, pos: [na - 1, nb - 1], abort: [Some((x0, a0)), Some((x1, a1))] };
+              let (out, _) = sim(&c);
+              cases += 1;
+              for (f, &(cnt, _)) in out.iter().enumerate() {
+                assert_eq!(cnt, 1, "N 8/16 off {off} c0 {c0} aborts of {x0} at {a0}, {x1} at {a1}: frame {f} drawn {cnt} times");
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  std::println!("handover timeline: {cases} cases exactly once");
+}
+
+/// The handover (round 7) on the retention test's scene: class 8 fills while the view yaws,
+/// class 16 is admitted once the view is still. With the handover the members move to class 16
+/// with no fresh gap (fresh after the admission stays within 10 % of its level before it), class 16
+/// ends with ≥ 90 % of them, the per-frame builds fall to class 16's rate, the owner and incoming
+/// bytes pass `check_owner_bytes` (I1–I5) every frame, no collapse is dropped, and every live
+/// cluster is drawn exactly once per frame (the images' contents tracked from the aborts, swaps and
+/// build draws).
+#[test]
+fn cadence_hands_members_over_without_a_gap() {
+  let r = cad_handover_scene(alloc::vec![8, 16], 128, None);
+  let st = &r.st;
+  let a16 = r.admitted_at[1].expect("class 16 never admitted");
+  let (before, after) = (r.stills[a16 - 1], r.stills[a16..].iter().copied().max().unwrap_or(0));
+  let (class8, c8_end, c16_end) = (r.class8, r.members_end[0], r.members_end[1]);
+  let tail_builds = r.builds[96..].iter().sum::<usize>() as f64 / 32.0;
+  std::println!(
+    "handover: class 8 members {class8} after the motion; class 16 admitted at still frame {a16}; fresh {before} before / ≤ {after} after; members at the end class 8 {c8_end} / class 16 {c16_end}; builds per frame over the last 32 {tail_builds:.1}; collapsed {} dropped {}",
+    st.handover_collapsed, st.handover_dropped
+  );
+  assert!(class8 > 0, "the moving phase filled no class-8 list");
+  assert!(after <= before + before / 10 + 16, "handover: fresh rose from {before} to {after} once class 16 was admitted (a gap)");
+  assert!(c16_end * 10 >= class8 * 9, "handover: class 16 holds {c16_end} of {class8} members");
+  assert!(c8_end * 10 <= class8, "handover: class 8 kept {c8_end} of {class8} members");
+  assert!(st.handover_collapsed > 0 && st.handover_dropped == 0, "handover: collapsed {} dropped {}", st.handover_collapsed, st.handover_dropped);
+  // class 16's rate: every member once per 16 frames (both phases), plus class 8's remainder
+  let bound = (c16_end as f64 / 16.0 + c8_end as f64 / 8.0) * 1.25 + 8.0;
+  assert!(tail_builds <= bound, "handover: {tail_builds:.1} builds per frame at the end, class 16's rate is {bound:.1}");
+}
+
+/// The handover through three classes ([8, 16, 64]): class 16 is admitted after 32 still frames,
+/// class 64 after 128, so the members move 8 → 16 → 64 (the 16 → 64 step overlaps class 16's
+/// builds for 48 frames). Fresh never rises at an admission, class 64 ends with ≥ 90 % of the
+/// members, no collapse is dropped, the builds fall to class 64's rate, and every live cluster is
+/// drawn exactly once per frame through two class-64 windows after the handover (the observer's
+/// perf7a/perf7c: the GPU's light fell 0.8 % per class-16 window there).
+#[test]
+fn cadence_hands_members_over_through_three_classes() {
+  let r = cad_handover_scene(alloc::vec![8, 16, 64], 448, None);
+  let st = &r.st;
+  let a16 = r.admitted_at[1].expect("class 16 never admitted");
+  let a64 = r.admitted_at[2].expect("class 64 never admitted");
+  let class8 = r.class8;
+  let m = &r.members_end;
+  let tail_builds = r.builds[384..].iter().sum::<usize>() as f64 / 64.0;
+  std::println!(
+    "handover 3: class 8 members {class8} after the motion; class 16 admitted at still frame {a16}, class 64 at {a64}; members at the end {m:?}; builds per frame over the last 64 {tail_builds:.1}; collapsed {} dropped {}",
+    st.handover_collapsed, st.handover_dropped
+  );
+  assert!(class8 > 0, "the moving phase filled no class-8 list");
+  for a in [a16, a64] {
+    let (before, after) = (r.stills[a - 1], r.stills[a..].iter().copied().max().unwrap_or(0));
+    assert!(after <= before + before / 10 + 16, "handover 3: fresh rose from {before} to {after} after the admission at still frame {a} (a gap)");
+  }
+  assert!(m[2] * 10 >= class8 * 9, "handover 3: class 64 holds {} of {class8} members", m[2]);
+  assert!((m[0] + m[1]) * 10 <= class8, "handover 3: classes 8/16 kept {} / {} of {class8} members", m[0], m[1]);
+  assert!(st.handover_collapsed > 0 && st.handover_dropped == 0, "handover 3: collapsed {} dropped {}", st.handover_collapsed, st.handover_dropped);
+  let bound = (m[2] as f64 / 64.0 + m[1] as f64 / 16.0 + m[0] as f64 / 8.0) * 1.25 + 8.0;
+  assert!(tail_builds <= bound, "handover 3: {tail_builds:.1} builds per frame at the end, class 64's rate is {bound:.1}");
+}
+
+/// what `cad_handover_scene` measured
+/// [`cad_handover_scene`]'s light-tolerance sweep
+struct CadLight {
+  /// the time step per frame (s)
+  dt: f64,
+  /// the age quantile class 1's bound admits from, per still frame (1: only the oldest; 0: all)
+  q: fn(usize) -> f64,
+}
+
+struct CadHandoverRun {
+  st: super::cadence::DustCadenceState,
+  /// class 8's members after the motion
+  class8: usize,
+  /// per still frame: fresh clusters, build draws
+  stills: alloc::vec::Vec<usize>,
+  builds: alloc::vec::Vec<usize>,
+  /// per class: the first still frame it is admitted
+  admitted_at: alloc::vec::Vec<Option<usize>>,
+  /// per class: members at the end
+  members_end: alloc::vec::Vec<usize>,
+}
+
+/// Round 7c's τ 0.004 defect (observer: 2.6 % shape L1 from f≈64–96 with the handover on, none with
+/// it off): members move between classes one by one as the light bound crosses their age, not by
+/// a class's admission. The handover scene with the time running (Δt 1 µs a frame, so the
+/// geometric rate barely moves) and class 16's light bound swept across the scene's ages: still
+/// frames 0–15 admit none to class 16, 16–175 lower the bound from the oldest to every cluster
+/// (members handed 8 → 16 one by one), 176–207 hold, 208–367 raise it back (members dropped
+/// from 16 back towards 8). Every frame: the owner/incoming bytes pass `check_owner_bytes` and
+/// every live cluster is drawn exactly once (the helper's asserts). Prints the members per class.
+#[test]
+fn cadence_hands_members_over_as_the_light_bound_moves() {
+  fn q(j: usize) -> f64 {
+    match j {
+      0..16 => 1.0,
+      16..176 => 1.0 - (j - 16) as f64 / 160.0,
+      176..208 => 0.0,
+      _ => ((j - 208) as f64 / 160.0).min(1.0),
+    }
+  }
+  let r = cad_handover_scene(alloc::vec![8, 16], 368, Some(CadLight { dt: 1e-6, q }));
+  std::println!("light sweep: admitted at {:?}, members at the end {:?}", r.admitted_at, r.members_end);
+  assert!(r.admitted_at[1].is_some(), "class 16 never admitted");
+}
+
+/// The handover scenes (the retention test's scene, `classes` with 2 phases, margin 0.2): 24 frames
+/// of yaw fill class 8 (the only class admitted from moving frame 16), then `still_frames` still
+/// frames admit the slower classes. Every frame the owner and incoming bytes pass
+/// `check_owner_bytes` and every live cluster is drawn exactly once (the images' contents tracked
+/// from the aborts, swaps and build draws).
+///
+/// `light` (round 7c): every frame advances the time by `dt` and, at still frame `j`, sets the
+/// light tolerance so that class 1's shape bound admits the clusters at least as old as the
+/// age quantile `q(j)` of the scene (`τ = 1.5 N₁ Δt / age_q`; class 0's bound is then half that
+/// age). The fixture's ages do not grow with the time, so sweeping `q` stands in for clusters
+/// ageing across the bound one by one in the observer.
+fn cad_handover_scene(classes: alloc::vec::Vec<u32>, still_frames: usize, light: Option<CadLight>) -> CadHandoverRun {
+  use super::cadence::{CadenceConfig, CadenceView, corner_motion};
+  let nc = classes.len();
+  let px = 128u32;
+  let layout = PyramidLayout::new(px, px);
+  let (mut tiers, radius) = cad_scene();
+  let anchor = tiers[0].0.anchor_m;
+  let t = tiers[0].0.frame.ps_r_t_hi[3] as f64;
+  let view = cad_static_view(anchor, radius, px, 3.0);
+  let inv_unit = cad_inv_unit(&tiers, &view, &layout, None, 1e-2).expect("τ_max");
+  let unit_v = 1.0 / inv_unit;
+  let fwd0: V3 = unit([1.0, 0.3, -0.2]);
+  let up0: V3 = [0.0, 0.0, 1.0];
+  let upv0 = cross64(unit(cross64(fwd0, up0)), fwd0);
+  let yawed = |a: f64| CadenceView { view_rot: cad_view_rot(cad_rotate(fwd0, upv0, a), up0), ..view };
+  let step = {
+    let (mut lo, mut hi) = (0.0f64, 0.1f64);
+    for _ in 0..60 {
+      let mid = 0.5 * (lo + hi);
+      let d = corner_motion(&yawed(mid).map_from(&view).unwrap(), px, px);
+      if d[0].max(d[1]) < 1.5 { lo = mid } else { hi = mid }
+    }
+    lo
+  };
+  // valid entries of class k (on either byte), all states
+  let members = |st: &super::cadence::DustCadenceState, k: usize| -> usize {
+    st.tiers
+      .values()
+      .map(|tc| {
+        let mut set = std::collections::HashSet::new();
+        for l in &tc.lists[k] {
+          for st_l in l.iter() {
+            for &s in st_l {
+              let (o, i) = (tc.owner[s as usize], tc.incoming[s as usize]);
+              if (o & 3) as usize == k + 1 || (i & 3) as usize == k + 1 {
+                set.insert(s);
+              }
+            }
+          }
+        }
+        set.len()
+      })
+      .sum()
+  };
+  let mut st = cad_state(CadenceConfig {
+    classes,
+    phases: 2,
+    eps_px: 1.0,
+    margin_frac: 0.2,
+    retain: true,
+    handover: true,
+    light_tol: 0.0,
+  });
+  // the images' contents by (tier, offset): the scene is static in time, so offsets are lives
+  let mut build_content: alloc::vec::Vec<std::collections::HashSet<(usize, u32)>> = alloc::vec![Default::default(); 2 * nc];
+  let mut shown_content: alloc::vec::Vec<std::collections::HashSet<(usize, u32)>> = alloc::vec![Default::default(); 2 * nc];
+  let mut frame = |st: &mut super::cadence::DustCadenceState,
+                   v: CadenceView,
+                   tiers: &mut [(DustDrawState, TierPackets)],
+                   tag: &str,
+                   t_now: f64|
+   -> super::cadence::CadenceReport {
+    let (_, _, rep) = cad_cadence_frame(st, &cad_frame_meta(v, t_now, anchor, unit_v), tiers, &layout, inv_unit, None, &|_, _| {});
+    st.check_owner_bytes().unwrap_or_else(|e| panic!("{tag}: {e}"));
+    for a in &rep.aborts {
+      match a.list {
+        1 => build_content[a.k * 2 + a.p].clear(),
+        0 => shown_content[a.k * 2 + a.p].clear(),
+        _ => {}
+      }
+    }
+    for &(k, p) in &rep.swaps {
+      shown_content[k * 2 + p] = core::mem::take(&mut build_content[k * 2 + p]);
+    }
+    for d in &rep.drawn_build {
+      assert!(build_content[d.k * 2 + d.p].insert((d.tier, d.offset)), "{tag}: tier {} offset {} drawn twice into image ({}, {})", d.tier, d.offset, d.k, d.p);
+    }
+    for (ti, (ds, (r, _))) in tiers.iter().enumerate() {
+      let live = ds.live_count.min(r.len() as u32);
+      let fresh: std::collections::HashSet<u32> = rep.fresh[ti].iter().copied().collect();
+      for o in 0..live {
+        let n = fresh.contains(&o) as usize + shown_content.iter().filter(|c| c.contains(&(ti, o))).count();
+        assert_eq!(n, 1, "{tag}: tier {ti} offset {o} drawn {n} times");
+      }
+    }
+    rep
+  };
+  let fresh_of = |rep: &super::cadence::CadenceReport| rep.fresh.iter().map(|f| f.len()).sum::<usize>();
+  // the light sweep's ages (sorted) and the frame clock
+  let dt = light.as_ref().map_or(0.0, |l| l.dt);
+  let ages: alloc::vec::Vec<f32> = {
+    let mut a: alloc::vec::Vec<f32> = tiers.iter().flat_map(|(_, (_, m))| m.iter().filter(|mm| mm.flux() > 0.0).map(|mm| mm.age())).collect();
+    a.sort_by(|x, y| x.partial_cmp(y).unwrap_or(core::cmp::Ordering::Equal));
+    a
+  };
+  let mut clock = 0usize;
+  let mut a = 0.0f64;
+  for j in 0..24 {
+    a += step;
+    clock += 1;
+    let rep = frame(&mut st, yawed(a), &mut tiers, &alloc::format!("moving frame {j}"), t + clock as f64 * dt);
+    if j >= 16 {
+      assert!(rep.admitted[0] && rep.admitted[1..].iter().all(|&a| !a), "moving frame {j}: the admission {:?}", rep.admitted);
+    }
+  }
+  let class8 = members(&st, 0);
+  let still = yawed(a);
+  let (mut stills, mut builds, mut admitted_at) = (alloc::vec::Vec::new(), alloc::vec::Vec::new(), alloc::vec![None; nc]);
+  let mut members_per_frame: alloc::vec::Vec<alloc::vec::Vec<usize>> = alloc::vec::Vec::new();
+  for j in 0..still_frames {
+    if let Some(l) = light.as_ref() {
+      let q = (l.q)(j).clamp(0.0, 1.0);
+      let age_q = ages[((q * (ages.len() - 1) as f64) as usize).min(ages.len() - 1)].max(super::cadence::DUST_CADENCE_AGE_MIN_S);
+      st.cfg.light_tol = (1.5 * st.cfg.classes[1] as f64 * dt / age_q as f64) as f32;
+    }
+    clock += 1;
+    let rep = frame(&mut st, still, &mut tiers, &alloc::format!("still frame {j}"), t + clock as f64 * dt);
+    if light.is_some() && j % 16 == 0 {
+      members_per_frame.push((0..nc).map(|k| members(&st, k)).collect());
+    }
+    for k in 0..nc {
+      if admitted_at[k].is_none() && rep.admitted.get(k) == Some(&true) {
+        admitted_at[k] = Some(j);
+      }
+    }
+    stills.push(fresh_of(&rep));
+    builds.push(rep.drawn_build.len());
+  }
+  std::println!("handover {nc}: fresh per still frame {stills:?}");
+  std::println!("handover {nc}: builds per still frame {builds:?}");
+  if light.is_some() {
+    std::println!("handover {nc}: members per class every 16 still frames {members_per_frame:?}");
+  }
+  let members_end = (0..nc).map(|k| members(&st, k)).collect();
+  CadHandoverRun { st, class8, stills, builds, admitted_at, members_end }
 }

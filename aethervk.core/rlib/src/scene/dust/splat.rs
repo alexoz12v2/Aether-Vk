@@ -290,11 +290,11 @@ pub const DUST_FRAME_GATES_OFF_BIT: u32 = 22;
 /// process environment, the GPU bit 23 of [`PYR_SPLIT_DEPTH`]): the EWA linearisation at the
 /// chord's start, as before the midpoint fix
 pub fn jacobian_at_start() -> bool {
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   {
     std::env::var("AETHERVK_DUST_JACOBIAN_AT_START").is_ok_and(|v| v == "1")
   }
-  #[cfg(not(feature = "std"))]
+  #[cfg(not(any(test, feature = "std")))]
   {
     false
   }
@@ -313,28 +313,28 @@ pub fn deep_chord(pyramid: &[u32]) -> bool {
   pyramid[PYR_FLAGS as usize] & DUST_FRAME_DEEP_CHORD != 0
 }
 
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 std::thread_local! {
   /// the deep-chord bit of the frame this thread is splatting ([`set_deep_chord`], per thread as
   /// [`set_legacy_kernel`]'s)
   static DEEP_CHORD: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
 }
-#[cfg(not(feature = "std"))]
+#[cfg(not(any(test, feature = "std")))]
 static DEEP_CHORD_NO_STD: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 /// Sets this thread's deep-chord flag ([`project_split_scatter`] from the frame's header)
 pub fn set_deep_chord(on: bool) {
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   DEEP_CHORD.with(|c| c.set(on));
-  #[cfg(not(feature = "std"))]
+  #[cfg(not(any(test, feature = "std")))]
   DEEP_CHORD_NO_STD.store(on, core::sync::atomic::Ordering::Relaxed);
 }
 
 /// This thread's deep-chord flag ([`set_deep_chord`])
 pub fn deep_chord_on() -> bool {
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   return DEEP_CHORD.with(|c| c.get());
-  #[cfg(not(feature = "std"))]
+  #[cfg(not(any(test, feature = "std")))]
   return DEEP_CHORD_NO_STD.load(core::sync::atomic::Ordering::Relaxed);
 }
 
@@ -372,17 +372,17 @@ pub fn deep_chord_factors(w0: f32, w1: f32, rho: [f32; 2]) -> (f32, f32) {
 /// its time cell, `AETHERVK_DUST_LAB_PIECES=<n>` overrides [`TIME_PIECES_MAX`],
 /// `AETHERVK_DUST_LAB_SIGMA=<s>` scales every packet's covariance by `s²`,
 /// `AETHERVK_DUST_LAB_NO_SUPPORT=1` draws every packet without its support plane.
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 fn lab_knob(name: &str) -> Option<f32> {
   std::env::var(name).ok().and_then(|v| v.trim().parse::<f32>().ok())
 }
-#[cfg(not(feature = "std"))]
+#[cfg(not(any(test, feature = "std")))]
 fn lab_knob(_name: &str) -> Option<f32> {
   None
 }
 
 /// A lab bit mask: decimal or `0x` hexadecimal (std builds, the process environment)
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 fn lab_mask(name: &str) -> Option<u32> {
   let v = std::env::var(name).ok()?;
   let v = v.trim();
@@ -391,7 +391,7 @@ fn lab_mask(name: &str) -> Option<u32> {
     None => v.parse::<u32>().ok(),
   }
 }
-#[cfg(not(feature = "std"))]
+#[cfg(not(any(test, feature = "std")))]
 fn lab_mask(_name: &str) -> Option<u32> {
   None
 }
@@ -422,7 +422,7 @@ static VOLUME_FULL_TOP_TEST: VolumeFullTopNoStd = VolumeFullTopNoStd;
 pub fn set_volume_full_top_test(on: bool) {
   VOLUME_FULL_TOP_TEST.with(|c| c.set(on));
 }
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 std::thread_local! {
   /// The lab's trace of one packet's drawing ([`set_volume_trace`])
   static VOLUME_TRACE: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
@@ -432,11 +432,11 @@ std::thread_local! {
 /// the shell's hand-over, the volume plan, every piece's mean, σ, flags, kept mass, level, class,
 /// texel range and deposit). The observer turns it on for the clusters of
 /// `AETHERVK_DUST_LAB_TRACE_CLUSTER=<id>[,<id>…]` in its per-packet probe.
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 pub fn set_volume_trace(on: bool) {
   VOLUME_TRACE.with(|c| c.set(on));
 }
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 std::thread_local! {
   /// The lab's log of the texel rectangles this thread's scatters visited ([`set_touch_log`])
   static TOUCH_LOG_ON: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
@@ -447,7 +447,7 @@ std::thread_local! {
 /// (inclusive), so a caller drawing one packet at a time on a reused pyramid can sum and clear
 /// only the texels the packet touched (the observer's per-packet probe). Every texel word either
 /// scatter writes lies inside a logged rectangle. Turning it on clears the log.
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 pub fn set_touch_log(on: bool) {
   TOUCH_LOG_ON.with(|c| c.set(on));
   if on {
@@ -456,28 +456,28 @@ pub fn set_touch_log(on: bool) {
 }
 /// The rectangles logged since [`set_touch_log`] was turned on (or since the last take), moved
 /// into `out` (cleared first)
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 pub fn take_touch_log(out: &mut alloc::vec::Vec<[u32; 6]>) {
   out.clear();
   TOUCH_LOG.with(|l| core::mem::swap(&mut *l.borrow_mut(), out));
 }
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 #[inline]
 fn touch_log_on() -> bool {
   TOUCH_LOG_ON.with(|c| c.get())
 }
-#[cfg(not(feature = "std"))]
+#[cfg(not(any(test, feature = "std")))]
 #[inline]
 fn touch_log_on() -> bool {
   false
 }
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 fn touch_rect(off: u32, w: u32, x0: i64, x1: i64, y0: i64, y1: i64) {
   if x0 <= x1 && y0 <= y1 {
     TOUCH_LOG.with(|l| l.borrow_mut().push([off, w, x0.max(0) as u32, x1.max(0) as u32, y0.max(0) as u32, y1.max(0) as u32]));
   }
 }
-#[cfg(not(feature = "std"))]
+#[cfg(not(any(test, feature = "std")))]
 fn touch_rect(_: u32, _: u32, _: i64, _: i64, _: i64, _: i64) {}
 #[cfg(any(test, feature = "std"))]
 std::thread_local! {
@@ -589,11 +589,11 @@ pub fn set_volume_level_rule_test(floor: bool, cap_mode: u8) {
 pub fn set_volume_packet_level(on: bool) {
   VOLUME_PACKET_LEVEL.with(|c| c.set(on));
 }
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 fn volume_trace() -> bool {
   VOLUME_TRACE.with(|c| c.get())
 }
-#[cfg(not(feature = "std"))]
+#[cfg(not(any(test, feature = "std")))]
 fn volume_trace() -> bool {
   false
 }
@@ -726,28 +726,28 @@ pub fn legacy_kernel(pyramid: &[u32]) -> bool {
   (pyramid[PYR_SPLIT_DEPTH as usize] >> DUST_FRAME_LEGACY_KERNEL_BIT) & 1 != 0
 }
 
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 std::thread_local! {
   /// the legacy-kernel bit of the frame this thread is splatting ([`set_legacy_kernel`]): per
   /// thread, so a test's legacy frame cannot leak into another test's packets
   static LEGACY_KERNEL: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
 }
-#[cfg(not(feature = "std"))]
+#[cfg(not(any(test, feature = "std")))]
 static LEGACY_KERNEL_NO_STD: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 /// Sets this thread's legacy-kernel flag (the splat, per cluster, from the frame's header; replays)
 pub fn set_legacy_kernel(on: bool) {
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   LEGACY_KERNEL.with(|c| c.set(on));
-  #[cfg(not(feature = "std"))]
+  #[cfg(not(any(test, feature = "std")))]
   LEGACY_KERNEL_NO_STD.store(on, core::sync::atomic::Ordering::Relaxed);
 }
 
 /// This thread's legacy-kernel flag ([`set_legacy_kernel`])
 pub fn legacy_kernel_on() -> bool {
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   return LEGACY_KERNEL.with(|c| c.get());
-  #[cfg(not(feature = "std"))]
+  #[cfg(not(any(test, feature = "std")))]
   return LEGACY_KERNEL_NO_STD.load(core::sync::atomic::Ordering::Relaxed);
 }
 
@@ -1288,42 +1288,42 @@ pub struct Packet {
 // ([`group_bins`]): its edges are `b` and `b + g`, its speed factors theirs, its share `g` bins'
 // flux, its density ramp linear between its end factors ([`bin_density_ends`]). `g` is chosen per
 // cluster ([`cluster_group`]) and is 1 everywhere else.
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 std::thread_local! {
   static GROUP_ACTIVE: core::cell::Cell<usize> = const { core::cell::Cell::new(1) };
   static GROUP_REQUESTED: core::cell::Cell<usize> = const { core::cell::Cell::new(1) };
 }
-#[cfg(not(feature = "std"))]
+#[cfg(not(any(test, feature = "std")))]
 static GROUP_ACTIVE: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(1);
-#[cfg(not(feature = "std"))]
+#[cfg(not(any(test, feature = "std")))]
 static GROUP_REQUESTED: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(1);
 
 /// The size bins one bin of the loop spans now (1 outside a grouped cluster's bin loop)
 pub fn group_bins() -> usize {
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   return GROUP_ACTIVE.with(|c| c.get());
-  #[cfg(not(feature = "std"))]
+  #[cfg(not(any(test, feature = "std")))]
   return GROUP_ACTIVE.load(core::sync::atomic::Ordering::Relaxed);
 }
 fn set_group_active(g: usize) {
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   GROUP_ACTIVE.with(|c| c.set(g));
-  #[cfg(not(feature = "std"))]
+  #[cfg(not(any(test, feature = "std")))]
   GROUP_ACTIVE.store(g, core::sync::atomic::Ordering::Relaxed);
 }
 /// Requests chord groups of `g` bins for the next [`subpackets_cells`] (the cluster's draw;
 /// [`cluster_group`]); 1 = single bins
 pub fn request_group(g: usize) {
   let g = if g >= 1 && SIZE_BINS as usize % g == 0 { g } else { 1 };
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   GROUP_REQUESTED.with(|c| c.set(g));
-  #[cfg(not(feature = "std"))]
+  #[cfg(not(any(test, feature = "std")))]
   GROUP_REQUESTED.store(g, core::sync::atomic::Ordering::Relaxed);
 }
 fn requested_group() -> usize {
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   return GROUP_REQUESTED.with(|c| c.get());
-  #[cfg(not(feature = "std"))]
+  #[cfg(not(any(test, feature = "std")))]
   return GROUP_REQUESTED.load(core::sync::atomic::Ordering::Relaxed);
 }
 
@@ -1337,11 +1337,11 @@ fn requested_group() -> usize {
 // pixels long, where its Gaussianised axis's tails lie within the pixel filter; the near field,
 // whose light is shape-critical, keeps every bin (the chord-group study of 2026-10-14 grouped by
 // a volumetric rule, i.e. near the eye, and doubled the light).
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 std::thread_local! {
   static LOD_PX: core::cell::Cell<f32> = const { core::cell::Cell::new(0.0) };
 }
-#[cfg(not(feature = "std"))]
+#[cfg(not(any(test, feature = "std")))]
 static LOD_PX_BITS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 /// the frame's pixels per drawn segment (0 = off) of the header word [`PYR_LOD`]
 pub fn lod_px(pyramid: &[u32]) -> f32 {
@@ -1350,15 +1350,15 @@ pub fn lod_px(pyramid: &[u32]) -> f32 {
 }
 /// the level of detail of the cluster being drawn (set by [`splat_cluster_inner`]; 0 = off)
 pub fn lod_px_active() -> f32 {
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   return LOD_PX.with(|c| c.get());
-  #[cfg(not(feature = "std"))]
+  #[cfg(not(any(test, feature = "std")))]
   return f32::from_bits(LOD_PX_BITS.load(core::sync::atomic::Ordering::Relaxed));
 }
 pub fn set_lod_px_active(v: f32) {
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   LOD_PX.with(|c| c.set(v));
-  #[cfg(not(feature = "std"))]
+  #[cfg(not(any(test, feature = "std")))]
   LOD_PX_BITS.store(v.to_bits(), core::sync::atomic::Ordering::Relaxed);
 }
 // The level of detail's depth rule: a group chord or a time piece may not span more depth than
@@ -1369,17 +1369,17 @@ pub fn set_lod_px_active(v: f32) {
 // at the frames' split depth 0 the 50 000 km pose lost 40 % of its light at 2 px (2026-10-16).
 // The eye and forward of the frame being drawn (a perspective view; `None`: orthographic or
 // unknown, no depth rule), set by [`splat_cluster_inner`].
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 std::thread_local! {
   static LOD_VIEW: core::cell::Cell<Option<([f32; 3], [f32; 3])>> = const { core::cell::Cell::new(None) };
 }
-#[cfg(not(feature = "std"))]
+#[cfg(not(any(test, feature = "std")))]
 static LOD_VIEW_BITS: [core::sync::atomic::AtomicU32; 7] = [const { core::sync::atomic::AtomicU32::new(0) }; 7];
 /// the eye and forward of the frame being drawn, for the level of detail's depth rule
 pub fn lod_view_active() -> Option<([f32; 3], [f32; 3])> {
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   return LOD_VIEW.with(|c| c.get());
-  #[cfg(not(feature = "std"))]
+  #[cfg(not(any(test, feature = "std")))]
   {
     use core::sync::atomic::Ordering::Relaxed;
     if LOD_VIEW_BITS[6].load(Relaxed) == 0 {
@@ -1390,9 +1390,9 @@ pub fn lod_view_active() -> Option<([f32; 3], [f32; 3])> {
   }
 }
 pub fn set_lod_view_active(v: Option<([f32; 3], [f32; 3])>) {
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   LOD_VIEW.with(|c| c.set(v));
-  #[cfg(not(feature = "std"))]
+  #[cfg(not(any(test, feature = "std")))]
   {
     use core::sync::atomic::Ordering::Relaxed;
     match v {
@@ -4222,7 +4222,7 @@ fn volume_plan_pieces(
     pieces.iter().take(n as usize).filter(|pc| pc.on).map(|pc| volume_piece_level(pc, &rule, layout)).max().unwrap_or(top)
   });
   let texels = volume_evals_pp(pieces, n, &rule, single, layout);
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   sky_study_record(theta, n, any_full, evals);
   Some(VolumePlan { level, pieces: n, evals, subrays, texels, rule, single })
 }
@@ -4232,9 +4232,9 @@ fn volume_plan_pieces(
 // evaluations an octahedral map of base [`SKY_STUDY_BASE`]² would make at
 // [`DUST_VOLUME_TEXELS_PER_SIGMA`] texels per σ (a piece's 3σ cone, the whole sphere when the eye
 // is inside it), capped at [`DUST_VOLUME_MAX_EVALS`] per packet as on screen
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 const SKY_STUDY_BASE: f32 = 128.0;
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 #[derive(Clone, Copy, Default)]
 struct SkyStudy {
   packets: u64,
@@ -4245,17 +4245,17 @@ struct SkyStudy {
   theta_bins: [u64; 6],
   theta_min: f32,
 }
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 std::thread_local! {
   static SKY_STUDY: core::cell::Cell<SkyStudy> = const { core::cell::Cell::new(SkyStudy {
     packets: 0, full: 0, screen_evals: 0, map_evals: 0, theta_bins: [0; 6], theta_min: f32::INFINITY,
   }) };
 }
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 static SKY_STUDY_TOTAL: std::sync::Mutex<Option<SkyStudy>> = std::sync::Mutex::new(None);
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 static LAB_SKY_STUDY: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 fn sky_study_record(theta: f32, n: u32, full: bool, evals: u32) {
   if !lab_flag(&LAB_SKY_STUDY, "AETHERVK_DUST_SKYMAP_STUDY") {
     return;
@@ -4278,7 +4278,7 @@ fn sky_study_record(theta: f32, n: u32, full: bool, evals: u32) {
     c.set(v);
   });
 }
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 fn sky_study_flush() {
   let v = SKY_STUDY.with(|c| c.replace(SkyStudy { theta_min: f32::INFINITY, ..SkyStudy::default() }));
   if v.packets == 0 {
@@ -5956,7 +5956,7 @@ pub fn volume_scatter(
 ) -> u32 {
   // the packet's rounding seed, drawn first (mirror of `dust_volume_scatter`)
   let seed = next_packet_seed();
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   VOLUME_CALLS.with(|c| c.set(c.get() + 1));
   let vs = VolumeStats::load(pyramid);
   let (bias, axis) = (vs.bias, vs.axis);
@@ -5974,7 +5974,7 @@ pub fn volume_scatter(
     &mut pieces,
     &mut bound,
   ) else {
-    #[cfg(feature = "std")]
+    #[cfg(any(test, feature = "std"))]
     if volume_trace() {
       std::println!("  [trace volume] not drawn (no projection, or no piece on screen):");
       for (k, pc) in pieces.iter().enumerate().filter(|(_, pc)| pc.l[0] > 0.0) {
@@ -6218,13 +6218,13 @@ pub fn volume_scatter(
     if written > written_before {
       mask_bits |= 1 << level;
     }
-    #[cfg(feature = "std")]
+    #[cfg(any(test, feature = "std"))]
     if tracing {
       let name = ["centre", "small", "sub-rays", "lines"][class as usize];
       trace_piece(k, pc, eye, &phot.support, name, k_sub, (tx0, tx1, ty0, ty1), tr_raw, tr_in);
     }
   }
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   if tracing {
     std::println!(
       "  [trace volume] plan: coarsest piece level {} ({}x{} texels of {} px), levels drawn {mask_bits:#b}, pieces {}, evals {}, sub-ray limit {}, bias {bias}, texel share {}, renorm {renorm:.4}, written {written}",
@@ -6250,7 +6250,7 @@ pub fn volume_scatter(
 /// Mahalanobis distance, flags, own level, the class it was drawn with (and its sub-ray order),
 /// its kept mass in the support's half-space, its box, its texel range, and its deposit (Σ τ·px²
 /// as stored, and the in-frame part the composite shows).
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 #[allow(clippy::too_many_arguments)]
 fn trace_piece(
   k: usize,
@@ -6528,7 +6528,7 @@ pub fn split_packet_with(
         match shell.classify(&q) {
           super::specks::ShellClass::Outside => push(out, q),
           super::specks::ShellClass::Inside => {
-            #[cfg(feature = "std")]
+            #[cfg(any(test, feature = "std"))]
             if volume_trace() {
               std::println!("  [trace shell] a leaf wholly inside the speck shell ({} m): left to the specks, flux {:.4e}", view.shell, q.flux);
             }
@@ -6550,7 +6550,7 @@ pub fn split_packet_with(
             } else {
               let mut r = q;
               r.flux *= shell.outside_fraction(&q);
-              #[cfg(feature = "std")]
+              #[cfg(any(test, feature = "std"))]
               if volume_trace() {
                 std::println!("  [trace shell] a leaf across the speck shell ({} m): kept {:.4} of flux {:.4e}", view.shell, shell.outside_fraction(&q), q.flux);
               }
@@ -6604,7 +6604,7 @@ pub fn project_split_scatter(
   scratch.clear();
   // the frame's deep-chord bit for the split and the projection below ([`DUST_FRAME_DEEP_CHORD`])
   set_deep_chord(deep_chord(pyramid));
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   if volume_trace() {
     let q = sub3(view.eye, p.mean);
     let r = sub3(q, scale3(p.seg, segment_param(q, p.seg)));
@@ -6642,7 +6642,7 @@ pub fn project_split_scatter(
   {
     let mut parts = [*p; DUST_SUPPORT_TRUNC_MAX];
     let n = conic_slabs(p, &phot.support, phot.origin, &mut parts);
-    #[cfg(feature = "std")]
+    #[cfg(any(test, feature = "std"))]
     if volume_trace() {
       std::println!("  [trace route] its cone of grains: {n} slabs, each drawn uncut");
     }
@@ -6666,7 +6666,7 @@ pub fn project_split_scatter(
     && support_mass(p, &phot.support) < 1.0 - DUST_SUPPORT_CUT_MIN
   {
     if is_volumetric(p, view) {
-      #[cfg(feature = "std")]
+      #[cfg(any(test, feature = "std"))]
       if volume_trace() {
         std::println!("  [trace route] cut by its support, the eye near: the ray integral over the half-space");
       }
@@ -6675,7 +6675,7 @@ pub fn project_split_scatter(
     // the eye not near: its truncation's moments, drawn as uncut packets
     let mut parts = [*p; DUST_SUPPORT_TRUNC_MAX];
     let n = support_truncated(p, &phot.support, &mut parts);
-    #[cfg(feature = "std")]
+    #[cfg(any(test, feature = "std"))]
     if volume_trace() {
       std::println!("  [trace route] cut by its support: {n} truncated parts, each drawn uncut");
     }
@@ -6687,13 +6687,13 @@ pub fn project_split_scatter(
     return drawn;
   }
   let mut stats = SplitStats::load(pyramid);
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   let children_before = stats.children;
   split_packet(p, view, scratch, &mut stats);
   stats.store(pyramid);
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   let tracing = volume_trace();
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   if tracing {
     let fl = |v: &[Packet]| v.iter().map(|q| q.flux as f64).sum::<f64>();
     std::println!(
@@ -6710,7 +6710,7 @@ pub fn project_split_scatter(
   }
   let mut scattered = 0;
   for leaf in scratch.volume.iter() {
-    #[cfg(feature = "std")]
+    #[cfg(any(test, feature = "std"))]
     if tracing {
       std::println!("  [trace leaf] volume: mean {:?} seg {:?} cov {:?} flux {:.4e}", leaf.mean, leaf.seg, leaf.cov, leaf.flux);
     }
@@ -6731,7 +6731,7 @@ pub fn project_split_scatter(
       view.eye,
       phot,
     );
-    #[cfg(feature = "std")]
+    #[cfg(any(test, feature = "std"))]
     if tracing {
       std::println!(
         "  [trace leaf] EWA: mean {:?} seg {:?} flux {:.4e} → {}",
@@ -6746,7 +6746,7 @@ pub fn project_split_scatter(
     }
     if let Some(sp) = sp {
       let t = splat_scatter(&sp, color, layout, inv_unit, pyramid);
-      #[cfg(feature = "std")]
+      #[cfg(any(test, feature = "std"))]
       if tracing {
         std::println!("    [trace leaf] EWA texels written {t}");
       }
@@ -6977,7 +6977,7 @@ pub fn unpack_color(w: u32) -> [f32; 3] {
 #[inline]
 pub fn sat_add(a: &mut u32, b: u32) {
   *a = a.saturating_add(b);
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   SAT_ADDS.with(|c| c.set(c.get() + 1));
 }
 
@@ -6985,15 +6985,15 @@ pub fn sat_add(a: &mut u32, b: u32) {
 // each cluster makes ([`sat_add`]: one compare-and-swap loop each on the GPU) and its split
 // children, volume evaluations and EWA texel units (the header counters' increase), logged by
 // [`splat_tier_range`] and taken by [`take_work_log`]. Off by default: nothing is recorded.
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 std::thread_local! {
   static SAT_ADDS: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
   static VOLUME_CALLS: core::cell::Cell<u32> = const { core::cell::Cell::new(0) };
   static PACKET_CALLS: core::cell::Cell<u32> = const { core::cell::Cell::new(0) };
 }
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 static LAB_WORK_LOG: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 static WORK_LOG: std::sync::Mutex<alloc::vec::Vec<ClusterWork>> = std::sync::Mutex::new(alloc::vec::Vec::new());
 
 /// The texel run a dither carry stays within ([`segment_carry`]): a packet's texels are drawn in
@@ -7361,31 +7361,31 @@ const _: () = assert!(
 
 // The packet rounding seeds (mirror of `dust_cluster_seed` / `dust_packet_ord`): per cluster
 // (its ring slot) and per packet in the order the cluster's thread draws them
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 std::thread_local! {
   static PACKET_SEQ: core::cell::Cell<(u32, u32)> = const { core::cell::Cell::new((0, 0)) };
 }
-#[cfg(not(feature = "std"))]
+#[cfg(not(any(test, feature = "std")))]
 static PACKET_SEQ: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 /// Starts cluster `index`'s packet seeds (mirror of the splat's `main`)
 pub fn begin_cluster_packets(index: u32) {
   let seed = dust_hash32(index);
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   PACKET_SEQ.with(|c| c.set((seed, 0)));
-  #[cfg(not(feature = "std"))]
+  #[cfg(not(any(test, feature = "std")))]
   PACKET_SEQ.store(seed as u64, core::sync::atomic::Ordering::Relaxed);
 }
 
 /// The next packet's rounding seed (mirror of `dust_next_packet_seed`)
 pub fn next_packet_seed() -> u32 {
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   let (seed, ord) = PACKET_SEQ.with(|c| {
     let v = c.get();
     c.set((v.0, v.1.wrapping_add(1)));
     v
   });
-  #[cfg(not(feature = "std"))]
+  #[cfg(not(any(test, feature = "std")))]
   let (seed, ord) = {
     let v = PACKET_SEQ.fetch_add(1 << 32, core::sync::atomic::Ordering::Relaxed);
     (v as u32, (v >> 32) as u32)
@@ -7456,7 +7456,7 @@ pub fn pool_study(m: &DustMoments, eye: [f32; 3]) -> ClusterWork {
 /// The work log since the last call ([`ClusterWork`]; empty unless `AETHERVK_DUST_WORK_LOG=1`).
 /// With `AETHERVK_DUST_POOL_STUDY=1` it also logs which clusters' volumetric packets the two
 /// pooling rules would cover: A (shape ratio ≤ 0.25 / 0.5 / 1) and B (spread ≤ 1/8, 1/4, 1/2 rad).
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 pub fn take_work_log() -> alloc::vec::Vec<ClusterWork> {
   let log = core::mem::take(&mut *WORK_LOG.lock().unwrap_or_else(|e| e.into_inner()));
   if let Some(v) = SKY_STUDY_TOTAL.lock().unwrap_or_else(|e| e.into_inner()).take() {
@@ -8146,9 +8146,9 @@ pub fn splat_tier_range(
   let n = (pc.live_count as usize).min(moments.len()).min(render.len());
   // `AETHERVK_DUST_PROBE="x,y;x,y"` (diagnostics, CPU particle mode): the clusters' τ at those
   // pixels, the largest contributors logged per tier ([`splat_tier_probed`])
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   let probes = probe_pixels();
-  #[cfg(not(feature = "std"))]
+  #[cfg(not(any(test, feature = "std")))]
   let probes: alloc::vec::Vec<(u32, u32)> = alloc::vec::Vec::new();
   let reports = splat_range_probed(
     moments, render, pc, flow, tracer_counts, layout, pyramid, &view, &mut scratch, stream, eye,
@@ -8364,9 +8364,9 @@ fn splat_range_probed(
   let mut hits: alloc::vec::Vec<alloc::vec::Vec<(f32, usize)>> =
     alloc::vec![alloc::vec::Vec::new(); probes.len()];
   let mut before = alloc::vec![0.0f32; probes.len()];
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   let logging = lab_flag(&LAB_WORK_LOG, "AETHERVK_DUST_WORK_LOG");
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   let mut log: alloc::vec::Vec<ClusterWork> = alloc::vec::Vec::new();
   for i in range {
     let m = &moments[i];
@@ -8376,11 +8376,11 @@ fn splat_range_probed(
     for (k, &(x, y)) in probes.iter().enumerate() {
       before[k] = composite_sample(layout, pyramid, unit, x, y).0;
     }
-    #[cfg(feature = "std")]
+    #[cfg(any(test, feature = "std"))]
     let v0 = VOLUME_CALLS.with(|c| c.get());
-    #[cfg(feature = "std")]
+    #[cfg(any(test, feature = "std"))]
     let p0 = PACKET_CALLS.with(|c| c.get());
-    #[cfg(feature = "std")]
+    #[cfg(any(test, feature = "std"))]
     let w0 = logging.then(|| {
       (
         SAT_ADDS.with(|c| c.get()),
@@ -8392,7 +8392,7 @@ fn splat_range_probed(
     splat_cluster_inner(
       moments, render, pc, flow, tracer_counts, layout, pyramid, view, scratch, stream, eye, i,
     );
-    #[cfg(feature = "std")]
+    #[cfg(any(test, feature = "std"))]
     if let Some((a, c, v, e)) = w0 {
       log.push(ClusterWork {
         index: i as u32,
@@ -8414,11 +8414,11 @@ fn splat_range_probed(
       }
     }
   }
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   if !log.is_empty() {
     WORK_LOG.lock().unwrap_or_else(|e| e.into_inner()).extend(log);
   }
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   sky_study_flush();
   probes
     .iter()
@@ -8471,7 +8471,7 @@ fn splat_range_probed(
 }
 
 /// `AETHERVK_DUST_PROBE="x,y;x,y"`: the probe pixels of [`splat_tier_range`] (diagnostics)
-#[cfg(feature = "std")]
+#[cfg(any(test, feature = "std"))]
 fn probe_pixels() -> alloc::vec::Vec<(u32, u32)> {
   std::env::var("AETHERVK_DUST_PROBE")
     .ok()
@@ -8559,7 +8559,7 @@ fn splat_cluster_inner(
     request_group(1);
     set_lod_px_active(0.0);
     set_lod_view_active(None);
-    #[cfg(feature = "std")]
+    #[cfg(any(test, feature = "std"))]
     PACKET_CALLS.with(|c| c.set(c.get() + packets.len() as u32));
     for (p0, support, w_o, bin) in packets {
       let support = if no_support { [0.0; 4] } else { support };

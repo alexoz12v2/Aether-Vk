@@ -80,6 +80,10 @@ void main() {
             uint s = (pc.firstSlot + o) & pc.ringMask;
             uint b = dust_own_get(pc.sys, rb + s);
             uint nb = b;
+            uint inc0 = dust_cad_inc0(R, nc, np);
+            uint ib = dust_inc_get(pc.sys, inc0, rb + s);
+            uint nib = ib;
+            bool handover = (prm.v[DUST_CADP_FLAGS] & DUST_CADF_HANDOVER) != 0u;
             uint nsw = prm.v[DUST_CADP_NSWAP];
             float dMax = uintBitsToFloat(prm.v[DUST_CADP_DMAX]);
             bool decided = false, ok = false, shell = false, rated = false, shifted = true, inside = true;
@@ -99,7 +103,14 @@ void main() {
                 if (((admit >> k) & 1u) == 0u) continue;
                 if (np == 2u && (s & 1u) != pp) continue;
                 uint cls = nb & DUST_OWN_CLASS_MASK;
-                if ((cls != 0u && cls != k + 1u) || (nb & DUST_OWN_PENDING) != 0u) continue;
+                uint icls = nib & DUST_OWN_CLASS_MASK;
+                // the handover (rule b): a member of a faster class taken as incoming, or re-taken
+                // as incoming once its faster class let go before the collapse; no owner
+                // membership while an incoming one exists
+                bool asInc = handover && (icls == 0u || icls == k + 1u) && (nib & DUST_OWN_PENDING) == 0u
+                          && ((cls != 0u && cls != k + 1u && prm.v[DUST_CADP_N + cls - 1u] < prm.v[DUST_CADP_N + k])
+                              || (cls == 0u && icls == k + 1u));
+                if (!asInc && ((cls != 0u && cls != k + 1u) || (nb & DUST_OWN_PENDING) != 0u || (cls == 0u && icls != 0u))) continue;
                 if (!decided) {
                     decided = true;
                     ok = dust_mom.m[s].mean_flux.w > 0.0 && dust_render_live(pc.render.c[s].age_id_dbeta_flux.y);
@@ -131,7 +142,15 @@ void main() {
                 // retention (cadence::finish F2b): a member of class k whose target is a slower
                 // class stays in k (per pair: the target is k-independent, the owner is not)
                 int tk = target;
-                if ((prm.v[DUST_CADP_FLAGS] & DUST_CADF_RETAIN) != 0u && cls == k + 1u && target > int(k)) tk = int(k);
+                if (handover && cls == k + 1u && icls != 0u) {
+                    // the handover (rule a): held while the incoming class shows it later than 2N
+                    uint jc = icls - 1u;
+                    uint sT = prm.v[DUST_CADP_FTS + jc * 2u + (np == 2u ? pp : 0u)]
+                            + ((nib & DUST_OWN_BUILD) != 0u ? 0u : prm.v[DUST_CADP_N + jc]);
+                    tk = (target >= int(k) && sT > 2u * prm.v[DUST_CADP_N + k]) ? int(k) : -1;
+                } else if (((prm.v[DUST_CADP_FLAGS] & DUST_CADF_RETAIN) != 0u || handover) && cls == k + 1u && target > int(k)) {
+                    tk = int(k);
+                }
                 uint hb = min(r, DUST_CAD_MAX_CLASSES);
                 if (hb == 0u) atomicAdd(s_hist0, 1u);
                 else if (hb == 1u) atomicAdd(s_hist1, 1u);
@@ -139,11 +158,13 @@ void main() {
                 else atomicAdd(s_hist3, 1u);
                 if (foot && tk == int(k) && !inside) { atomicAdd(s_d3, 1u); continue; }
                 if (tk == int(k)) {
-                    nb = dust_own_byte(k, (nb & ~DUST_OWN_CLASS_MASK) | DUST_OWN_PENDING);
+                    if (asInc) nib = dust_own_byte(k, (nib & ~DUST_OWN_CLASS_MASK) | DUST_OWN_PENDING);
+                    else nb = dust_own_byte(k, (nb & ~DUST_OWN_CLASS_MASK) | DUST_OWN_PENDING);
                     if (dust_cad_finite(g)) atomicMax(st.v[dust_cads_tp(t, k, pp) + 6u], floatBitsToUint(g));
                 }
             }
             dust_own_set(pc.sys, rb + s, b, nb);
+            dust_inc_set(pc.sys, inc0, rb + s, ib, nib);
         }
         barrier();
         if (lane == 0u) {
@@ -164,16 +185,27 @@ void main() {
         uint s = (pc.firstSlot + o) & pc.ringMask;
         uint b = dust_own_get(pc.sys, rb + s);
         uint nb = b;
-        // F1: the aborted lists (all pairs, the CPU's k, p order; a byte holds one class)
+        uint inc0 = dust_cad_inc0(R, nc, np);
+        uint ib = dust_inc_get(pc.sys, inc0, rb + s);
+        uint nib = ib;
+        // F1: the aborted lists (all pairs, the CPU's k, p order; a byte holds one class; the
+        // incoming byte another)
         if ((prm.v[DUST_CADP_FLAGS] & DUST_CADF_ABORTS) != 0u) {
             for (uint k = 0u; k < nc; ++k) {
                 for (uint pp = 0u; pp < np; ++pp) {
                     uint af = st.v[dust_cads_pair(k, pp) + 2u];
-                    if (af == 0u || (nb & DUST_OWN_CLASS_MASK) != k + 1u || (np == 2u && (s & 1u) != pp)) continue;
-                    if ((af & 1u) != 0u && (nb & DUST_OWN_BUILD) != 0u)
-                        nb = dust_own_drop_empty(nb & ~(DUST_OWN_BUILD | DUST_OWN_IN_IMAGE));
-                    if ((af & 2u) != 0u && (nb & DUST_OWN_PENDING) != 0u)
-                        nb = dust_own_drop_empty(nb & ~DUST_OWN_PENDING);
+                    if (af == 0u || (np == 2u && (s & 1u) != pp)) continue;
+                    if ((nb & DUST_OWN_CLASS_MASK) == k + 1u) {
+                        if ((af & 1u) != 0u && (nb & DUST_OWN_BUILD) != 0u)
+                            nb = dust_own_drop_empty(nb & ~(DUST_OWN_BUILD | DUST_OWN_IN_IMAGE));
+                        if ((af & 2u) != 0u && (nb & DUST_OWN_PENDING) != 0u)
+                            nb = dust_own_drop_empty(nb & ~DUST_OWN_PENDING);
+                    } else if ((nib & DUST_OWN_CLASS_MASK) == k + 1u) {
+                        if ((af & 1u) != 0u && (nib & DUST_OWN_BUILD) != 0u)
+                            nib = dust_own_drop_empty(nib & ~(DUST_OWN_BUILD | DUST_OWN_IN_IMAGE));
+                        if ((af & 2u) != 0u && (nib & DUST_OWN_PENDING) != 0u)
+                            nib = dust_own_drop_empty(nib & ~DUST_OWN_PENDING);
+                    }
                 }
             }
         }
@@ -194,7 +226,20 @@ void main() {
         for (uint j = 0u; j < nsw; ++j) {
             uint code = prm.v[DUST_CADP_SWAP0 + j];
             uint k = code & 0xFFu, pp = code >> 8u;
-            if ((nb & DUST_OWN_CLASS_MASK) != k + 1u || (np == 2u && (s & 1u) != pp)) continue;
+            if (np == 2u && (s & 1u) != pp) continue;
+            // the handover's collapse (rule c): a valid incoming build entry takes the owner byte
+            // when the faster class's swap (earlier in this loop) emptied it, else it is dropped
+            if ((nib & DUST_OWN_CLASS_MASK) == k + 1u && (nib & DUST_OWN_BUILD) != 0u) {
+                if (nb == 0u) { nb = nib; atomicAdd(st.v[DUST_CADS_HANDOVER], 1u); }
+                else atomicAdd(st.v[DUST_CADS_HANDOVER + 1u], 1u);
+                nib = 0u;
+            }
+            if ((nib & DUST_OWN_CLASS_MASK) == k + 1u) {
+                // an incoming pending entry promoted
+                if ((nib & DUST_OWN_PENDING) != 0u) nib = (nib & ~DUST_OWN_PENDING) | DUST_OWN_BUILD;
+                continue;
+            }
+            if ((nb & DUST_OWN_CLASS_MASK) != k + 1u) continue;
             if ((nb & DUST_OWN_SHOWN) != 0u) nb = dust_own_drop_empty(nb & ~DUST_OWN_SHOWN);
             if ((nb & DUST_OWN_BUILD) != 0u) {
                 uint m = nb & ~(DUST_OWN_BUILD | DUST_OWN_IN_IMAGE);
@@ -204,6 +249,7 @@ void main() {
             if ((nb & DUST_OWN_PENDING) != 0u) nb = (nb & ~DUST_OWN_PENDING) | DUST_OWN_BUILD;
         }
         dust_own_set(pc.sys, rb + s, b, nb);
+        dust_inc_set(pc.sys, inc0, rb + s, ib, nib);
         return;
     }
 
@@ -253,8 +299,12 @@ void main() {
         uint idx = cursor + j;
         uint s = 0xFFFFFFFFu;
         if (j < step && idx < len) s = pc.sys.v[dust_cad_list(R, nc, np, rb, cap, k, pp, 1u) + idx];
+        uint inc0 = dust_cad_inc0(R, nc, np);
         uint b = s != 0xFFFFFFFFu ? dust_own_get(pc.sys, rb + s) : 0u;
-        bool valid = s != 0xFFFFFFFFu && (b & DUST_OWN_CLASS_MASK) == k + 1u && (b & DUST_OWN_BUILD) != 0u
+        uint ib = s != 0xFFFFFFFFu ? dust_inc_get(pc.sys, inc0, rb + s) : 0u;
+        // a member on the owner byte, or (the handover) on the incoming byte
+        bool onInc = (ib & DUST_OWN_CLASS_MASK) == k + 1u && (ib & DUST_OWN_BUILD) != 0u;
+        bool valid = s != 0xFFFFFFFFu && (((b & DUST_OWN_CLASS_MASK) == k + 1u && (b & DUST_OWN_BUILD) != 0u) || onInc)
                   && ((s - pc.firstSlot) & pc.ringMask) < pc.liveCount;
         // (a build without an image draws nothing: cadence::finish F3 skips it)
         if (mode == DUST_CADM_CHUNK && st.v[dust_cads_pair(k, pp) + 1u] == 0u) valid = false;
@@ -285,7 +335,8 @@ void main() {
         }
         atomicAdd(st.v[tp + 8u], 1u);
         atomicAdd(st.v[dust_cads_pair(k, pp) + 6u], 1u);
-        dust_own_set(pc.sys, rb + s, b, b | DUST_OWN_IN_IMAGE);
+        if (onInc) dust_inc_set(pc.sys, inc0, rb + s, ib, ib | DUST_OWN_IN_IMAGE);
+        else dust_own_set(pc.sys, rb + s, b, b | DUST_OWN_IN_IMAGE);
         pc.sys.v[drawAt] = s;
         return;
     }
@@ -303,6 +354,8 @@ void main() {
         s &= pc.ringMask;
         uint b = dust_own_get(pc.sys, rb + s);
         dust_own_set(pc.sys, rb + s, b, 0u);
+        uint inc0 = dust_cad_inc0(R, nc, np);
+        dust_inc_set(pc.sys, inc0, rb + s, dust_inc_get(pc.sys, inc0, rb + s), 0u);
         return;
     }
 

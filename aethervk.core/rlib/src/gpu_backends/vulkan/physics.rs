@@ -746,7 +746,7 @@ impl PhysicsPipelines {
               count_op("STL")
             ));
           }
-          #[cfg(feature = "std")]
+          #[cfg(any(test, feature = "std"))]
           if let Some(dir) = dir.as_deref() {
             let safe: alloc::string::String =
               rname.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect();

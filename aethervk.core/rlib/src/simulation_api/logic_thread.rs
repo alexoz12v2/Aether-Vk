@@ -174,6 +174,8 @@ fn drain_logic_commands(
         }
       }
       Err(thingbuf::mpsc::errors::TryRecvError::Closed) => return true,
+      // the sender was dropped during a panic, which leaves the channel open
+      Err(_) if ctx.closing.load(core::sync::atomic::Ordering::Acquire) => return true,
       Err(_) => break,
     }
   }
