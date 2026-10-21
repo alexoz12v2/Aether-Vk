@@ -70,6 +70,7 @@ const uint DUST_CAD_MAX_TIERS  = 8u;
 const uint DUST_CADF_ADVANCE   = 1u;   // the previous drawn frame was Run: advance the cursors
 const uint DUST_CADF_ABORTS    = 2u;   // the abort test runs (Run, no reset)
 const uint DUST_CADF_COVERAGE  = 4u;   // the coverage test runs (Run, no reset, a margin)
+const uint DUST_CADF_RETAIN    = 8u;   // retention: a member whose target is a slower class stays (CadenceConfig::retain)
 // the abort reasons (cadence::ABORT_*)
 const uint DUST_CAD_ABORT_RATE = 0u;
 const uint DUST_CAD_ABORT_BUDGET = 1u;

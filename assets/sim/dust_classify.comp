@@ -128,13 +128,17 @@ void main() {
                     }
                     if (foot && target >= 0) inside = dust_cad_footprint(s, sh, pred, sh, pc.mvp, W, H);
                 }
+                // retention (cadence::finish F2b): a member of class k whose target is a slower
+                // class stays in k (per pair: the target is k-independent, the owner is not)
+                int tk = target;
+                if ((prm.v[DUST_CADP_FLAGS] & DUST_CADF_RETAIN) != 0u && cls == k + 1u && target > int(k)) tk = int(k);
                 uint hb = min(r, DUST_CAD_MAX_CLASSES);
                 if (hb == 0u) atomicAdd(s_hist0, 1u);
                 else if (hb == 1u) atomicAdd(s_hist1, 1u);
                 else if (hb == 2u) atomicAdd(s_hist2, 1u);
                 else atomicAdd(s_hist3, 1u);
-                if (foot && target == int(k) && !inside) { atomicAdd(s_d3, 1u); continue; }
-                if (target == int(k)) {
+                if (foot && tk == int(k) && !inside) { atomicAdd(s_d3, 1u); continue; }
+                if (tk == int(k)) {
                     nb = dust_own_byte(k, (nb & ~DUST_OWN_CLASS_MASK) | DUST_OWN_PENDING);
                     if (dust_cad_finite(g)) atomicMax(st.v[dust_cads_tp(t, k, pp) + 6u], floatBitsToUint(g));
                 }
