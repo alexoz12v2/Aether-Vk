@@ -1241,11 +1241,16 @@ pub fn prepare_dust(
     device.cmd_dust_timestamp(cmd, pe, crate::gpu_backends::vulkan::device::dust::DUST_TS_CHUNKED);
     // pair-major (one header copy and one queue drain per image), the tiers in order
     draws.sort_by_key(|d| (d.k, d.p));
-    if let Err(e) = device.cmd_dust_cadence_builds(cmd, pe, &draws) {
-      aethervk_oshal_rlib::log!("[Dust cadence] builds failed: {e}");
+    // class by class, the work counters after each (the budget loop's counters by target; the
+    // full-frame estimate weighs the classes apart)
+    use crate::gpu_backends::vulkan::device::dust::PROBE_CLASSES;
+    for k in 0..PROBE_CLASSES {
+      let (lo, hi) = (draws.partition_point(|d| d.k < k), draws.partition_point(|d| d.k <= k));
+      if let Err(e) = device.cmd_dust_cadence_builds(cmd, pe, &draws[lo..hi]) {
+        aethervk_oshal_rlib::log!("[Dust cadence] builds failed: {e}");
+      }
+      device.cmd_dust_budget_probe(cmd, pe, k);
     }
-    // the work counters after the builds (the budget loop's counters by target)
-    device.cmd_dust_budget_probe(cmd, pe);
     device.cmd_dust_timestamp(cmd, pe, crate::gpu_backends::vulkan::device::dust::DUST_TS_BUILDS);
     if let Err(e) = device.cmd_dust_cadence_reproject(cmd, pe) {
       aethervk_oshal_rlib::log!("[Dust cadence] reprojection failed: {e}");

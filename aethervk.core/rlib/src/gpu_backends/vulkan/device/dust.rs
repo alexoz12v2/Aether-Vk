@@ -514,58 +514,110 @@ impl Default for FeedbackSet {
 
 /// A cadenced frame's work counters by target ([`DUST_PROBE_HEADER_WORDS`]: split children, EWA
 /// texels in `DUST_EWA_TEXEL_UNIT`s, volume evaluations): the build draws' (the frame header copied
-/// after them, `Device::cmd_dust_budget_probe`) and the fresh pass's (the frame's total less them).
-/// The counters are frame-continuous (the builds' headers are routed through the frame's), so the
-/// in-frame gates read the frame's total across both targets.
+/// after each class's builds, `Device::cmd_dust_budget_probe`) and the fresh pass's (the frame's
+/// total less them). The counters are frame-continuous (the builds' headers are routed through the
+/// frame's), so the in-frame gates read the frame's total across both targets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct TargetCounters {
   pub builds: [u32; 3],
+  /// the builds' counters per class (the differences of the class probes)
+  pub by_class: [[u32; 3]; PROBE_CLASSES],
   pub fresh: [u32; 3],
 }
 
-/// words per readback slot of the target probe, appended after the readback slots
+/// the classes the target probe holds apart (`DUST_CADENCE_MAX_CLASSES`)
+pub const PROBE_CLASSES: usize = crate::scene::dust::cadence::DUST_CADENCE_MAX_CLASSES;
+/// words per class of the target probe
 pub const DUST_PROBE_WORDS: u32 = 4;
+/// words per readback slot of the target probe (one class probe after another), appended after the
+/// readback slots
+pub const DUST_PROBE_SLOT_WORDS: u32 = DUST_PROBE_WORDS * PROBE_CLASSES as u32;
 /// the header words the target probe copies: split children, EWA texels, volume evaluations
 pub const DUST_PROBE_HEADER_WORDS: [u32; 3] = [dust::PYR_SPLIT_CHILDREN, dust::PYR_EWA_TEXELS, dust::PYR_VOLUME_EVALS];
 
 /// A cadenced frame's counters ([`DUST_PROBE_HEADER_WORDS`]) as a full draw's estimate: the fresh
-/// pass's as measured plus the builds' scaled by `shown / built` (the shown images' members over
-/// the members this frame drew into the build images: each shown member was drawn once, at its
-/// build, at about the rate of this frame's build members). A cadenced frame draws a fraction of
+/// pass's as measured plus, per class, the builds' scaled by `shown / built` (the class's shown
+/// members over the members this frame drew into its build images: each shown member was drawn
+/// once, at its build, at about the rate of its class's build members). Per class because the
+/// classes sample their members at different rates (class k builds each once per N_k frames): a
+/// pooled `Σ shown / Σ built` weighs the faster classes' members N_slow / N_fast times too much
+/// (round 7, 1 km orbit after the handover: 4 % low, the EWA 1 → 0 switch at f96 against the full
+/// draw's f144). A class with shown members and no builds in the window takes the pooled rate.
+///
+/// The scale `shown / built` is capped at [`DUST_ESTIMATE_SCALE_SLACK`] `· N_k / w` (`w` the
+/// frames in the class's window, `N_k` its cycle): a full window builds every list position once
+/// per phase, the shown images' members, so its scale is ≈ 1, and a filling one ≈ `N_k / w`. A
+/// larger scale means the shown images hold another population than the builds (the handover:
+/// class 8's old image of 86 416 ordinary members shown while its builds hold the 6 320 members
+/// it keeps, 34 of them the bright young clusters at ~80 EWA units each). Uncapped, that rate
+/// times the old image's count put a 4.8e8-texel estimate on a 2.3e7-texel frame (1 km still,
+/// τ 0.004, f72), and the EWA bias 2 it set blurred the near-nucleus packets (L1 2.63 %, p99 56 %).
+/// A cadenced frame draws a fraction of
 /// a full draw's work, and its feedback on the raw counters walks the biases finer than a full
 /// draw ever draws: 1 km, still camera, the volume bias 14 → 8 over 60 frames, the class images
 /// built at bias 8–10 put 5 % of the light on levels 9–10 the full draw leaves empty (light ratio
 /// 1.057). `built == 0`: the raw counters (no build this frame says nothing about the images).
 ///
-/// The builds' rate is a ratio of decayed sums over the cadenced frames ([`BuildRate`]): one
-/// frame's ratio swings with its cursors (a cycle's last step is short, a swap frame builds
-/// nothing), and one 4.3e8-texel estimate at 1 km kicked the EWA bias off the full draw's.
-pub fn full_frame_estimate(fresh: [u32; 3], rate: &BuildRate, shown: u32) -> [u32; 3] {
+/// The builds' rate is a ratio of sums over each class's last cycle ([`BuildRate`]): one frame's
+/// ratio swings with its cursors (a cycle's last step is short, a swap frame builds nothing, and
+/// the lists' order bunches the costly members: class 16 at 1 km orbit built 9 580 members every
+/// frame at 0 to 179 k EWA units), and one 4.3e8-texel estimate at 1 km kicked the EWA bias off
+/// the full draw's.
+pub fn full_frame_estimate(fresh: [u32; 3], rate: &BuildRate, shown: [u32; PROBE_CLASSES]) -> [u32; 3] {
+  let built_all: f64 = rate.built.iter().sum();
   core::array::from_fn(|i| {
-    let b = if rate.built > 0.0 { rate.builds[i] * shown as f64 / rate.built } else { 0.0 };
+    let builds_all: f64 = rate.builds.iter().map(|c| c[i]).sum();
+    let b: f64 = (0..PROBE_CLASSES)
+      .map(|k| {
+        if rate.built[k] > 0.0 {
+          let w = rate.window[k].len().max(1) as f64;
+          let cap = DUST_ESTIMATE_SCALE_SLACK * rate.frames[k].max(1) as f64 / w;
+          rate.builds[k][i] * (shown[k] as f64 / rate.built[k]).min(cap)
+        } else if built_all > 0.0 {
+          builds_all * shown[k] as f64 / built_all
+        } else {
+          0.0
+        }
+      })
+      .sum();
     (fresh[i] as f64 + b).min(u32::MAX as f64) as u32
   })
 }
 
-/// The cadenced frames' build work per member built: decayed sums (weight
-/// `1 − 1 / BUILD_RATE_FRAMES` per frame) of the builds' counters and of the members they drew
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+/// The cap on [`full_frame_estimate`]'s scale `shown / built` over the one a class's window
+/// expects (`N_k / w`): the lists' sizes drift a little within a cycle (1 km still: 1.001 and
+/// 0.998), a population mismatch is 10× and more
+pub const DUST_ESTIMATE_SCALE_SLACK: f64 = 1.25;
+
+/// The cadenced frames' build work per member built, per class: sums over the class's last `N_k`
+/// cadenced frames (one cycle of its lists, where every list position is built once per phase, so
+/// the lists' bunching of costly members cancels) of the builds' counters and of the members they
+/// drew. A decayed sum over 8 frames held half of class 16's cycle and swung 2× with its order.
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct BuildRate {
-  pub builds: [f64; 3],
-  pub built: f64,
+  /// the window sums
+  pub builds: [[f64; 3]; PROBE_CLASSES],
+  pub built: [f64; PROBE_CLASSES],
+  window: [alloc::collections::VecDeque<([u32; 3], u32)>; PROBE_CLASSES],
+  /// each class's window length `N_k` (the last fold's)
+  frames: [usize; PROBE_CLASSES],
 }
 
-/// the frames [`BuildRate`]'s sums look back over (the shortest class's cycle)
-pub const BUILD_RATE_FRAMES: f64 = 8.0;
-
 impl BuildRate {
-  /// one cadenced frame folded in: its builds' counters and the members they drew
-  pub fn fold(&mut self, builds: [u32; 3], built: u32) {
-    let keep = 1.0 - 1.0 / BUILD_RATE_FRAMES;
-    for i in 0..3 {
-      self.builds[i] = self.builds[i] * keep + builds[i] as f64;
+  /// one cadenced frame folded in: its builds' counters and the members they drew, per class;
+  /// `frames[k]` is class k's window (its length `N_k`, at least 1)
+  pub fn fold(&mut self, builds: [[u32; 3]; PROBE_CLASSES], built: [u32; PROBE_CLASSES], frames: [usize; PROBE_CLASSES]) {
+    self.frames = frames;
+    for k in 0..PROBE_CLASSES {
+      let w = &mut self.window[k];
+      w.push_back((builds[k], built[k]));
+      while w.len() > frames[k].max(1) {
+        w.pop_front();
+      }
+      // re-summed (≤ 64 entries): no drift from adding and subtracting floats
+      self.builds[k] = core::array::from_fn(|i| w.iter().map(|e| e.0[i] as f64).sum());
+      self.built[k] = w.iter().map(|e| e.1 as f64).sum();
     }
-    self.built = self.built * keep + built as f64;
   }
 }
 
@@ -1736,9 +1788,9 @@ impl Device {
           }
         }
       }
-      // (then the target probes, `DUST_PROBE_WORDS` per slot)
+      // (then the target probes, `DUST_PROBE_SLOT_WORDS` per slot)
       let rb_bytes = DUST_READBACK_SLOTS as u64 * DustView::readback_words(&layout) as u64 * 4
-        + DUST_READBACK_SLOTS as u64 * DUST_PROBE_WORDS as u64 * 4;
+        + DUST_READBACK_SLOTS as u64 * DUST_PROBE_SLOT_WORDS as u64 * 4;
       let (readback, rmapped) = match self.dust_create_buffer(
         &allocator,
         rb_bytes,
@@ -1821,12 +1873,13 @@ impl Device {
     let rb_words = DustView::readback_words(&view.layout) as usize;
     // the view's cadence (the budget loop runs with it) and its newest fresh count (taken
     // before the host lock: the two locks are never held together here)
-    let (cad_active, cad_fresh, cad_members) = match mgr.cadence.get(&pe) {
+    let (cad_active, cad_fresh, cad_members, cad_frames) = match mgr.cadence.get(&pe) {
       Some(c) => {
         let c = c.lock();
-        (true, c.last_state.as_ref().map(|s| s[cadence::CADS_FRESH]), c.work_members())
+        let frames: [usize; PROBE_CLASSES] = core::array::from_fn(|k| c.cfg.classes.get(k).map_or(1, |&n| n as usize));
+        (true, c.last_state.as_ref().map(|s| s[cadence::CADS_FRESH]), c.work_members(), frames)
       }
-      None => (false, None, None),
+      None => (false, None, None, [1; PROBE_CLASSES]),
     };
     let mut host = view.host.lock();
     let slot = (host.frame % DUST_READBACK_SLOTS as u64) as usize;
@@ -1851,11 +1904,17 @@ impl Device {
         let (level, queue) = rest.split_at(rest.len() - dust::DUST_QUEUE_HEADER_WORDS as usize);
         // the counters by target (the probe after the builds; fresh = the frame's less them)
         host.targets = if host.slot_probe[slot] {
-          let off = DUST_READBACK_SLOTS * rb_words * 4 + slot * DUST_PROBE_WORDS as usize * 4;
-          res.allocator.allocator.as_allocator_view().invalidate_allocation(&rb.alloc, off as u64, DUST_PROBE_WORDS as u64 * 4)?;
-          let p = unsafe { core::slice::from_raw_parts(view.readback_mapped.add(off).cast::<u32>(), 3) };
+          let off = DUST_READBACK_SLOTS * rb_words * 4 + slot * DUST_PROBE_SLOT_WORDS as usize * 4;
+          res.allocator.allocator.as_allocator_view().invalidate_allocation(&rb.alloc, off as u64, DUST_PROBE_SLOT_WORDS as u64 * 4)?;
+          let p = unsafe { core::slice::from_raw_parts(view.readback_mapped.add(off).cast::<u32>(), DUST_PROBE_SLOT_WORDS as usize) };
+          // the class probes are cumulative (the counters start the builds at 0): class k's work is
+          // probe k less probe k − 1, the builds' total the last probe
+          let at = |k: usize, i: usize| p[k * DUST_PROBE_WORDS as usize + i];
+          let last = PROBE_CLASSES - 1;
+          let builds: [u32; 3] = core::array::from_fn(|i| at(last, i));
+          let by_class = core::array::from_fn(|k| core::array::from_fn(|i| if k == 0 { at(0, i) } else { at(k, i).wrapping_sub(at(k - 1, i)) }));
           let tot: [u32; 3] = core::array::from_fn(|i| header[DUST_PROBE_HEADER_WORDS[i] as usize]);
-          Some(TargetCounters { builds: [p[0], p[1], p[2]], fresh: core::array::from_fn(|i| tot[i].wrapping_sub(p[i])) })
+          Some(TargetCounters { builds, by_class, fresh: core::array::from_fn(|i| tot[i].wrapping_sub(builds[i])) })
         } else {
           None
         };
@@ -1869,7 +1928,7 @@ impl Device {
             if !aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_FEEDBACK_RAW").is_some_and(|v| v.trim() == "1") =>
           {
             let rate = host.build_rate.get_or_insert_with(BuildRate::default);
-            rate.fold(t.builds, built);
+            rate.fold(t.by_class, built, cad_frames);
             let mut h = header.to_vec();
             for (i, v) in full_frame_estimate(t.fresh, rate, shown).into_iter().enumerate() {
               h[DUST_PROBE_HEADER_WORDS[i] as usize] = v;
@@ -1883,6 +1942,20 @@ impl Device {
             None
           }
         };
+        // `AETHERVK_DUST_FEEDBACK_LOG=1`: each readback's regime, the counters by target and class,
+        // the members per class and the EWA texels absorbed (raw and estimated)
+        if aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_FEEDBACK_LOG").is_some_and(|v| v.trim() == "1") {
+          let ewa = DUST_PROBE_HEADER_WORDS[1] as usize;
+          aethervk_oshal_rlib::log!(
+            "[Dust feedback] frame {} slot {slot}: regime {regime_rb}, EWA raw {} absorbed {}, targets {:?}, members (built, shown) {:?}, rate {:?}",
+            host.frame,
+            header[ewa],
+            estimate.as_deref().map_or(header[ewa], |h| h[ewa]),
+            host.targets.map(|t| (t.by_class.map(|c| c[1]), t.fresh[1])),
+            cad_members,
+            host.build_rate.as_ref().map(|r| (r.builds.map(|c| c[1] as u64), r.built.map(|x| x as u64)))
+          );
+        }
         host.feedback_load(regime_rb);
         host.absorb(estimate.as_deref().unwrap_or(header), level, 1 << lvl, unit);
         host.feedback_store(regime_rb);
@@ -2355,10 +2428,12 @@ impl Device {
     }
   }
 
-  /// The work counters after the cadence's build draws ([`DUST_PROBE_HEADER_WORDS`]) into this
-  /// frame's probe (after the readback slots of the view's readback buffer); read with the frame's
-  /// readback as [`TargetCounters`] (`frame.rs`, right after `cmd_dust_cadence_builds`)
-  pub fn cmd_dust_budget_probe(&self, cmd: vk::CommandBuffer, pe: gpu::PresentationEngineHandle) {
+  /// The work counters after class `k`'s build draws ([`DUST_PROBE_HEADER_WORDS`]) into this
+  /// frame's probe `k` (after the readback slots of the view's readback buffer); read with the
+  /// frame's readback as [`TargetCounters`] (`frame.rs`: every class `0..PROBE_CLASSES`, in order,
+  /// each right after that class's `cmd_dust_cadence_builds`, an empty class included)
+  pub fn cmd_dust_budget_probe(&self, cmd: vk::CommandBuffer, pe: gpu::PresentationEngineHandle, k: usize) {
+    debug_assert!(k < PROBE_CLASSES);
     let res = self.res.read();
     let Some(mgr) = res.dust_manager.as_ref() else { return };
     let Some(view) = mgr.views.get(&pe) else { return };
@@ -2372,7 +2447,9 @@ impl Device {
       host.slot_probe[slot] = true;
       slot
     };
-    let base = DUST_READBACK_SLOTS as u64 * DustView::readback_words(&view.layout) as u64 * 4 + slot as u64 * DUST_PROBE_WORDS as u64 * 4;
+    let base = DUST_READBACK_SLOTS as u64 * DustView::readback_words(&view.layout) as u64 * 4
+      + slot as u64 * DUST_PROBE_SLOT_WORDS as u64 * 4
+      + k as u64 * DUST_PROBE_WORDS as u64 * 4;
     let regions: [vk::BufferCopy; 3] = core::array::from_fn(|i| {
       vk::BufferCopy::default().src_offset(DUST_PROBE_HEADER_WORDS[i] as u64 * 4).dst_offset(base + i as u64 * 4).size(4)
     });

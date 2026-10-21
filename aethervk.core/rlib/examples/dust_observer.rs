@@ -2133,6 +2133,11 @@ fn main() {
   }
   ctx.set_dust_flow_speed(scene_id, 1.0);
   ctx.set_dust_softening(scene_id, 1e-2);
+  // lab knob: the scene's volume detail (pieces per volumetric packet, `set_dust_volume_detail`)
+  if let Some(v) = std::env::var("OBSERVER_VOLUME_DETAIL").ok().and_then(|v| v.trim().parse::<u32>().ok()) {
+    let got = ctx.set_dust_volume_detail(scene_id, v);
+    log_line(&format!("[observer] volume detail {v} requested, set {got:?}"));
+  }
 
   // presentation engine + camera
   let pe = ctx
@@ -3463,6 +3468,25 @@ fn main() {
     // while the budget held the view)
     let drawn: Vec<f64> = timings.values().filter(|t| !t.reused).map(|t| t.total_ms).collect();
     let path_ms: Vec<f64> = drawn.iter().rev().take(steps_done as usize).rev().copied().collect();
+    // the path frames' stages (`DustGpuTimings`, one comma list per stage; diagnostics)
+    let drawn_t: Vec<_> = timings.values().filter(|t| !t.reused).copied().collect();
+    let path_t = &drawn_t[drawn_t.len().saturating_sub(steps_done as usize)..];
+    let stage = |f: &dyn Fn(&aethervk_core_rlib::gpu_backends::vulkan::device::dust::DustGpuTimings) -> f64| {
+      path_t.iter().map(|t| format!("{:.3}", f(t))).collect::<Vec<_>>().join(",")
+    };
+    let stages: Vec<(&str, String)> = vec![
+      ("stage_propagate_ms", stage(&|t| t.propagate_ms)),
+      ("stage_splat_ms", stage(&|t| t.splat_ms)),
+      ("stage_splat_only_ms", stage(&|t| t.splat_only_ms)),
+      ("stage_specks_ms", stage(&|t| t.specks_ms)),
+      ("stage_queue_ms", stage(&|t| t.queue_ms)),
+      ("stage_cadence_ms", stage(&|t| t.cadence_ms)),
+      ("stage_classify_ms", stage(&|t| t.classify_ms)),
+      ("stage_builds_ms", stage(&|t| t.builds_ms)),
+      ("stage_reproject_ms", stage(&|t| t.reproject_ms)),
+      ("stage_measure_ms", stage(&|t| t.measure_ms)),
+      ("stage_composite_ms", stage(&|t| t.composite_ms)),
+    ];
     let mut sorted = path_ms.clone();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(core::cmp::Ordering::Equal));
     let (ms_mean, ms_p90, ms_max) = if sorted.is_empty() {
@@ -3498,7 +3522,10 @@ fn main() {
         ("ms_max", format!("{ms_max:.3}")),
         ("gpu_ms", path_ms.iter().map(|m| format!("{m:.3}")).collect::<Vec<_>>().join(",")),
         ("cadence", "n/a".into()),
-      ],
+      ]
+      .into_iter()
+      .chain(stages.iter().map(|(k, v)| (*k, v.clone())))
+      .collect::<Vec<_>>(),
     );
     if steps_done + 1 != nf && path_problems.is_empty() {
       path_problems.push(format!("camera path: {steps_done} of {} steps done", nf - 1));

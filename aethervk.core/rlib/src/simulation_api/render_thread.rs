@@ -173,6 +173,10 @@ pub fn start_render_thread(
             if let thingbuf::mpsc::errors::TryRecvError::Closed = e {
               return true;
             }
+            // the sender was dropped during a panic, which leaves the channel open
+            if render_params.closing.load(core::sync::atomic::Ordering::Acquire) {
+              return true;
+            }
             oshal::os::native::this_thread::sleep_for(core::time::Duration::from_micros(500));
             false
           }

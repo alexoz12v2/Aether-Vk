@@ -143,6 +143,10 @@ fn test_update_trajectory_command_exists() {
 
 #[test]
 fn test_two_phase_commit_comet() {
+  let Some(spk_path) = fetch_67p_spk("1000012_two_phase.bsp") else {
+    println!("Skipping: Horizons unreachable");
+    return;
+  };
   let mut ctx = SimulationContext::startup(None).expect("Failed to create SimulationContext");
 
   let (tx, rx) = mpsc::channel();
@@ -150,7 +154,6 @@ fn test_two_phase_commit_comet() {
   crate::simulation_api::set_external_state_simulation_callback(Some(mock_external_state_cb));
 
   // Manually load the almanac into logic_state so valid dates pass
-  let spk_path = fetch_67p_spk("1000012_two_phase.bsp");
   {
     let mut logic_state = ctx.logic_state.write();
     logic_state
@@ -167,7 +170,7 @@ fn test_two_phase_commit_comet() {
       .expect("Failed to load DE442");
     logic_state
       .almanac_data
-      .load_almanac(spk_path.as_ref().unwrap().to_str().unwrap())
+      .load_almanac(spk_path.to_str().unwrap())
       .expect("Failed to load fetched SPK");
   }
 
@@ -276,6 +279,25 @@ fn test_two_phase_commit_comet() {
 
   ctx.threads.logic_thread.tx().try_send(LogicCommand::Shutdown).unwrap();
 }
+/// A context dropped while its owner unwinds must still join its threads: thingbuf skips closing
+/// a channel when the last sender drops during a panic, so the threads exit on `closing` instead.
+/// A hang here trips the 8 s shutdown watchdog, which exits the test process with status 1.
+#[test]
+fn test_context_drop_during_panic_joins_the_threads() {
+  let (done_tx, done_rx) = mpsc::channel();
+  std::thread::spawn(move || {
+    let unwound = std::panic::catch_unwind(|| {
+      let _ctx = SimulationContext::startup(None).expect("Failed to create SimulationContext");
+      panic!("unwind with a live context");
+    });
+    let _ = done_tx.send(unwound.is_err());
+  });
+  let unwound = done_rx
+    .recv_timeout(std::time::Duration::from_secs(30))
+    .expect("context drop during a panic did not finish");
+  assert!(unwound);
+}
+
 #[test]
 fn test_simulation_start_pause_sync() {
   use aethervk_oshal_rlib::os::time::v2::SimSpeed;

@@ -652,6 +652,12 @@ fn gpu_dust_cadence_state_matches_reference() {
         std::println!("[cadence gpu] {tag}: slot {s}: owner gpu {:#04x} cpu {:#04x}", gt.owner[s], tc.owner[s]);
       }
       assert!(diff.is_empty(), "{tag}: {} owner bytes differ", diff.len());
+      // the incoming bytes (the handover)
+      let idiff: alloc::vec::Vec<usize> = (0..capacity as usize).filter(|&s| gt.incoming[s] != tc.incoming[s]).collect();
+      for &s in idiff.iter().take(5) {
+        std::println!("[cadence gpu] {tag}: slot {s}: incoming gpu {:#04x} cpu {:#04x}", gt.incoming[s], tc.incoming[s]);
+      }
+      assert!(idiff.is_empty(), "{tag}: {} incoming bytes differ", idiff.len());
       // the lists, steps, cursors, g_max
       let np = cfg.phases as usize;
       for k in 0..classes.len() {
@@ -764,6 +770,463 @@ fn gpu_dust_cadence_state_matches_reference() {
     device.dust_cadence_enable(pe, None).unwrap();
   });
 }
+
+/// The handover's GPU parity (round 7): `gpu_dust_cadence_state_matches_reference`'s scene and
+/// per-frame comparisons (mode, swaps, every owner and incoming byte, the lists, steps, cursors,
+/// aborts, histogram, chunk entries, the propagate set, the build/shown images and the frame), with
+/// the eye fixed and a yaw over frames 1–24 that admits class 8 only, then 446 still frames: class 16
+/// and class 64 are admitted and the members move 8 → 16 → 64 (the observer's perf7c: the GPU's
+/// light fell 0.8 % per class-16 window in the first two class-64 windows). The collapse and drop
+/// counts match the CPU's every frame.
+#[test]
+fn gpu_dust_cadence_handover_matches_reference() {
+  handover_parity(9038, 38, None);
+}
+
+/// Round 7c's τ 0.004 defect (observer: 2.6 % shape L1 from f≈64–96 with the handover on, none
+/// with it off; the CPU mirror passes the same sweep, `cadence_hands_members_over_as_the_light_bound_moves`):
+/// the handover parity with class 16's light bound swept across the clusters' ages (τ off over the
+/// yaw; then the bound admits from the oldest cluster to every cluster over frames 60–220, holds,
+/// and returns over 260–420), so members move between classes one by one as in the observer.
+/// Every per-frame comparison of the handover parity holds.
+#[test]
+fn gpu_dust_cadence_handover_light_sweep_matches_reference() {
+  fn q(f: u32) -> f64 {
+    match f {
+      0..60 => 1.0,
+      60..220 => 1.0 - (f - 60) as f64 / 160.0,
+      220..260 => 0.0,
+      _ => ((f - 260) as f64 / 160.0).min(1.0),
+    }
+  }
+  handover_parity(9039, 39, Some(q));
+}
+
+/// The handover parity's body: system `id`, presentation engine `u64::MAX − pe_off`; `light`: the
+/// age quantile class 16's light bound admits from, per frame after the yaw (τ = 1.5 · 16 · Δt /
+/// age_q, Δt the run's 0.02 s; τ 0 over the yaw), or `None` (the configuration's τ throughout)
+fn handover_parity(id: u64, pe_off: u64, light: Option<fn(u32) -> f64>) {
+  with_device(id, |device, capacity, render_buf, moments_buf| {
+    let mut seq = 0u64;
+    let batch = test_batch(1024, 3600.0, 3, capacity, 0xC0FFEE);
+    emit(device, id, &batch, seq);
+    seq += 1;
+    let mask = capacity - 1;
+    let (mut first, mut live) = (batch.first_index & mask, batch.count);
+    let mut emitted = 1u64;
+    let mut rewritten_from: u32;
+    let pe = crate::gpu::PresentationEngineHandle(u64::MAX - pe_off);
+    let (w, h) = (320u32, 200u32);
+    let flow = dust::DustFlowUniform { t_hi: 1.0e8, t_lo: 0.0, speed: 1.0 };
+    let ttl = 30.0 * 86400.0f32;
+    let mut cfg = cad::CadenceConfig::full();
+    if light.is_some() {
+      cfg.light_tol = 0.0;
+    }
+    let classes = cfg.classes.clone();
+    // place the eye from one propagate
+    let frame0 = frame_at(5.0);
+    let mut cmds = device
+      .run_transient_commands(|cmd| {
+        device.cmd_dust_pre_propagate_barrier(cmd);
+        device.cmd_dust_propagate(cmd, id, 0, capacity, first, live, &frame0)?;
+        Ok(())
+      })
+      .unwrap();
+    cmds.cleanup(&device.device);
+    let m0: alloc::vec::Vec<dust::DustMoments> = records(device, moments_buf, first, live, capacity);
+    let (eye0, _) = eye_above(&m0, 3.0);
+    // the light sweep's ages (sorted; they grow by 0.02 s a frame, negligible against days)
+    let ages: alloc::vec::Vec<f32> = {
+      let mut a: alloc::vec::Vec<f32> = m0.iter().filter(|m| m.flux() > 0.0).map(|m| m.age()).collect();
+      a.sort_by(f32::total_cmp);
+      a
+    };
+    let f_px = 0.5 * h as f32 / 30.0f32.to_radians().tan();
+    let d_med = {
+      let mut d: alloc::vec::Vec<f32> = m0.iter().filter(|m| m.flux() > 0.0).map(|m| eye0[2] - m.mean()[2]).collect();
+      d.sort_by(f32::total_cmp);
+      d[d.len() / 2]
+    };
+    let step = d_med / (40.0 * f_px);
+    let rel = camera(eye0, w, h).1;
+    let layout = dust::PyramidLayout::new(w, h);
+    let mut st = cad::DustCadenceState::new(cfg.clone());
+    st.threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(16);
+    let mut eye = eye0;
+    let (mut aborts_seen, mut class_seen) = (0usize, [0u32; 4]);
+    let mut reasons_seen = [0usize; 4];
+    // the phases (frames, set from the CPU's state as the run goes)
+    const FRAMES: u32 = 470;
+    const YAW_FRAMES: u32 = 24;
+    // the yaw per frame: a corner motion U with 2·8·U ≤ m − G < 2·16·U (class 8 admitted while it
+    // yaws, class 16 not), set from the CPU's motion budget after frame 0
+    let mut yaw_step_deg = 0.0f64;
+    let (mut collapsed_gpu, mut dropped_gpu, mut admitted_at) = (0u64, 0u64, [None::<u32>; 4]);
+    let (mut shown_at, mut yaw_from, mut motion_abort_at, mut jump_at, mut end_at) =
+      (None::<u32>, None::<u32>, None::<u32>, None::<u32>, None::<u32>);
+    let mut yaw_deg = 0.0f64;
+    // the view exists from the first frame_begin; the cadence on from then
+    let mut enabled = false;
+    for f in 0..FRAMES {
+      // what the render thread's `start_frame` does each frame (the idiom of test_commands.rs):
+      // recycle the completed submissions' command buffers, or 160 frames of downloads exhaust the
+      // 24 pending command pools
+      {
+        let items = {
+          let res = device.res.read();
+          let t = res.timeline_manager.refresh_cached_value().unwrap();
+          res.discard_pool.pop_ready_items(t)
+        };
+        crate::gpu_backends::vulkan::device::DiscardPool::destroy_items_lock_free(&device.device, items);
+      }
+      // the ring: emissions at the head, a retirement at the tail
+      if f == 6 || f == 12 || f == 18 {
+        let b = test_batch(64, 600.0, first + live, capacity, 0xBEEF + f);
+        emit(device, id, &b, seq);
+        seq += 1;
+        rewritten_from = live;
+        live += 64;
+        emitted += 1;
+      } else {
+        rewritten_from = live;
+      }
+      if f == 9 {
+        first = (first + 32) & mask;
+        live -= 32;
+        rewritten_from = live;
+      }
+      // the eye fixed (no step): only the yaw moves the view
+      let _ = step;
+      if f >= 1 && f <= YAW_FRAMES {
+        yaw_deg += yaw_step_deg;
+      }
+      let t_s = T_START + 5.0 * 86400.0 + f as f64 * 0.02;
+      let frame = frame_at(5.0 + f as f64 * 0.02 / 86400.0);
+      if let Some(q) = light
+        && enabled
+      {
+        let tau = if f <= YAW_FRAMES {
+          0.0
+        } else {
+          let qq = q(f).clamp(0.0, 1.0);
+          let age_q = ages[((qq * (ages.len() - 1) as f64) as usize).min(ages.len() - 1)].max(cad::DUST_CADENCE_AGE_MIN_S);
+          (1.5 * classes[1] as f64 * 0.02 / age_q as f64) as f32
+        };
+        st.cfg.light_tol = tau;
+        device.dust_cadence_set_light_tol(pe, tau);
+      }
+      let pre_render: alloc::vec::Vec<dust::DustRenderCluster> = records(device, render_buf, first, live, capacity);
+      let mut view = cad::CadenceView {
+        view_rot: yaw4(yaw_deg),
+        proj: [0.0; 16],
+        eye_m: [eye[0] as f64, eye[1] as f64, eye[2] as f64],
+        units_per_m: 1.0,
+        width: w,
+        height: h,
+      };
+      for i in 0..16 {
+        view.proj[i] = rel[i] as f64;
+      }
+      // both mirrors draw and classify with the view's own mvp (the rotation included)
+      let mvp = view.mvp([0.0; 3]);
+      let tier = CadenceTierInput {
+        key: 0,
+        system: id,
+        ring_base: 0,
+        first_slot: first,
+        capacity,
+        live_count: live,
+        emitted,
+        rewritten_from,
+        anchor_m: [0.0; 3],
+      };
+      let mut plan = CadenceGpuPlan::default();
+      let mut fm = cad::FrameMeta {
+        view,
+        t_now_s: t_s,
+        speed: 1.0,
+        nucleus_m: [0.0; 3],
+        flags: 0,
+        fingerprint: 0,
+        reused: false,
+        unit_now: 1.0,
+      };
+      let mut inv_unit = 1.0f32;
+      if !enabled {
+        // the view (frame_begin) first, then the cadence
+        let mut cmds = device
+          .run_transient_commands(|cmd| {
+            device.cmd_dust_frame_begin(cmd, pe, [w, h], 0, flow)?;
+            device.cmd_dust_frame_end(cmd, pe)?;
+            Ok(())
+          })
+          .unwrap();
+        cmds.cleanup(&device.device);
+        device.dust_cadence_enable(pe, Some(cfg.clone())).unwrap();
+        // the view is recreated with the class images at the next begin: one more frame, then its
+        // gates off (the images and the CPU's are compared draw for draw)
+        let mut cmds = device
+          .run_transient_commands(|cmd| {
+            device.cmd_dust_frame_begin(cmd, pe, [w, h], 0, flow)?;
+            device.cmd_dust_frame_end(cmd, pe)?;
+            Ok(())
+          })
+          .unwrap();
+        cmds.cleanup(&device.device);
+        device.dust_set_frame_gates(pe, false);
+        enabled = true;
+      }
+      let mut cmds = device
+        .run_transient_commands(|cmd| {
+          device.cmd_dust_pre_propagate_barrier(cmd);
+          let v = device.cmd_dust_frame_begin(cmd, pe, [w, h], 0, flow)?;
+          fm.unit_now = v.unit;
+          inv_unit = 1.0 / v.unit;
+          device.cmd_dust_system_begin(id, 0, flow)?;
+          plan = device.cmd_dust_cadence_begin(cmd, pe, &fm, &[tier], 0.0)?;
+          let (render, moments) = device.cmd_dust_cadence_propagate(cmd, pe, id, 0, capacity, first, live, &frame, emitted)?;
+          device.cmd_dust_pre_splat_barrier(cmd);
+          device.cmd_dust_cadence_classify(cmd, pe, 0, render, moments, mvp, [eye[0], eye[1], eye[2], ttl])?;
+          device.cmd_dust_cadence_chunks(cmd, pe, 0, render, moments)?;
+          // the build draws at the frozen views (the CPU's F3), then the fresh splat (owner filter)
+          let base = dust::DustSplatPushConstants {
+            moments: 0,
+            render: 0,
+            pyramid: 0,
+            live_count: live,
+            flags: 0,
+            exposure: 1.0,
+            inv_unit,
+            color: dust::pack_color([1.0, 0.6, 0.2, 1.0]),
+            albedo: 0.04,
+            mvp,
+            eye_local: [eye[0], eye[1], eye[2], ttl],
+          };
+          let draws: alloc::vec::Vec<CadenceBuildDraw> = plan
+            .builds
+            .iter()
+            .map(|b| {
+              let e = b.view.eye_local([0.0; 3]);
+              let mut pcb = base;
+              pcb.mvp = b.view.mvp_image([0.0; 3], &cfg.image_geom(w, h));
+              pcb.eye_local = [e[0], e[1], e[2], ttl];
+              pcb.inv_unit = if b.unit > 0.0 { 1.0 / b.unit } else { 0.0 };
+              CadenceBuildDraw { k: b.k, p: b.p, key: 0, system: id, ring_base: 0, first_slot: first, capacity, render, moments, pc: pcb }
+            })
+            .collect();
+          device.cmd_dust_cadence_builds(cmd, pe, &draws)?;
+          device.cmd_dust_cadence_reproject(cmd, pe)?;
+          device.cmd_dust_splat(cmd, pe, id, 0, first, capacity, render, moments, base)?;
+          device.cmd_dust_cadence_end(cmd, pe)?;
+          device.cmd_dust_post_splat_barrier(cmd);
+          device.cmd_dust_frame_end(cmd, pe)?;
+          device.cmd_dust_system_end(id)?;
+          Ok(())
+        })
+        .unwrap();
+      cmds.cleanup(&device.device);
+      let gs = device.download_dust_cadence(pe).unwrap();
+      let mut moments: alloc::vec::Vec<dust::DustMoments> = records(device, moments_buf, first, live, capacity);
+      let render: alloc::vec::Vec<dust::DustRenderCluster> = records(device, render_buf, first, live, capacity);
+      // the CPU mirror on the same inputs and the GPU's moments
+      let cplan = st.begin(
+        &fm,
+        &[cad::TierMeta {
+          key: 0,
+          first_slot: first,
+          capacity,
+          live_count: live,
+          emitted,
+          rewritten_from,
+          anchor_m: [0.0; 3],
+          render: &pre_render,
+        }],
+        &layout,
+      );
+      if f == 0 {
+        let b = st.motion_budget();
+        assert!(b[0].is_finite() && b[1].is_finite(), "no motion budget: every class admitted, no handover");
+        let u = b[0].min(b[1]) as f64 / 24.0;
+        let half_w = 0.5 * w as f64 / f_px as f64;
+        yaw_step_deg = (u / (f_px as f64 * (1.0 + half_w * half_w))).to_degrees();
+        std::println!("[cadence gpu] handover: budget {b:?} px, yaw {yaw_step_deg:.5}° per frame");
+      }
+      let pc = dust::DustSplatPushConstants {
+        moments: 0,
+        render: 0,
+        pyramid: 0,
+        live_count: live,
+        flags: 0,
+        exposure: 1.0,
+        inv_unit,
+        color: dust::pack_color([1.0, 0.6, 0.2, 1.0]),
+        albedo: 0.04,
+        mvp,
+        eye_local: [eye[0], eye[1], eye[2], ttl],
+      };
+      let mut frame_cpu = alloc::vec![0u32; layout.total_words as usize];
+      frame_cpu[..dust::PYRAMID_HEADER_WORDS as usize].copy_from_slice(&layout.header());
+      let gpu_header = device.download_dust_pyramid(pe).unwrap();
+      for word in [
+        dust::PYR_FLAGS,
+        dust::PYR_T_HI,
+        dust::PYR_T_LO,
+        dust::PYR_TRACER_COUNTS,
+        dust::PYR_LOD,
+        dust::PYR_SPLIT_DEPTH,
+        dust::specks::PYR_SPECKS_DMAX,
+        dust::specks::PYR_SPECKS_BUDGET,
+      ] {
+        frame_cpu[word as usize] = gpu_header[word as usize];
+      }
+      let rep = st.finish(
+        &mut [cad::TierDraw { moments: &mut moments, render: &render, pc, flow, specks_pc: None, stamp: device.dust_propagate_generation(id, 0).unwrap_or(0) }],
+        &layout,
+        &mut frame_cpu,
+      );
+      let tag = alloc::format!("frame {f}");
+      std::println!(
+        "[cadence gpu] {tag}: mode {:?} reset {:?} swaps {:?} aborts {:?} classified {:?} drawn {} d3 {}",
+        cplan.mode,
+        cplan.reset,
+        cplan.swaps,
+        cplan.aborts.iter().map(|a| (a.k, a.p, a.list)).collect::<alloc::vec::Vec<_>>(),
+        rep.classified,
+        rep.drawn_build.len(),
+        rep.d3_rejected
+      );
+      assert_eq!(plan.mode, cplan.mode, "{tag}: mode");
+      assert_eq!(plan.reset, cplan.reset, "{tag}: reset");
+      assert_eq!(plan.swaps, cplan.swaps, "{tag}: swaps");
+        let tc = &st.tiers[&0];
+      let gt = &gs.tiers[0];
+      // the owner bytes
+      let diff: alloc::vec::Vec<usize> = (0..capacity as usize).filter(|&s| gt.owner[s] != tc.owner[s]).collect();
+      for &s in diff.iter().take(5) {
+        std::println!("[cadence gpu] {tag}: slot {s}: owner gpu {:#04x} cpu {:#04x}", gt.owner[s], tc.owner[s]);
+      }
+      assert!(diff.is_empty(), "{tag}: {} owner bytes differ", diff.len());
+      // the incoming bytes (the handover)
+      let idiff: alloc::vec::Vec<usize> = (0..capacity as usize).filter(|&s| gt.incoming[s] != tc.incoming[s]).collect();
+      for &s in idiff.iter().take(5) {
+        std::println!("[cadence gpu] {tag}: slot {s}: incoming gpu {:#04x} cpu {:#04x}", gt.incoming[s], tc.incoming[s]);
+      }
+      assert!(idiff.is_empty(), "{tag}: {} incoming bytes differ", idiff.len());
+      // the lists, steps, cursors, g_max
+      let np = cfg.phases as usize;
+      for k in 0..classes.len() {
+        for p in 0..np {
+          for s in 0..3 {
+            assert_eq!(gt.lists[k][p][s], tc.lists[k][p][s], "{tag}: list ({k}, {p}, {s})");
+          }
+          let tp = cads_tp(gt.t, k, p);
+          let (len, cursor, stp) = (gs.state[tp + 1], gs.state[tp + 3], gs.state[tp + 4]);
+          assert_eq!(stp, tc.step[k][p], "{tag}: step ({k}, {p})");
+          let advanced = if cplan.mode == Some(cad::CadenceMode::Run) { (cursor + stp).min(len) } else { cursor };
+          assert_eq!(advanced, tc.cursor[k][p], "{tag}: cursor ({k}, {p})");
+          for (list, word) in [(1usize, 5usize), (2, 6)] {
+            let (a, b) = (f32::from_bits(gs.state[tp + word]), tc.meta[k][p][list].g_max);
+            assert!((a - b).abs() <= 1e-5 * a.abs().max(b.abs()), "{tag}: g_max ({k}, {p}, {list}) gpu {a} cpu {b}");
+          }
+          // the aborts of this frame
+          let flags = gs.state[cads_pair(k, p) + 2];
+          for list in [1u8, 2] {
+            let c = cplan.aborts.iter().find(|a| a.k == k && a.p == p && a.list == list);
+            assert_eq!(flags & list as u32 != 0, c.is_some(), "{tag}: abort ({k}, {p}, {list})");
+            if let Some(a) = c {
+              let e = f32::from_bits(gs.state[cads_pair(k, p) + 2 + list as usize]);
+              assert!((e - a.excess_px).abs() <= 1e-5 * e.abs().max(a.excess_px.abs()), "{tag}: excess gpu {e} cpu {}", a.excess_px);
+              assert_eq!(gs.state[cads_pair(k, p) + 8 + list as usize], a.reason as u32, "{tag}: abort reason ({k}, {p}, {list})");
+              reasons_seen[a.reason as usize] += 1;
+              aborts_seen += 1;
+              if a.reason == cad::ABORT_BUDGET || a.reason == cad::ABORT_PREDICTION {
+                motion_abort_at.get_or_insert(f);
+              }
+            }
+          }
+          let cov = cplan.aborts.iter().any(|a| a.k == k && a.p == p && a.list == 0);
+          assert_eq!(gs.state[cads_pair(k, p) + 11] != 0, cov, "{tag}: coverage drop ({k}, {p})");
+          if cov {
+            reasons_seen[cad::ABORT_COVERAGE as usize] += 1;
+          }
+          // the images' existence
+          let im = &st.images[k * np + p];
+          assert_eq!(gs.state[cads_pair(k, p)] != 0, !im.shown.is_empty(), "{tag}: shown image ({k}, {p}) exists");
+          assert_eq!(gs.state[cads_pair(k, p) + 1] != 0, !im.build.is_empty(), "{tag}: build image ({k}, {p}) exists");
+        }
+      }
+      // the counters
+      for c in 0..4 {
+        assert_eq!(gs.state[CADS_HIST + c], rep.class_hist[c], "{tag}: classify histogram [{c}]");
+        class_seen[c] += rep.class_hist[c];
+      }
+      assert_eq!(gs.state[CADS_SHELL_FORCED], rep.shell_forced, "{tag}: shell-forced");
+      // the handover's collapses (cumulative on the CPU, per frame on the GPU)
+      collapsed_gpu += gs.state[CADS_HANDOVER] as u64;
+      dropped_gpu += gs.state[CADS_HANDOVER + 1] as u64;
+      assert_eq!(collapsed_gpu, st.handover_collapsed as u64, "{tag}: handover collapses");
+      assert_eq!(dropped_gpu, st.handover_dropped as u64, "{tag}: handover dropped collapses");
+      for (k, &ad) in rep.admitted.iter().enumerate().take(4) {
+        if ad && admitted_at[k].is_none() && f > YAW_FRAMES {
+          admitted_at[k] = Some(f);
+        }
+      }
+      let drawn: u32 = (0..classes.len()).flat_map(|k| (0..np).map(move |p| (k, p))).map(|(k, p)| gs.state[cads_tp(gt.t, k, p) + 8]).sum();
+      assert_eq!(drawn as usize, rep.drawn_build.len(), "{tag}: chunk entries drawn");
+      // the propagate set
+      let mut cset: alloc::vec::Vec<u32> = cplan.propagate[0].iter().map(|&o| (first + o) & mask).collect();
+      cset.sort_unstable();
+      assert_eq!(gt.propagate, cset, "{tag}: the propagate set");
+      // the class images: the GPU's draws against the CPU's (the splat parity's rules, the images'
+      // own layout)
+      let ilayout = cfg.image_geom(w, h).layout;
+      for (k, p, gshown, gbuild) in device.download_dust_cadence_images(pe).unwrap() {
+        let im = &st.images[k * np + p];
+        if !im.build.is_empty() {
+          let r = cad_pyr_parity(&alloc::format!("{tag}: build image ({k}, {p})"), &ilayout, &gbuild, &im.build);
+          if r.1 > 0 {
+            std::println!("[cadence gpu] {tag}: build image ({k}, {p}): Σ gpu {} cpu {}, 3×3 beyond {} of {}", r.0, r.1, r.2, r.3);
+          }
+        }
+        if !im.shown.is_empty() {
+          cad_pyr_parity(&alloc::format!("{tag}: shown image ({k}, {p})"), &ilayout, &gshown, &im.shown);
+        }
+      }
+      // the frame: the reprojected shown images and the fresh splat, against the CPU's
+      {
+        let gframe = device.download_dust_pyramid(pe).unwrap();
+        let r = cad_pyr_parity(&alloc::format!("{tag}: frame"), &layout, &gframe, &frame_cpu);
+        std::println!("[cadence gpu] {tag}: frame Σ gpu {} cpu {}, 3×3 beyond {} of {}, images shown {}", r.0, r.1, r.2, r.3, rep.images_shown);
+      }
+      if let Err(e) = st.check_owner_bytes() {
+        panic!("{tag}: the CPU's owner bytes: {e}");
+      }
+      // the phases: the yaw the frame after an image is first shown; the jump the frame after a
+      // list is non-empty again once the yaw's lists aborted
+      if rep.images_shown > 0 && shown_at.is_none() {
+        shown_at = Some(f);
+        yaw_from = Some(f + 1);
+      }
+      let tc = &st.tiers[&0];
+      let lists_live = (0..classes.len()).any(|k| (0..np).any(|p| !tc.lists[k][p][1].is_empty() || !tc.lists[k][p][2].is_empty()));
+      if yaw_from.is_some_and(|y0| f + 1 >= y0 + YAW_FRAMES) && motion_abort_at.is_some() && jump_at.is_none() && lists_live {
+        jump_at = Some(f + 1);
+        end_at = Some(f + 5);
+      }
+      let _ = (jump_at, end_at, lists_live);
+    }
+    std::println!(
+      "[cadence gpu] handover (light sweep {}): classes fresh/8/16/64 {class_seen:?}, admitted after the yaw at {admitted_at:?}, collapsed {collapsed_gpu} dropped {dropped_gpu}, aborts {aborts_seen} {reasons_seen:?}, motion abort {motion_abort_at:?}",
+      light.is_some()
+    );
+    assert!(shown_at.is_some(), "no class image shown in {FRAMES} frames");
+    assert!(admitted_at[1].is_some() && admitted_at[2].is_some(), "classes 16 and 64 not both admitted after the yaw: {admitted_at:?}");
+    assert!(collapsed_gpu > 0, "no handover collapsed");
+    device.dust_cadence_enable(pe, None).unwrap();
+  });
+}
+
 
 /// the splat parity's rules on the levels of two pyramids of `layout` (Σ counts within 10⁻³, the
 /// 3×3 τ sums within 5 % + 6 on all but 1 % of the neighbourhoods with ≥ 100 counts, τ_max within
@@ -1561,27 +2024,121 @@ fn gpu_dust_reproject_matches_reference() {
   });
 }
 
-/// a cadenced frame's full-draw estimate: fresh as measured, the builds at the decayed rate per
-/// member times the shown members; one odd frame moves the rate by at most 1 / BUILD_RATE_FRAMES
-/// of its weight; no build ever: fresh alone; saturating at u32::MAX
+/// a cadenced frame's full-draw estimate: fresh as measured, each class's builds at its rate per
+/// member over its last cycle times its shown members (class 8 builds 12 000 a frame, its two
+/// images show the cycle's 96 000; the first frame scales its one frame by 8); one odd frame
+/// moves the rate by at most 1 / N of its weight; no build ever: fresh alone; saturating at
+/// u32::MAX
 #[test]
 fn the_full_frame_estimate_scales_the_builds() {
+  let one = |b: [u32; 3]| [b, [0; 3], [0; 3]];
+  let in0 = |n: u32| [n, 0, 0];
+  let frames = [8, 16, 64];
   let mut rate = BuildRate::default();
-  assert_eq!(full_frame_estimate([5, 50, 7], &rate, 1000), [5, 50, 7]);
-  rate.fold([10, 200, 1_000_000], 12_000);
-  assert_eq!(full_frame_estimate([5, 50, 7_000_000], &rate, 150_000), [5 + 125, 50 + 2500, 7_000_000 + 12_500_000]);
+  assert_eq!(full_frame_estimate([5, 50, 7], &rate, in0(1000)), [5, 50, 7]);
+  rate.fold(one([10, 200, 1_000_000]), in0(12_000), frames);
+  assert_eq!(full_frame_estimate([5, 50, 7_000_000], &rate, in0(96_000)), [5 + 80, 50 + 1600, 7_000_000 + 8_000_000]);
   // a steady rate stays the rate
   for _ in 0..40 {
-    rate.fold([10, 200, 1_000_000], 12_000);
+    rate.fold(one([10, 200, 1_000_000]), in0(12_000), frames);
   }
-  let steady = full_frame_estimate([0, 0, 0], &rate, 150_000);
-  assert!(steady.iter().zip([125u32, 2500, 12_500_000]).all(|(&a, b)| a.abs_diff(b) <= b / 1000 + 1), "{steady:?}");
+  let steady = full_frame_estimate([0, 0, 0], &rate, in0(96_000));
+  assert!(steady.iter().zip([80u32, 1600, 8_000_000]).all(|(&a, b)| a.abs_diff(b) <= b / 1000 + 1), "{steady:?}");
   // a frame that built 100 members at the cost of 12 000 (a short last step) barely moves it
-  rate.fold([10, 200, 1_000_000], 100);
-  let after = full_frame_estimate([0, 0, 0], &rate, 150_000)[2] as f64;
-  assert!(after < 12_500_000.0 * 1.2, "{after}");
-  let big = BuildRate { builds: [0.0, 0.0, u32::MAX as f64], built: 1.0 };
-  assert_eq!(full_frame_estimate([0, 0, 1], &big, 4)[2], u32::MAX);
+  rate.fold(one([10, 200, 1_000_000]), in0(100), frames);
+  let after = full_frame_estimate([0, 0, 0], &rate, in0(96_000))[2] as f64;
+  assert!(after < 8_000_000.0 * 1.2, "{after}");
+  let mut big = BuildRate::default();
+  big.fold(one([0, 0, u32::MAX]), in0(1), frames);
+  assert_eq!(full_frame_estimate([0, 0, 1], &big, in0(4))[2], u32::MAX);
+}
+
+/// each class's rate spans its own cycle (round 7): class 16 builds 9 580 members every frame but
+/// its EWA work comes in bursts (the lists' order: 3 of every 16 frames carry it all, as at 1 km
+/// orbit). Over one cycle the estimate is the same every frame (within 0.1 %); the old decayed
+/// 8-frame sum swung by more than 2× with the same input.
+#[test]
+fn the_build_rate_spans_each_class_cycle() {
+  let burst = |f: usize| if f % 16 < 3 { 160_000u32 } else { 0 };
+  let mut rate = BuildRate::default();
+  let (mut lo, mut hi) = (u32::MAX, 0u32);
+  let (mut dlo, mut dhi, mut d) = (f64::MAX, 0.0f64, [0.0f64; 2]);
+  for f in 0..160 {
+    rate.fold([[0; 3], [0, burst(f), 0], [0; 3]], [0, 9_580, 0], [8, 16, 64]);
+    // the old rule: a decayed sum with weight 7/8
+    d = [d[0] * 0.875 + burst(f) as f64, d[1] * 0.875 + 9_580.0];
+    if f >= 32 {
+      let e = full_frame_estimate([0, 0, 0], &rate, [0, 153_000, 0])[1];
+      lo = lo.min(e);
+      hi = hi.max(e);
+      let old = d[0] * 153_000.0 / d[1];
+      dlo = dlo.min(old);
+      dhi = dhi.max(old);
+    }
+  }
+  assert!((hi - lo) as f64 <= 0.001 * hi as f64, "the estimate swings {lo}..{hi} over class 16's cycle");
+  assert!(dhi > 2.0 * dlo, "the decayed 8-frame sum {dlo}..{dhi} (the test's premise)");
+  // the window is the class's: a class-8 burst pattern is flat over 8 frames
+  let mut r8 = BuildRate::default();
+  for f in 0..64 {
+    r8.fold([[0, if f % 8 == 0 { 8_000 } else { 0 }, 0], [0; 3], [0; 3]], [1_000, 0, 0], [8, 16, 64]);
+  }
+  assert_eq!(r8.builds[0][1], 8_000.0);
+  assert_eq!(r8.built[0], 8_000.0);
+}
+
+/// the estimate weighs the classes apart (round 7): class 8 shows 10 000 members at a cost of 1
+/// each and builds 1 250 a frame, class 16 shows 150 000 at a cost of 3 and builds 9 375. The true
+/// full draw is 10 000 + 450 000 = 460 000; the pooled `Σ shown / Σ built` gives
+/// (1 250 + 28 125) · 160 000 / 10 625 = 442 353 (4 % low, the orbit's early EWA switch); per
+/// class it is exact. A class with shown members and no builds takes the pooled rate.
+#[test]
+fn the_full_frame_estimate_weighs_the_classes_apart() {
+  let mut rate = BuildRate::default();
+  for _ in 0..64 {
+    rate.fold([[0, 1_250, 0], [0, 28_125, 0], [0; 3]], [1_250, 9_375, 0], [8, 16, 64]);
+  }
+  let e = full_frame_estimate([0, 0, 0], &rate, [10_000, 150_000, 0])[1];
+  assert!(e.abs_diff(460_000) <= 460, "per class {e}, the full draw 460 000");
+  let pooled = (1_250.0 + 28_125.0) * 160_000.0 / 10_625.0;
+  assert!((e as f64 - pooled).abs() > 0.03 * 460_000.0, "per class {e} equals the pooled {pooled}");
+  // class 64 shows 6 400 members it has not built in the window: the pooled rate over the classes'
+  // cycles (each window holds every member of its class once: (8 · 1 250 + 16 · 28 125) /
+  // (8 · 1 250 + 16 · 9 375) = 2.875 per member)
+  let e64 = full_frame_estimate([0, 0, 0], &rate, [10_000, 150_000, 6_400])[1];
+  let want = 460_000.0 + 6_400.0 * 2.875;
+  assert!((e64 as f64 - want).abs() <= 0.001 * want, "with class 64 {e64}, want {want}");
+}
+
+/// the handover's population mismatch (1 km still, τ 0.004, f72, `AETHERVK_DUST_FEEDBACK_LOG`):
+/// class 8's window built 6 320 members (the bright young clusters among them) for 507 681 EWA
+/// units while its old image still showed 86 416 ordinary members; class 16 built 160 272 for
+/// 454 952 and showed 80 111; the fresh pass 356 971. The uncapped scale (13.7) gave 7.5e6 units,
+/// over the frame budget (the EWA bias 2 and its blur); capped at 1.25 the estimate sits inside the
+/// feedback's band [budget / 8, budget], so the bias stays. A full window with consistent counts is
+/// unchanged (within the lists' drift).
+#[test]
+fn the_full_frame_estimate_caps_a_population_mismatch() {
+  let budget = (dust::DUST_EWA_FRAME_BUDGET as f64 / dust::DUST_EWA_TEXEL_UNIT as f64) as u32;
+  let mut rate = BuildRate::default();
+  for f in 0..64usize {
+    let b8 = if f % 8 == 0 { 507_681 } else { 0 };
+    let n8 = if f % 8 == 0 { 6_320 } else { 0 };
+    let b16 = if f % 16 == 0 { 454_952 } else { 0 };
+    let n16 = if f % 16 == 0 { 160_272 } else { 0 };
+    rate.fold([[0, b8, 0], [0, b16, 0], [0; 3]], [n8, n16, 0], [8, 16, 64]);
+  }
+  let shown = [86_416, 80_111, 0];
+  let uncapped = 356_971.0 + 507_681.0 * 86_416.0 / 6_320.0 + 454_952.0 * 80_111.0 / 160_272.0;
+  assert!(uncapped > budget as f64, "the premise: {uncapped} over the budget {budget}");
+  let e = full_frame_estimate([0, 356_971, 0], &rate, shown)[1];
+  let want = 356_971.0 + 507_681.0 * 1.25 + 454_952.0 * 80_111.0 / 160_272.0;
+  assert!((e as f64 - want).abs() <= 1.0, "capped {e}, want {want}");
+  assert!(e > budget / 8 && e < budget, "{e} outside the band [{}, {budget}]", budget / 8);
+  // consistent counts (the lists' drift, scale 1.001): the uncapped estimate
+  let e1 = full_frame_estimate([0, 0, 0], &rate, [6_326, 160_272, 0])[1];
+  let want1 = 507_681.0 * 6_326.0 / 6_320.0 + 454_952.0;
+  assert!((e1 as f64 - want1).abs() <= 1.0, "consistent {e1}, want {want1}");
 }
 
 /// the feedback's band keeps the current state: frames drawn at another bias (read back
@@ -1632,7 +2189,7 @@ fn cads_work_members_reads_the_cursors() {
   set(&mut st, 0, 0, 1, [700, 640, 5, 600, 80]);
   set(&mut st, 0, 2, 1, [6400, 6400, 0, 6400, 100]);
   set(&mut st, 1, 1, 0, [1600, 1600, 0, 100, 100]);
-  assert_eq!(cads_work_members(&st, 2, 3, 2), (80 + 40 + 0 + 100, 800 + 700 + 6400 + 1600));
+  assert_eq!(cads_work_members(&st, 2, 3, 2), ([80 + 40, 100, 0], [800 + 700, 1600, 6400]));
   // a tier slot or class beyond the counts is not read
-  assert_eq!(cads_work_members(&st, 1, 2, 2), (120, 1500));
+  assert_eq!(cads_work_members(&st, 1, 2, 2), ([120, 0, 0], [1500, 0, 0]));
 }

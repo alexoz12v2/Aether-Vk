@@ -92,6 +92,11 @@ pub mod particle_constants {
 pub struct ThreadTxContainer<T> {
   tx: Option<mpsc::Sender<T>>,
   handle: Option<Thread>,
+  /// Raised by [`Self::close`] next to dropping `tx`; the thread treats an empty channel with
+  /// this flag set as closed. thingbuf's `Core::close` is a no-op while the dropping thread is
+  /// panicking, so a context dropped during unwinding never closes the channel by itself and the
+  /// join would hang (cp_perf7: a test that panicked on a failed SPK download).
+  closing: Arc<core::sync::atomic::AtomicBool>,
 }
 
 impl<T> ThreadTxContainer<T> {
@@ -99,7 +104,15 @@ impl<T> ThreadTxContainer<T> {
     Self {
       tx: None,
       handle: None,
+      closing: Arc::new(core::sync::atomic::AtomicBool::new(false)),
     }
+  }
+
+  /// Signals the thread to exit once its channel is drained: raises `closing`, then drops the
+  /// sender (which also closes the channel when the caller is not panicking).
+  fn close(&mut self) {
+    self.closing.store(true, core::sync::atomic::Ordering::Release);
+    drop(self.tx.take());
   }
 
   pub fn tx(&self) -> &mpsc::Sender<T> {
@@ -114,10 +127,10 @@ impl<T> ThreadTxContainer<T> {
 impl<T> Drop for ThreadTxContainer<T> {
   fn drop(&mut self) {
     oshal::log!("ThreadTxContainer drop started. Dropping tx...");
-    // 1. Drop the Sender first.
+    // 1. Drop the Sender first (and raise `closing`, see `close`).
     // This closes the channel. The Receiver in the background thread
     // will now yield `None` or an error, signaling the thread to exit.
-    drop(self.tx.take());
+    self.close();
 
     // 2. Take the Thread handle out of the Option and join it.
     // Because the channel is closed, the thread will finish its work
@@ -454,7 +467,8 @@ impl Drop for SimulationThreads {
     // Using try_send(Shutdown) was unreliable: if the 128-slot channel is full
     // (e.g. many commands queued during heavy use), try_send silently fails and
     // handle.join() hangs forever.
-    self.logic_thread.tx.take();
+    // `close` also raises the `closing` flag, which covers a drop during unwinding.
+    self.logic_thread.close();
     self.logic_feedback_rx = None;
 
     // ── Phase 3: Join logic thread (safe — no X11 involvement) ────────────────
@@ -470,7 +484,7 @@ impl Drop for SimulationThreads {
     // MUST drop render thread BEFORE gathering the pool!
     // Dropping the render thread drops the `Device`, which sets `callback_stop_signal`
     // to true. This stops `TimelinePollingWorkload` which is running on the pool.
-    self.render_thread.tx.take();
+    self.render_thread.close();
     self.render_feedback_rx = None;
 
     // ── Phase 5: Timed join of render thread ──────────────────────────────────
@@ -672,8 +686,12 @@ impl SimulationThreads {
     }
     let (render_tx, render_rx) = mpsc::channel(params.channel_capacity);
     let (render_feedback_tx, render_feedback_rx) = mpsc::channel(params.channel_capacity);
-    let render_thread_handle =
-      start_render_thread(render_rx, params.to_context(render_feedback_tx))?;
+    let closing = Arc::new(core::sync::atomic::AtomicBool::new(false));
+    let render_thread_handle = start_render_thread(
+      render_rx,
+      params.to_context(render_feedback_tx, Arc::clone(&closing)),
+    )?;
+    self.render_thread.closing = closing;
     self.render_thread.tx = Some(render_tx);
     self.render_thread.handle = Some(render_thread_handle);
     self.render_feedback_rx = Some(render_feedback_rx);
@@ -690,13 +708,16 @@ impl SimulationThreads {
 
     let (logic_tx, logic_rx) = mpsc::channel(params.channel_capacity);
     let (logic_feedback_tx, logic_feedback_rx) = mpsc::channel(params.channel_capacity);
+    let closing = Arc::new(core::sync::atomic::AtomicBool::new(false));
     let logic_thread_handle = start_logic_thread(
       logic_rx,
       alloc::sync::Arc::new(params.to_context(
         logic_feedback_tx,
         self.render_thread.tx.as_ref().unwrap().clone(),
+        Arc::clone(&closing),
       )),
     )?;
+    self.logic_thread.closing = closing;
     self.logic_thread.tx = Some(logic_tx);
     self.logic_thread.handle = Some(logic_thread_handle);
     self.logic_feedback_rx = Some(logic_feedback_rx);
@@ -1542,8 +1563,13 @@ impl RenderThreadParams {
   }
 
   /// TODO: Document this item
-  pub fn to_context(self, render_feedback_tx: mpsc::Sender<RenderFeedback>) -> RenderThreadContext {
+  pub fn to_context(
+    self,
+    render_feedback_tx: mpsc::Sender<RenderFeedback>,
+    closing: Arc<core::sync::atomic::AtomicBool>,
+  ) -> RenderThreadContext {
     RenderThreadContext {
+      closing,
       render_feedback_tx,
       render_frontend: RefCell::new(Some(self.render_frontend)),
       render_device_handle: self.render_device_handle,
@@ -1564,6 +1590,8 @@ pub struct RenderThreadContext {
   /// to prevent the render thread from calling `vkQueuePresentKHR` on any new
   /// frame.  See [`SimulationThreads::skip_present`] for the full rationale.
   pub skip_present: Arc<core::sync::atomic::AtomicBool>,
+  /// See `ThreadTxContainer::closing`: an empty channel with this set counts as closed.
+  pub closing: Arc<core::sync::atomic::AtomicBool>,
 }
 
 impl RenderThreadContext {
@@ -1618,8 +1646,10 @@ impl LogicThreadParams {
     self,
     logic_feedback_tx: mpsc::Sender<LogicFeedback>,
     render_tx: mpsc::Sender<RenderCommand>,
+    closing: Arc<core::sync::atomic::AtomicBool>,
   ) -> LogicThreadContext {
     LogicThreadContext {
+      closing,
       logic_state: self.logic_state,
       thread_pool: self.thread_pool,
       logic_feedback_tx,
@@ -1643,6 +1673,8 @@ pub struct LogicThreadContext {
   pub ctx_ptr: SendPtrMut<core::ffi::c_void>,
   pub render_tx: mpsc::Sender<RenderCommand>,
   pub kernels: (gpu::RenderFrontend, gpu::RenderDeviceHandle),
+  /// See `ThreadTxContainer::closing`: an empty channel with this set counts as closed.
+  pub closing: Arc<core::sync::atomic::AtomicBool>,
 }
 
 #[repr(i32)]

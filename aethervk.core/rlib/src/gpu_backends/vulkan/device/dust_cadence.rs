@@ -67,6 +67,12 @@ pub const CADF_ABORTS: u32 = 2;
 pub const CADF_COVERAGE: u32 = 4;
 /// the classify retains a member whose target is a slower class (`CadenceConfig::retain`)
 pub const CADF_RETAIN: u32 = 8;
+/// the handover (`CadenceConfig::handover_on`): incoming memberships of slower classes, aligned
+/// phases
+pub const CADF_HANDOVER: u32 = 16;
+/// per (k * 2 + p): drawn frames to the pair's next swap (`DustCadenceState::frames_to_swap`; the
+/// handover's rule a)
+pub const CADP_FTS: usize = 176;
 /// the anchor tables: per tier slot, words 0 n, 1 this frame's stamp, then n × (stamp, Δ xyz)
 pub const CAD_ANCH_TIER_WORDS: usize = 2304;
 pub const CAD_ANCH_ENTRY0: usize = 4;
@@ -82,7 +88,8 @@ pub const CADS_PROF: usize = 1536;
 pub const CADS_WORDS: usize = 2048;
 const _: () = assert!(CADS_TP0 + CADS_TP_WORDS * CAD_MAX_TIERS * 6 <= CADS_HIST);
 const _: () = assert!(CADS_PAIR0 + CADS_PAIR_WORDS * 6 <= CADS_TP0);
-const _: () = assert!(CADP_STEPU + CAD_MAX_TIERS * 6 <= CADP_CLEAR0);
+const _: () = assert!(CADP_STEPU + CAD_MAX_TIERS * 6 <= CADP_FTS);
+const _: () = assert!(CADP_FTS + 6 <= CADP_CLEAR0);
 const _: () = assert!(CADP_CLEAR0 + CADP_CLEAR_WORDS * CAD_MAX_TIERS <= CADP_WORDS);
 const _: () = assert!(CADP_TIER0 + CADP_TIER_WORDS * CAD_MAX_TIERS <= CADP_STEPU);
 
@@ -173,8 +180,12 @@ impl CadenceSysLayout {
   pub fn blocks0(&self) -> u32 {
     self.draw0() + self.nc * self.ring
   }
-  pub fn words(&self) -> u32 {
+  /// the incoming bytes (the handover; byte ring base + slot, as the owner bytes)
+  pub fn incoming0(&self) -> u32 {
     self.blocks0() + 6 * self.nc * self.np * (self.ring / CMP_BLOCK + CAD_MAX_TIERS as u32)
+  }
+  pub fn words(&self) -> u32 {
+    self.incoming0() + self.ring / 4
   }
 }
 
@@ -218,6 +229,8 @@ pub struct CadenceTierSnapshot {
   pub t: usize,
   /// the owner bytes of the tier's sub-ring, slot indexed
   pub owner: alloc::vec::Vec<u8>,
+  /// the incoming bytes (the handover), slot indexed
+  pub incoming: alloc::vec::Vec<u8>,
   /// `lists[k][p][s]` (s: 0 shown, 1 build, 2 pending), their lengths from the state
   pub lists: alloc::vec::Vec<alloc::vec::Vec<[alloc::vec::Vec<u32>; 3]>>,
   /// the slots of the propagate bitmask, ascending
@@ -368,22 +381,27 @@ fn sqrt32(x: f32) -> f32 {
   <f32 as aethervk_oshal_rlib::math::FloatLike>::sqrt(x)
 }
 
-/// `(built, shown)`: the list entries a frame drew into its build images (per tier slot and
-/// pair, `min(step, build length − cursor)`, the cursor before the frame's advance) and the
+/// `(built, shown)` per class: the list entries a frame drew into its build images (per tier slot
+/// and pair, `min(step, build length − cursor)`, the cursor before the frame's advance) and the
 /// entries of the shown lists, from a state readback (`CADS_TP*` words). The feedback's full-frame
-/// estimate scales the builds' counters by `shown / built` (`dust::full_frame_estimate`).
-pub fn cads_work_members(st: &[u32], nt: usize, nc: usize, np: usize) -> (u32, u32) {
-  let (mut built, mut shown) = (0u32, 0u32);
+/// estimate scales each class's builds' counters by its `shown / built` (`dust::full_frame_estimate`).
+pub fn cads_work_members(
+  st: &[u32],
+  nt: usize,
+  nc: usize,
+  np: usize,
+) -> ([u32; DUST_CADENCE_MAX_CLASSES], [u32; DUST_CADENCE_MAX_CLASSES]) {
+  let (mut built, mut shown) = ([0u32; DUST_CADENCE_MAX_CLASSES], [0u32; DUST_CADENCE_MAX_CLASSES]);
   for t in 0..nt {
-    for k in 0..nc {
+    for k in 0..nc.min(DUST_CADENCE_MAX_CLASSES) {
       for p in 0..np {
         let tp = cads_tp(t, k, p);
         if tp + 4 >= st.len() {
           continue;
         }
         let (len, cursor, step) = (st[tp + 1], st[tp + 3], st[tp + 4]);
-        built = built.saturating_add(step.min(len.saturating_sub(cursor)));
-        shown = shown.saturating_add(st[tp]);
+        built[k] = built[k].saturating_add(step.min(len.saturating_sub(cursor)));
+        shown[k] = shown[k].saturating_add(st[tp]);
       }
     }
   }
@@ -392,7 +410,7 @@ pub fn cads_work_members(st: &[u32], nt: usize, nc: usize, np: usize) -> (u32, u
 
 impl DustCadenceGpu {
   /// [`cads_work_members`] of the newest state readback (`None` before one)
-  pub fn work_members(&self) -> Option<(u32, u32)> {
+  pub fn work_members(&self) -> Option<([u32; DUST_CADENCE_MAX_CLASSES], [u32; DUST_CADENCE_MAX_CLASSES])> {
     let st = self.last_state.as_ref()?;
     let nt = self.tiers.values().map(|t| t.t + 1).max().unwrap_or(0);
     Some(cads_work_members(st, nt, self.nc(), self.np()))
@@ -404,8 +422,15 @@ impl DustCadenceGpu {
   fn np(&self) -> usize {
     self.cfg.phases.clamp(1, 2) as usize
   }
+  /// `DustCadenceState::offset_of` (aligned under the handover)
   fn offset_of(&self, k: usize, p: usize) -> u64 {
-    if self.np() == 2 { (p as u64) * (self.cfg.classes[k] as u64 / 2) } else { 0 }
+    if self.np() != 2 {
+      0
+    } else if self.cfg.handover_on() {
+      (p as u64) * (self.cfg.classes.iter().copied().min().unwrap_or(2) as u64 / 2)
+    } else {
+      (p as u64) * (self.cfg.classes[k] as u64 / 2)
+    }
   }
   /// whether (k, p)'s cycle starts at this drawn frame (`DustCadenceState::starts`)
   fn starts(&self, k: usize, p: usize) -> bool {
@@ -932,7 +957,7 @@ impl Device {
       prm[CADP_AW + k] = fbits(aw[k]);
     }
     prm[CADP_EPS] = fbits(c.cfg.eps_px);
-    prm[CADP_SHAPE] = fbits(c.shape_frac);
+    prm[CADP_SHAPE] = fbits(crate::scene::dust::cadence::admission_shape(c.shape_frac, c.cfg.light_theta()));
     prm[CADP_FRAME_PX] = fbits(f.view.width.max(f.view.height) as f32);
     prm[CADP_W] = fbits(f.view.width as f32);
     prm[CADP_H] = fbits(f.view.height as f32);
@@ -1015,6 +1040,14 @@ impl Device {
     }
     if c.cfg.retain {
       flags |= CADF_RETAIN;
+    }
+    if c.cfg.handover_on() {
+      flags |= CADF_HANDOVER;
+    }
+    for k in 0..nc {
+      for p in 0..np {
+        prm[CADP_FTS + k * 2 + p] = c.frames_to_swap(k, p);
+      }
     }
     prm[CADP_FLAGS] = flags;
     prm[CADP_ADMIT] = c.admitted.iter().enumerate().map(|(k, &a)| (a as u32) << k).sum();
@@ -1113,6 +1146,7 @@ impl Device {
       if clear {
         for s in c.systems.values() {
           self.device.cmd_fill_buffer(cmd, s.buf.buffer, 0, s.layout.pmask0() as u64 * 4, 0);
+          self.device.cmd_fill_buffer(cmd, s.buf.buffer, s.layout.incoming0() as u64 * 4, (s.layout.ring / 4) as u64 * 4, 0);
         }
         self.device.cmd_fill_buffer(cmd, c.state.buffer, 0, vk::WHOLE_SIZE, 0);
       }
@@ -1457,6 +1491,9 @@ impl Device {
       let all: alloc::vec::Vec<u32> = pod_vec(&self.dust_download_bytes(t.buffer, 0, t.layout.words() as u64 * 4)?);
       let bytes: &[u8] = bytemuck::cast_slice(&all[..(t.layout.ring / 4) as usize]);
       let owner = bytes[t.rb as usize..(t.rb + t.cap) as usize].to_vec();
+      let i0 = t.layout.incoming0() as usize;
+      let ibytes: &[u8] = bytemuck::cast_slice(&all[i0..i0 + (t.layout.ring / 4) as usize]);
+      let incoming = ibytes[t.rb as usize..(t.rb + t.cap) as usize].to_vec();
       let mut lists = alloc::vec::Vec::new();
       for k in 0..nc {
         let mut kl = alloc::vec::Vec::new();
@@ -1478,7 +1515,7 @@ impl Device {
           all[pm + (i >> 5)] & (1 << (i & 31)) != 0
         })
         .collect();
-      out.tiers.push(CadenceTierSnapshot { key: t.key, t: t.t, owner, lists, propagate });
+      out.tiers.push(CadenceTierSnapshot { key: t.key, t: t.t, owner, incoming, lists, propagate });
     }
     Ok(out)
   }
@@ -1827,6 +1864,15 @@ impl Device {
     mgr.cadence.get(&pe).and_then(|c| c.lock().owner_address(id, ring_base)).unwrap_or(0)
   }
 
+  /// Test hook: the light tolerance τ of `pe`'s cadence from its next frame
+  /// (`CadenceConfig::light_tol`; the CPU mirror's `cfg.light_tol` must be set alike)
+  pub fn dust_cadence_set_light_tol(&self, pe: gpu::PresentationEngineHandle, tau: f32) {
+    let res = self.res.read();
+    if let Some(entry) = res.dust_manager.as_ref().and_then(|m| m.cadence.get(&pe)) {
+      entry.lock().cfg.light_tol = tau;
+    }
+  }
+
   /// Test hook: the in-frame gates of `pe`'s next frames (`DUST_FRAME_GATES_OFF_BIT`; the
   /// identity tests run with them off)
   pub fn dust_set_frame_gates(&self, pe: gpu::PresentationEngineHandle, on: bool) {
@@ -2156,7 +2202,7 @@ impl Device {
       eat(w as u64);
     }
     for t in &snap.tiers {
-      for &b in &t.owner {
+      for &b in t.owner.iter().chain(t.incoming.iter()) {
         eat(b as u64);
       }
     }
@@ -2167,6 +2213,8 @@ impl Device {
 // ─── The telemetry (I5) ─────────────────────────────────────────────────────
 
 pub const CADS_FRESH: usize = 1029;
+/// the handover's collapses and dropped collapses this frame (2 words)
+pub const CADS_HANDOVER: usize = 1030;
 pub const CADS_SHOWN_PAIR0: usize = 1032;
 pub const CADS_SHOWN_LIGHT: usize = 1040;
 pub const CADS_FRAME_LIGHT: usize = 1042;

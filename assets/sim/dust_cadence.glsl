@@ -71,6 +71,8 @@ const uint DUST_CADF_ADVANCE   = 1u;   // the previous drawn frame was Run: adva
 const uint DUST_CADF_ABORTS    = 2u;   // the abort test runs (Run, no reset)
 const uint DUST_CADF_COVERAGE  = 4u;   // the coverage test runs (Run, no reset, a margin)
 const uint DUST_CADF_RETAIN    = 8u;   // retention: a member whose target is a slower class stays (CadenceConfig::retain)
+const uint DUST_CADF_HANDOVER  = 16u;  // the handover: incoming memberships of slower classes (CadenceConfig::handover_on)
+const uint DUST_CADP_FTS       = 176u; // per (k * 2 + p): drawn frames to the pair's next swap (the handover's rule a)
 // the abort reasons (cadence::ABORT_*)
 const uint DUST_CAD_ABORT_RATE = 0u;
 const uint DUST_CAD_ABORT_BUDGET = 1u;
@@ -101,6 +103,7 @@ const uint DUST_CADS_SHELL_FORCED = 1028u; // classify candidates refused by the
 // 1024..1048): the fresh slots, the SHOWN slots per pair (k * 2 + p), the light the reprojection
 // wrote and the frame's light (counts · 4^ℓ, (lo, hi) fixed point)
 const uint DUST_CADS_FRESH = 1029u;
+const uint DUST_CADS_HANDOVER = 1030u;      // 2: the handover's collapses and dropped collapses this frame
 const uint DUST_CADS_SHOWN_PAIR0 = 1032u;   // 6 words
 const uint DUST_CADS_SHOWN_LIGHT = 1040u;   // (lo, hi)
 const uint DUST_CADS_FRAME_LIGHT = 1042u;   // (lo, hi)
@@ -136,6 +139,8 @@ uint dust_cad_blocks0(uint R, uint nc) { return dust_cad_draw0(R, nc) + nc * R; 
 uint dust_cad_blocks(uint R, uint nc, uint np, uint rb, uint t, uint nb, uint l) {
     return dust_cad_blocks0(R, nc) + 6u * nc * np * (rb / 1024u + t) + l * 2u * nb;
 }
+// the incoming bytes (the handover; dust_cadence::CadenceSysLayout::incoming0): after the blocks
+uint dust_cad_inc0(uint R, uint nc, uint np) { return dust_cad_blocks0(R, nc) + 6u * nc * np * (R / 1024u + DUST_CAD_MAX_TIERS); }
 
 // the owner byte of byte index i (ring base + slot)
 uint dust_own_get(DustUintBuffer sys, uint i) { return (sys.v[i >> 2u] >> ((i & 3u) * 8u)) & 0xFFu; }
@@ -145,6 +150,14 @@ void dust_own_set(DustUintBuffer sys, uint i, uint oldB, uint newB) {
     uint sh = (i & 3u) * 8u;
     atomicAnd(sys.v[i >> 2u], ~(0xFFu << sh));
     if (newB != 0u) atomicOr(sys.v[i >> 2u], newB << sh);
+}
+// the incoming byte of byte index i (ring base + slot), its store (as dust_own_set)
+uint dust_inc_get(DustUintBuffer sys, uint inc0, uint i) { return (sys.v[inc0 + (i >> 2u)] >> ((i & 3u) * 8u)) & 0xFFu; }
+void dust_inc_set(DustUintBuffer sys, uint inc0, uint i, uint oldB, uint newB) {
+    if (oldB == newB) return;
+    uint sh = (i & 3u) * 8u;
+    atomicAnd(sys.v[inc0 + (i >> 2u)], ~(0xFFu << sh));
+    if (newB != 0u) atomicOr(sys.v[inc0 + (i >> 2u)], newB << sh);
 }
 // marks bit i (ring base + slot) of the propagate bitmask
 void dust_cad_mark(DustUintBuffer sys, uint R, uint i) {

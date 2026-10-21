@@ -53,6 +53,13 @@ pub const DUST_CADENCE_ORTHO_ZOOM_MAX: f32 = 1.25;
 pub const DUST_CADENCE_NEAR_SIGMAS: f32 = 0.0;
 /// the age floor (s) of the growth terms `Δt / age`
 pub const DUST_CADENCE_AGE_MIN_S: f32 = 1.0;
+/// the light tolerance τ ([`CadenceConfig::light_tol`]): a class image may show a cluster only
+/// while the cluster's relative light change over the image's oldest display age stays within τ.
+/// 0.004 (round 7c, perf7m, 16 px, 1 km still): the image equals retention's frame for frame
+/// (L1 0.06–0.09 %, light 1.0005 / 1.0049 against the full draw) at 48.6 ms against retention's
+/// 60.3 (0.002: L1 0.00 % at 49.0 ms; 0: a 0.22 % sawtooth at 52.4); its earlier 2.63 % defect was
+/// the EWA estimate (`dust::full_frame_estimate`'s cap), not the cadence
+pub const DUST_CADENCE_LIGHT_TOL: f32 = 0.004;
 /// a simulated step more than this many times the previous frame's (or any positive step after a
 /// non-positive one, or a negative step) resets every class ([`CadenceReset::Time`])
 pub const DUST_CADENCE_TIME_JUMP_FACTOR: f64 = 4.0;
@@ -116,6 +123,33 @@ pub const OWN_PENDING: u8 = 1 << 4;
 /// drawn into the build image this cycle (its whole footprint inside the frozen frame)
 pub const OWN_IN_IMAGE: u8 = 1 << 5;
 
+/// **Handover** ([`CadenceConfig::handover`]): a second byte per slot, the *incoming* byte, holds a
+/// membership of a slower class `B` while the member is still owned by its class `A` (the owner
+/// byte). Same layout as the owner byte, never SHOWN: B's PENDING / BUILD / IN_IMAGE. An entry of
+/// B's lists is valid on either byte ([`TierCadence::valid_any`]). The phases are aligned
+/// (offset `p · N_min / 2` for every class), so every swap of B is a swap of A.
+///
+/// *Rules.* (a) A's classify keeps a member whose incoming class is B only while `S − t > 2·N_A`,
+/// where `S` is the swap that first shows it in B (`frames_to_swap(B)`, plus `N_B` while the
+/// incoming membership is only PENDING); without an incoming membership it keeps a member whose
+/// target is a slower class (retention). (b) B's classify takes a member of a faster class as
+/// incoming (incoming class 0 or B, incoming PENDING clear), and re-takes as incoming a slot
+/// whose owner byte emptied (an abort of A) while its incoming class is B; no owner membership is
+/// taken while an incoming one exists. (c) At B's swap a valid incoming build
+/// entry collapses into the owner byte when the owner byte is empty (A swaps first: ascending
+/// classes), else the incoming membership is dropped. (d) B's aborts clear incoming bits; the
+/// retire / emit hook and resets zero both bytes.
+///
+/// *Exactly once.* A's image shown over `[t + 2N_A, t + 3N_A)` comes from A's classify at `t`. By
+/// (a) A re-pends the member at every A start with `S − t > 2N_A` and at none with
+/// `S − t ≤ 2N_A` (`S − t` is a multiple of `N_A`: the phases are aligned and `N_A | N_B`), so A's
+/// last image holding it is shown over `[S − N_A, S)` and B's first from `S`: no gap, no overlap.
+/// A's last pend (`S − 3N_A`) is promoted at `S − 2N_A`, shown at `S − N_A` and cleared by A's
+/// swap at `S`, so the collapse at `S` finds the owner byte empty. B took the member at
+/// `c′ = S − 2N_B < S − 2N_A` (`N_B ≥ 2N_A`), before A lets it go. An abort of either class only
+/// removes a membership: the member is fresh, never drawn twice.
+pub const OWN_STATE_MASK: u8 = OWN_SHOWN | OWN_BUILD | OWN_PENDING | OWN_IN_IMAGE;
+
 /// the class index (`0..`) of an owner byte, `None` when unowned
 pub fn owner_class(b: u8) -> Option<usize> {
   match b & OWN_CLASS_MASK {
@@ -155,6 +189,21 @@ pub struct CadenceConfig {
   /// stays within ε; members born or freed later go to the slowest admitted class.
   /// `AETHERVK_DUST_CADENCE_RETAIN=0`: off (the A/B)
   pub retain: bool,
+  /// handover: a member whose rate admits a slower admitted class moves there with no fresh gap
+  /// (the incoming byte, [`owner_class`]'s doc). Implies retention while the slower class has not
+  /// taken it. Effective only when the classes nest ([`Self::classes_nest`]: `N_{k+1} ≥ 2·N_k`,
+  /// `N_k | N_{k+1}`); it also aligns the phases. `AETHERVK_DUST_CADENCE_HANDOVER=0`: off (the A/B:
+  /// retention alone, phase offsets `p · N_k / 2`)
+  pub handover: bool,
+  /// the light tolerance τ (relative; 0 = off): a cluster changes its light by about `Δt / age`
+  /// of itself per frame (its extent grows ∝ its age; the 1 km observer path at 0.375 s a frame:
+  /// −0.061 % a frame for the full draw, a ±0.6 % sawtooth with class 16's period under the
+  /// geometric ε rule alone). A class-`N` image shows a cluster at most `1.5 N` frames after its
+  /// classify (the build half-window `N/2` plus the shown window `N`), so class `k` also needs
+  /// `1.5 N_k Δt / age ≤ τ`, i.e. the shape bound `2 N_k Δt ≤ θ · age` with `θ = 4τ/3`
+  /// ([`Self::light_theta`], [`admission_shape`]). Costs speed only under time warp (`Δt` large
+  /// against the dust's age). `AETHERVK_DUST_CADENCE_LIGHT_TOL=<τ>` (0: off, the A/B)
+  pub light_tol: f32,
 }
 
 /// One class image's geometry: the margin (px per side) and the image's pyramid layout
@@ -181,6 +230,8 @@ impl CadenceConfig {
       eps_px: DUST_CADENCE_EPS_DEFAULT,
       margin_frac: DUST_CADENCE_MARGIN_DEFAULT,
       retain: true,
+      handover: true,
+      light_tol: DUST_CADENCE_LIGHT_TOL,
     }
   }
 
@@ -199,6 +250,8 @@ impl CadenceConfig {
         eps_px: DUST_CADENCE_EPS_DEFAULT,
         margin_frac: 0.1,
         retain: true,
+        handover: true,
+        light_tol: DUST_CADENCE_LIGHT_TOL,
       })
     } else {
       None
@@ -264,7 +317,32 @@ impl CadenceConfig {
     if var("AETHERVK_DUST_CADENCE_RETAIN").is_some_and(|v| v.trim() == "0") {
       c.retain = false;
     }
+    if var("AETHERVK_DUST_CADENCE_HANDOVER").is_some_and(|v| v.trim() == "0") {
+      c.handover = false;
+    }
+    if let Some(t) = var("AETHERVK_DUST_CADENCE_LIGHT_TOL").and_then(|v| v.trim().parse::<f32>().ok())
+      && t >= 0.0
+      && t.is_finite()
+    {
+      c.light_tol = t;
+    }
     Some(c)
+  }
+
+  /// whether the classes nest (ascending, `N_{k+1} ≥ 2·N_k` and `N_k | N_{k+1}`): the handover's
+  /// precondition
+  pub fn classes_nest(&self) -> bool {
+    self.classes.windows(2).all(|w| w[0] > 0 && w[1] >= 2 * w[0] && w[1] % w[0] == 0)
+  }
+
+  /// the light tolerance's shape bound `θ = 4τ/3` ([`Self::light_tol`]; 0: off)
+  pub fn light_theta(&self) -> f32 {
+    if self.light_tol > 0.0 { self.light_tol * (4.0 / 3.0) } else { 0.0 }
+  }
+
+  /// the handover in effect ([`Self::handover`] with nesting classes)
+  pub fn handover_on(&self) -> bool {
+    self.handover && self.classes_nest()
   }
 
   /// the class images of this configuration (shown + build per class and phase)
@@ -1334,6 +1412,8 @@ pub struct TierCadence {
   pub capacity: u32,
   pub emitted: u64,
   pub owner: alloc::vec::Vec<u8>,
+  /// the incoming bytes (handover: a slower class's membership, [`owner_class`]'s doc)
+  pub incoming: alloc::vec::Vec<u8>,
   pub lists: alloc::vec::Vec<alloc::vec::Vec<[alloc::vec::Vec<u32>; 3]>>,
   pub cursor: alloc::vec::Vec<alloc::vec::Vec<u32>>,
   pub step: alloc::vec::Vec<alloc::vec::Vec<u32>>,
@@ -1348,6 +1428,7 @@ impl TierCadence {
       capacity: t.capacity,
       emitted: t.emitted,
       owner: alloc::vec![0u8; t.capacity as usize],
+      incoming: alloc::vec![0u8; t.capacity as usize],
       lists: (0..classes).map(|_| (0..phases).map(|_| Default::default()).collect()).collect(),
       cursor: alloc::vec![alloc::vec![0; phases]; classes],
       step: alloc::vec![alloc::vec![0; phases]; classes],
@@ -1366,6 +1447,34 @@ impl TierCadence {
   fn valid(&self, slot: u32, k: usize, bit: u8) -> bool {
     let b = self.owner[slot as usize];
     (b & OWN_CLASS_MASK) as usize == k + 1 && b & bit != 0
+  }
+  /// [`Self::valid`] on the owner byte or on the incoming byte (class `k`'s lists)
+  fn valid_any(&self, slot: u32, k: usize, bit: u8) -> bool {
+    let i = self.incoming[slot as usize];
+    self.valid(slot, k, bit) || ((i & OWN_CLASS_MASK) as usize == k + 1 && i & bit != 0)
+  }
+  /// clears `bits` of class `k`'s membership of `slot` (on whichever byte holds class `k`)
+  fn clear_bits(&mut self, slot: u32, k: usize, bits: u8) {
+    let s = slot as usize;
+    if (self.owner[s] & OWN_CLASS_MASK) as usize == k + 1 {
+      self.owner[s] = drop_empty(self.owner[s] & !bits);
+    } else if (self.incoming[s] & OWN_CLASS_MASK) as usize == k + 1 {
+      self.incoming[s] = drop_empty(self.incoming[s] & !bits);
+    }
+  }
+  /// sets `bits` on class `k`'s membership of `slot` (on whichever byte holds class `k`)
+  fn set_bits(&mut self, slot: u32, k: usize, bits: u8) {
+    let s = slot as usize;
+    if (self.owner[s] & OWN_CLASS_MASK) as usize == k + 1 {
+      self.owner[s] |= bits;
+    } else if (self.incoming[s] & OWN_CLASS_MASK) as usize == k + 1 {
+      self.incoming[s] |= bits;
+    }
+  }
+  /// both bytes of `slot` cleared (the retire / emit hook)
+  fn clear_slot(&mut self, slot: u32) {
+    self.owner[slot as usize] = 0;
+    self.incoming[slot as usize] = 0;
   }
 }
 
@@ -1434,6 +1543,11 @@ pub struct DustCadenceState {
   pub shape_frac: f32,
   /// drawn frames since the last reset (builds pause on reused frames)
   pub drawn_frame: u64,
+  /// handover telemetry (cumulative): incoming build entries collapsed into the owner byte at the
+  /// incoming class's swap, and those dropped because the owner byte was not empty (0 by the
+  /// handover's proof)
+  pub handover_collapsed: u64,
+  pub handover_dropped: u64,
   /// by tier key; the frame's tiers come in key order of their [`TierMeta`]s
   pub tiers: alloc::collections::BTreeMap<u64, TierCadence>,
   /// `images[k * phases + p]`
@@ -1511,7 +1625,7 @@ pub fn draw_list_traced(
   pyramid: &mut [u32],
   list: &[u32],
 ) -> alloc::vec::Vec<f64> {
-  #[cfg(feature = "std")]
+  #[cfg(any(test, feature = "std"))]
   if threads > 1 && list.len() > 1 {
     use super::splat::{
       PYR_EWA_TEXELS, PYR_SPLIT_CHILDREN, PYR_SPLIT_DROPPED_FLUX, PYR_VOLUME_EVALS, merge_pyramid,
@@ -1682,6 +1796,8 @@ impl DustCadenceState {
       cfg,
       shape_frac: 0.0,
       drawn_frame: 0,
+      handover_collapsed: 0,
+      handover_dropped: 0,
       tiers: alloc::collections::BTreeMap::new(),
       images: alloc::vec![ClassImage::default(); n],
       de_hist: alloc::collections::VecDeque::with_capacity(DUST_CADENCE_HISTORY),
@@ -1703,7 +1819,14 @@ impl DustCadenceState {
     self.cfg.phases.clamp(1, 2) as usize
   }
   fn offset_of(&self, k: usize, p: usize) -> u64 {
-    if self.np() == 2 { (p as u64) * (self.cfg.classes[k] as u64 / 2) } else { 0 }
+    if self.np() != 2 {
+      0
+    } else if self.cfg.handover_on() {
+      // aligned: every swap of a slower class is a swap of each faster one (the handover)
+      (p as u64) * (self.cfg.classes.iter().copied().min().unwrap_or(2) as u64 / 2)
+    } else {
+      (p as u64) * (self.cfg.classes[k] as u64 / 2)
+    }
   }
   /// whether (k, p)'s cycle starts at this drawn frame
   fn starts(&self, k: usize, p: usize) -> bool {
@@ -1784,6 +1907,7 @@ impl DustCadenceState {
   pub fn clear_all(&mut self) {
     for t in self.tiers.values_mut() {
       t.owner.iter_mut().for_each(|b| *b = 0);
+      t.incoming.iter_mut().for_each(|b| *b = 0);
       for kl in t.lists.iter_mut() {
         for pl in kl.iter_mut() {
           for l in pl.iter_mut() {
@@ -1806,7 +1930,7 @@ impl DustCadenceState {
   }
 
   fn has_content(&self) -> bool {
-    self.tiers.values().any(|t| t.owner.iter().any(|&b| b != 0))
+    self.tiers.values().any(|t| t.owner.iter().chain(t.incoming.iter()).any(|&b| b != 0))
       || self.images.iter().any(|im| im.shown_view.is_some() || im.build_view.is_some())
   }
 
@@ -1895,18 +2019,19 @@ impl DustCadenceState {
       let appended = (t.live_count as i64 + a as i64 - old.live_count as i64).max(0) as u64;
       if a > old.live_count || appended >= cap as u64 {
         old.owner.iter_mut().for_each(|b| *b = 0);
+        old.incoming.iter_mut().for_each(|b| *b = 0);
       } else {
         for i in 0..a {
-          old.owner[(old.first_slot.wrapping_add(i) & mask) as usize] = 0;
+          old.clear_slot(old.first_slot.wrapping_add(i) & mask);
         }
         let end = old.first_slot.wrapping_add(old.live_count);
         for i in 0..appended as u32 {
-          old.owner[(end.wrapping_add(i) & mask) as usize] = 0;
+          old.clear_slot(end.wrapping_add(i) & mask);
         }
         // the rewritten slots (the provisional window re-emitted, a re-emission the host placed):
         // new content in old slots, fresh until a build of their own
         for o in t.rewritten_from.min(t.live_count)..t.live_count {
-          old.owner[(t.first_slot.wrapping_add(o) & mask) as usize] = 0;
+          old.clear_slot(t.first_slot.wrapping_add(o) & mask);
         }
       }
       old.first_slot = t.first_slot;
@@ -2016,7 +2141,7 @@ impl DustCadenceState {
       a_w_m: self.window_terms(),
       eps_px: self.cfg.eps_px,
       frame_px: f.view.width.max(f.view.height) as f32,
-      shape_frac: self.shape_frac,
+      shape_frac: admission_shape(self.shape_frac, self.cfg.light_theta()),
     });
     // F1: aborts
     if reset.is_none() {
@@ -2069,9 +2194,8 @@ impl DustCadenceState {
             for t in self.tiers.values_mut() {
               let l = core::mem::take(&mut t.lists[k][p][list]);
               for &s in &l {
-                if t.valid(s, k, if list == 1 { OWN_BUILD } else { OWN_PENDING }) {
-                  let b = t.owner[s as usize] & !bit;
-                  t.owner[s as usize] = drop_empty(b);
+                if t.valid_any(s, k, if list == 1 { OWN_BUILD } else { OWN_PENDING }) {
+                  t.clear_bits(s, k, bit);
                 }
               }
               t.meta[k][p][list] = ListMeta::default();
@@ -2168,6 +2292,20 @@ impl DustCadenceState {
             }
           }
           let build = core::mem::take(&mut t.lists[k][p][1]);
+          // the handover's collapse (rule c): a valid incoming build entry takes the owner byte
+          // when class A's swap (earlier in this loop) has emptied it, else it is dropped
+          for &s in &build {
+            let i = t.incoming[s as usize];
+            if (i & OWN_CLASS_MASK) as usize == k + 1 && i & OWN_BUILD != 0 {
+              if t.owner[s as usize] == 0 {
+                t.owner[s as usize] = i;
+                self.handover_collapsed += 1;
+              } else {
+                self.handover_dropped += 1;
+              }
+              t.incoming[s as usize] = 0;
+            }
+          }
           let mut shown = alloc::vec::Vec::with_capacity(build.len());
           for &s in &build {
             if t.valid(s, k, OWN_BUILD) {
@@ -2187,6 +2325,9 @@ impl DustCadenceState {
           for &s in &pending {
             if t.valid(s, k, OWN_PENDING) {
               t.owner[s as usize] = (t.owner[s as usize] & !OWN_PENDING) | OWN_BUILD;
+              nb_list.push(s);
+            } else if t.valid_any(s, k, OWN_PENDING) {
+              t.incoming[s as usize] = (t.incoming[s as usize] & !OWN_PENDING) | OWN_BUILD;
               nb_list.push(s);
             }
           }
@@ -2251,7 +2392,7 @@ impl DustCadenceState {
           let hi = (lo + tc.step[k][p] as usize).min(l.len());
           let c: alloc::vec::Vec<u32> = l[lo..hi].to_vec();
           for &s in &c {
-            if tc.valid(s, k, OWN_BUILD) {
+            if tc.valid_any(s, k, OWN_BUILD) {
               let o = tc.offset(s);
               if o < live {
                 prop.push(o);
@@ -2330,6 +2471,10 @@ impl DustCadenceState {
       let inputs = pend.inputs.expect("rate inputs");
       let classes = self.cfg.classes.clone();
       let retain = self.cfg.retain;
+      let handover = self.cfg.handover_on();
+      // drawn frames to each pair's next swap (rule a's `S − t`)
+      let fts: alloc::vec::Vec<alloc::vec::Vec<u32>> =
+        (0..self.nc()).map(|j| (0..np).map(|pp| self.frames_to_swap(j, pp)).collect()).collect();
       for &(k, p) in &pend.swaps {
         // a class over its motion budget is not classified until the motion over 2N frames fits
         if !pend.admitted.get(k).copied().unwrap_or(true) {
@@ -2353,7 +2498,17 @@ impl DustCadenceState {
             }
             let b = tc.owner[s as usize];
             let cls = (b & OWN_CLASS_MASK) as usize;
-            if (cls != 0 && cls != k + 1) || b & OWN_PENDING != 0 {
+            let ib = tc.incoming[s as usize];
+            let icls = (ib & OWN_CLASS_MASK) as usize;
+            // handover (rule b): a member of a faster class taken as incoming, or re-taken as
+            // incoming once its faster class let go (an abort) before the collapse; while an
+            // incoming membership exists no owner membership is taken (the collapse must find the
+            // owner byte empty)
+            let as_incoming = handover
+              && (icls == 0 || icls == k + 1)
+              && ib & OWN_PENDING == 0
+              && ((cls != 0 && cls != k + 1 && classes[cls - 1] < classes[k]) || (cls == 0 && icls == k + 1));
+            if !as_incoming && ((cls != 0 && cls != k + 1) || b & OWN_PENDING != 0 || (cls == 0 && icls != 0)) {
               continue;
             }
             let m0 = &td.moments[o as usize];
@@ -2412,14 +2567,27 @@ impl DustCadenceState {
             // the class it goes to: the largest admitted by the motion budget among those the rate
             // admits (a class of N admits every smaller class's bound: δ_k' · 2N_k' ≤ δ_k · 2N_k)
             let target = (0..r.class as usize).rev().find(|&kk| pend.admitted.get(kk).copied().unwrap_or(true));
-            // retention: a member of class k whose target is a slower class stays in k
-            let target = if retain && cls == k + 1 && target.is_some_and(|kk| kk > k) { Some(k) } else { target };
+            let target = if handover && cls == k + 1 && icls != 0 {
+              // handover (rule a): held while the incoming class shows it later than 2N from now
+              let j = icls - 1;
+              let s_t = fts[j][p.min(fts[j].len() - 1)] + if ib & OWN_BUILD != 0 { 0 } else { classes[j] };
+              if target.is_some_and(|kk| kk >= k) && s_t > 2 * classes[k] { Some(k) } else { None }
+            } else if (retain || handover) && cls == k + 1 && target.is_some_and(|kk| kk > k) {
+              // retention: a member of class k whose target is a slower class stays in k
+              Some(k)
+            } else {
+              target
+            };
             if footprint_rule && target == Some(k) && !footprint_inside(m, pred, &td.pc.mvp, w, h) {
               rep.d3_at_classify += 1;
               continue;
             }
             if target == Some(k) {
-              tc.owner[s as usize] = owner_byte(k, (b & !OWN_CLASS_MASK) | OWN_PENDING);
+              if as_incoming {
+                tc.incoming[s as usize] = owner_byte(k, (ib & !OWN_CLASS_MASK) | OWN_PENDING);
+              } else {
+                tc.owner[s as usize] = owner_byte(k, (b & !OWN_CLASS_MASK) | OWN_PENDING);
+              }
               list.push(s);
               if r.g_px_per_m.is_finite() {
                 tg = tg.max(r.g_px_per_m);
@@ -2468,7 +2636,7 @@ impl DustCadenceState {
         pc.inv_unit = if im.build_unit > 0.0 { 1.0 / im.build_unit } else { 0.0 };
         let mut batch = alloc::vec::Vec::new();
         for &s in slots {
-          if !tc.valid(s, k, OWN_BUILD) {
+          if !tc.valid_any(s, k, OWN_BUILD) {
             continue;
           }
           let o = tc.offset(s);
@@ -2490,7 +2658,7 @@ impl DustCadenceState {
             continue;
           }
           im.build_drawn += 1;
-          tc.owner[s as usize] |= OWN_IN_IMAGE;
+          tc.set_bits(s, k, OWN_IN_IMAGE);
           batch.push(o);
         }
         if batch.is_empty() {
@@ -2585,7 +2753,7 @@ impl DustCadenceState {
     pyramid: &mut [u32],
     list: &[u32],
   ) {
-    #[cfg(feature = "std")]
+    #[cfg(any(test, feature = "std"))]
     if threads > 1 {
       super::splat::splat_tier_list_parallel(moments, render, pc, flow, 0, layout, pyramid, list, threads);
       return;
@@ -2603,10 +2771,21 @@ impl DustCadenceState {
     let bits = [OWN_SHOWN, OWN_BUILD, OWN_PENDING];
     for (key, t) in &self.tiers {
       let mut rec = alloc::vec![0u8; t.owner.len()];
+      let mut rec_in = alloc::vec![0u8; t.owner.len()];
       for (k, kl) in t.lists.iter().enumerate() {
         for (p, pl) in kl.iter().enumerate() {
           for (st, l) in pl.iter().enumerate() {
             for &s in l {
+              let i = t.incoming[s as usize];
+              if (i & OWN_CLASS_MASK) as usize == k + 1 && i & bits[st] != 0 {
+                if np == 2 && (s & 1) as usize != p {
+                  return Err(alloc::format!("tier {key}: slot {s} incoming-valid in the phase-{p} list of class {k}"));
+                }
+                if rec_in[s as usize] & bits[st] != 0 {
+                  return Err(alloc::format!("tier {key}: slot {s} twice (incoming) in list ({k}, {p}, {st})"));
+                }
+                rec_in[s as usize] |= bits[st];
+              }
               if !t.valid(s, k, bits[st]) {
                 continue;
               }
@@ -2632,6 +2811,26 @@ impl DustCadenceState {
         if (b & OWN_CLASS_MASK == 0) != (b & !OWN_CLASS_MASK == 0) {
           return Err(alloc::format!("tier {key}: slot {s} byte {b:#04x}: a class id without a state or back"));
         }
+        // I5 (handover): the incoming byte is a slower class's membership, never SHOWN, backed by
+        // that class's lists
+        let i = t.incoming[s];
+        if i == 0 {
+          continue;
+        }
+        if i & OWN_SHOWN != 0 || i & OWN_CLASS_MASK == 0 || i & !OWN_CLASS_MASK == 0 {
+          return Err(alloc::format!("tier {key}: slot {s} incoming {i:#04x}: SHOWN, or a class without a state or back"));
+        }
+        if (i & (OWN_BUILD | OWN_PENDING)) & !rec_in[s] != 0 {
+          return Err(alloc::format!("tier {key}: slot {s} incoming {i:#04x} has a state no list backs ({:#04x})", rec_in[s]));
+        }
+        if i & OWN_IN_IMAGE != 0 && i & OWN_BUILD == 0 {
+          return Err(alloc::format!("tier {key}: slot {s} incoming {i:#04x}: IN_IMAGE without BUILD"));
+        }
+        if let (Some(a), Some(bb)) = (owner_class(b), owner_class(i))
+          && self.cfg.classes[bb] <= self.cfg.classes[a]
+        {
+          return Err(alloc::format!("tier {key}: slot {s} owner {b:#04x} incoming {i:#04x}: the incoming class is not slower"));
+        }
       }
     }
     Ok(())
@@ -2645,7 +2844,7 @@ impl DustCadenceState {
       fnv(&mut hsh, *key);
       fnv(&mut hsh, t.first_slot as u64 | (t.live_count as u64) << 32);
       fnv(&mut hsh, t.emitted);
-      for &b in &t.owner {
+      for &b in t.owner.iter().chain(t.incoming.iter()) {
         fnv(&mut hsh, b as u64);
       }
       for kl in &t.lists {
@@ -2739,6 +2938,18 @@ pub struct BudgetKnobs {
   pub n_level: u32,
   /// every knob at its ceiling and still over the budget (the verdict state)
   pub saturated: bool,
+}
+
+/// The rate rule's shape bound θ ([`RateInputs::shape_frac`]) from the budget's bound `knob`
+/// ([`BudgetKnobs::shape_frac`]) and the light tolerance's `light` ([`CadenceConfig::light_theta`]):
+/// the stricter of those that are on (0 = off); the CPU mirror and the GPU params take the same
+pub fn admission_shape(knob: f32, light: f32) -> f32 {
+  match (knob > 0.0, light > 0.0) {
+    (true, true) => knob.min(light),
+    (true, false) => knob,
+    (false, true) => light,
+    (false, false) => 0.0,
+  }
 }
 
 impl BudgetKnobs {
