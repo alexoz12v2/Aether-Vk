@@ -892,6 +892,24 @@ impl SimulationContext {
       .ok()
   }
 
+  /// The speck walk's spill header after the last walk pass (Vulkan only; see
+  /// `Device::download_dust_spill_header`): word 0 the spill slots claimed, 1 the view's slots,
+  /// 8 the stack limit (0 = the whole stack).
+  pub fn download_dust_spill_header(
+    &self,
+    pe: crate::gpu::PresentationEngineHandle,
+  ) -> Option<alloc::vec::Vec<u32>> {
+    use crate::gpu::WeakRenderFrontendExt;
+    let frontend = self.render_proxy.0.as_frontend()?;
+    frontend
+      .with_device(self.render_proxy.1, |device| {
+        let vulkan_device: &crate::gpu_backends::vulkan::device::Device =
+          device.as_any().downcast_ref().ok_or(crate::gpu_err!("not a Vulkan device"))?;
+        vulkan_device.download_dust_spill_header(pe)
+      })
+      .ok()
+  }
+
   /// The last measured GPU cost of presentation engine `pe`'s dust frame, per pass
   /// (`dust::DustGpuTimings`, read a few frames after it was recorded); `None` before the first,
   /// without a view, a device or timestamp queries. Cheap: no queue wait.

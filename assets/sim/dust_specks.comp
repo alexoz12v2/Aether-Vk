@@ -396,9 +396,10 @@ void dust_specks_map(float S[6], vec3 seg, out vec3 c0, out vec3 c1, out vec3 c2
     kappa = g > 0.0 ? slen / g : 0.0;
 }
 
-// M^-1 row-major (dust::specks::inv3): a(i, j) = column j's component i
-bool dust_specks_inv3(vec3 c0, vec3 c1, vec3 c2, out float mi[9]) {
-    for (int k = 0; k < 9; ++k) mi[k] = 0.0;
+// M^-1 by rows (dust::specks::inv3, row-major: mi0 = its elements 0..2): a(i, j) = column j's
+// component i (rows, not a float[9]: an array argument is copied and lives in local memory)
+bool dust_specks_inv3(vec3 c0, vec3 c1, vec3 c2, out vec3 mi0, out vec3 mi1, out vec3 mi2) {
+    mi0 = vec3(0.0); mi1 = vec3(0.0); mi2 = vec3(0.0);
     float a00 = c0.x, a01 = c1.x, a02 = c2.x;
     float a10 = c0.y, a11 = c1.y, a12 = c2.y;
     float a20 = c0.z, a21 = c1.z, a22 = c2.z;
@@ -408,9 +409,9 @@ bool dust_specks_inv3(vec3 c0, vec3 c1, vec3 c2, out float mi[9]) {
     float det = a00 * k00 + a01 * k01 + a02 * k02;
     if (!(abs(det) > 1e-30) || isinf(det) || isnan(det)) return false;
     float id = 1.0 / det;
-    mi[0] = k00 * id; mi[1] = (a02 * a21 - a01 * a22) * id; mi[2] = (a01 * a12 - a02 * a11) * id;
-    mi[3] = k01 * id; mi[4] = (a00 * a22 - a02 * a20) * id; mi[5] = (a02 * a10 - a00 * a12) * id;
-    mi[6] = k02 * id; mi[7] = (a01 * a20 - a00 * a21) * id; mi[8] = (a00 * a11 - a01 * a10) * id;
+    mi0 = vec3(k00 * id, (a02 * a21 - a01 * a22) * id, (a01 * a12 - a02 * a11) * id);
+    mi1 = vec3(k01 * id, (a00 * a22 - a02 * a20) * id, (a02 * a10 - a00 * a12) * id);
+    mi2 = vec3(k02 * id, (a01 * a20 - a00 * a21) * id, (a00 * a11 - a01 * a10) * id);
     return true;
 }
 
@@ -653,12 +654,18 @@ void dust_specks_cells_at(uint level, vec3 bLo, vec3 bHi, out uvec3 loI, out uve
 // probability cube; at the deepest level whose cells are as wide as the box, the <= 2 cells per
 // axis meeting it, each reached by its path from the root (stopping at an empty node or a leaf,
 // duplicates merged). The walk from them finds exactly the root walk's specks.
-uint dust_specks_start_nodes(SpeckNode root, float mi[9], vec3 yEye, float sigmaLo, float dMax,
-                             float kappa, vec2 rho, out SpeckNode starts[DUST_SPECKS_JUMP_STARTS]) {
-    if (!(sigmaLo > 0.0) || !(dMax > 0.0)) { starts[0] = root; return 1u; }
+// Lane 0 of the walk writes them straight into the workgroup's stack slots [0, n), the first
+// start on top (a private SpeckNode[DUST_SPECKS_JUMP_STARTS] was local memory)
+#ifdef DUST_SPECKS_WALK
+void specks_put(uint at, SpeckNode n);
+SpeckNode specks_at(uint at);
+uint dust_specks_start_nodes(SpeckNode root, vec3 mi0, vec3 mi1, vec3 mi2, vec3 yEye, float sigmaLo, float dMax,
+                             float kappa, vec2 rho) {
+    if (!(sigmaLo > 0.0) || !(dMax > 0.0)) { specks_put(0u, root); return 1u; }
     vec3 bLo, bHi;
     for (int k = 0; k < 3; ++k) {
-        float r0 = mi[3 * k], r1 = mi[3 * k + 1], r2 = mi[3 * k + 2];
+        vec3 row = k == 0 ? mi0 : (k == 1 ? mi1 : mi2);
+        float r0 = row.x, r1 = row.y, r2 = row.z;
         float h0 = dMax * sqrt(r0 * r0 + r1 * r1 + r2 * r2);
         float y = yEye[k];
         float h = h0 + 1.0e-4 * (abs(y) + h0) + DUST_SPECKS_XI_TOL * (1.0 + abs(y));
@@ -709,13 +716,23 @@ uint dust_specks_start_nodes(SpeckNode root, float mi[9], vec3 yEye, float sigma
         }
         if (node.mant == 0u) continue;
         bool dup = false;
-        for (uint j = 0u; j < n; ++j) dup = dup || (starts[j].level == node.level && starts[j].lo == node.lo);
+        for (uint j = 0u; j < n; ++j) {
+            SpeckNode s = specks_at(j);
+            dup = dup || (s.level == node.level && s.lo == node.lo);
+        }
         if (dup) continue;
-        starts[n] = node;
+        specks_put(n, node);
         n++;
+    }
+    // the push order (the first start on top): slots [0, n) reversed
+    for (uint j = 0u; j < n / 2u; ++j) {
+        SpeckNode a = specks_at(j), b = specks_at(n - 1u - j);
+        specks_put(j, b);
+        specks_put(n - 1u - j, a);
     }
     return n;
 }
+#endif
 
 #ifdef DUST_SPECKS_WALK
 // the workgroup's stack: nodes packed in 6 words (lo xyz, mant, hash, level | inside << 8 |
@@ -756,7 +773,7 @@ SpeckNode specks_at(uint at) {
 
 void main() {
     // the moments every dust_common function reads by index (dust_mom.m[mi])
-    dust_mom = pc.moments;
+    dust_mom_addr = uvec2(pc.moments);
 #ifdef DUST_SPECKS_WALK
     // a workgroup per (cluster, bin), dispatched in two dimensions: the x count is at most the
     // baseline's 65 535 (Vulkan's required maxComputeWorkGroupCount; Mali, Apple, Intel report it)
@@ -865,18 +882,21 @@ void main() {
 #ifdef DUST_SPECKS_WALK
     // the eye in coordinate space and the bound of M's smallest singular value (M: the coordinate map)
     vec3 yEye = vec3(0.0); float sigmaLo = 0.0; vec3 rowN = vec3(0.0);
-    float minv[9];
-    if (dust_specks_inv3(c0, c1, c2, minv)) {
+    vec3 mi0, mi1, mi2;
+    if (dust_specks_inv3(c0, c1, c2, mi0, mi1, mi2)) {
+        // the Frobenius norm^2 in the element order (row-major, from 0)
         float fro2 = 0.0;
-        for (int k = 0; k < 9; ++k) fro2 += minv[k] * minv[k];
+        fro2 += mi0.x * mi0.x; fro2 += mi0.y * mi0.y; fro2 += mi0.z * mi0.z;
+        fro2 += mi1.x * mi1.x; fro2 += mi1.y * mi1.y; fro2 += mi1.z * mi1.z;
+        fro2 += mi2.x * mi2.x; fro2 += mi2.y * mi2.y; fro2 += mi2.z * mi2.z;
         sigmaLo = 1.0 / sqrt(fro2);
-        rowN = vec3(sqrt(minv[0] * minv[0] + minv[1] * minv[1] + minv[2] * minv[2]),
-                    sqrt(minv[3] * minv[3] + minv[4] * minv[4] + minv[5] * minv[5]),
-                    sqrt(minv[6] * minv[6] + minv[7] * minv[7] + minv[8] * minv[8]));
+        rowN = vec3(sqrt(mi0.x * mi0.x + mi0.y * mi0.y + mi0.z * mi0.z),
+                    sqrt(mi1.x * mi1.x + mi1.y * mi1.y + mi1.z * mi1.z),
+                    sqrt(mi2.x * mi2.x + mi2.y * mi2.y + mi2.z * mi2.z));
         vec3 dd = -me;
-        yEye = vec3(minv[0] * dd.x + minv[1] * dd.y + minv[2] * dd.z,
-                    minv[3] * dd.x + minv[4] * dd.y + minv[5] * dd.z,
-                    minv[6] * dd.x + minv[7] * dd.y + minv[8] * dd.z);
+        yEye = vec3(mi0.x * dd.x + mi0.y * dd.y + mi0.z * dd.z,
+                    mi1.x * dd.x + mi1.y * dd.y + mi1.z * dd.z,
+                    mi2.x * dd.x + mi2.y * dd.y + mi2.z * dd.z);
     }
     // the whole bin against the shell
     if (!dust_specks_node_meets(c0, c1, c2, colNorm, kappa, rho, me, vec3(0.0), vec3(1.0),
@@ -903,21 +923,24 @@ void main() {
     // did (an overflowing stack truncates the walk, counted with the caps)
     SpeckNode root;
     root.level = 0u; root.lo = uvec3(0u); root.mant = cq.x; root.exp = cq.y; root.hash = rootHash; root.inside = false;
-    SpeckNode starts[DUST_SPECKS_JUMP_STARTS];
-    uint nStarts = dust_specks_start_nodes(root, minv, yEye, sigmaLo, dMax, kappa, rho, starts);
     if (lane == 0u) {
-        s_top = 0u; s_nodes = 0u; s_acc = 0u; s_truncated = 0u;
+        s_nodes = 0u; s_acc = 0u; s_truncated = 0u;
         s_spill_slot = 0xFFFFFFFFu; s_spill_count = 0u;
-        for (uint k = nStarts; k > 0u; --k) { specks_push(starts[k - 1u]); }
+        s_top = dust_specks_start_nodes(root, mi0, mi1, mi2, yEye, sigmaLo, dMax, kappa, rho);
     }
     barrier();
     uint spillBase = dust_spill_base(pc.pyramid);
+    // the stack's limit in nodes (spill header word 8, a test hook forcing the spill; 0 = the
+    // whole stack) and the nodes a spill keeps: uniform over the workgroup
+    uint stackLimit = pc.pyramid.v[spillBase + 8u];
+    stackLimit = stackLimit == 0u ? uint(DUST_SPECKS_WG_STACK) : min(stackLimit, uint(DUST_SPECKS_WG_STACK));
+    uint stackKeep = stackLimit / 2u;
     for (;;) {
         // (s_top, s_truncated, the spill words as the barrier left them: uniform over the workgroup)
         if (s_truncated != 0u) break;
         // the shared stack is dry: take the newest spilled nodes back
         if (s_top == 0u && s_spill_count > 0u) {
-            uint n = min(s_spill_count, uint(DUST_SPECKS_WG_KEEP));
+            uint n = min(s_spill_count, stackKeep);
             uint from = s_spill_count - n;
             uint slotBase = spillBase + DUST_SPILL_HEADER_WORDS + s_spill_slot * DUST_SPILL_NODES * DUST_SPILL_NODE_WORDS;
             for (uint k = lane; k < n; k += uint(DUST_SPECKS_WG_LANES)) {
@@ -932,8 +955,8 @@ void main() {
         if (top == 0u) break;
         uint take = min(top, uint(DUST_SPECKS_WG_LANES));
         // a step may push twice what it pops: spill the oldest nodes first when it could overflow
-        if (top - take + 2u * take > DUST_SPECKS_WG_STACK) {
-            uint keep = uint(DUST_SPECKS_WG_KEEP);
+        if (top - take + 2u * take > stackLimit) {
+            uint keep = stackKeep;
             uint move = top - keep;
             if (lane == 0u && s_spill_slot == 0xFFFFFFFFu) {
                 uint slot = atomicAdd(pc.pyramid.v[spillBase], 1u);
@@ -951,22 +974,19 @@ void main() {
                 uint src = k * DUST_SPECKS_NODE_WORDS, dst = slotBase + (s_spill_count + k) * DUST_SPILL_NODE_WORDS;
                 for (uint w = 0u; w < DUST_SPECKS_NODE_WORDS; ++w) pc.pyramid.v[dst + w] = s_stack[src + w];
             }
-            // the newest `keep` nodes to the bottom (each lane carries its share through registers)
-            uint mine[(DUST_SPECKS_WG_STACK / 2u + DUST_SPECKS_WG_LANES - 1u) / DUST_SPECKS_WG_LANES * DUST_SPECKS_NODE_WORDS];
-            uint cnt = 0u;
-            for (uint k = lane; k < keep; k += uint(DUST_SPECKS_WG_LANES)) {
-                uint src = (move + k) * DUST_SPECKS_NODE_WORDS;
-                for (uint w = 0u; w < DUST_SPECKS_NODE_WORDS; ++w) mine[cnt * DUST_SPECKS_NODE_WORDS + w] = s_stack[src + w];
-                cnt++;
-            }
+            // the newest `keep` nodes to the bottom, in place, in rounds of `move` nodes: within a
+            // round source and destination do not meet, a round writes the previous round's
+            // (already read) source (a per-lane staging array was local memory). move > the stack
+            // less the lanes and keep: 2 rounds
             barrier();
-            cnt = 0u;
-            for (uint k = lane; k < keep; k += uint(DUST_SPECKS_WG_LANES)) {
-                uint dst = k * DUST_SPECKS_NODE_WORDS;
-                for (uint w = 0u; w < DUST_SPECKS_NODE_WORDS; ++w) s_stack[dst + w] = mine[cnt * DUST_SPECKS_NODE_WORDS + w];
-                cnt++;
+            for (uint done = 0u; done < keep; done += move) {
+                uint cnt = min(move, keep - done);
+                for (uint k = lane; k < cnt; k += uint(DUST_SPECKS_WG_LANES)) {
+                    uint src = (move + done + k) * DUST_SPECKS_NODE_WORDS, dst = (done + k) * DUST_SPECKS_NODE_WORDS;
+                    for (uint w = 0u; w < DUST_SPECKS_NODE_WORDS; ++w) s_stack[dst + w] = s_stack[src + w];
+                }
+                barrier();
             }
-            barrier();
             if (lane == 0u) { s_top = keep; s_spill_count += move; }
             barrier();
             top = keep;

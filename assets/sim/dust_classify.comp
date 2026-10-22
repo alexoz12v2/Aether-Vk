@@ -69,7 +69,7 @@ void main() {
     uint tb = DUST_CADP_TIER0 + DUST_CADP_TIER_WORDS * t;
     uint rb = prm.v[tb];
     uint cap = prm.v[tb + 1u];
-    dust_mom = pc.moments;
+    dust_mom_addr = uvec2(pc.moments);
     vec3 eye = pc.eyeLocal.xyz;
 
     if (mode == DUST_CADM_CLASSIFY) {

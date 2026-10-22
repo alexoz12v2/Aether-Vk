@@ -38,7 +38,7 @@ void main() {
     uint at = base + DUST_QUEUE_HEADER_WORDS + r * DUST_QUEUE_RECORD_WORDS;
     uint w0 = pc.pyramid.v[at];
     // the phase table rides in the header; the timing probe bits (plain_add) too
-    dust_phot_lut = pc.pyramid;
+    dust_phot_lut_addr = uvec2(pc.pyramid);
     dust_pyr_split_word = pc.pyramid.v[DUST_PYR_SPLIT_DEPTH];
     if ((w0 >> 30u) == DUST_QUEUE_EWA) {
         uint level = w0 & 0xFFu;

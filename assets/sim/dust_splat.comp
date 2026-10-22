@@ -120,7 +120,7 @@ void dust_splat_subpacket(uint i, uint sub) {
     dust_rec_cluster = i;
     dust_phot_sun = dust_sun_dir(mi);
     dust_phot_rh = dust_helio_au(mi);
-    dust_phot_lut = pc.pyramid;
+    dust_phot_lut_addr = uvec2(pc.pyramid);
     vec3 stream = vec3(float(pc.color & 0xFFu), float((pc.color >> 8u) & 0xFFu), float((pc.color >> 16u) & 0xFFu)) / 255.0;
     vec3 color = dust_age_color(stream, age, pc.eyeLocal.w);
     // a polyline below a pixel is one pooled packet (dust_polyline_merged), uniform along the time
@@ -384,7 +384,7 @@ void main() {
         i = listed ? e : 0u;
     }
     // the moments every dust_common function reads by index (dust_mom.m[mi])
-    dust_mom = pc.moments;
+    dust_mom_addr = uvec2(pc.moments);
     // (a list is bounded by its chunks' range, not by the tier's live count: liveCount keeps its
     // meaning for the predecessor rule)
     bool live = listed && kr < end && (listAddr != uvec2(0u) || kr < pc.liveCount) && dust_mom.m[i].mean_flux.w > 0.0;

@@ -476,6 +476,9 @@ pub struct DustViewHost {
   /// the walk pass records every speck it draws ([`Device::dust_set_specks_trace`],
   /// `dust::DUST_SPECKS_TRACE_*`; a test hook)
   pub specks_trace: bool,
+  /// the walk's stack limit in nodes (spill header word 8; a test hook forcing the spill,
+  /// [`Device::dust_set_specks_stack_limit`]; 0 = the whole `DUST_SPECKS_WG_STACK`)
+  pub specks_stack_limit: u32,
   /// the in-frame gates off for this view (a test hook, [`Device::dust_set_frame_gates`])
   pub frame_gates_off: bool,
   /// the budget loop (temporal reuse step 5, `dust::cadence::BudgetLoop`): `Some` while the view
@@ -918,6 +921,7 @@ impl Default for DustViewHost {
       lod_px: None,
       volume_bias_override: None,
       specks_trace: false,
+      specks_stack_limit: 0,
       frame_gates_off: false,
       drawn: None,
       budget: None,
@@ -2692,6 +2696,8 @@ impl Device {
     // previous tier's walk (its spill atomics) and before this tier's passes.
     let spill_offset = (view.queue_word() + dust::dust_queue_offsets(view.vqueue_records).spill) as u64 * 4;
     let trace_cap = if view.host.lock().specks_trace { dust::DUST_SPECKS_TRACE_CAPACITY } else { 0 };
+    // word 8: the walk's stack limit (a test hook; 0 = the whole stack)
+    let stack_limit = view.host.lock().specks_stack_limit;
     // the cadence's owner bytes (SHOWN slots are not walked; 0: no cadence)
     let owner = self.cad_owner_address(mgr, pe, id, ring_base);
     let to_update = vk::MemoryBarrier2::default()
@@ -2717,6 +2723,7 @@ impl Device {
           capacity.wrapping_sub(1),
           owner as u32,
           (owner >> 32) as u32,
+          stack_limit,
         ]),
       );
     }
@@ -3442,6 +3449,30 @@ impl Device {
     if let Some(view) = res.dust_manager.as_ref().and_then(|m| m.views.get(&pe)) {
       view.host.lock().specks_trace = on;
     }
+  }
+
+  /// `pe`'s walk passes hold their shared stack to `nodes` from the next frame on, spilling past
+  /// it (a test hook: the spill path at a scene's own depth; 0 = the whole stack, the default)
+  pub fn dust_set_specks_stack_limit(&self, pe: gpu::PresentationEngineHandle, nodes: u32) {
+    let res = self.res.read();
+    if let Some(view) = res.dust_manager.as_ref().and_then(|m| m.views.get(&pe)) {
+      view.host.lock().specks_stack_limit = nodes;
+    }
+  }
+
+  /// The speck walk's spill header after the last walk pass ([`dust::DUST_SPILL_HEADER_WORDS`]
+  /// words: 0 the slots claimed, 1 the view's slots, 2-3 the trace's capacity and count, 8 the
+  /// stack limit). GPU views only.
+  pub fn download_dust_spill_header(&self, pe: gpu::PresentationEngineHandle) -> GpuResult<alloc::vec::Vec<u32>> {
+    let (buffer, spill_offset) = {
+      let res = self.res.read();
+      let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
+      let view = mgr.views.get(&pe).ok_or(gpu_err!("dust view of PE {} absent", pe.0))?;
+      let pyramid = view.queue_pyramid()?;
+      let off = (view.queue_word() + dust::dust_queue_offsets(view.vqueue_records).spill) as u64 * 4;
+      (pyramid.buffer, off)
+    };
+    Ok(pod_vec(&self.dust_download_bytes(buffer, spill_offset, dust::DUST_SPILL_HEADER_WORDS as u64 * 4)?))
   }
 
   /// The specks the last frame's walk passes recorded (`(hash, dp)` in local metres from the eye;
