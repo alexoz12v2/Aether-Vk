@@ -1139,6 +1139,22 @@ pub fn packet_moments_in(
   log2cap: u32,
   frame: &DustFrame,
 ) -> (DustRenderCluster, DustMoments) {
+  packet_moments_detail(c, slot, log2cap, frame, 1)
+}
+
+/// [`packet_moments_in`] at a size-polyline edge `stride` (1, 2 or 4: the trajectory detail,
+/// [`super::propagate_edge_stride`]): every `stride`-th edge is solved, the others are placed
+/// linearly between their solved neighbours (`e0 + (e1 − e0)·t`, the GPU's expression); the
+/// speed factors are exact for every edge (linear in `j` anyway). `1 + 3 + SIZE_BINS / stride + 1`
+/// Kepler solves. Mirror of `dust_propagate.comp`.
+pub fn packet_moments_detail(
+  c: &DustCluster,
+  slot: u32,
+  log2cap: u32,
+  frame: &DustFrame,
+  stride: u32,
+) -> (DustRenderCluster, DustMoments) {
+  let stride = if stride == 2 || stride == 4 { stride } else { 1 };
   let rc = super::evaluate_cluster_in(c, slot, log2cap, frame);
   if !(rc.age_id_dbeta_flux[3] > 0.0) {
     return (rc, DustMoments::culled());
@@ -1169,13 +1185,29 @@ pub fn packet_moments_in(
   let mut edges = [[0.0f32; 4]; SIZE_EDGES as usize];
   for (j, e) in edges.iter_mut().enumerate() {
     let sb = size_edge_sqrt_beta(beta, range, j as u32);
-    let beta_j = sb * sb;
     let factor = if sqrt_beta > 0.0 { sb / sqrt_beta } else { 1.0 };
-    let v_j = v0.add(&Df3::from_f32(scale3(eject, factor - 1.0)));
-    let mu_j = consts::SUN_MU.mul(two_sum_one_minus(beta_j));
-    let (r_j, _) = kepler::propagate(&r0, &v_j, mu_j, age);
-    let local = qrot(rot, r_j.sub(&ps).to_f32());
+    let local = if j as u32 % stride == 0 {
+      let beta_j = sb * sb;
+      let v_j = v0.add(&Df3::from_f32(scale3(eject, factor - 1.0)));
+      let mu_j = consts::SUN_MU.mul(two_sum_one_minus(beta_j));
+      let (r_j, _) = kepler::propagate(&r0, &v_j, mu_j, age);
+      qrot(rot, r_j.sub(&ps).to_f32())
+    } else {
+      [0.0; 3]
+    };
     *e = [local[0], local[1], local[2], factor];
+  }
+  // the skipped edges (stride > 1): linear between the solved neighbours, the GPU's expression
+  for j in 0..SIZE_EDGES as usize {
+    let r = j as u32 % stride;
+    if r == 0 {
+      continue;
+    }
+    let (j0, j1) = (j - r as usize, j - r as usize + stride as usize);
+    let t = r as f32 / stride as f32;
+    for i in 0..3 {
+      edges[j][i] = edges[j0][i] + (edges[j1][i] - edges[j0][i]) * t;
+    }
   }
   // the nucleus spin in the spare `w` lanes (the factors are linear in `j`: the first and last
   // edge keep theirs, `DustMoments::edge_factor`)

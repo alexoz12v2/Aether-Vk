@@ -1138,6 +1138,13 @@ fn gpu_dust_moments_match_reference() {
       0.801_783_73,
       2.0 * core::f64::consts::PI / 44_640.0,
     ];
+    // round 8 step D: the parity at every trajectory detail (edge stride 1, 2, 4), the mirror at
+    // the same stride; a changed detail bumps the generation; at a stride > 1 a skipped edge is
+    // the blend of its solved neighbours on the GPU too (the knob reached the shader)
+    let mut last_generation = 0u32;
+    for (detail, stride) in [(17u32, 1u32), (9, 2), (5, 4), (17, 1)] {
+      assert_eq!(device.dust_set_propagate_detail(detail), detail);
+      assert_eq!(device.dust_propagate_detail(), detail);
     for days in [0.5, 10.0, 400.0] {
       let frame = frame_after(days).with_spin(spin);
       let first_slot = batch.first_index & batch.ring_mask;
@@ -1147,10 +1154,39 @@ fn gpu_dust_moments_match_reference() {
         read_tier_records(device, moments, 0, first_slot, batch.count, batch.ring_mask);
       let generation = device.dust_propagate_generation(9007, 0).expect("propagated");
       assert!(generation > 0);
+      assert_ne!(generation, last_generation, "a new time or a new detail bumps the generation");
+      last_generation = generation;
       let mut worst = 0.0f32;
+      let mut blended = 0usize;
       for (i, gpu) in out.iter().enumerate() {
         let slot = (first_slot + i as u32) & batch.ring_mask;
-        let (_, cpu) = dust::packet_moments(&dust::emit_cluster(&batch, i as u32), slot, &frame);
+        let (_, cpu) = dust::packet_moments_detail(
+          &dust::emit_cluster(&batch, i as u32),
+          slot,
+          dust::RENDER_SLOT_BITS,
+          &frame,
+          stride,
+        );
+        if stride > 1 && cpu.flux() > 0.0 {
+          for k in 0..dust::SIZE_EDGES as usize {
+            let r = k as u32 % stride;
+            if r == 0 {
+              continue;
+            }
+            let (k0, k1) = (k - r as usize, k - r as usize + stride as usize);
+            let (e0, e1, e) = (gpu.edge(k0), gpu.edge(k1), gpu.edge(k));
+            let t = r as f32 / stride as f32;
+            for c in 0..3 {
+              let want = e0[c] + (e1[c] - e0[c]) * t;
+              assert!(
+                (e[c] - want).abs() <= 1e-5 * want.abs() + 1e-2,
+                "{days} d slot {slot} stride {stride}: edge {k}[{c}] gpu {} is not the blend {want}",
+                e[c]
+              );
+            }
+            blended += 1;
+          }
+        }
         if cpu.flux() > 0.0 {
           // the velocity lanes (the mean's heliocentric velocity, particle-system axes) and the
           // stamp: the GPU's generation, the CPU's 0
@@ -1224,8 +1260,13 @@ fn gpu_dust_moments_match_reference() {
           );
         }
       }
-      std::println!("[dust gpu] moments parity at {days} d: worst relative cov error {worst:.2e}");
+      if stride > 1 {
+        assert!(blended > 0, "{days} d stride {stride}: no skipped edge checked");
+      }
+      std::println!("[dust gpu] moments parity at {days} d, detail {detail} (stride {stride}): worst relative cov error {worst:.2e}, {blended} blended edges checked");
     }
+    }
+    assert_eq!(device.dust_set_propagate_detail(dust::DUST_PROPAGATE_DETAIL_DEFAULT), 17);
   });
 }
 

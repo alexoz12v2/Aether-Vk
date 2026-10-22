@@ -187,6 +187,40 @@ pub fn volume_detail_from_flags(flags: u32) -> u32 {
   (DUST_VOLUME_DETAIL_MAX >> ((flags >> DUST_FLAGS_VOLUME_DETAIL_SHIFT) & 7)).max(DUST_VOLUME_DETAIL_MIN)
 }
 
+/// Default "trajectory detail" (Settings › Particle rendering): the size-polyline edges the
+/// propagate solves exactly (a Kepler solve each), 17 = every edge ([`SIZE_EDGES`], today's
+/// image). 9 and 5 solve every second / fourth edge and place the others linearly between their
+/// solved neighbours ([`propagate_edge_stride`]): 21 → 13 → 9 solves per live cluster, the
+/// polyline straighter between the solved edges. Visual only; round 8 step D.
+pub const DUST_PROPAGATE_DETAIL_DEFAULT: u32 = SIZE_EDGES;
+/// The accepted trajectory details: 17, 9, 5 (the strides 1, 2, 4 of [`SIZE_BINS`])
+pub const DUST_PROPAGATE_DETAIL_STEPS: [u32; 3] = [SIZE_EDGES, SIZE_BINS / 2 + 1, SIZE_BINS / 4 + 1];
+pub const DUST_PROPAGATE_DETAIL_MIN: u32 = SIZE_BINS / 4 + 1;
+/// `DustPropagatePushConstants::skip[0]` bits 1–2: `log2(stride)` (bit 0 is the stamp skip).
+/// Mirror of `dust_propagate.comp`'s `stride`.
+pub const DUST_PROPAGATE_STRIDE_SHIFT: u32 = 1;
+
+/// Clamps a trajectory detail to the largest step `≤ v` of [`DUST_PROPAGATE_DETAIL_STEPS`] (below
+/// the smallest → the smallest): 17, 9 or 5
+pub fn clamp_propagate_detail(v: u32) -> u32 {
+  DUST_PROPAGATE_DETAIL_STEPS.iter().copied().find(|&s| v >= s).unwrap_or(DUST_PROPAGATE_DETAIL_MIN)
+}
+
+/// The edge stride of a trajectory detail (clamped first): `SIZE_BINS / (detail − 1)` = 1, 2 or 4
+pub fn propagate_edge_stride(detail: u32) -> u32 {
+  SIZE_BINS / (clamp_propagate_detail(detail) - 1)
+}
+
+/// The push constants' `skip[0]` bits of an edge stride (1, 2 or 4): `log2(stride) << 1`
+pub fn propagate_stride_bits(stride: u32) -> u32 {
+  stride.max(1).trailing_zeros().min(3) << DUST_PROPAGATE_STRIDE_SHIFT
+}
+
+/// The edge stride of a push constants' `skip[0]` word, the inverse of [`propagate_stride_bits`]
+pub fn propagate_stride_from_skip(skip0: u32) -> u32 {
+  1 << ((skip0 >> DUST_PROPAGATE_STRIDE_SHIFT) & 3)
+}
+
 /// Default "temporal reuse tolerance" (Settings › Particle rendering), in px: 0 = off, every
 /// frame drawn fresh (today's image). A value ε > 0 runs the cadence (`dust::cadence`): clusters
 /// whose on-screen motion over their class's window stays within ε px are reused from a class
@@ -1082,8 +1116,10 @@ pub struct DustPropagatePushConstants {
   pub ring_mask: u32,
   /// the host's propagate generation: the stamp written to the moments' `edges[12].w` (bits)
   pub generation: u32,
-  /// `[0]` 1 = leave a slot already stamped with `generation` as it is; `[1]` unused (std430
-  /// pads the `vec4` frame to a 16-byte boundary)
+  /// `[0]` bit 0: 1 = leave a slot already stamped with `generation` as it is; bits 1–2 the
+  /// size-polyline edge stride's log2 ([`propagate_stride_bits`], the trajectory detail);
+  /// `[1]` the cadence's propagate bitmask address, low word (std430 pads the `vec4` frame to a
+  /// 16-byte boundary)
   pub skip: [u32; 2],
   pub frame: DustFrame,
 }

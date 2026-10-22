@@ -40,6 +40,33 @@ public class ParticleRenderingViewTests
   }
 
   [AvaloniaFact]
+  public void PropagateDetailPicker_ShowsTheThreeSteps_AndFollowsTheViewModel()
+  {
+    var vm = new DesignSettingsTabViewModel();
+    var view = new SettingsTabView { DataContext = vm };
+    var window = new Window { Content = view, Width = 600, Height = 1600 };
+    window.Show();
+    var section = view.GetLogicalDescendants().OfType<Expander>().Single(e => e.Name == "ParticleRenderingSection");
+    section.IsExpanded = true;
+    Dispatcher.UIThread.RunJobs();
+
+    var picker = section.GetLogicalDescendants().OfType<ComboBox>().Single(c => c.Name == "PropagateDetailPicker");
+    Assert.Equal(3, picker.ItemCount);
+    Assert.Equal(0, picker.SelectedIndex);
+    Assert.Equal(17, vm.ParticleRendering.PropagateDetail);
+
+    picker.SelectedIndex = 1;
+    Dispatcher.UIThread.RunJobs();
+    Assert.Equal(9, vm.ParticleRendering.PropagateDetail);
+    Assert.Equal(16, vm.ParticleRendering.VolumeDetail);
+
+    vm.ParticleRendering.PropagateDetail = 5;
+    Dispatcher.UIThread.RunJobs();
+    Assert.Equal(2, picker.SelectedIndex);
+    window.Close();
+  }
+
+  [AvaloniaFact]
   public void ReuseTolerancePicker_ShowsTheSixSteps_AndFollowsTheViewModel()
   {
     var vm = new DesignSettingsTabViewModel();

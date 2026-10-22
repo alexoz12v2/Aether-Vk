@@ -27,8 +27,10 @@ layout(push_constant, std430) uniform PushConstants {
     uint liveCount;              // 28
     uint ringMask;               // 32
     uint generation;             // 36: the host's propagate generation (the stamp, edges[12].w)
-    uvec2 skip;                  // 40: x 1 = skip a slot stamped with `generation`; y the cadence's
-                                 //     propagate bitmask address, low word (0, 0 = every slot)
+    uvec2 skip;                  // 40: x bit 0: 1 = skip a slot stamped with `generation`, bits 1-2
+                                 //     log2 of the size-polyline edge stride (the trajectory detail,
+                                 //     dust::propagate_stride_bits); y the cadence's propagate
+                                 //     bitmask address, low word (0, 0 = every slot)
                                  //     (std430: the vec4 below is 16-aligned)
     vec4 ps_r_t_hi;              // 48: particle-system heliocentric position (m), w = t_now (s); df64 hi
     vec4 ps_r_t_lo;              // 64: ... low part
@@ -103,17 +105,39 @@ void main() {
             vec3 a0 = secant_v(r0, v0, e1 * sigmaLat, mu, age, r);
             vec3 a1 = secant_v(r0, v0, e2 * sigmaLat, mu, age, r);
             vec3 a2 = secant_v(r0, v0, e3 * sigmaRad, mu, age, r);
-            // the size polyline: every bin edge at its own beta and speed (v ~ s^-1/2)
+            // the size polyline: every bin edge at its own beta and speed (v ~ s^-1/2). The
+            // trajectory detail (round 8 step D, dust::propagate_edge_stride; pc.skip.x bits 1-2):
+            // every stride-th edge solved, the others placed linearly between their solved
+            // neighbours below; the speed factors exact for every edge (linear in k anyway).
+            // Constant indices: the loops unroll, the stride is uniform
             float sqrtBeta = sqrt(max(beta, 0.0));
             float range = dust_size_range_factor(C);
+            uint stride = 1u << ((pc.skip.x >> 1u) & 3u);
             for (uint k = 0u; k < DUST_SIZE_EDGES; ++k) {
                 float sb = dust_size_edge_sqrt_beta(beta, range, k);
-                float betaK = sb * sb;
                 float factor = sqrtBeta > 0.0 ? sb / sqrtBeta : 1.0;
-                Df3 vK = df3_add(v0, df3_from_f32(C.eject.xyz * (factor - 1.0)));
-                Df3 rK, vvK;
-                dust_kepler(r0, vK, df_mul(DF_SUN_MU, df_two_sum(1.0, -betaK)), age, rK, vvK);
-                M.edges[k] = vec4(dust_qrot(pc.rot_inv, df3_to_f32(df3_sub(rK, ps))), factor);
+                vec3 e = vec3(0.0);
+                if ((k & (stride - 1u)) == 0u) {
+                    float betaK = sb * sb;
+                    Df3 vK = df3_add(v0, df3_from_f32(C.eject.xyz * (factor - 1.0)));
+                    Df3 rK, vvK;
+                    dust_kepler(r0, vK, df_mul(DF_SUN_MU, df_two_sum(1.0, -betaK)), age, rK, vvK);
+                    e = dust_qrot(pc.rot_inv, df3_to_f32(df3_sub(rK, ps)));
+                }
+                M.edges[k] = vec4(e, factor);
+            }
+            if (stride == 2u) {
+                for (uint k = 1u; k < DUST_SIZE_BINS; k += 2u) {
+                    vec3 e0 = M.edges[k - 1u].xyz, e1 = M.edges[k + 1u].xyz;
+                    M.edges[k].xyz = e0 + (e1 - e0) * 0.5;
+                }
+            } else if (stride == 4u) {
+                for (uint k0 = 0u; k0 < DUST_SIZE_BINS; k0 += 4u) {
+                    vec3 e0 = M.edges[k0].xyz, e1 = M.edges[k0 + 4u].xyz;
+                    M.edges[k0 + 1u].xyz = e0 + (e1 - e0) * 0.25;
+                    M.edges[k0 + 2u].xyz = e0 + (e1 - e0) * 0.5;
+                    M.edges[k0 + 3u].xyz = e0 + (e1 - e0) * 0.75;
+                }
             }
             // the nucleus spin in the spare w lanes (the factors are linear in k: edges 0 and 16
             // keep theirs, dust_edge_factor)

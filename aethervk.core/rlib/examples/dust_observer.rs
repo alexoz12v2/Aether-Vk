@@ -2138,6 +2138,12 @@ fn main() {
     let got = ctx.set_dust_volume_detail(scene_id, v);
     log_line(&format!("[observer] volume detail {v} requested, set {got:?}"));
   }
+  // lab knob: the scene's trajectory detail (solved size-polyline edges 17 / 9 / 5,
+  // `set_dust_propagate_detail`; round 8 step D)
+  if let Some(v) = std::env::var("OBSERVER_PROPAGATE_DETAIL").ok().and_then(|v| v.trim().parse::<u32>().ok()) {
+    let got = ctx.set_dust_propagate_detail(scene_id, v);
+    log_line(&format!("[observer] trajectory detail {v} requested, set {got:?}"));
+  }
 
   // presentation engine + camera
   let pe = ctx
