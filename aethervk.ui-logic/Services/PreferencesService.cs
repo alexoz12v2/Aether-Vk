@@ -22,6 +22,10 @@ public sealed class PreferencesFile
   public List<BindingDto>? InputBindings { get; set; }
   /// <summary>Dust volume detail (Settings › Particle rendering): 16, 8, 4, 2 or 1; missing = 16.</summary>
   public int? DustVolumeDetail { get; set; }
+  /// <summary>Dust trajectory detail (Settings › Particle rendering): 17, 9 or 5 solved size
+  /// edges; missing = 17.</summary>
+  [JsonPropertyName("dust_propagate_detail")]
+  public int? DustPropagateDetail { get; set; }
   /// <summary>Dust temporal reuse tolerance in pixels (Settings › Particle rendering): 0 (off), 1, 2,
   /// 4, 8 or 16; missing = 0.</summary>
   [JsonPropertyName("dust_reuse_px")]
@@ -88,6 +92,11 @@ public sealed class PreferencesService
   public int DustVolumeDetail =>
     ParticleRenderingViewModel.ClampVolumeDetail(_file.DustVolumeDetail ?? ParticleRenderingViewModel.VolumeDetailDefault);
 
+  /// <summary>The dust trajectory detail, clamped (<see cref="ParticleRenderingViewModel.ClampPropagateDetail"/>);
+  /// 17 when the file has none.</summary>
+  public int DustPropagateDetail =>
+    ParticleRenderingViewModel.ClampPropagateDetail(_file.DustPropagateDetail ?? ParticleRenderingViewModel.PropagateDetailDefault);
+
   /// <summary>The dust temporal reuse tolerance in pixels, clamped
   /// (<see cref="ParticleRenderingViewModel.ClampReuseTolerance"/>); 0 (off) when the file has none.</summary>
   public int DustReuseTolerance =>
@@ -145,6 +154,12 @@ public sealed class PreferencesService
   public void SetDustVolumeDetail(int detail)
   {
     _file.DustVolumeDetail = ParticleRenderingViewModel.ClampVolumeDetail(detail);
+    Save();
+  }
+
+  public void SetDustPropagateDetail(int detail)
+  {
+    _file.DustPropagateDetail = ParticleRenderingViewModel.ClampPropagateDetail(detail);
     Save();
   }
 

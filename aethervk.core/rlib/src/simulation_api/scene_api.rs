@@ -700,6 +700,20 @@ impl SimulationContext {
     Some(d)
   }
 
+  /// Sets the dust trajectory detail ("Trajectory detail": the size-polyline edges the propagate
+  /// solves exactly, 17 = every edge, the default; 9 and 5 interpolate the rest), clamped to the
+  /// largest step `≤ detail` (`dust::clamp_propagate_detail`). Returns the value applied, or
+  /// `None` without the scene. Visual only: picked up by the next rendered frame.
+  pub fn set_dust_propagate_detail(&self, scene_id: u64, detail: u32) -> Option<u32> {
+    let scene_arc = self.scenes.read().get_scene(scene_id)?;
+    let d = crate::scene::dust::clamp_propagate_detail(detail);
+    scene_arc
+      .read()
+      .dust_propagate_detail
+      .store(d, core::sync::atomic::Ordering::Relaxed);
+    Some(d)
+  }
+
   /// Sets the dust temporal reuse tolerance in px ("Temporal reuse tolerance": 0 = off, every
   /// frame drawn fresh, the default; ε > 0 reuses clusters whose on-screen motion stays within ε
   /// px), clamped by `dust::clamp_reuse_px`. Returns the value applied, or `None` without the

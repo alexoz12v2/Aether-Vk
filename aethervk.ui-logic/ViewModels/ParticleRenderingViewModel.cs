@@ -10,6 +10,10 @@ namespace AetherVk.Logic.ViewModels;
 /// <b>Volume detail</b>: the pieces a volumetric dust packet is drawn with, 16 (every piece, the
 /// default: the reference image) down to 1; lower is faster and slightly coarser. Visual only.
 ///
+/// <b>Trajectory detail</b>: the size-polyline edges the dust propagate solves exactly, 17 (every
+/// edge, the default: the reference image), 9 or 5 (the rest interpolated between the solved
+/// ones; faster, the dust tails a little straighter). Visual only.
+///
 /// <b>Temporal reuse tolerance</b>: dust that moved less than this many pixels since it was drawn
 /// is reused instead of drawn again; Off (0, the default) draws every frame fresh, 1 up to 16 px
 /// are faster but can smear moving dust. Visual only.
@@ -36,6 +40,24 @@ public partial class ParticleRenderingViewModel : ObservableObject
     while (p < VolumeDetailMax && p * 2 <= v)
       p *= 2;
     return p;
+  }
+
+  /// <summary>Default trajectory detail (every size edge solved: today's image).</summary>
+  public const int PropagateDetailDefault = 17;
+  public const int PropagateDetailMin = 5;
+  public const int PropagateDetailMax = 17;
+
+  /// <summary>The trajectory picker's steps, finest first (17, 9, 5 solved edges).</summary>
+  public static readonly IReadOnlyList<int> PropagateDetailSteps = new[] { 17, 9, 5 };
+
+  /// <summary>The largest step of <see cref="PropagateDetailSteps"/> ≤ <paramref name="v"/>
+  /// (below the smallest → 5); mirror of <c>dust::clamp_propagate_detail</c>.</summary>
+  public static int ClampPropagateDetail(int v)
+  {
+    foreach (int s in PropagateDetailSteps)
+      if (v >= s)
+        return s;
+    return PropagateDetailMin;
   }
 
   /// <summary>Default reuse tolerance (off: every frame drawn fresh, today's image).</summary>
@@ -89,6 +111,32 @@ public partial class ParticleRenderingViewModel : ObservableObject
     }
   }
 
+  /// <summary>Trajectory detail: 17, 9 or 5 (other values clamp to a step).</summary>
+  [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(PropagateDetailIndex))]
+  private int _propagateDetail = PropagateDetailDefault;
+
+  /// <summary>The trajectory picker's items (<see cref="PropagateDetailSteps"/>).</summary>
+  public IReadOnlyList<int> PropagateDetailOptions => PropagateDetailSteps;
+
+  /// <summary>Picker index over <see cref="PropagateDetailSteps"/> (a negative index, a cleared
+  /// picker, is ignored).</summary>
+  public int PropagateDetailIndex
+  {
+    get
+    {
+      for (int i = 0; i < PropagateDetailSteps.Count; i++)
+        if (PropagateDetailSteps[i] == PropagateDetail)
+          return i;
+      return 0;
+    }
+    set
+    {
+      if (value >= 0 && value < PropagateDetailSteps.Count)
+        PropagateDetail = PropagateDetailSteps[value];
+    }
+  }
+
   /// <summary>Temporal reuse tolerance in pixels: 0 (off), 1, 2, 4, 8 or 16 (other values clamp
   /// to a step).</summary>
   [ObservableProperty]
@@ -138,6 +186,7 @@ public partial class ParticleRenderingViewModel : ObservableObject
     // the runtime already has the stored value (App startup): no push
     _suppressDispatch = true;
     VolumeDetail = preferences?.DustVolumeDetail ?? VolumeDetailDefault;
+    PropagateDetail = preferences?.DustPropagateDetail ?? PropagateDetailDefault;
     ReuseTolerance = preferences?.DustReuseTolerance ?? ReuseToleranceDefault;
     _suppressDispatch = false;
   }
@@ -154,6 +203,20 @@ public partial class ParticleRenderingViewModel : ObservableObject
       return;
     _preferences?.SetDustVolumeDetail(d);
     _runtimeService?.SetDustVolumeDetail(d);
+  }
+
+  partial void OnPropagateDetailChanged(int value)
+  {
+    int d = ClampPropagateDetail(value);
+    if (d != value)
+    {
+      PropagateDetail = d;
+      return;
+    }
+    if (_suppressDispatch)
+      return;
+    _preferences?.SetDustPropagateDetail(d);
+    _runtimeService?.SetDustPropagateDetail(d);
   }
 
   partial void OnReuseToleranceChanged(int value)

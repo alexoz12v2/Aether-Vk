@@ -1124,6 +1124,80 @@ fn photometry_helpers_are_consistent() {
   );
 }
 
+/// Round 8 step D, the trajectory detail: the clamp (17 / 9 / 5), the edge stride (1 / 2 / 4) and
+/// the push constants' bits round-trip
+#[test]
+fn propagate_detail_clamps_to_its_steps_and_the_stride_bits_round_trip() {
+  for (v, want) in [(0, 5), (1, 5), (5, 5), (8, 5), (9, 9), (16, 9), (17, 17), (100, 17), (u32::MAX, 17)] {
+    assert_eq!(clamp_propagate_detail(v), want, "clamp {v}");
+  }
+  assert_eq!(DUST_PROPAGATE_DETAIL_DEFAULT, SIZE_EDGES);
+  assert_eq!(DUST_PROPAGATE_DETAIL_STEPS, [17, 9, 5]);
+  for (detail, stride) in [(17, 1), (9, 2), (5, 4)] {
+    assert_eq!(propagate_edge_stride(detail), stride);
+    assert_eq!((detail - 1) * stride, SIZE_BINS);
+    let bits = propagate_stride_bits(stride);
+    assert_eq!(bits & 1, 0, "bit 0 is the stamp skip");
+    assert_eq!(propagate_stride_from_skip(bits), stride);
+    assert_eq!(propagate_stride_from_skip(bits | 1), stride, "with the stamp skip set");
+  }
+  assert_eq!(propagate_stride_bits(1), 0, "stride 1 leaves the word as before the knob");
+}
+
+/// The CPU mirror at a stride: the solved edges are bit-equal to the full solve's, the skipped
+/// edges are the linear blend of their solved neighbours (the GPU's expression), the factors and
+/// every other moment field are unchanged; the mean / cov / spin / sun lanes do not depend on it
+#[test]
+fn packet_moments_detail_interpolates_the_skipped_edges() {
+  for &r_au in &[1.2f64, 3.0] {
+    let r = [r_au * AU_M, 0.0, 0.0];
+    let v = [0.0, (SUN_MU_M3_S2 / norm(r)).sqrt(), 0.0];
+    let mut b = test_batch(4, 0.0);
+    b.set_comet(r, v, T_START, 0.0);
+    for j in 0..4u32 {
+      let c = emit_cluster(&b, j);
+      for &age in &[3600.0f64, 30.0 * 86400.0] {
+        let (rc, _) = kepler::propagate_f64(r, v, SUN_MU_M3_S2, age);
+        let frame = DustFrame::new(rc, T_START + age, [0.0, 0.0, 0.0, 1.0], 1.0e9)
+          .with_spin([0.0, 0.6, 0.8, 1e-4]);
+        let (r1, m1) = packet_moments_detail(&c, j, RENDER_SLOT_BITS, &frame, 1);
+        assert!(m1.flux() > 0.0, "culled at {r_au} AU, age {age}");
+        let (r1b, m1b) = packet_moments_in(&c, j, RENDER_SLOT_BITS, &frame);
+        assert_eq!((r1, m1), (r1b, m1b), "stride 1 is the full solve");
+        // a solved edge is not the blend of its neighbours (the polyline is curved): the test
+        // below would pass trivially otherwise
+        let mut curved = false;
+        for stride in [2u32, 4] {
+          let (rs, ms) = packet_moments_detail(&c, j, RENDER_SLOT_BITS, &frame, stride);
+          assert_eq!(rs, r1, "the render cluster at stride {stride}");
+          assert_eq!(ms.mean_flux, m1.mean_flux, "mean / flux at stride {stride}");
+          assert_eq!(ms.cov_a, m1.cov_a);
+          assert_eq!(ms.cov_b_age_id, m1.cov_b_age_id);
+          for k in 0..SIZE_EDGES as usize {
+            assert_eq!(ms.edges[k][3], m1.edges[k][3], "factor {k} at stride {stride}");
+            let r = k as u32 % stride;
+            if r == 0 {
+              assert_eq!(ms.edge(k), m1.edge(k), "solved edge {k} at stride {stride}");
+            } else {
+              let (k0, k1) = (k - r as usize, k - r as usize + stride as usize);
+              let t = r as f32 / stride as f32;
+              let (e0, e1) = (m1.edge(k0), m1.edge(k1));
+              for i in 0..3 {
+                assert_eq!(ms.edge(k)[i], e0[i] + (e1[i] - e0[i]) * t, "blended edge {k}[{i}] at stride {stride}");
+              }
+              let dev = norm3f(sub3f(m1.edge(k), ms.edge(k)));
+              if dev > 1e-3 * norm3f(sub3f(e1, e0)) {
+                curved = true;
+              }
+            }
+          }
+        }
+        assert!(curved, "{r_au} AU age {age}: no skipped edge moved by the blend (a straight polyline?)");
+      }
+    }
+  }
+}
+
 /// The moments carry each cluster's heliocentric distance and Sun direction, and the rendered
 /// radiance falls as `r_h⁻²`: one cluster on circular orbits at 1.2, 2, 3 and 5 AU, seen with the
 /// eye towards the Sun (α = 0), gives Σ image ∝ r_h⁻² within 2 % (the fixed-point unit is the

@@ -1380,6 +1380,10 @@ pub struct SceneContext {
   /// `SimulationContext::set_dust_volume_detail` ("Volume detail" setting,
   /// `AETHERVK_DUST_VOLUME_DETAIL` default override)
   pub dust_volume_detail: Arc<core::sync::atomic::AtomicU32>,
+  /// dust trajectory detail (solved size-polyline edges 17 / 9 / 5, `dust::clamp_propagate_detail`),
+  /// see `SimulationContext::set_dust_propagate_detail` ("Trajectory detail" setting,
+  /// `AETHERVK_DUST_PROPAGATE_DETAIL` default override)
+  pub dust_propagate_detail: Arc<core::sync::atomic::AtomicU32>,
   /// dust temporal reuse tolerance in px (0 = off, `dust::clamp_reuse_px`), see
   /// `SimulationContext::set_dust_reuse_px` ("Temporal reuse tolerance" setting,
   /// `AETHERVK_DUST_REUSE_PX` default override)
@@ -1491,6 +1495,12 @@ impl SceneContext {
           .and_then(|v| v.trim().parse::<u32>().ok())
           .map(crate::scene::dust::clamp_volume_detail)
           .unwrap_or(crate::scene::dust::DUST_VOLUME_DETAIL_DEFAULT),
+      )),
+      dust_propagate_detail: Arc::new(core::sync::atomic::AtomicU32::new(
+        aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_PROPAGATE_DETAIL")
+          .and_then(|v| v.trim().parse::<u32>().ok())
+          .map(crate::scene::dust::clamp_propagate_detail)
+          .unwrap_or(crate::scene::dust::DUST_PROPAGATE_DETAIL_DEFAULT),
       )),
       dust_reuse_px: Arc::new(core::sync::atomic::AtomicU32::new(crate::scene::dust::dust_reuse_px_default())),
       dust_view_flags: Arc::new(core::sync::atomic::AtomicU32::new(

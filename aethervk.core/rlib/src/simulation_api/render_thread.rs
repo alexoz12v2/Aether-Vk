@@ -383,6 +383,7 @@ fn process_command(
               // other SceneContext fields, so releasing the guard here is safe.
               let mut dust_softening = crate::scene::dust::DUST_SOFTENING_DEFAULT;
               let mut dust_volume_detail = crate::scene::dust::DUST_VOLUME_DETAIL_DEFAULT;
+              let mut dust_propagate_detail = crate::scene::dust::DUST_PROPAGATE_DETAIL_DEFAULT;
               let mut dust_reuse_px = crate::scene::dust::DUST_REUSE_PX_DEFAULT;
               let mut dust_view_flags = 0u32;
               let mut dust_flow = crate::scene::dust::DustFlowClock::default();
@@ -417,6 +418,8 @@ fn process_command(
                   scene_context_read.dust_view_flags.load(core::sync::atomic::Ordering::Relaxed);
                 dust_volume_detail =
                   scene_context_read.dust_volume_detail.load(core::sync::atomic::Ordering::Relaxed);
+                dust_propagate_detail =
+                  scene_context_read.dust_propagate_detail.load(core::sync::atomic::Ordering::Relaxed);
                 dust_reuse_px = scene_context_read.dust_reuse_px.load(core::sync::atomic::Ordering::Relaxed);
                 // flow: advances while the sim runs, held on pause (identical paused frames)
                 {
@@ -460,6 +463,7 @@ fn process_command(
                 })?;
               render_scene.dust_softening = dust_softening;
               render_scene.set_dust_volume_detail(dust_volume_detail);
+              render_scene.set_dust_propagate_detail(dust_propagate_detail);
               render_scene.dust_reuse_px = dust_reuse_px;
               render_scene.dust_view_flags = dust_view_flags;
               render_scene.dust_flow = dust_flow;

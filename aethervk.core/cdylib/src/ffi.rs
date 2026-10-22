@@ -777,6 +777,27 @@ pub unsafe extern "C" fn avkSimulationContext_setDustVolumeDetail(
   ctx_ref.set_dust_volume_detail(scene_id, detail).is_some()
 }
 
+/// Sets the dust trajectory detail of `scene_id` ("Trajectory detail": the size-polyline edges the
+/// propagate solves exactly, 17 = every edge, the default; 9 and 5 interpolate the rest: faster,
+/// the dust tails a little straighter), clamped to the largest step `≤ detail` of 17 / 9 / 5;
+/// returns false without the scene.
+///
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setDustPropagateDetail(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  detail: u32,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  ctx_ref.set_dust_propagate_detail(scene_id, detail).is_some()
+}
+
 /// Sets the dust temporal reuse tolerance of `scene_id` in px ("Temporal reuse tolerance": 0 =
 /// off, every frame drawn fresh, the default; ε > 0 reuses dust whose on-screen motion stays
 /// within ε px: faster, with errors up to ε px), clamped to 0 or a power of two `≤ 16`; returns

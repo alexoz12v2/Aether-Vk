@@ -1088,6 +1088,8 @@ pub fn prepare_dust(
     CameraProjectionParams::Orthographic { .. } => 0.0,
   };
   device.dust_set_shell_camera(pe, omega_px_sr);
+  // the scene's trajectory detail (round 8 step D): every propagate of this frame at its stride
+  device.dust_set_propagate_detail(render_scene.dust_propagate_detail);
   for &id in &systems {
     if let Err(e) = device.cmd_dust_system_begin(id, flags, flow) {
       aethervk_oshal_rlib::log!("[Dust] frame begin failed for {id}: {e}");
@@ -1546,6 +1548,7 @@ fn dust_cadence_fingerprint(render_scene: &RenderScene, flags: u32) -> u64 {
   };
   eat(&flags.to_le_bytes());
   eat(&render_scene.dust_reuse_px.to_le_bytes());
+  eat(&render_scene.dust_propagate_detail.to_le_bytes());
   for name in [
     "AETHERVK_DUST_DEBUG_STREAM",
     "AETHERVK_DUST_DEBUG_SAMPLE_MOD",
@@ -1670,6 +1673,7 @@ fn dust_draw_inputs(
   h.u64(flags as u64 | (specks_needed as u64) << 32);
   h.f32s(&[flow.t_hi, flow.t_lo, flow.speed]);
   h.u64(render_scene.dust_reuse_px as u64);
+  h.u64(render_scene.dust_propagate_detail as u64);
   for name in [
     "AETHERVK_DUST_DEBUG_STREAM",
     "AETHERVK_DUST_DEBUG_SAMPLE_MOD",
@@ -1821,6 +1825,9 @@ pub struct RenderScene {
   /// dust temporal reuse tolerance of the scene in px (`SceneContext::dust_reuse_px`, 0 = off):
   /// ε > 0 runs the view's cadence with that ε (`Device::dust_cadence_auto`)
   pub dust_reuse_px: u32,
+  /// dust trajectory detail of the scene (`SceneContext::dust_propagate_detail`: 17 / 9 / 5
+  /// solved size-polyline edges), stamped on the device before the propagates (`prepare_dust`)
+  pub dust_propagate_detail: u32,
   /// dust view aids (`dust::DUST_VIEW_*`, `SceneContext::dust_view_flags`)
   pub dust_view_flags: u32,
   /// dust flow clock of this frame (`SceneContext::dust_flow_clock`)
@@ -1853,6 +1860,7 @@ impl RenderScene {
       dust_softening: crate::scene::dust::DUST_SOFTENING_DEFAULT,
       dust_volume_detail: crate::scene::dust::DUST_VOLUME_DETAIL_DEFAULT,
       dust_reuse_px: crate::scene::dust::dust_reuse_px_default(),
+      dust_propagate_detail: crate::scene::dust::DUST_PROPAGATE_DETAIL_DEFAULT,
       dust_view_flags: 0,
       dust_flow: Default::default(),
       dust_view: Default::default(),
@@ -1868,6 +1876,11 @@ impl RenderScene {
     for call in self.depth_layers.iter_mut().flat_map(|l| l.dust_calls.iter_mut()) {
       call.volume_detail = d;
     }
+  }
+
+  /// Sets the scene's dust trajectory detail (clamped, `dust::clamp_propagate_detail`)
+  pub fn set_dust_propagate_detail(&mut self, detail: u32) {
+    self.dust_propagate_detail = crate::scene::dust::clamp_propagate_detail(detail);
   }
 }
 
@@ -2911,6 +2924,32 @@ mod dust_volume_detail_tests {
     rs.set_dust_volume_detail(0);
     assert!(rs.depth_layers[0].dust_calls.iter().all(|c| c.volume_detail == 1));
     rs.set_dust_volume_detail(DUST_VOLUME_DETAIL_DEFAULT);
+    assert_eq!(fingerprints(&rs), at_default);
+  }
+
+  /// The trajectory detail starts at 17 and both frame fingerprints change with it: a changed
+  /// knob re-propagates (the device key) and no reused image survives it
+  #[test]
+  fn render_scene_stamps_the_propagate_detail_and_the_fingerprints_see_it() {
+    let mut rs = RenderScene::new((TransformComponent::default(), CameraComponent::default()), 0, 0, [800, 600]);
+    assert_eq!(rs.dust_propagate_detail, dust::DUST_PROPAGATE_DETAIL_DEFAULT);
+    assert_eq!(rs.dust_propagate_detail, 17);
+    let mut layer = RenderLayer::new(1, 1.0, Vec3f32::from_array([0.0, 0.0, 0.0]), 0.1, 1000.0);
+    layer.dust_calls = alloc::vec![call(DUST_VOLUME_DETAIL_DEFAULT)];
+    rs.depth_layers.push(layer);
+    let flow = dust::DustFlowUniform::default();
+    let fingerprints = |rs: &RenderScene| (dust_cadence_fingerprint(rs, 0), dust_draw_inputs(rs, 0, &flow, false));
+    let at_default = fingerprints(&rs);
+    rs.set_dust_propagate_detail(12);
+    assert_eq!(rs.dust_propagate_detail, 9);
+    let at_9 = fingerprints(&rs);
+    assert_ne!(at_9.0, at_default.0, "the cadence fingerprint sees the trajectory detail");
+    assert_ne!(at_9.1, at_default.1, "the frame reuse fingerprint sees the trajectory detail");
+    rs.set_dust_propagate_detail(0);
+    assert_eq!(rs.dust_propagate_detail, 5);
+    assert_ne!(fingerprints(&rs), at_9);
+    rs.set_dust_propagate_detail(100);
+    assert_eq!(rs.dust_propagate_detail, 17);
     assert_eq!(fingerprints(&rs), at_default);
   }
 

@@ -123,6 +123,93 @@ public sealed class ParticleRenderingViewModelTests : IDisposable
   }
 
   [Fact]
+  public void ClampPropagateDetail_TakesTheLargestStepBelow()
+  {
+    Assert.Equal(5, ParticleRenderingViewModel.ClampPropagateDetail(-5));
+    Assert.Equal(5, ParticleRenderingViewModel.ClampPropagateDetail(0));
+    Assert.Equal(5, ParticleRenderingViewModel.ClampPropagateDetail(8));
+    Assert.Equal(9, ParticleRenderingViewModel.ClampPropagateDetail(12));
+    Assert.Equal(9, ParticleRenderingViewModel.ClampPropagateDetail(16));
+    Assert.Equal(17, ParticleRenderingViewModel.ClampPropagateDetail(1000));
+    foreach (int d in ParticleRenderingViewModel.PropagateDetailSteps)
+      Assert.Equal(d, ParticleRenderingViewModel.ClampPropagateDetail(d));
+  }
+
+  /// <summary>No stored value: 17 (today's image), and building the section sends nothing.</summary>
+  [Fact]
+  public void PropagateDetail_DefaultsTo17_AndConstructionSendsNothing()
+  {
+    var (vm, runtime, prefs) = Build();
+    Assert.Equal(ParticleRenderingViewModel.PropagateDetailDefault, vm.PropagateDetail);
+    Assert.Equal(17, vm.PropagateDetail);
+    Assert.Equal(0, vm.PropagateDetailIndex);
+    Assert.Equal(17, prefs.DustPropagateDetail);
+    runtime.Verify(r => r.SetDustPropagateDetail(It.IsAny<int>()), Times.Never);
+  }
+
+  [Fact]
+  public void PropagateDetail_IsSentClampedAndStored()
+  {
+    var (vm, runtime, prefs) = Build();
+    vm.PropagateDetail = 9;
+    runtime.Verify(r => r.SetDustPropagateDetail(9), Times.Once);
+    Assert.Equal(9, prefs.DustPropagateDetail);
+    Assert.Equal(1, vm.PropagateDetailIndex);
+
+    vm.PropagateDetail = 7;
+    Assert.Equal(5, vm.PropagateDetail);
+    runtime.Verify(r => r.SetDustPropagateDetail(5), Times.Once);
+    runtime.Verify(r => r.SetDustPropagateDetail(7), Times.Never);
+    vm.PropagateDetail = 1000;
+    Assert.Equal(17, vm.PropagateDetail);
+    runtime.Verify(r => r.SetDustPropagateDetail(17), Times.Once);
+    Assert.Equal(17, prefs.DustPropagateDetail);
+    runtime.Verify(r => r.SetDustVolumeDetail(It.IsAny<int>()), Times.Never);
+    runtime.Verify(r => r.SetDustReuseTolerance(It.IsAny<int>()), Times.Never);
+
+    // the picker's index
+    vm.PropagateDetailIndex = 2;
+    Assert.Equal(5, vm.PropagateDetail);
+    runtime.Verify(r => r.SetDustPropagateDetail(5), Times.Exactly(2));
+    vm.PropagateDetailIndex = -1; // a cleared picker
+    Assert.Equal(5, vm.PropagateDetail);
+  }
+
+  [Fact]
+  public void PropagateDetail_SurvivesARestart()
+  {
+    var (vm, _, _) = Build();
+    vm.PropagateDetail = 9;
+
+    var prefs2 = LoadPrefs();
+    Assert.Equal("loaded", prefs2.LoadOutcome);
+    Assert.Equal(9, prefs2.DustPropagateDetail);
+    Assert.Contains("\"dust_propagate_detail\": 9", File.ReadAllText(PrefsPath));
+    var runtime2 = new Mock<INativeRuntimeService>();
+    var vm2 = new ParticleRenderingViewModel(runtime2.Object, prefs2);
+    Assert.Equal(9, vm2.PropagateDetail);
+    Assert.Equal(1, vm2.PropagateDetailIndex);
+    runtime2.Verify(r => r.SetDustPropagateDetail(It.IsAny<int>()), Times.Never);
+  }
+
+  /// <summary>A file without the key (written before the setting) means 17; a hand-edited value
+  /// off the steps clamps.</summary>
+  [Fact]
+  public void PropagateDetail_MissingKeyMeans17_AndAnOffStepValueClamps()
+  {
+    Directory.CreateDirectory(_dir);
+    File.WriteAllText(PrefsPath, "{\"format_version\": 1, \"theme\": \"dark\"}");
+    var p = LoadPrefs();
+    Assert.Equal("loaded", p.LoadOutcome);
+    Assert.Equal(17, p.DustPropagateDetail);
+
+    File.WriteAllText(PrefsPath, "{\"format_version\": 1, \"dust_propagate_detail\": 12}");
+    var p2 = LoadPrefs();
+    Assert.Equal(9, p2.DustPropagateDetail);
+    Assert.Equal(9, new ParticleRenderingViewModel(null, p2).PropagateDetail);
+  }
+
+  [Fact]
   public void ClampReuseTolerance_KeepsOff_AndTakesTheLargestPowerOfTwoBelow()
   {
     Assert.Equal(0, ParticleRenderingViewModel.ClampReuseTolerance(-5));

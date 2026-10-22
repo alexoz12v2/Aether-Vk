@@ -263,6 +263,11 @@ public interface INativeRuntimeService : IDisposable
   /// ≤ <paramref name="detail"/> in [1, 16]. Visual only.</summary>
   bool SetDustVolumeDetail(int detail);
 
+  /// <summary>Dust "Trajectory detail": the size-polyline edges the propagate solves exactly, 17
+  /// (every edge, the default), 9 or 5 (the rest interpolated: faster, the dust tails a little
+  /// straighter); clamped natively to the largest step ≤ <paramref name="detail"/>. Visual only.</summary>
+  bool SetDustPropagateDetail(int detail);
+
   /// <summary>Dust "Temporal reuse tolerance": dust that moved less than <paramref name="px"/>
   /// pixels since it was drawn is reused instead of drawn again; 0 (the default) draws every frame
   /// fresh, otherwise clamped natively to the largest power of two ≤ min(<paramref name="px"/>, 16).
@@ -1281,6 +1286,10 @@ internal unsafe static class PInvokeAetherVkCore
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   [return: MarshalAs(UnmanagedType.U1)]
   public static extern bool avkSimulationContext_setDustVolumeDetail(nint ctx, ulong sceneId, uint detail);
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.U1)]
+  public static extern bool avkSimulationContext_setDustPropagateDetail(nint ctx, ulong sceneId, uint detail);
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   [return: MarshalAs(UnmanagedType.U1)]
@@ -2354,6 +2363,9 @@ public sealed class NativeRuntimeService : INativeRuntimeService
 
   public bool SetDustVolumeDetail(int detail) =>
     _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_setDustVolumeDetail(_ctx, _sceneId, (uint)Math.Max(detail, 0));
+
+  public bool SetDustPropagateDetail(int detail) =>
+    _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_setDustPropagateDetail(_ctx, _sceneId, (uint)Math.Max(detail, 0));
 
   public bool SetDustReuseTolerance(int px) =>
     _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_setDustReuseTolerance(_ctx, _sceneId, (uint)Math.Max(px, 0));

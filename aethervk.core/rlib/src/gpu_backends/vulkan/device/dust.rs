@@ -340,6 +340,8 @@ struct PropagateKey {
   render: u64,
   moments: u64,
   emitted: u64,
+  /// the size-polyline edge stride (the trajectory detail): a changed knob re-propagates
+  stride: u32,
 }
 
 /// The inputs a tier's propagate generation follows ([`PropagateKey`]'s notion without the
@@ -352,6 +354,8 @@ struct PropagateGenKey {
   first_slot: u32,
   live_count: u32,
   emitted: Option<u64>,
+  /// the edge stride: a changed knob bumps the generation (the cadence's stamp skip refreshes)
+  stride: u32,
 }
 
 /// bytes of the traced clusters of one readback slot (all tiers)
@@ -1207,6 +1211,10 @@ pub struct DustManager {
   /// still be written by frames in flight, so it is reused, never destroyed before the device
   query_pools: spin::Mutex<alloc::vec::Vec<vk::QueryPool>>,
   free_query_pools: spin::Mutex<alloc::vec::Vec<vk::QueryPool>>,
+  /// the scene's trajectory detail (`dust::clamp_propagate_detail`, 17 / 9 / 5 solved
+  /// size-polyline edges; [`Device::dust_set_propagate_detail`], stamped by `prepare_dust` before
+  /// the propagates): every propagate of every system runs at its edge stride
+  pub propagate_detail: core::sync::atomic::AtomicU32,
 }
 
 impl DustManager {
@@ -1218,6 +1226,7 @@ impl DustManager {
       allocator_view,
       query_pools: spin::Mutex::new(alloc::vec::Vec::new()),
       free_query_pools: spin::Mutex::new(alloc::vec::Vec::new()),
+      propagate_detail: core::sync::atomic::AtomicU32::new(dust::DUST_PROPAGATE_DETAIL_DEFAULT),
     }
   }
 
@@ -4015,6 +4024,28 @@ impl Device {
       .map(|(addrs, _)| addrs)
   }
 
+  /// Sets the scene's trajectory detail (`dust::clamp_propagate_detail`: 17, 9 or 5 solved
+  /// size-polyline edges, the rest interpolated) for every propagate from the next on; returns
+  /// the value applied (the default without a dust manager). `prepare_dust` stamps the scene's
+  /// setting every frame; tests set it directly.
+  pub fn dust_set_propagate_detail(&self, detail: u32) -> u32 {
+    let d = dust::clamp_propagate_detail(detail);
+    if let Some(mgr) = self.res.read().dust_manager.as_ref() {
+      mgr.propagate_detail.store(d, core::sync::atomic::Ordering::Relaxed);
+    }
+    d
+  }
+
+  /// The scene's trajectory detail in force ([`Self::dust_set_propagate_detail`])
+  pub fn dust_propagate_detail(&self) -> u32 {
+    self
+      .res
+      .read()
+      .dust_manager
+      .as_ref()
+      .map_or(dust::DUST_PROPAGATE_DETAIL_DEFAULT, |m| m.propagate_detail.load(core::sync::atomic::Ordering::Relaxed))
+  }
+
   /// Test hook: the propagate's skip flag for system `id` (a slot whose moments already carry the
   /// tier's current generation stamp is left as it is; off by default)
   pub fn dust_set_propagate_skip(&self, id: u64, on: bool) -> GpuResult<()> {
@@ -4082,6 +4113,8 @@ impl Device {
     }
     let live_count = live_count.min(capacity);
     let mask = capacity - 1;
+    // the trajectory detail's edge stride (round 8 step D): the same on both mirrors
+    let stride = dust::propagate_edge_stride(mgr.propagate_detail.load(core::sync::atomic::Ordering::Relaxed));
     if let Some(ring) = sys.cpu_ring.as_ref() {
       // CPU mode: evaluate on the host; cmd_dust_splat scatters the result
       let ring = ring.read();
@@ -4089,11 +4122,12 @@ impl Device {
       let mut ms = alloc::vec::Vec::with_capacity(live_count as usize);
       for i in 0..live_count {
         let slot = first_slot.wrapping_add(i) & mask;
-        let (r, m) = dust::packet_moments_in(
+        let (r, m) = dust::packet_moments_detail(
           &ring[(ring_base + slot) as usize],
           slot,
           dust::ring_log2_capacity(mask),
           frame,
+          stride,
         );
         rs.push(r);
         ms.push(m);
@@ -4121,6 +4155,7 @@ impl Device {
       render: render.address + render_offset,
       moments: if skip_moments { 0 } else { moments.address + moments_offset },
       emitted,
+      stride,
     });
     let skipped =
       prop_mask == 0 && live_count > 0 && key.is_some() && sys.propagated.lock().get(&ring_base) == key.as_ref();
@@ -4143,6 +4178,7 @@ impl Device {
         first_slot,
         live_count,
         emitted,
+        stride,
       };
       let mut gens = sys.propagate_gen.lock();
       let e = gens.entry(ring_base).or_insert((gk, 1));
@@ -4166,7 +4202,8 @@ impl Device {
         ring_mask: mask,
         generation,
         skip: [
-          (prop_mask != 0 || sys.propagate_skip.load(core::sync::atomic::Ordering::Relaxed)) as u32,
+          (prop_mask != 0 || sys.propagate_skip.load(core::sync::atomic::Ordering::Relaxed)) as u32
+            | dust::propagate_stride_bits(stride),
           prop_mask as u32,
         ],
         // `spin.w` (unused by the shader) carries the bitmask address's high word
