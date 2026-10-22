@@ -407,6 +407,9 @@ pub struct DustViewHost {
   /// per-packet texel cap is `DUST_SPLAT_MAX_TEXELS / 4^bias`), from the texels a measured frame
   /// planned (`EwaStats::suggested_bias`)
   pub ewa_bias: u32,
+  /// the feedback's memory of the active regime (only its `*_step_q8` / `*_prev` are read; the
+  /// bias fields are the ones above)
+  pub fb_memory: FeedbackSet,
   /// per readback slot: the timestamps written that frame (bit i = [`DUST_TS_BEGIN`] + i)
   ts_written: [u32; DUST_READBACK_SLOTS],
   /// per readback slot: its frame number when recorded
@@ -499,6 +502,16 @@ pub struct FeedbackSet {
   pub split_depth_over: u32,
   pub volume_bias: u32,
   pub ewa_bias: u32,
+  /// the feedback's memory (round 8 step B): per bias, the work ratio of one step measured at
+  /// the last raise into it (8.8 fixed point, 0 = unknown), and the previous readback's (bias,
+  /// work) that measures the next raise. A lower is refused while `work × ratio` would pass the
+  /// budget: one volume step changes the work up to ~13×, one EWA step up to 25×, both past the
+  /// band's 8× (5000 km, 1 d/s, volume detail 1: bias 10 ↔ 11 every four frames, half of them at
+  /// the dearer bias, 212 ms against 177)
+  pub volume_step_q8: [u32; dust::DUST_VOLUME_BIAS_MAX as usize + 1],
+  pub ewa_step_q8: [u32; dust::DUST_EWA_BIAS_MAX as usize + 1],
+  pub volume_prev: (u32, u64),
+  pub ewa_prev: (u32, u64),
 }
 
 impl Default for FeedbackSet {
@@ -508,7 +521,39 @@ impl Default for FeedbackSet {
       split_depth_over: u32::MAX,
       volume_bias: 0,
       ewa_bias: 0,
+      volume_step_q8: [0; dust::DUST_VOLUME_BIAS_MAX as usize + 1],
+      ewa_step_q8: [0; dust::DUST_EWA_BIAS_MAX as usize + 1],
+      volume_prev: (0, 0),
+      ewa_prev: (0, 0),
     }
+  }
+}
+
+/// The step ratio the feedback assumes before a raise measured one: a level quarters the work
+/// (the log₄ rule of the raises); with the band's lower edge at budget / 8 it keeps today's rule
+pub const DUST_FEEDBACK_STEP_DEFAULT: f64 = 4.0;
+
+impl FeedbackSet {
+  /// Folds a readback drawn at `bias` with `work` into the memory of `step_q8` / `prev`: the
+  /// readback after a raise of `k` steps records the per-step ratio (geometric) at the new bias.
+  fn feedback_remember(step_q8: &mut [u32], prev: &mut (u32, u64), bias: u32, work: u64) {
+    let (pb, pw) = *prev;
+    if bias > pb && pw > 0 && work > 0 && (bias as usize) < step_q8.len() {
+      let k = (bias - pb) as f64;
+      let r = (pw as f64 / work as f64).powf(1.0 / k);
+      step_q8[bias as usize] = (r * 256.0).clamp(256.0, u32::MAX as f64) as u32;
+    }
+    *prev = (bias, work);
+  }
+
+  /// Whether the work measured at `bias` may lower it: `work × ratio ≤ budget`, the ratio the
+  /// memory's at `bias` or [`DUST_FEEDBACK_STEP_DEFAULT`]
+  fn feedback_allows_lower(step_q8: &[u32], bias: u32, work: u64, budget: u64) -> bool {
+    let r = match step_q8.get(bias as usize) {
+      Some(&q) if q > 0 => q as f64 / 256.0,
+      _ => DUST_FEEDBACK_STEP_DEFAULT,
+    };
+    work as f64 * r <= budget as f64
   }
 }
 
@@ -766,6 +811,10 @@ impl DustViewHost {
       split_depth_over: self.split_depth_over,
       volume_bias: self.volume_bias,
       ewa_bias: self.ewa_bias,
+      volume_step_q8: self.fb_memory.volume_step_q8,
+      ewa_step_q8: self.fb_memory.ewa_step_q8,
+      volume_prev: self.fb_memory.volume_prev,
+      ewa_prev: self.fb_memory.ewa_prev,
     }
   }
 
@@ -779,6 +828,7 @@ impl DustViewHost {
     self.split_depth_over = s.split_depth_over;
     self.volume_bias = s.volume_bias;
     self.ewa_bias = s.ewa_bias;
+    self.fb_memory = s;
   }
 
   /// regime `regime`'s state ← the feedback fields
@@ -833,6 +883,7 @@ impl Default for DustViewHost {
       split_depth_over: u32::MAX,
       volume_bias: 0,
       ewa_bias: 0,
+      fb_memory: FeedbackSet::default(),
       ts_written: [0; DUST_READBACK_SLOTS],
       ts_frame: [0; DUST_READBACK_SLOTS],
       ts_slot: None,
@@ -934,16 +985,25 @@ impl DustViewHost {
     }
     self.split_depth = next;
     let vol = dust::VolumeStats::load(header);
+    FeedbackSet::feedback_remember(
+      &mut self.fb_memory.volume_step_q8,
+      &mut self.fb_memory.volume_prev,
+      vol.bias,
+      vol.evals as u64,
+    );
     // over the budget: coarser by log4(evals / budget) levels at once (a level divides the
     // texels by 4; inside the coma the first frame asks ~45× the budget, and one level per
-    // readback took four slow frames to settle); else the one-step rule
+    // readback took four slow frames to settle); else the one-step rule, unless the memory says
+    // the step would pass the budget again
     // the budget loop's knob (step 5): the target halved `budget_shift` times (0: the constant)
     let vol_budget = dust::DUST_VOLUME_FRAME_BUDGET >> self.budget_shift();
     let bias = if vol.evals > vol_budget {
       let ratio = vol.evals as f64 / vol_budget as f64;
       let up = (ratio.ln() / 4f64.ln()).ceil().max(1.0) as u32;
       (vol.bias + up).min(dust::DUST_VOLUME_BIAS_MAX)
-    } else if vol.evals < vol_budget / 8 {
+    } else if vol.evals < vol_budget / 8
+      && FeedbackSet::feedback_allows_lower(&self.fb_memory.volume_step_q8, vol.bias, vol.evals as u64, vol_budget as u64)
+    {
       vol.suggested_bias_for(vol_budget)
     } else {
       // inside the band: the state stays (as the split depth's)
@@ -960,20 +1020,28 @@ impl DustViewHost {
     }
     self.volume_bias = bias;
     let ewa = dust::EwaStats::load(header);
+    FeedbackSet::feedback_remember(&mut self.fb_memory.ewa_step_q8, &mut self.fb_memory.ewa_prev, ewa.bias, ewa.texels);
     let ewa_budget = (dust::DUST_EWA_FRAME_BUDGET as u64) >> self.budget_shift();
-    // inside the band [budget / 8, budget]: the state stays (as the split depth's)
-    let ewa_bias = if ewa.texels > ewa_budget || ewa.texels < ewa_budget / 8 {
+    // inside the band [budget / 8, budget]: the state stays (as the split depth's); below it,
+    // only when the memory's step ratio keeps the lower bias under the budget
+    let ewa_bias = if ewa.texels > ewa_budget
+      || (ewa.texels < ewa_budget / 8
+        && FeedbackSet::feedback_allows_lower(&self.fb_memory.ewa_step_q8, ewa.bias, ewa.texels, ewa_budget))
+    {
       ewa.suggested_bias_for(ewa_budget)
     } else {
       self.ewa_bias
     };
     if ewa_bias != self.ewa_bias {
       aethervk_oshal_rlib::log!(
-        "[Dust EWA] {:.3e} texels at bias {} (budget {:.3e}): bias {} for the next frames",
+        "[Dust EWA] {:.3e} texels at bias {} (budget {:.3e}): bias {} for the next frames (memory: step ×{:.1} at {}, previous readback {:?})",
         ewa.texels as f64,
         ewa.bias,
         ewa_budget as f64,
-        ewa_bias
+        ewa_bias,
+        self.fb_memory.ewa_step_q8.get(ewa.bias as usize).copied().unwrap_or(0) as f64 / 256.0,
+        ewa.bias,
+        self.fb_memory.ewa_prev
       );
     }
     self.ewa_bias = ewa_bias;
