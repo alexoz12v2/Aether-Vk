@@ -2176,6 +2176,65 @@ fn the_feedback_band_keeps_the_state() {
   assert_eq!((host.ewa_bias, host.volume_bias), (1, 12));
 }
 
+/// the feedback's memory (round 8 step B): the 5000 km, 1 d/s, volume detail 1 oscillation
+/// (`perf8e_5000km_vd1`: 97 M evaluations at bias 10 → 11, 7.3 M at 11 < budget / 8 → 10, every
+/// four frames). After the raise the memory holds the measured step (13.3×), so 7.3 M at 11 is
+/// refused (7.3 M × 13.3 > the budget); a drift down to 4 M (× 13.3 ≤ the budget) is lowered.
+/// Without a measured step the default 4× keeps today's rule (`the_feedback_band_keeps_the_state`).
+/// The same for the EWA side (1 km: 6.7e8 texels at 0 → 1, 2.7e7 at 1 → 0, a 25× step).
+#[test]
+fn the_feedback_refuses_a_lower_that_would_raise_again() {
+  use crate::scene::dust::{DUST_EWA_FRAME_BUDGET, DUST_EWA_TEXEL_UNIT, DUST_VOLUME_FRAME_BUDGET, EwaStats};
+  let header_at = |ewa_bias: u32, ewa_texels: u64, vol_bias: u32, evals: u32| {
+    let mut h = alloc::vec![0u32; dust::PYRAMID_HEADER_WORDS as usize];
+    EwaStats::store_bias(ewa_bias, &mut h);
+    h[dust::PYR_EWA_TEXELS as usize] = (ewa_texels / DUST_EWA_TEXEL_UNIT as u64) as u32;
+    let w = &mut h[dust::PYR_SPLIT_DEPTH as usize];
+    *w = (*w & !(0xFF << 8)) | (vol_bias << 8);
+    h[dust::PYR_VOLUME_EVALS as usize] = evals;
+    h[dust::PYR_SPLIT_CHILDREN as usize] = dust::DUST_SPLIT_BUDGET / 2;
+    h
+  };
+  let level = alloc::vec![0u32; 16];
+  let vb = DUST_VOLUME_FRAME_BUDGET;
+  let eb = DUST_EWA_FRAME_BUDGET as u64;
+  let mid_ewa = eb / 4;
+  let mut host = DustViewHost::default();
+  host.volume_bias = 10;
+  host.ewa_bias = 0;
+  // the raise: 97 M at 10 (over the budget 67 M) → 11
+  host.absorb(&header_at(0, mid_ewa, 10, 97_030_085), &level, 1, 1.0);
+  assert_eq!(host.volume_bias, 11);
+  // 7.3 M at 11, below budget / 8 (8.4 M): refused, the measured step is 13.3×
+  host.absorb(&header_at(0, mid_ewa, 11, 7_295_987), &level, 1, 1.0);
+  assert_eq!(host.volume_bias, 11, "a lower that would raise again");
+  let q = host.fb_memory.volume_step_q8[11];
+  assert!((q as f64 / 256.0 - 13.3).abs() < 0.1, "step ratio {}", q as f64 / 256.0);
+  // the pose drifts: 4 M at 11 (× 13.3 = 53 M ≤ the budget) is lowered
+  host.absorb(&header_at(0, mid_ewa, 11, 4_000_000), &level, 1, 1.0);
+  assert_eq!(host.volume_bias, 10);
+  // a two-step raise records the per-step (geometric) ratio: 16× over two steps is 4× a step
+  let mut host = DustViewHost::default();
+  host.volume_bias = 3;
+  host.absorb(&header_at(0, mid_ewa, 3, vb * 16), &level, 1, 1.0);
+  assert_eq!(host.volume_bias, 5);
+  host.absorb(&header_at(0, mid_ewa, 5, vb), &level, 1, 1.0);
+  assert_eq!(host.fb_memory.volume_step_q8[5], 4 * 256);
+  // the EWA side: 6.7e8 at 0 → 1, then 2.7e7 at 1 (< budget / 8 = 3.4e7) is refused (× 25 > budget)
+  let mut host = DustViewHost::default();
+  host.ewa_bias = 0;
+  host.volume_bias = 2;
+  host.absorb(&header_at(0, 666_100_000, 2, vb / 4), &level, 1, 1.0);
+  assert_eq!(host.ewa_bias, 1);
+  host.absorb(&header_at(1, 27_160_000, 2, vb / 4), &level, 1, 1.0);
+  assert_eq!(host.ewa_bias, 1, "the EWA lower that would raise again");
+  // the memory follows the regime: stored with it and loaded back
+  host.feedback_store(1);
+  host.fb_memory = FeedbackSet::default();
+  host.feedback_load(1);
+  assert!(host.fb_memory.ewa_step_q8[1] > 0);
+}
+
 /// the build members of a frame are `min(step, length − cursor)` per tier slot and pair (a
 /// finished cursor builds nothing); the shown entries are summed over every pair and tier
 #[test]
