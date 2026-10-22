@@ -7045,7 +7045,7 @@ pub const DUST_SEGMENT_TEXELS: u32 = 16;
 // `PyramidLayout::total_words`: [`DUST_QUEUE_HEADER_WORDS`] (x, 1, 1 for the indirect dispatch; the
 // raw append counter; a capacity override, 0 = [`DUST_QUEUE_CAPACITY`]; words 8.. the profiler's
 // counters, [`DUST_PROF_STAGE0`]) then the records.
-pub const DUST_QUEUE_HEADER_WORDS: u32 = 128;
+pub const DUST_QUEUE_HEADER_WORDS: u32 = 144;
 
 // ─── The shader-clock profiler (GPU only: `dust_profile.glsl`, `AETHERVK_DUST_PROFILE=1`) ───
 // The `.prof` variants of `dust_splat.comp` and `dust_draw_queue.comp` sum the cycles of each
@@ -7097,15 +7097,21 @@ pub const DUST_PROF_SMAX: usize = 109;
 /// vdraw): 8 × (lo, hi) cycle sums, [`DUST_PROF_K1C_NAMES`] in order (`dust_prof_flush_k1c`'s);
 /// vsmprep / vsmfast / vsmedge are vsmallpts' parts (its prelude; the centre slice by one
 /// projection and the edge decision of every piece and an interior piece's other slices; an edge
-/// piece's slices by 4 sigma points), the rest of vsmallpts the divergence waits
+/// piece's slices by 4 sigma points), the rest of vsmallpts the divergence waits; the last four
+/// (round 8 step E) are the consumer's pass B piece loop: vhead (its head: the control word, the
+/// record's words, the covariance slots), vbuild (`dust_volume_piece_at`), vdecide (the level
+/// table, the range, the class and order under K), vdeposit (`dust_volume_deposit`, every
+/// segment function)
 pub const DUST_PROF_K1C0: usize = 110;
-pub const DUST_PROF_K1C_NAMES: [&str; 8] =
-  ["vclass", "vsmallpts", "vsmall", "vsubline", "vcentre", "vsmprep", "vsmfast", "vsmedge"];
+pub const DUST_PROF_K1C_NAMES: [&str; 12] = [
+  "vclass", "vsmallpts", "vsmall", "vsubline", "vcentre", "vsmprep", "vsmfast", "vsmedge", "vhead",
+  "vbuild", "vdecide", "vdeposit",
+];
 /// 2 words: the small pieces drawn by one projection a slice and by 4 sigma points a slice (the
 /// GPU's [`take_volume_small_paths`])
-pub const DUST_PROF_SMALL_PATHS: usize = 126;
+pub const DUST_PROF_SMALL_PATHS: usize = 134;
 
-/// The counter block of one drawn frame ([`Device::dust_profile_counters`]): words 8..128 of the
+/// The counter block of one drawn frame ([`Device::dust_profile_counters`]): words 8..144 of the
 /// queue header, indexed by the `DUST_PROF_*` offsets (from the queue base) through [`Self::word`]
 /// / [`Self::u64_at`]; all zero on a frame drawn by the production shaders.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

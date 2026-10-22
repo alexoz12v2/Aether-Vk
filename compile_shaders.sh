@@ -214,9 +214,18 @@ for file in assets/*.comp assets/sim/*.comp; do
             # AETHERVK_DUST_PROFILE=1 on a device with VK_KHR_shader_clock): `.prof` before the
             # vmm infix, as PhysicsPipelines' mk!() rewrites the name.
             case "$base" in
-                dust_splat.comp|dust_draw_queue.comp|dust_draw_volume.comp|dust_split.comp|dust_draw_small_edge.comp)
+                dust_splat.comp|dust_draw_queue.comp|dust_split.comp|dust_draw_small_edge.comp)
                     compile_one "$file" comp "-DDUST_PROFILE=1 $vmm_flag" "${file%.comp}.comp.prof${vmm_infix}.spv"
                     compile_one "$file" comp "-DDUST_PROFILE=1 -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.prof${vmm_infix}.d.spv"
+                    ;;
+                # the volume consumer (round 8 step F2): `.sg` = the top-level deposits reduced over
+                # the subgroup (subgroup arithmetic, optional on the baseline devices; the host picks
+                # it by the device), the plain blob the fallback; the `.prof` blob has it too
+                dust_draw_volume.comp)
+                    compile_one "$file" comp "-DDUST_SUBGROUP=1 $(opt_flags "$base") $vmm_flag" "${file%.comp}.comp.sg${vmm_infix}.spv"
+                    compile_one "$file" comp "-DDUST_SUBGROUP=1 -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.sg${vmm_infix}.d.spv"
+                    compile_one "$file" comp "-DDUST_SUBGROUP=1 -DDUST_PROFILE=1 $vmm_flag" "${file%.comp}.comp.prof${vmm_infix}.spv"
+                    compile_one "$file" comp "-DDUST_SUBGROUP=1 -DDUST_PROFILE=1 -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.prof${vmm_infix}.d.spv"
                     ;;
                 # the speck walk pass (a workgroup of 32 lanes per walked bin; the plain blob is
                 # the gate pass): `.walk` before the vmm infix, as mk!() rewrites the name

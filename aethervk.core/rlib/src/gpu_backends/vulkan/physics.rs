@@ -94,6 +94,9 @@ pub struct PhysicsPipelines {
   /// (`dust_draw_volume.comp`, wg 64, dispatched indirectly after each producer chunk)
   pub dust_draw_volume: vk::Pipeline,
   pub dust_draw_volume_prof: Option<vk::Pipeline>,
+  /// the plain blob while the `.sg` one is in use (round 8 step F2; the baseline devices' path,
+  /// `Device::dust_set_volume_plain` runs it on a device that has both: the test)
+  pub dust_draw_volume_plain: Option<vk::Pipeline>,
   /// track 9A (t9a2d), the edge pass: a lane per small piece the consumer deferred (its centre
   /// slice's 3σ crosses the frame; `dust_draw_small_edge.comp`, wg 64, dispatched indirectly beside
   /// the next chunk's producer): the demotion or the sigma points, then its texels
@@ -136,6 +139,7 @@ impl PhysicsPipelines {
     has_vulkan_memory_model: bool,
     has_shader_clock: bool,
     capture_statistics: bool,
+    has_subgroup_arithmetic: bool,
   ) -> GpuResult<Self> {
     if has_native_float16 {
       aethervk_oshal_rlib::log!(
@@ -307,6 +311,22 @@ impl PhysicsPipelines {
           e
         ))
       })?;
+      crate::gpu_backends::vulkan::utils::dump_pipeline_cache(
+        &device.handle,
+        last_segment(spv_path),
+        |cache| unsafe {
+          let mut p = vk::Pipeline::null();
+          (device.handle.fp_v1_0().create_compute_pipelines)(
+            device.handle.handle(),
+            cache,
+            1u32,
+            core::ptr::from_ref(&compute_info),
+            core::ptr::null(),
+            core::ptr::from_mut(&mut p),
+          )
+          .result_with_success(p)
+        },
+      );
 
       unsafe {
         device.destroy_shader_module(shader_module, None);
@@ -546,9 +566,20 @@ impl PhysicsPipelines {
         } else {
           None
         },
-        dust_draw_volume: mk!("dust_draw_volume.comp.spv"),
+        // (round 8 step F2) the `.sg` blob reduces the top-level deposits over the subgroup
+        // (compute subgroup arithmetic, optional on the baseline devices); else the plain one
+        dust_draw_volume: if has_subgroup_arithmetic {
+          mk!("dust_draw_volume.comp.sg.spv")
+        } else {
+          mk!("dust_draw_volume.comp.spv")
+        },
         dust_draw_volume_prof: if has_shader_clock && dust_profile_requested() {
           Some(mk!("dust_draw_volume.comp.prof.spv"))
+        } else {
+          None
+        },
+        dust_draw_volume_plain: if has_subgroup_arithmetic {
+          Some(mk!("dust_draw_volume.comp.spv"))
         } else {
           None
         },
@@ -619,6 +650,9 @@ impl PhysicsPipelines {
     if let Some(p) = self.dust_draw_volume_prof {
       discard_pool.discard_pipeline(p, timeline);
     }
+    if let Some(p) = self.dust_draw_volume_plain {
+      discard_pool.discard_pipeline(p, timeline);
+    }
     discard_pool.discard_pipeline(self.dust_draw_small_edge, timeline);
     if let Some(p) = self.dust_draw_small_edge_prof {
       discard_pool.discard_pipeline(p, timeline);
@@ -642,7 +676,7 @@ impl PhysicsPipelines {
   pub fn log_pipeline_statistics(&self, instance: &ash::Instance, device: &ash::Device) {
     let ext = ash::khr::pipeline_executable_properties::Device::new(instance, device);
     let dir = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_PROFILE_DIR");
-    let named: [(&str, Option<vk::Pipeline>); 18] = [
+    let named: [(&str, Option<vk::Pipeline>); 19] = [
       ("dust_reproject", Some(self.dust_reproject)),
       ("dust_classify", Some(self.dust_classify)),
       ("dust_compact", Some(self.dust_compact)),
@@ -654,6 +688,7 @@ impl PhysicsPipelines {
       ("dust_draw_queue_prof", self.dust_draw_queue_prof),
       ("dust_draw_volume", Some(self.dust_draw_volume)),
       ("dust_draw_volume_prof", self.dust_draw_volume_prof),
+      ("dust_draw_volume_plain", self.dust_draw_volume_plain),
       ("dust_draw_small_edge", Some(self.dust_draw_small_edge)),
       ("dust_draw_small_edge_prof", self.dust_draw_small_edge_prof),
       ("dust_specks", Some(self.dust_specks)),
@@ -783,6 +818,7 @@ impl VulkanComputeKernels {
     has_vulkan_memory_model: bool,
     has_shader_clock: bool,
     capture_statistics: bool,
+    has_subgroup_arithmetic: bool,
   ) -> GpuResult<Self> {
     let pipelines = PhysicsPipelines::new(
       device,
@@ -793,6 +829,7 @@ impl VulkanComputeKernels {
       has_vulkan_memory_model,
       has_shader_clock,
       capture_statistics,
+      has_subgroup_arithmetic,
     )?;
 
     let mut timeline_info = vk::SemaphoreTypeCreateInfo::default()

@@ -1166,6 +1166,19 @@ float dust_small_rect(DustSmallPoint q, float xa, float xb, float ya, float yb) 
 const float DUST_COUNT_TEXEL_MAX = 4.0e9;
 const uint DUST_VQUEUE_SPLIT_ADDS = 12u;
 uint dust_vqueue_base(DustUintBuffer pyr);
+// (round 8 step F2) the accumulate mode of the volume consumer's top-level path: the frame's bias
+// puts every piece on the 1 x 1 top texel (dust_volume_draw topKnown, frame-uniform, set by
+// dust_draw_volume.comp main with the texel's word dust_vacc_off), so each lane sums its deposits
+// here and main writes the subgroup's sums with one atomic per word (dust_volume_flush_top).
+// Exact: saturating adds of non-negatives are associative (the word is 0xFFFFFFFF iff the total
+// passed 2^32: a lane's wrap bit or the subgroup's carry), the depth a min. A deposit at another
+// address (never, by the path's construction) takes the per-deposit atomics as before.
+bool  dust_vacc = false;
+uint  dust_vacc_off = 0u;
+uvec4 dust_vacc_sum = uvec4(0u);   // counts, r, g, b, mod 2^32
+uint  dust_vacc_wrap = 0u;         // bit w: the lane's word w passed 2^32
+uint  dust_vacc_depth = 0u;        // the lane's nearest depth (0: none written)
+uint  dust_vacc_splits = 0u;       // the lane's deposits split into several adds
 bool dust_volume_deposit(DustUintBuffer pyr, float tauPx, float area, float invUnit, vec3 color, uint depthBits,
                          uint off, uint lw, int ty, int tx, bool noWrites, inout float carry, inout float peak) {
     if (!(tauPx >= 0.0) || isinf(tauPx)) return false;
@@ -1179,15 +1192,29 @@ bool dust_volume_deposit(DustUintBuffer pyr, float tauPx, float area, float invU
     if (!(counts >= 1.0) || noWrites) return false;
     uint i = off + (uint(ty) * lw + uint(tx)) * DUST_PYRAMID_TEXEL_WORDS;
     float hf = float(dust_hash32(i) >> 8u) * (1.0 / 16777216.0);
-    if (counts > DUST_COUNT_MAX_PER_ADD) atomicAdd(pyr.v[dust_vqueue_base(pyr) + DUST_VQUEUE_SPLIT_ADDS], 1u);
+    bool acc = dust_vacc && i == dust_vacc_off;
+    if (counts > DUST_COUNT_MAX_PER_ADD) {
+        if (acc) dust_vacc_splits++;
+        else atomicAdd(pyr.v[dust_vqueue_base(pyr) + DUST_VQUEUE_SPLIT_ADDS], 1u);
+    }
     for (float rest = counts; rest > 0.5; ) {
         uint c = uint(min(rest, DUST_COUNT_MAX_PER_ADD));
-        dust_atomic_add_sat(pyr, i, c);
         uvec3 cw = uvec3(float(c) * color * DUST_COLOR_SCALE + hf);
-        dust_atomic_add_sat(pyr, i + 1u, cw.r);
-        dust_atomic_add_sat(pyr, i + 2u, cw.g);
-        dust_atomic_add_sat(pyr, i + 3u, cw.b);
+        if (acc) {
+            uvec4 a = uvec4(c, cw), s = dust_vacc_sum + a;
+            dust_vacc_wrap |= (s.x < a.x ? 1u : 0u) | (s.y < a.y ? 2u : 0u) | (s.z < a.z ? 4u : 0u) | (s.w < a.w ? 8u : 0u);
+            dust_vacc_sum = s;
+        } else {
+            dust_atomic_add_sat(pyr, i, c);
+            dust_atomic_add_sat(pyr, i + 1u, cw.r);
+            dust_atomic_add_sat(pyr, i + 2u, cw.g);
+            dust_atomic_add_sat(pyr, i + 3u, cw.b);
+        }
         rest -= float(c);
+    }
+    if (acc) {
+        dust_vacc_depth = dust_vacc_depth == 0u ? depthBits : min(dust_vacc_depth, depthBits);
+        return true;
     }
     uint cur = pyr.v[i + 4u];
     if (cur == 0u || depthBits < cur) {
@@ -1219,8 +1246,10 @@ bool dust_volume_segment(DustUintBuffer pyr, float invUnit, DustVolumePiece pc_,
         float nx = 2.0 * xc / W - 1.0;
         vec3 aRow = r0 - r3 * nx;
         float tauPx = dust_volume_ray_tau(pc_, bd_, renorm, eye, aRow, bRow, r3, meanRef);
+        DUST_PROF_BEGIN(vdeposit)
         any_ = dust_volume_deposit(pyr, tauPx, area, invUnit, color, depthBits, off, lw, ty, tx, noWrites, carry, peak)
             || any_;
+        DUST_PROF_END(vdeposit)
     }
     return any_;
 }
@@ -1246,8 +1275,10 @@ bool dust_volume_segment_small(DustUintBuffer pyr, float invUnit, float W, float
                   + dust_small_rect(s4, xa_, xb_, ya, yb);
         float tauPx = max(acc, 0.0) / ((xb_ - xa_) * (yb - ya));
         DUST_PROF_END(vsmall)
+        DUST_PROF_BEGIN(vdeposit)
         any_ = dust_volume_deposit(pyr, tauPx, area, invUnit, color, depthBits, off, lw, ty, tx, noWrites, carry, peak)
             || any_;
+        DUST_PROF_END(vdeposit)
     }
     return any_;
 }
@@ -1301,8 +1332,10 @@ bool dust_volume_segment_sub(DustUintBuffer pyr, float invUnit, DustVolumePiece 
             tauPx = acc;
         }
         DUST_PROF_END(vsubline)
+        DUST_PROF_BEGIN(vdeposit)
         any_ = dust_volume_deposit(pyr, tauPx, area, invUnit, color, depthBits, off, lw, ty, tx, noWrites, carry, peak)
             || any_;
+        DUST_PROF_END(vdeposit)
     }
     return any_;
 }
@@ -1442,7 +1475,7 @@ bool dust_volume_plan_axes(DustPacket p, vec3 r0, vec3 r1, vec3 r3, vec3 eye, fl
 // counter (min(raw, capacity) records held: the rest overflowed and were drawn in-thread), a
 // capacity override (0 = DUST_QUEUE_CAPACITY), words 8..127 the profiler's counters
 // (dust_profile.glsl, zero in production) — then DUST_QUEUE_RECORD_WORDS-word records.
-const uint DUST_QUEUE_HEADER_WORDS = 128u;
+const uint DUST_QUEUE_HEADER_WORDS = 144u;
 const uint DUST_QUEUE_RECORD_WORDS = 64u;
 const uint DUST_QUEUE_CAPACITY = 262144u;
 // a packet whose band holds more texels than this is queued (dust::DUST_QUEUE_MIN_TEXELS)

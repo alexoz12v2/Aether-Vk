@@ -180,6 +180,23 @@ uvec2 dust_volume_class_k(DustVolumePiece q, uvec2 ck, uint K, uint kb) {
         } \
     }
 
+// the frame's top-level regime (frame-uniform, from the pyramid header): the bias puts every piece
+// on the last level and that level is 1 x 1 (topOnly); known to every path unless the reference
+// mode DUST_FRAME_TOP_PASS_A asks for pass A in full (topKnown; dust_draw_volume.comp main sets the
+// accumulate mode from it: round 8 step F2)
+bool dust_volume_top_only(uint levels, uint bias) {
+    uint topW = pc.pyramid.v[DUST_PYR_TABLE + 3u * (levels - 1u) + 1u];
+    uint topH = pc.pyramid.v[DUST_PYR_TABLE + 3u * (levels - 1u) + 2u];
+    return bias + 1u >= levels && topW == 1u && topH == 1u;
+}
+bool dust_volume_top_known(uint levels, uint bias) {
+    return dust_volume_top_only(levels, bias) && (pc.pyramid.v[DUST_PYR_FLAGS] & DUST_FRAME_TOP_PASS_A) == 0u;
+}
+// the lane's end words under the accumulate mode (dust_draw_volume.comp main reduces them over the
+// subgroup: DUST_PYR_TAU_MAX max, DUST_PYR_LEVEL_MASK or, DUST_PYR_VOLUME_EVALS add)
+float dust_vacc_peak = 0.0;
+uint  dust_vacc_mask = 0u, dust_vacc_evals = 0u;
+
 void dust_volume_draw(DustPacket p, uint ra, uint rc, float exposure, uint levels, float W, float H, uint bias,
                       uint axis) {
     DUST_PROF_BEGIN(vplan)
@@ -213,10 +230,8 @@ void dust_volume_draw(DustPacket p, uint ra, uint rc, float exposure, uint level
     // sums the evaluations into the lane's code slots, which this path does not use. The same
     // decisions on the same integers: the pyramid is the same word for word (reference:
     // DUST_FRAME_TOP_PASS_A, dust::DUST_FRAME_TOP_PASS_A)
-    uint topW = pc.pyramid.v[DUST_PYR_TABLE + 3u * (levels - 1u) + 1u];
-    uint topH = pc.pyramid.v[DUST_PYR_TABLE + 3u * (levels - 1u) + 2u];
-    bool topOnly = bias + 1u >= levels && topW == 1u && topH == 1u;
-    bool topKnown = topOnly && (pc.pyramid.v[DUST_PYR_FLAGS] & DUST_FRAME_TOP_PASS_A) == 0u;
+    bool topOnly = dust_volume_top_only(levels, bias);
+    bool topKnown = dust_volume_top_known(levels, bias);
     // the volume detail (the draw's flags bits 8-10, dust::SplitView::volume_detail; 16 by
     // default, which no plan exceeds): a top-level packet cut into at most that many pieces,
     // fewer along seg_t first, as the evaluation cap (dust::volume_plan_pieces)
@@ -327,6 +342,7 @@ void dust_volume_draw(DustPacket p, uint ra, uint rc, float exposure, uint level
     float peak = 0.0;
     uint maskBits = 0u;
     for (uint k = 0u; k < n; ++k) {
+        DUST_PROF_BEGIN(vhead)
         uint ctl = dust_vs_word(DUST_VS_CTRL);
         uint nAk = ctl & 31u, nBk = (ctl >> 5u) & 31u, Kk = (ctl >> 10u) & 7u, modek = (ctl >> 13u) & 3u;
         bool hasBk = ((ctl >> 15u) & 1u) != 0u, gatedk = ((ctl >> 16u) & 1u) != 0u;
@@ -363,6 +379,7 @@ void dust_volume_draw(DustPacket p, uint ra, uint rc, float exposure, uint level
         Lk[3] = dust_vs_get(DUST_VS_L + 3u); Lk[4] = dust_vs_get(DUST_VS_L + 4u); Lk[5] = dust_vs_get(DUST_VS_L + 5u);
         vec3 skd = vec3(dust_vs_get(DUST_VS_SKD + 0u), dust_vs_get(DUST_VS_SKD + 1u), dust_vs_get(DUST_VS_SKD + 2u));
         float fPxK = dust_vs_get(DUST_VS_FPX);
+        DUST_PROF_END(vhead)
         DustVolumePiece q;
         uint code = dust_unpack_code(k);
         uint lev = code >> 8u;
@@ -370,6 +387,7 @@ void dust_volume_draw(DustPacket p, uint ra, uint rc, float exposure, uint level
         uint kb;
         uint gate = dust_gate_level(levelsk);
         bool topk = ((ctl >> 25u) & 1u) != 0u;
+        DUST_PROF_BEGIN(vbuild)
         if (topk) {
             // the top-level path: the piece at the last level, its class and bound there (pass
             // A's build and decisions on it)
@@ -400,6 +418,8 @@ void dust_volume_draw(DustPacket p, uint ra, uint rc, float exposure, uint level
             kb = ((code >> 4u) & 3u) + 1u;
             if (ck.x == DUST_VOLUME_CLASS_LINE) q.line = ((code >> 6u) & 1u) + 1u;
         }
+        DUST_PROF_END(vbuild)
+        DUST_PROF_BEGIN(vdecide)
         uint off = pc.pyramid.v[DUST_PYR_TABLE + 3u * lev];
         uint lw = pc.pyramid.v[DUST_PYR_TABLE + 3u * lev + 1u];
         uint lh = pc.pyramid.v[DUST_PYR_TABLE + 3u * lev + 2u];
@@ -409,6 +429,7 @@ void dust_volume_draw(DustPacket p, uint ra, uint rc, float exposure, uint level
         }
         float sz = float(1u << lev);
         ivec4 r = dust_volume_range(q, lev, lw, lh);
+        DUST_PROF_END(vdecide)
         if (r.y < r.x || r.w < r.z) continue;
         // the class and order under the limit K and the piece's bound; one loop per class
         uvec2 cks = dust_volume_class_k(q, ck, Kk, kb);
@@ -463,11 +484,18 @@ void dust_volume_draw(DustPacket p, uint ra, uint rc, float exposure, uint level
 #endif
         if (any_) maskBits |= 1u << lev;
     }
-    if (peak > 0.0) atomicMax(pc.pyramid.v[DUST_PYR_TAU_MAX], floatBitsToUint(peak));
-    if (maskBits != 0u) atomicOr(pc.pyramid.v[DUST_PYR_LEVEL_MASK], maskBits);
-    if (((dust_vs_word(DUST_VS_CTRL) >> 25u) & 1u) != 0u) {
-        uint ev = dust_pk[0];
-        if (ev != 0u) atomicAdd(pc.pyramid.v[DUST_PYR_VOLUME_EVALS], ev);
+    if (dust_vacc) {
+        // (round 8 step F2) the end words to the subgroup flush; dust_vacc = topKnown = ctl bit 25
+        dust_vacc_peak = peak;
+        dust_vacc_mask = maskBits;
+        dust_vacc_evals = dust_pk[0];
+    } else {
+        if (peak > 0.0) atomicMax(pc.pyramid.v[DUST_PYR_TAU_MAX], floatBitsToUint(peak));
+        if (maskBits != 0u) atomicOr(pc.pyramid.v[DUST_PYR_LEVEL_MASK], maskBits);
+        if (((dust_vs_word(DUST_VS_CTRL) >> 25u) & 1u) != 0u) {
+            uint ev = dust_pk[0];
+            if (ev != 0u) atomicAdd(pc.pyramid.v[DUST_PYR_VOLUME_EVALS], ev);
+        }
     }
     DUST_PROF_END(vdraw)
 #ifdef DUST_PROFILE

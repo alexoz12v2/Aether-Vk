@@ -2309,6 +2309,9 @@ impl Device {
       chosen_physical_device_query_result
         .optional_extensions
         .contains(utils::OptionalExtensionSupportFlags::PIPELINE_EXECUTABLE_PROPERTIES),
+      chosen_physical_device_query_result
+        .optional_extensions
+        .contains(utils::OptionalExtensionSupportFlags::SUBGROUP_ARITHMETIC),
     ) {
       Ok(k) => {
         // the dust pipelines' compiled statistics, once (`AETHERVK_DUST_PROFILE=1`)

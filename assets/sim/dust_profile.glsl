@@ -43,9 +43,9 @@ const uint DUST_PROF_CMAX          = 105u; // its slowest lane's cycles
 const uint DUST_PROF_STHREAD       = 106u; // (lo, hi) the splitter's lane cycles (dust_split.comp)
 const uint DUST_PROF_SLANES        = 108u; // its lanes with a record
 const uint DUST_PROF_SMAX          = 109u; // its slowest lane's cycles
-const uint DUST_PROF_K1C0          = 110u; // 8 x (lo, hi), K1c's parts of vplan / vdraw (every volumetric draw, in-thread and consumer): vclass (pass A's per-class sums), vsmallpts (a small piece's depth points), vsmall (its texels' rectangle integrals), vsubline (sub-ray and line texels), vcentre (the centre class's rows), 110..119; vsmallpts' parts: vsmprep (its prelude: the depth axis, the lateral axes' dots, the mass), vsmfast (the centre slice by one projection and the edge decision, every piece; the other slices of an interior piece), vsmedge (the slices of an edge piece by 4 sigma points each), 120..125
-const uint DUST_PROF_SMALL_PATHS   = 126u; // 2 words (add32): the small pieces drawn by one projection a slice (126) and by 4 sigma points a slice (127) (dust::DUST_PROF_SMALL_PATHS)
-const uint DUST_PROF_WORDS_END     = 128u; // (DUST_QUEUE_HEADER_WORDS = 128)
+const uint DUST_PROF_K1C0          = 110u; // 12 x (lo, hi), K1c's parts of vplan / vdraw (every volumetric draw, in-thread and consumer): vclass (pass A's per-class sums), vsmallpts (a small piece's depth points), vsmall (its texels' rectangle integrals), vsubline (sub-ray and line texels), vcentre (the centre class's rows), 110..119; vsmallpts' parts: vsmprep (its prelude: the depth axis, the lateral axes' dots, the mass), vsmfast (the centre slice by one projection and the edge decision, every piece; the other slices of an interior piece), vsmedge (the slices of an edge piece by 4 sigma points each), 120..125; the consumer's pass B parts (round 8 step E): vhead (the piece loop's head: the control word, the record's words, the covariance slots), vbuild (dust_volume_piece_at), vdecide (the level table, the range, the class and order under K), vdeposit (dust_volume_deposit: the counts' atomics and the depth), 126..133
+const uint DUST_PROF_SMALL_PATHS   = 134u; // 2 words (add32): the small pieces drawn by one projection a slice (126) and by 4 sigma points a slice (127) (dust::DUST_PROF_SMALL_PATHS)
+const uint DUST_PROF_WORDS_END     = 144u; // (DUST_QUEUE_HEADER_WORDS = 144)
 
 #ifdef DUST_PROFILE
 #define DUST_PROF_BEGIN_AS(t)   uint dust_prof_t0_##t = clock2x32ARB().x;
@@ -66,7 +66,8 @@ uint dust_prof_thread = 0u, dust_prof_setup = 0u, dust_prof_subpk = 0u, dust_pro
      dust_prof_tracer = 0u, dust_prof_vemit = 0u, dust_prof_count = 0u;
 // K1c's parts (nested in vplan / vdraw)
 uint dust_prof_vclass = 0u, dust_prof_vsmallpts = 0u, dust_prof_vsmall = 0u, dust_prof_vsubline = 0u,
-     dust_prof_vcentre = 0u, dust_prof_vsmprep = 0u, dust_prof_vsmfast = 0u, dust_prof_vsmedge = 0u;
+     dust_prof_vcentre = 0u, dust_prof_vsmprep = 0u, dust_prof_vsmfast = 0u, dust_prof_vsmedge = 0u,
+     dust_prof_vhead = 0u, dust_prof_vbuild = 0u, dust_prof_vdecide = 0u, dust_prof_vdeposit = 0u;
 uint dust_prof_n_small_fast = 0u, dust_prof_n_small_edge = 0u;
 void dust_prof_flush_k1c(DustUintBuffer pyr, uint base);
 uint dust_prof_n_packets = 0u, dust_prof_n_cone = 0u, dust_prof_n_leaves = 0u,
@@ -141,6 +142,10 @@ void dust_prof_flush_k1c(DustUintBuffer pyr, uint base) {
     dust_prof_add64(pyr, base + DUST_PROF_K1C0 + 10u, dust_prof_vsmprep);
     dust_prof_add64(pyr, base + DUST_PROF_K1C0 + 12u, dust_prof_vsmfast);
     dust_prof_add64(pyr, base + DUST_PROF_K1C0 + 14u, dust_prof_vsmedge);
+    dust_prof_add64(pyr, base + DUST_PROF_K1C0 + 16u, dust_prof_vhead);
+    dust_prof_add64(pyr, base + DUST_PROF_K1C0 + 18u, dust_prof_vbuild);
+    dust_prof_add64(pyr, base + DUST_PROF_K1C0 + 20u, dust_prof_vdecide);
+    dust_prof_add64(pyr, base + DUST_PROF_K1C0 + 22u, dust_prof_vdeposit);
     dust_prof_add32(pyr, base + DUST_PROF_SMALL_PATHS + 0u, dust_prof_n_small_fast);
     dust_prof_add32(pyr, base + DUST_PROF_SMALL_PATHS + 1u, dust_prof_n_small_edge);
 }

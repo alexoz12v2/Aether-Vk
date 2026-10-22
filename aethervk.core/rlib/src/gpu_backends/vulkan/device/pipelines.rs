@@ -1243,6 +1243,21 @@ impl PipelinePool {
     if res != vk::Result::SUCCESS {
       return Err(crate::gpu_err_device!());
     }
+    if !info.debug_name.is_empty() {
+      crate::gpu_backends::vulkan::utils::dump_pipeline_cache(device, &info.debug_name, |cache| unsafe {
+        let mut p = vk::Pipeline::null();
+        let graphics_info = raw_info.borrow_graphics_pipeline_create_info();
+        (device.fp_v1_0().create_graphics_pipelines)(
+          device.handle(),
+          cache,
+          1,
+          ptr::from_ref(&graphics_info),
+          ptr::null(),
+          ptr::from_mut(&mut p),
+        )
+        .result_with_success(p)
+      });
+    }
 
     let pipeline_handle = unsafe {
       NonZeroHandle::new_unchecked(
