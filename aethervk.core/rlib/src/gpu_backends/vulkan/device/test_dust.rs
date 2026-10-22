@@ -2968,7 +2968,12 @@ fn gpu_dust_volume_queue_draws_the_same_pyramid() {
 /// for a piece on screen and pass B classifies each piece there; the pyramid and the evaluations
 /// counted (`PYR_VOLUME_EVALS`, the host feedback's input) are the same word for word as with pass
 /// A in full (the hook). At bias 0 the path is never taken (both frames the same too). The
-/// perspective view inside the cloud draws volumetric packets only.
+/// perspective view inside the cloud draws volumetric packets only. (Round 8 step F2) the path
+/// pre-reduces its deposits over the subgroup: at exposure 1 the 1 024 clusters drive the top
+/// texel's words past 2^32 (inside a lane and over the subgroup), and they must saturate to
+/// 0xFFFFFFFF as the per-deposit saturating adds do; the third case, at exposure 10^-4, must
+/// not saturate (the plain sums). Every case also runs the plain consumer blob
+/// (the baseline devices', without subgroup arithmetic; `dust_set_volume_plain`): the same words.
 #[test]
 fn gpu_dust_top_level_path_draws_the_same_pyramid() {
   let id = 9058;
@@ -3005,7 +3010,7 @@ fn gpu_dust_top_level_path_draws_the_same_pyramid() {
       eye_local: [0.0, 0.0, d, 30.0 * 86400.0],
       mvp: persp,
     };
-    let run = |inv_unit: f32| -> (Vec<u32>, f32) {
+    let run = |inv_unit: f32, exposure: f32| -> (Vec<u32>, f32) {
       let mut used = inv_unit;
       let mut cmds = device
         .run_transient_commands(|cmd| {
@@ -3016,6 +3021,7 @@ fn gpu_dust_top_level_path_draws_the_same_pyramid() {
             used = 1.0 / view.unit;
           }
           pc.inv_unit = used;
+          pc.exposure = exposure;
           device.cmd_dust_system_begin(id, pc.flags, flow)?;
           let (render, moments) = device.cmd_dust_propagate(cmd, id, 0, capacity, first_slot, batch.count, &frame)?;
           device.cmd_dust_pre_splat_barrier(cmd);
@@ -3033,14 +3039,17 @@ fn gpu_dust_top_level_path_draws_the_same_pyramid() {
     let ev = dust::PYR_VOLUME_EVALS as usize;
     let mut inv_unit = 0.0;
     for _ in 0..(super::dust::DUST_READBACK_SLOTS + 2) {
-      inv_unit = run(0.0).1;
+      inv_unit = run(0.0, 1.0).1;
     }
-    for bias in [0u32, 15] {
+    for (bias, exposure) in [(0u32, 1.0f32), (15, 1.0), (15, 1.0e-4)] {
       device.dust_set_volume_bias(pe, Some(bias));
       device.dust_set_vqueue_mode(pe, None);
-      let (fast, _) = run(inv_unit);
+      let (fast, _) = run(inv_unit, exposure);
+      device.dust_set_volume_plain(pe, true);
+      let (plain, _) = run(inv_unit, exposure);
+      device.dust_set_volume_plain(pe, false);
       device.dust_set_vqueue_mode(pe, Some(dust::DUST_FRAME_TOP_PASS_A));
-      let (reference, _) = run(inv_unit);
+      let (reference, _) = run(inv_unit, exposure);
       device.dust_set_vqueue_mode(pe, None);
       let levels = fast[dust::PYR_LEVELS as usize];
       let top = (dust::PYR_TABLE + 3 * (levels - 1)) as usize;
@@ -3061,6 +3070,26 @@ fn gpu_dust_top_level_path_draws_the_same_pyramid() {
       assert_eq!(fast[ev], reference[ev], "bias {bias}: the top-level path counted other evaluations");
       let diff = fast[hw..].iter().zip(&reference[hw..]).filter(|(x, y)| x != y).count();
       assert_eq!(diff, 0, "bias {bias}: the top-level path drew another pyramid ({diff} words differ)");
+      let diff = plain[hw..].iter().zip(&reference[hw..]).filter(|(x, y)| x != y).count();
+      assert_eq!(diff, 0, "bias {bias}: the plain consumer blob drew another pyramid ({diff} words differ)");
+      assert_eq!(plain[ev], reference[ev], "bias {bias}: the plain consumer blob counted other evaluations");
+      if taken {
+        let off = reference[top] as usize;
+        std::println!(
+          "[dust top path] bias {bias} exposure {exposure:e}: top texel counts {} r {} g {} b {} depth {:#x}",
+          reference[off],
+          reference[off + 1],
+          reference[off + 2],
+          reference[off + 3],
+          reference[off + 4]
+        );
+        assert!(reference[off] > 0 && reference[off + 4] != 0, "bias {bias}: nothing on the top texel");
+        if exposure >= 1.0 {
+          assert_eq!(reference[off], u32::MAX, "exposure {exposure:e}: the top texel's counts did not saturate");
+        } else {
+          assert!(reference[off] < u32::MAX, "exposure {exposure:e}: the top texel saturated at the low exposure");
+        }
+      }
     }
     device.dust_set_volume_bias(pe, None);
   });

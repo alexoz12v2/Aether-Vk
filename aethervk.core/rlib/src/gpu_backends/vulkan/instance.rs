@@ -700,6 +700,27 @@ impl Instance {
         if want_checkpoints && has_ext(ash::nv::device_diagnostic_checkpoints::NAME) {
           optional_extensions.insert(utils::OptionalExtensionSupportFlags::DIAGNOSTIC_CHECKPOINTS);
         }
+        // (PARTICLES_PERF round 8 step F2) compute subgroup basic + arithmetic operations
+        // (Vulkan 1.1 core, the arithmetic optional on the baseline devices) on subgroups of at
+        // least 32 lanes: the volume consumer's `.sg` blob reduces its top-level deposits over the
+        // subgroup (GTX 1070: −6 % at the far pose, exact). Narrow subgroups get the plain blob:
+        // on the Mali-G52 (8 lanes) the offline compiler puts the `.sg` blob at 848 B of spills
+        // against the plain 516 B and 596 against 402 load/store cycles, for a reduction over
+        // 8 lanes; GCN1 (64 lanes) estimates no better than the plain one.
+        if subgroup_props
+          .supported_operations
+          .contains(vk::SubgroupFeatureFlags::BASIC | vk::SubgroupFeatureFlags::ARITHMETIC)
+          && subgroup_props.supported_stages.contains(vk::ShaderStageFlags::COMPUTE)
+          && subgroup_props.subgroup_size >= 32
+        {
+          optional_extensions.insert(utils::OptionalExtensionSupportFlags::SUBGROUP_ARITHMETIC);
+        } else {
+          aethervk_oshal_rlib::log!(
+            "[dust] subgroup arithmetic {} / size {}: the volume consumer's plain blob",
+            subgroup_props.supported_operations.contains(vk::SubgroupFeatureFlags::ARITHMETIC),
+            subgroup_props.subgroup_size
+          );
+        }
         // the dust profiler (`AETHERVK_DUST_PROFILE=1`, physics::dust_profile_requested): the
         // subgroup clock for the `.prof` shader variants (they also reduce over the subgroup), and
         // the pipelines' executable statistics; both features queried, not assumed

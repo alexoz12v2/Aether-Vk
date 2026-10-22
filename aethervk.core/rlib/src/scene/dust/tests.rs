@@ -1067,6 +1067,28 @@ fn phase_lut_rides_in_the_pyramid_header() {
   );
 }
 
+/// The profiler's counter block (round 8 step E): the K1c parts and the small-path words fit the
+/// queue header, and the GLSL mirror's constants are the Rust ones (dust_profile.glsl's offsets,
+/// dust_scatter.glsl's header size)
+#[test]
+fn profile_counter_layout_fits_the_queue_header() {
+  assert_eq!(DUST_PROF_K1C0 + 2 * DUST_PROF_K1C_NAMES.len(), DUST_PROF_SMALL_PATHS);
+  assert!(DUST_PROF_SMALL_PATHS + 2 <= DUST_QUEUE_HEADER_WORDS as usize);
+  assert_eq!(DUST_PROFILE_WORDS, DUST_QUEUE_HEADER_WORDS as usize - 8);
+  let prof = include_str!("../../../../../assets/sim/dust_profile.glsl");
+  assert!(prof.contains(&alloc::format!("const uint DUST_PROF_K1C0          = {}u;", DUST_PROF_K1C0)));
+  assert!(prof.contains(&alloc::format!("const uint DUST_PROF_SMALL_PATHS   = {}u;", DUST_PROF_SMALL_PATHS)));
+  assert!(prof.contains(&alloc::format!("const uint DUST_PROF_WORDS_END     = {}u;", DUST_QUEUE_HEADER_WORDS)));
+  for (k, name) in DUST_PROF_K1C_NAMES.iter().enumerate() {
+    assert!(
+      prof.contains(&alloc::format!("DUST_PROF_K1C0 + {}u, dust_prof_{name});", 2 * k)),
+      "{name} flushed at pair {k}"
+    );
+  }
+  let scatter = include_str!("../../../../../assets/sim/dust_scatter.glsl");
+  assert!(scatter.contains(&alloc::format!("const uint DUST_QUEUE_HEADER_WORDS = {}u;", DUST_QUEUE_HEADER_WORDS)));
+}
+
 /// The photometry helpers: the speed-factor mean of the size distribution against a numeric
 /// integral, the magnitude conversions (a white Lambert surface at 1 AU is 1.055 mag/arcsec², the
 /// full Moon's albedo 0.12 gives 3.36 against its measured ~3.4), the exposure value, and the

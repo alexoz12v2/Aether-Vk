@@ -444,6 +444,8 @@ pub struct DustViewHost {
   /// last frame read back's spill: (records drawn from it, records lost: refused by it too)
   pub vqueue_mode: Option<u32>,
   pub vqueue_off: bool,
+  /// the plain consumer blob instead of the `.sg` one (test hook, round 8 step F2)
+  pub volume_plain: bool,
   pub vqueue_capacity: u32,
   pub vspill_capacity: u32,
   pub vspill_counts: (u32, u32),
@@ -899,6 +901,7 @@ impl Default for DustViewHost {
       queue_capacity: 0,
       vqueue_mode: None,
       vqueue_off: false,
+      volume_plain: false,
       vqueue_capacity: 0,
       vspill_capacity: 0,
       vspill_counts: (0, 0),
@@ -2893,8 +2896,10 @@ impl Device {
       Some(p) if profiling => p,
       _ => self.kernels.pipelines.dust_splat,
     };
-    let consumer = match self.kernels.pipelines.dust_draw_volume_prof {
-      Some(p) if profiling => p,
+    let volume_plain = view.host.lock().volume_plain;
+    let consumer = match (self.kernels.pipelines.dust_draw_volume_prof, self.kernels.pipelines.dust_draw_volume_plain) {
+      (Some(p), _) if profiling => p,
+      (_, Some(p)) if volume_plain => p,
       _ => self.kernels.pipelines.dust_draw_volume,
     };
     let splitter = match self.kernels.pipelines.dust_split_prof {
@@ -3566,6 +3571,16 @@ impl Device {
     let res = self.res.read();
     if let Some(view) = res.dust_manager.as_ref().and_then(|m| m.views.get(&pe)) {
       view.host.lock().vqueue_mode = mode;
+    }
+  }
+
+  /// Runs `pe`'s volume consumer with the plain blob instead of the `.sg` one from the next
+  /// frame on (round 8 step F2; a test hook: the baseline devices' path on a device that has
+  /// both; a no-op where the plain blob is the only one, or without a view)
+  pub fn dust_set_volume_plain(&self, pe: gpu::PresentationEngineHandle, plain: bool) {
+    let res = self.res.read();
+    if let Some(view) = res.dust_manager.as_ref().and_then(|m| m.views.get(&pe)) {
+      view.host.lock().volume_plain = plain;
     }
   }
 

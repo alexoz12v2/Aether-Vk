@@ -52,6 +52,9 @@ bitflags! {
     /// `VK_KHR_pipeline_executable_properties`: the dust pipelines' compiled statistics
     /// (registers, local memory; `AETHERVK_DUST_PROFILE=1`, `physics::log_pipeline_statistics`)
     const PIPELINE_EXECUTABLE_PROPERTIES = 1 << 8;
+    /// compute subgroup basic + arithmetic operations (Vulkan 1.1 core; the arithmetic is
+    /// optional on the baseline devices): the volume consumer's `.sg` blob (round 8 step F2)
+    const SUBGROUP_ARITHMETIC = 1 << 9;
   }
 }
 
@@ -2005,4 +2008,47 @@ where
   }
 
   // extend `and_then_prepare_read/write` here following the exact same projection pattern.
+}
+
+/// Dev hook for offline disassembly (`AETHERVK_SASS_DUMP_DIR`): compiles the pipeline once more
+/// into a fresh, empty `VkPipelineCache` and writes that cache's data to `<dir>/<name>.pcache`,
+/// so the driver's binary for exactly this pipeline lands in its own file
+/// (`~/aethervk-lab/sass-tools/pcache2sass.py` turns it into SASS). The extra pipeline and cache
+/// are destroyed; a no-op when the variable is unset, and failures are only logged.
+pub(crate) fn dump_pipeline_cache(
+  device: &ash::Device,
+  name: &str,
+  create: impl FnOnce(vk::PipelineCache) -> Result<vk::Pipeline, vk::Result>,
+) {
+  let Some(dir) = aethervk_oshal_rlib::os::env::var("AETHERVK_SASS_DUMP_DIR") else {
+    return;
+  };
+  let safe: string::String =
+    name.chars().map(|c| if c.is_alphanumeric() || c == '.' || c == '_' { c } else { '_' }).collect();
+  let path = alloc::format!("{dir}/{safe}.pcache");
+  let Ok(cache) =
+    (unsafe { device.create_pipeline_cache(&vk::PipelineCacheCreateInfo::default(), None) })
+  else {
+    aethervk_oshal_rlib::log!("[sass dump] {name}: pipeline cache creation failed");
+    return;
+  };
+  match create(cache) {
+    Ok(pipeline) => {
+      unsafe { device.destroy_pipeline(pipeline, None) };
+      let written = unsafe { device.get_pipeline_cache_data(cache) }
+        .map_err(|e| alloc::format!("{e:?}"))
+        .and_then(|data| {
+          let _ = aethervk_oshal_rlib::os::fs::create_dir_all(dir.as_str());
+          aethervk_oshal_rlib::os::fs::write(path.as_str(), &data)
+            .map(|()| data.len())
+            .map_err(|e| alloc::format!("{e:?}"))
+        });
+      match written {
+        Ok(n) => aethervk_oshal_rlib::log!("[sass dump] {name}: {n} bytes to {path}"),
+        Err(e) => aethervk_oshal_rlib::log!("[sass dump] {name}: not written to {path}: {e}"),
+      }
+    }
+    Err(e) => aethervk_oshal_rlib::log!("[sass dump] {name}: pipeline creation failed: {e:?}"),
+  }
+  unsafe { device.destroy_pipeline_cache(cache, None) };
 }

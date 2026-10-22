@@ -768,6 +768,7 @@ impl RenderPasses {
       graphics_info.pipeline_layout = pipeline_layout.get();
       graphics_info.render_pass = bundle.render_pass.get();
       graphics_info.subpass = 2; // Composite subpass
+      graphics_info.debug_name = "composite".into();
 
       let key = graphics_info.pipeline_key();
 
