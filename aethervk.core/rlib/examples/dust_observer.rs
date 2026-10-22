@@ -3073,6 +3073,15 @@ fn main() {
           "frame {i}: split budget overflow {split_overflow} children"
         ));
       }
+      // the walk's spill header: did the 256-node workgroup stack spill on its own this frame?
+      if sk.specks > 0 {
+        if let Some(h) = ctx.download_dust_spill_header(pe) {
+          log_line(&format!(
+            "[observer] specks spill frame {i}: slots claimed {} of {} (stack limit word {})",
+            h[0], h[1], h[8]
+          ));
+        }
+      }
       if args.check && sk.overflow > 0 {
         problems.push(format!(
           "frame {i}: speck budget overflow {} specks",

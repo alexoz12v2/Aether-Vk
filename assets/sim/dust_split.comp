@@ -84,9 +84,9 @@ void main() {
     DUST_PROF_BEGIN(thread)
 #endif
     // the per-cluster frame words (as dust_splat.comp's lanes have them)
-    dust_mom = pc.moments;
+    dust_mom_addr = uvec2(pc.moments);
     dust_phot_albedo = pc.albedo;
-    dust_phot_lut = pc.pyramid;
+    dust_phot_lut_addr = uvec2(pc.pyramid);
     dust_pyr_split_word = pc.pyramid.v[DUST_PYR_SPLIT_DEPTH];
     dust_vqueue_on = (pc.pyramid.v[DUST_PYR_FLAGS] & DUST_FRAME_VQUEUE_OFF) == 0u;
     dust_deep_chord = (pc.pyramid.v[DUST_PYR_FLAGS] & DUST_FRAME_DEEP_CHORD) != 0u;

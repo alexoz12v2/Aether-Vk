@@ -383,7 +383,10 @@ layout(buffer_reference, std430, buffer_reference_align = 16) buffer DustMoments
 };
 // the moments of the pass (set by the shader's main): the functions below read a cluster's
 // moments by index through it (dust_mom.m[mi]), never a by-value copy of its 80 floats
-DustMomentsBuffer dust_mom;
+// (an address, not a Private buffer_reference: Adreno 619 drivers assert on a pointer global
+// loaded outside main)
+uvec2 dust_mom_addr;
+#define dust_mom DustMomentsBuffer(dust_mom_addr)
 // speed factor sqrt(beta_j/beta) of edge j (dust::DustMoments::edge_factor)
 float dust_edge_factor(uint mi, uint j) {
     float lo = dust_mom.m[mi].edges[0].w, hi = dust_mom.m[mi].edges[DUST_SIZE_BINS].w;
@@ -880,7 +883,8 @@ bool dust_phot_has_origin = false;
 float dust_phot_origin = 0.0;
 vec3  dust_phot_sun = vec3(0.0, 0.0, 1.0);
 float dust_phot_rh = 1.0;
-DustUintBuffer dust_phot_lut;
+uvec2 dust_phot_lut_addr;  // (an address: see dust_mom_addr)
+#define dust_phot_lut DustUintBuffer(dust_phot_lut_addr)
 // the radiance weight at the dust a texel holds (dust::texel_weight): the packet's mean displaced
 // by the texel's in-plane offset, the Sun direction and r_h moved with it, the phase angle to the eye
 float dust_texel_weight(DustScreenPacket P, vec2 x) {

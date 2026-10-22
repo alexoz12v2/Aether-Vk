@@ -638,6 +638,57 @@ fn run_specks_parity(device: &Device, id: u64) {
   }
   device.dust_set_specks_trace(pe, false);
   let records = device.download_dust_specks_trace_records(pe).unwrap();
+  // the walk's stack spill (no scene of the suite fills the 256-node stack): the same traced
+  // frame with the stack held to SPILL_TEST_LIMIT nodes must spill, within the view's slots,
+  // and draw the same specks word for word (the same nodes visited; the trace's order is the
+  // atomics' and differs). Both traces under the capacity, else the subset is order-dependent.
+  {
+    const SPILL_TEST_LIMIT: u32 = 128;
+    let header0 = device.download_dust_spill_header(pe).unwrap();
+    device.dust_set_specks_trace(pe, true);
+    device.dust_set_specks_stack_limit(pe, SPILL_TEST_LIMIT);
+    {
+      let mut cmds = device
+        .run_transient_commands(|cmd| {
+          device.cmd_dust_pre_propagate_barrier(cmd);
+          let view = device.cmd_dust_frame_begin(cmd, pe, [w, h], flags, flow)?;
+          splat_pc.inv_unit = 1.0 / view.unit;
+          speck_pc.inv_unit = 1.0 / view.unit;
+          device.cmd_dust_system_begin(id, flags, flow)?;
+          let (render, moments) =
+            device.cmd_dust_propagate(cmd, id, 0, capacity, first_slot, batch.count, &frame)?;
+          device.cmd_dust_pre_splat_barrier(cmd);
+          device.cmd_dust_specks(cmd, pe, id, 0, first_slot, capacity, render, moments, speck_pc)?;
+          device.cmd_dust_pre_splat_barrier(cmd);
+          device.cmd_dust_splat(cmd, pe, id, 0, first_slot, capacity, render, moments, splat_pc)?;
+          device.cmd_dust_post_splat_barrier(cmd);
+          device.cmd_dust_frame_end(cmd, pe)?;
+          device.cmd_dust_system_end(id)?;
+          Ok(())
+        })
+        .unwrap();
+      cmds.cleanup(&device.device);
+    }
+    device.dust_set_specks_stack_limit(pe, 0);
+    device.dust_set_specks_trace(pe, false);
+    let header1 = device.download_dust_spill_header(pe).unwrap();
+    let mut spilled = device.download_dust_specks_trace_records(pe).unwrap();
+    let mut plain = records.clone();
+    std::println!(
+      "[specks gpu] forced spill (stack {SPILL_TEST_LIMIT}): {} of {} slots claimed (unforced {}), {} specks traced (unforced {})",
+      header1[0], header1[1], header0[0], spilled.len(), plain.len()
+    );
+    assert!(header0[3] <= header0[2] && header1[3] <= header1[2], "the trace overflowed its capacity: {header0:?} {header1:?}");
+    assert!(header1[0] > 0, "the stack limit of {SPILL_TEST_LIMIT} nodes forced no spill");
+    assert!(header1[0] <= header1[1], "the forced spill ran out of slots ({} claimed of {}): lower the walks or raise the limit", header1[0], header1[1]);
+    assert_eq!(header1[8], SPILL_TEST_LIMIT, "the header's stack limit word");
+    spilled.sort_unstable();
+    plain.sort_unstable();
+    assert_eq!(spilled.len(), plain.len(), "the spilled walk drew {} specks, the unforced {}", spilled.len(), plain.len());
+    if let Some(i) = (0..plain.len()).find(|&i| spilled[i] != plain[i]) {
+      panic!("the spilled walk's specks differ from the unforced walk's: first at sorted #{i}: {:?} vs {:?}", spilled[i], plain[i]);
+    }
+  }
   let fb = |w: u32| f32::from_bits(w);
   let trace: alloc::vec::Vec<(u32, [f32; 3])> =
     records.iter().map(|w| (w[0], [fb(w[1]), fb(w[2]), fb(w[3])])).collect();

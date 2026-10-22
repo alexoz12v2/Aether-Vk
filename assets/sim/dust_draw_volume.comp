@@ -80,7 +80,7 @@ bool dust_draw_volume_record(uint r) {
     dust_phot_sun = sun;
     dust_phot_rh = rh;
     dust_phot_albedo = pc.albedo;
-    dust_phot_lut = pc.pyramid;
+    dust_phot_lut_addr = uvec2(pc.pyramid);
     dust_pyr_split_word = pc.pyramid.v[DUST_PYR_SPLIT_DEPTH];
     uint levels = pc.pyramid.v[DUST_PYR_LEVELS];
     float W = float(pc.pyramid.v[DUST_PYR_WIDTH]);

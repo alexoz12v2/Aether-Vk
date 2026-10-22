@@ -1276,9 +1276,22 @@ fn gpu_dust_moments_match_reference() {
 /// cluster changed (so the skip really happened: an uncached propagate's generation follows the
 /// frame and the range, not the emission); without the flag the slot is recomputed; a new time
 /// bumps the generation and rewrites every stamp, equal to the unflagged propagate at that time.
+/// At every trajectory detail (17 / 9 / 5): the stride shares `pc.skip.x` with the flag (bits
+/// 1-2), and until 2026-10-22 the shader tested the whole word, so the skip was unconditional at
+/// details 9 and 5 (the "without the flag" step below re-evaluated nothing).
 #[test]
 fn gpu_dust_propagate_stamp_skips_at_the_same_time() {
   with_dust_device(9040, |device, capacity, _, _| {
+    for detail in [17u32, 9, 5] {
+      assert_eq!(device.dust_set_propagate_detail(detail), detail);
+      stamp_skips_at_the_same_time(device, capacity, detail);
+    }
+    device.dust_set_propagate_detail(dust::DUST_PROPAGATE_DETAIL_DEFAULT);
+  });
+}
+
+fn stamp_skips_at_the_same_time(device: &Device, capacity: u32, detail: u32) {
+  {
     let id = 9040;
     // the range wraps: 300 slots before the end, 724 after the start
     let batch = test_batch(1024, 3600.0, capacity - 300, capacity);
@@ -1351,10 +1364,10 @@ fn gpu_dust_propagate_stamp_skips_at_the_same_time() {
       assert_eq!(words(&m6[i]), words(&m5[i]), "ring offset {i}: the bumped generation's words");
     }
     std::println!(
-      "[dust gpu] propagate stamp: generations {g1} → {g2}, {} live, {changed} re-evaluated",
+      "[dust gpu] propagate stamp (detail {detail}): generations {g1} → {g2}, {} live, {changed} re-evaluated",
       live.len()
     );
-  });
+  }
 }
 
 /// `dust_splat.comp` scatters the same texel counts as the reference `splat_tier` into the
