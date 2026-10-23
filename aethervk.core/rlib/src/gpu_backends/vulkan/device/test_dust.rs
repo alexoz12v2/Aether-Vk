@@ -2471,6 +2471,108 @@ fn gpu_dust_haze_detail_trades_subpackets_on_the_top_level() {
   });
 }
 
+/// The volume feedback with the haze engaged (round 9 step B): the haze detail test's
+/// inside-the-cloud frame (a 2-day batch at 2 days, the eye 200 m up, perspective) at haze
+/// detail 1. The scene is under the budget at bias 0 (61 M evaluations), so the plateau is pinned
+/// first (`dust_set_volume_bias(Some(levels − 1))`, 12 frames: the haze engages, ~0.1 M
+/// evaluations) and then released: the readbacks under budget / 8 are held
+/// `DUST_FEEDBACK_TOP_HOLD` times before the first change, that change is exactly one step off the
+/// plateau (`levels − 2`, where the haze is off), and the bias never returns to the plateau (the
+/// scene's own bias is 0). The bias history is printed.
+#[test]
+fn gpu_dust_haze_feedback_settles_on_the_top_level() {
+  let id = 9064;
+  with_dust_device(id, |device, capacity, _, _| {
+    let batch = test_batch(1024, 2.0 * 86400.0, 3, capacity);
+    emit(device, id, &batch);
+    let first_slot = batch.first_index & batch.ring_mask;
+    let pe = crate::gpu::PresentationEngineHandle(u64::MAX - 64);
+    let (w, h) = (640u32, 400u32);
+    let flow = dust::DustFlowUniform {
+      t_hi: 1.0e8,
+      t_lo: 0.0,
+      speed: 1.0,
+    };
+    let tan_h = (30.0f32).to_radians().tan();
+    let frame = frame_after(2.0);
+    let d = 200.0f32;
+    let mut persp = [0.0f32; 16];
+    persp[0] = h as f32 / (w as f32 * tan_h);
+    persp[5] = 1.0 / tan_h;
+    persp[10] = -1e-3;
+    persp[11] = -1.0;
+    persp[15] = d;
+    let base_pc = dust::DustSplatPushConstants {
+      moments: 0,
+      render: 0,
+      pyramid: 0,
+      live_count: batch.count,
+      flags: dust::DUST_VIEW_FLOW | dust::haze_detail_flag_bits(1),
+      exposure: 1.0,
+      inv_unit: 0.0,
+      color: dust::pack_color([1.0, 0.6, 0.2, 1.0]),
+      albedo: 0.04,
+      eye_local: [0.0, 0.0, d, 30.0 * 86400.0],
+      mvp: persp,
+    };
+    let pinned = 12usize;
+    let mut history = Vec::new();
+    let mut top_min = None;
+    for i in 0..64 {
+      if i == pinned {
+        device.dust_set_volume_bias(pe, None);
+      }
+      let mut cmds = device
+        .run_transient_commands(|cmd| {
+          device.cmd_dust_pre_propagate_barrier(cmd);
+          let view = device.cmd_dust_frame_begin(cmd, pe, [w, h], base_pc.flags, flow)?;
+          let mut pc = base_pc;
+          pc.inv_unit = 1.0 / view.unit;
+          device.cmd_dust_system_begin(id, pc.flags, flow)?;
+          let (render, moments) = device.cmd_dust_propagate(cmd, id, 0, capacity, first_slot, batch.count, &frame)?;
+          device.cmd_dust_pre_splat_barrier(cmd);
+          device.cmd_dust_splat(cmd, pe, id, 0, first_slot, capacity, render, moments, pc)?;
+          device.cmd_dust_post_splat_barrier(cmd);
+          device.cmd_dust_frame_end(cmd, pe)?;
+          device.cmd_dust_system_end(id)?;
+          Ok(())
+        })
+        .unwrap();
+      cmds.cleanup(&device.device);
+      let pyr = device.download_dust_pyramid(pe).unwrap();
+      let stats = dust::VolumeStats::load(&pyr);
+      history.push((stats.bias, stats.evals, dust::volume_top_only_header(&pyr, stats.bias)));
+      if i == 0 {
+        let t = dust::volume_top_min(&pyr);
+        top_min = Some(t);
+        device.dust_set_volume_bias(pe, Some(t));
+      }
+    }
+    let top_min = top_min.unwrap();
+    std::println!("[dust haze feedback] top plateau from bias {top_min}; bias history (bias, evaluations, top): {history:?}");
+    // the frames drawn while pinned (the pin takes from frame 1) sit on the plateau with the haze
+    // engaged: an order of magnitude fewer evaluations than at bias 0
+    assert!(history[2..pinned].iter().all(|f| f.0 == top_min && f.2), "the pin did not hold: {history:?}");
+    assert!(history[pinned - 1].1 * 10 < history[0].1, "the haze did not engage on the plateau: {history:?}");
+    // after the release: held DUST_FEEDBACK_TOP_HOLD readbacks (the frames in flight at the release,
+    // DUST_READBACK_SLOTS, are read back after it and count), then one step
+    let first_change = history[pinned..].iter().position(|f| f.0 != top_min).map(|k| k + pinned);
+    let first_change = first_change.expect("the bias never left the plateau");
+    assert!(
+      first_change >= pinned + (super::dust::DUST_FEEDBACK_TOP_HOLD as usize - super::dust::DUST_READBACK_SLOTS),
+      "the plateau was left after {} readbacks, before the hold: {history:?}",
+      first_change - pinned
+    );
+    assert_eq!(history[first_change].0, top_min - 1, "the first step off the plateau is not one level: {history:?}");
+    assert!(history[first_change..].iter().all(|f| !f.2), "the bias returned to the plateau: {history:?}");
+    assert!(
+      history[first_change..].windows(2).all(|w| w[1].0 <= w[0].0),
+      "the bias rose again below the plateau: {history:?}"
+    );
+    device.dust_set_volume_bias(pe, None);
+  });
+}
+
 /// whether a [`splat_parity`] compared the small pieces' path counts (the profiler's words)
 static PARITY_SMALL_PATHS_COMPARED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 /// the pieces the reference demoted in the [`splat_parity`] frames whose path counts were compared

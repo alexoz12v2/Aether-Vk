@@ -9131,14 +9131,136 @@ fn haze_detail_clamps_and_round_trips_through_the_flags() {
   assert!(!volume_top_only(&layout, 0));
 }
 
-/// The haze detail caps the sub-packets of a cluster (`subpackets_cells_bins` under
-/// `set_haze_active`, as `splat_cluster_inner` sets it at the top level): 16 draws exactly the
-/// packets of the knob untouched, every lower value no more packets (fewer at 4 and below: at most
-/// `H` chord groups of `H` time pieces), 1 one packet per cluster, the flux conserved at every
-/// value; the young cone (time pieces), the month-old polyline and a cluster without a predecessor
-/// (round 8 step G)
+/// The haze detail caps the sub-packets of a cluster the exact ray integral draws whatever its
+/// grouping (`subpackets_cells_bins` under `set_haze_active`, as `splat_cluster_inner` sets it at
+/// the top level, and a perspective view with the eye close along the polyline: `haze_volumetric`
+/// true): 16 draws exactly the packets of the knob untouched, every lower value no more packets
+/// (at most `H` chord groups of `H` time pieces, the depth rules lifted), 1 one packet per cluster,
+/// the flux conserved at every value. Without a view (orthographic) and from a far eye (the finest
+/// grouping passes the depth rule: an EWA cluster) every value draws the untouched packets; the
+/// young cone (time pieces), the month-old polyline and a cluster without a predecessor (round 8
+/// step G, round 9 step A)
 #[test]
 fn haze_detail_caps_the_subpackets_on_the_top_level() {
+  let moments_aged = haze_test_cluster;
+  assert_eq!(haze_active(), DUST_HAZE_DETAIL_DEFAULT, "the knob starts off");
+  assert!(lod_view_active().is_none(), "a view is active before the test");
+  for (name, age_o, age_p) in [("young", 468.0, Some(2300.0)), ("month", 25.0 * 86400.0, Some(25.1 * 86400.0)), ("alone", 3600.0, None)] {
+    let m = moments_aged(age_o);
+    let p = age_p.map(|a| moments_aged(a));
+    let seg = p.as_ref().map_or([0.0; 3], |p| sub3f(p.mean(), m.mean()));
+    // the view's forward along the polyline (its first to last edge), the eye behind the mean
+    let scalef = |a: [f32; 3], k: f32| [a[0] * k, a[1] * k, a[2] * k];
+    let ext = sub3f(m.edge(SIZE_EDGES as usize - 1), m.edge(0));
+    let fwd = scalef(ext, 1.0 / norm3f(ext));
+    let probe = polyline_depth(&m, sub3f(m.mean(), scalef(fwd, 1.0e9)), fwd).expect("a depth from a far eye");
+    let bin_depth = probe.0;
+    // the near eye: off the mean looking across the polyline, the offset halved from a bin's
+    // depth until the cluster is haze (every bin near the eye plane; an eye inside a long
+    // polyline looking along it rightly keeps the far bins); the far eye: pushed out along the
+    // polyline until the cluster is no longer haze
+    let cross = sub3f([fwd[1] * 1.0 - fwd[2] * 0.0, fwd[2] * 0.0 - fwd[0] * 1.0, fwd[0] * 0.0 - fwd[1] * 0.0], [0.0; 3]);
+    let across = scalef(cross, 1.0 / norm3f(cross));
+    // (the predicate takes the pieces the level of detail gives the cluster at that view)
+    let haze_at = |eye: [f32; 3], fwd: [f32; 3], depth_max: u32| -> bool {
+      set_lod_view_active(Some((eye, fwd)));
+      let n_t = time_pieces_at(&m, p.as_ref(), None).0;
+      set_lod_view_active(None);
+      haze_volumetric(&m, seg, p.as_ref(), n_t, Some((eye, fwd)), depth_max)
+    };
+    let mut near_d = bin_depth;
+    let near_eye = loop {
+      let eye = sub3f(m.mean(), scalef(across, near_d));
+      if haze_at(eye, across, 0) {
+        break eye;
+      }
+      near_d *= 0.5;
+      assert!(near_d > 1.0e-6 * bin_depth, "{name}: no near eye is haze");
+    };
+    std::println!("[haze detail] {name}: near eye {:.3} bin depths across", near_d / bin_depth);
+    let mut far_d = 40.0 * bin_depth;
+    let far_eye = loop {
+      let eye = sub3f(m.edge(0), scalef(fwd, far_d));
+      if !haze_at(eye, fwd, 0) {
+        break eye;
+      }
+      far_d *= 4.0;
+      assert!(far_d < 1.0e12, "{name}: no far eye passes the depth rule");
+    };
+    for (view, acts) in [(None, false), (Some((far_eye, fwd)), false), (Some((near_eye, across)), true)] {
+      set_lod_view_active(view);
+      let untouched = subpackets_cells_bins(&m, seg, p.as_ref(), false, false, None);
+      let mut counts = alloc::vec::Vec::new();
+      for h in [16u32, 8, 4, 2, 1] {
+        set_haze_active(h);
+        let packets = subpackets_cells_bins(&m, seg, p.as_ref(), false, false, None);
+        set_haze_active(DUST_HAZE_DETAIL_DEFAULT);
+        let flux: f32 = packets.iter().map(|(q, _, _, _)| q.flux).sum();
+        std::println!(
+          "[haze detail] {name} view {}: H {h}: {} packets (untouched {}), flux {:.6} of {:.6}",
+          match view { None => "none", Some(_) if acts => "near", Some(_) => "far" },
+          packets.len(), untouched.len(), flux, m.flux()
+        );
+        assert!((flux / m.flux() - 1.0).abs() < 1e-4, "{name} H {h}: the packets carry {flux} of {}", m.flux());
+        if h == 16 || !acts {
+          // (the Debug strings: the month case carries NaN fields on both sides, NaN != NaN)
+          assert_eq!(alloc::format!("{packets:?}"), alloc::format!("{untouched:?}"), "{name} view {view:?} H {h}: the packets changed");
+        }
+        assert!(packets.len() <= untouched.len(), "{name} H {h}: more packets than untouched");
+        if acts && h <= 4 {
+          assert!(packets.len() <= (h * h) as usize, "{name} H {h}: {} packets", packets.len());
+          assert!(packets.len() < untouched.len(), "{name} H {h}: no fewer packets than untouched ({})", untouched.len());
+        }
+        if acts && h == 1 {
+          assert_eq!(packets.len(), 1, "{name} H 1: one packet");
+        }
+        counts.push(packets.len());
+      }
+      assert!(counts.windows(2).all(|w| w[0] >= w[1]), "{name}: the counts are not monotone: {counts:?}");
+    }
+    set_lod_view_active(None);
+  }
+  // the helpers: at 16 the depth rules hold as the level of detail left them (a cap of 2 bins, a
+  // depth minimum of 3 pieces); below 16 they are lifted (one piece at least, 16 bins at most)
+  assert_eq!(haze_group(1, 16, 2), 1);
+  assert_eq!(haze_group(4, 16, 16), 4);
+  assert_eq!(haze_group(1, 1, 2), 16);
+  assert_eq!(haze_group(1, 1, 16), 16);
+  assert_eq!(haze_group(4, 8, 1), 4);
+  assert_eq!(haze_group(1, 4, 1), 4);
+  assert_eq!(haze_time_pieces(8, 16, 3), 8);
+  assert_eq!(haze_time_pieces(2, 16, 3), 2);
+  assert_eq!(haze_time_pieces(8, 1, 3), 1);
+  assert_eq!(haze_time_pieces(2, 1, 3), 1);
+  assert_eq!(haze_time_pieces(8, 4, 1), 4);
+  assert_eq!(haze_time_pieces(8, 4, 8), 4);
+}
+
+/// `volume_top_only_header` reads from a layout's header what `volume_top_only` reads from the
+/// layout, `volume_top_min` is its first true bias; a header without levels is never top-only
+/// (round 9 step B)
+#[test]
+fn volume_top_only_header_agrees_with_the_layout() {
+  for (w, h) in [(480u32, 300u32), (1280, 800), (33, 7)] {
+    let layout = PyramidLayout::new(w, h);
+    let header = layout.header();
+    let levels = layout.level_count();
+    for bias in 0..(levels + 4) {
+      assert_eq!(volume_top_only_header(&header, bias), volume_top_only(&layout, bias), "{w}×{h} bias {bias}");
+    }
+    assert_eq!(volume_top_min(&header), levels - 1);
+    assert!(volume_top_only_header(&header, volume_top_min(&header)));
+    assert!(!volume_top_only_header(&header, volume_top_min(&header) - 1));
+  }
+  let empty = alloc::vec![0u32; PYRAMID_HEADER_WORDS as usize];
+  assert!(!volume_top_only_header(&empty, 0));
+  assert!(!volume_top_only_header(&empty, 15));
+  assert_eq!(volume_top_min(&empty), 0);
+}
+
+/// The clusters of the haze tests: a spinning site's cluster at `age` (a month-long history,
+/// the comet moving), as `packet_moments` leaves it (round 8 step G, round 9 step A)
+fn haze_test_cluster(age: f64) -> DustMoments {
   let axis = unit([0.2, 0.1, 0.97]);
   let axis_f = [axis[0] as f32, axis[1] as f32, axis[2] as f32];
   let omega = 2.0 * core::f64::consts::PI / (12.4 * 3600.0);
@@ -9150,61 +9272,125 @@ fn haze_detail_caps_the_subpackets_on_the_top_level() {
   let (centre_now, _) = kepler::propagate_f64(rc, vc, SUN_MU_M3_S2, t_now - T_START);
   let frame = DustFrame::new(centre_now, t_now, [0.0, 0.0, 0.0, 1.0], 1.0e9)
     .with_spin([axis[0], axis[1], axis[2], omega]);
-  let moments_aged = |age: f64| -> DustMoments {
-    let t_rel = t_now - T_START - age;
-    let mut b = test_batch(1, 0.0);
-    let (centre, v_c) = kepler::propagate_f64(rc, vc, SUN_MU_M3_S2, t_rel);
-    let turned = rotate_axis_angle(off, axis, omega * t_rel);
-    b.spin = [axis_f[0], axis_f[1], axis_f[2], omega as f32];
-    b.rot_start = qaxis_angle(axis_f, (omega * t_rel) as f32);
-    b.site_offset = [off[0] as f32, off[1] as f32, off[2] as f32, 0.0];
-    b.jet_dir_aperture = [n0[0] as f32, n0[1] as f32, n0[2] as f32, 0.0];
-    b.lit = [0.0, 0.0, 0.0, LIT_MODE_ALWAYS];
-    b.set_comet(add(centre, turned), v_c, T_START + t_rel, 0.0);
-    let (_, m) = packet_moments(&emit_cluster(&b, 0), 0, &frame);
-    assert!(m.flux() > 0.0, "age {age}: culled");
-    m
-  };
+  let t_rel = t_now - T_START - age;
+  let mut b = test_batch(1, 0.0);
+  let (centre, v_c) = kepler::propagate_f64(rc, vc, SUN_MU_M3_S2, t_rel);
+  let turned = rotate_axis_angle(off, axis, omega * t_rel);
+  b.spin = [axis_f[0], axis_f[1], axis_f[2], omega as f32];
+  b.rot_start = qaxis_angle(axis_f, (omega * t_rel) as f32);
+  b.site_offset = [off[0] as f32, off[1] as f32, off[2] as f32, 0.0];
+  b.jet_dir_aperture = [n0[0] as f32, n0[1] as f32, n0[2] as f32, 0.0];
+  b.lit = [0.0, 0.0, 0.0, LIT_MODE_ALWAYS];
+  b.set_comet(add(centre, turned), v_c, T_START + t_rel, 0.0);
+  let (_, m) = packet_moments(&emit_cluster(&b, 0), 0, &frame);
+  assert!(m.flux() > 0.0, "age {age}: culled");
+  m
+}
+
+/// `haze_volumetric` is the splitter's rule on every sub-packet (round 9 step A2): for random
+/// eyes about the haze clusters (a hundredth to a thousand extents off, looking roughly at them)
+/// wherever it is true the pooled packet goes whole to the exact integral and — the guarantee
+/// the knob rests on — the haze detail 1 emits one packet that the splitter sends whole to the
+/// exact ray integral; measured against the detail 16's packets, the splitter keeps at most 1 %
+/// of those the haze pools, and the probes miss at most 10 % of the all-volume eyes; it is false
+/// without a view, never true at depth 4 alone; both sides of the draw covered
+#[test]
+fn haze_volumetric_is_the_split_rule_of_the_pooled_packet() {
   assert_eq!(haze_active(), DUST_HAZE_DETAIL_DEFAULT, "the knob starts off");
+  assert!(lod_view_active().is_none(), "a view is active before the test");
+  let mut seed = 0x9e37_79b9u32;
+  let mut rnd = || {
+    seed ^= seed << 13;
+    seed ^= seed >> 17;
+    seed ^= seed << 5;
+    (seed >> 8) as f32 / (1u32 << 24) as f32
+  };
+  let scalef = |a: [f32; 3], k: f32| [a[0] * k, a[1] * k, a[2] * k];
+  let add3f = |a: [f32; 3], b: [f32; 3]| [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+  let unit3f = |a: [f32; 3]| scalef(a, 1.0 / norm3f(a));
+  let (mut trues, mut falses, mut deep_split, mut missed) = (0usize, 0usize, 0usize, 0usize);
+  let (mut sub_at_haze, mut kept_at_haze, mut leaky) = (0usize, 0usize, 0usize);
   for (name, age_o, age_p) in [("young", 468.0, Some(2300.0)), ("month", 25.0 * 86400.0, Some(25.1 * 86400.0)), ("alone", 3600.0, None)] {
-    let m = moments_aged(age_o);
-    let p = age_p.map(|a| moments_aged(a));
+    let m = haze_test_cluster(age_o);
+    let p = age_p.map(haze_test_cluster);
     let seg = p.as_ref().map_or([0.0; 3], |p| sub3f(p.mean(), m.mean()));
-    let untouched = subpackets_cells_bins(&m, seg, p.as_ref(), false, false, None);
-    let mut counts = alloc::vec::Vec::new();
-    for h in [16u32, 8, 4, 2, 1] {
-      set_haze_active(h);
-      let packets = subpackets_cells_bins(&m, seg, p.as_ref(), false, false, None);
-      set_haze_active(DUST_HAZE_DETAIL_DEFAULT);
-      let flux: f32 = packets.iter().map(|(q, _, _, _)| q.flux).sum();
-      std::println!("[haze detail] {name} H {h}: {} packets (untouched {}), flux {:.6} of {:.6}", packets.len(), untouched.len(), flux, m.flux());
-      assert!((flux / m.flux() - 1.0).abs() < 1e-4, "{name} H {h}: the packets carry {flux} of {}", m.flux());
-      if h == 16 {
-        // (the Debug strings: the month case carries NaN fields on both sides, NaN != NaN)
-        assert_eq!(alloc::format!("{packets:?}"), alloc::format!("{untouched:?}"), "{name}: H 16 changes the packets");
+    let ext = norm3f(sub3f(m.edge(SIZE_EDGES as usize - 1), m.edge(0))).max(norm3f(seg));
+    let pooled = pooled_packet(&m, seg);
+    let (mut t_here, mut f_here) = (0usize, 0usize);
+    for _ in 0..400 {
+      let dir = unit3f([rnd() * 2.0 - 1.0, rnd() * 2.0 - 1.0, rnd() * 2.0 - 1.0]);
+      let dist = ext * 10.0f32.powf(rnd() * 5.0 - 2.0);
+      let eye = add3f(m.mean(), scalef(dir, dist));
+      let fwd = unit3f(add3f(scalef(dir, -1.0), [rnd() * 0.6 - 0.3, rnd() * 0.6 - 0.3, rnd() * 0.6 - 0.3]));
+      assert!(!haze_volumetric(&m, seg, p.as_ref(), TIME_PIECES_MAX, None, 0), "{name}: haze without a view");
+      set_lod_view_active(Some((eye, fwd)));
+      let n_t = time_pieces_at(&m, p.as_ref(), None).0;
+      set_lod_view_active(None);
+      let view = SplitView {
+        eye,
+        fwd,
+        perspective: true,
+        volumetric: true,
+        shell: 0.0,
+        volume_detail: DUST_VOLUME_DETAIL_DEFAULT,
+        haze_detail: DUST_HAZE_DETAIL_DEFAULT,
+      };
+      let v = haze_volumetric(&m, seg, p.as_ref(), n_t, Some((eye, fwd)), 0);
+      let step = split_step(&pooled, false, 0, 0, &view, false);
+      assert!(!v || matches!(step, SplitStep::Volume), "{name}: eye {eye:?} fwd {fwd:?}: haze with a pooled packet the splitter does not draw whole: {step:?}");
+      // at the frame's full depth a sub-packet the splitter would bisect is not haze
+      let v4 = haze_volumetric(&m, seg, p.as_ref(), n_t, Some((eye, fwd)), DUST_SPLIT_DEPTH_MAX);
+      assert!(!v4 || v, "{name}: eye {eye:?} fwd {fwd:?}: haze at depth 4 only");
+      if v && !v4 {
+        deep_split += 1;
       }
-      assert!(packets.len() <= untouched.len(), "{name} H {h}: more packets than untouched");
-      if h <= 4 {
-        assert!(packets.len() <= (h * h) as usize, "{name} H {h}: {} packets", packets.len());
-        assert!(packets.len() < untouched.len(), "{name} H {h}: no fewer packets than untouched ({})", untouched.len());
+      // the detail 16 at this view: a haze cluster's every sub-packet goes to the exact
+      // integral (or is dropped); a cluster that is not haze has one the splitter keeps, clips
+      // or bisects, or a pooled packet it would not draw whole
+      set_lod_view_active(Some((eye, fwd)));
+      let full = subpackets_cells_bins(&m, seg, p.as_ref(), false, false, None);
+      set_lod_view_active(None);
+      let kept = full.iter().filter(|(q, ..)| matches!(split_step(q, false, 0, 0, &view, false), SplitStep::Keep)).count();
+      if v {
+        sub_at_haze += full.len();
+        kept_at_haze += kept;
+        if kept > 0 {
+          leaky += 1;
+        }
+      } else if kept == 0 && matches!(step, SplitStep::Volume) {
+        missed += 1;
       }
-      if h == 1 {
-        assert_eq!(packets.len(), 1, "{name} H 1: one packet");
+      if v {
+        set_lod_view_active(Some((eye, fwd)));
+        set_haze_active(1);
+        let packets = subpackets_cells_bins(&m, seg, p.as_ref(), false, false, None);
+        set_haze_active(DUST_HAZE_DETAIL_DEFAULT);
+        set_lod_view_active(None);
+        assert_eq!(packets.len(), 1, "{name}: H 1 at a haze eye {eye:?} emits {} packets", packets.len());
+        for (q, ..) in &packets {
+          let s = split_step(q, false, 0, 0, &view, false);
+          assert!(matches!(s, SplitStep::Volume), "{name}: a haze packet the splitter keeps: eye {eye:?} fwd {fwd:?}: {s:?}");
+        }
+        t_here += 1;
+      } else {
+        f_here += 1;
       }
-      counts.push(packets.len());
     }
-    assert!(counts.windows(2).all(|w| w[0] >= w[1]), "{name}: the counts are not monotone: {counts:?}");
+    std::println!("[haze predicate] {name}: haze at {t_here} of {} eyes, {f_here} not", t_here + f_here);
+    trues += t_here;
+    falses += f_here;
   }
-  // the group and time-piece rules keep the depth criterion: a cap of 2 bins holds against H = 1,
-  // a depth minimum of 3 pieces holds against H = 1 (never past the pieces there are)
-  assert_eq!(haze_group(1, 1, 2), 2);
-  assert_eq!(haze_group(1, 1, 16), 16);
-  assert_eq!(haze_group(4, 16, 16), 4);
-  assert_eq!(haze_group(4, 8, 1), 1);
-  assert_eq!(haze_time_pieces(8, 1, 3), 3);
-  assert_eq!(haze_time_pieces(2, 1, 3), 2);
-  assert_eq!(haze_time_pieces(8, 16, 1), 8);
-  assert_eq!(haze_time_pieces(8, 4, 1), 4);
+  std::println!(
+    "[haze predicate] {trues} haze, {falses} not, {deep_split} bisected at depth 4; at the haze eyes {kept_at_haze} of {sub_at_haze} detail-16 packets kept ({leaky} eyes); {missed} all-volume clusters missed"
+  );
+  assert!(trues > 100 && falses > 100, "the draw covered one side only: {trues} / {falses}");
+  assert!(deep_split > 0, "no eye told depth 4 from depth 0");
+  // the probes stand in for the detail 16's packets (capsules, sweeps, cone pieces): at the haze
+  // eyes the splitter keeps at most 1 % of the packets the detail 16 would have drawn (those
+  // the haze pools into its Gaussian: measured 0.3 %), and the probes miss at most 10 % of the
+  // all-volume eyes (measured 5.6 %: a miss costs speed, not the image)
+  assert!(kept_at_haze * 100 <= sub_at_haze, "the haze pools {kept_at_haze} of {sub_at_haze} kept packets");
+  assert!(missed * 10 <= trues + falses, "the probe missed {missed} all-volume clusters of {}", trues + falses);
 }
 
 #[test]

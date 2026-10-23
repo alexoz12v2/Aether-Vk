@@ -58,6 +58,9 @@ uint dust_rec_cluster = 0u;
 uint dust_first_slot = 0u;
 // the record's bin is walked for specks (dust_specks_mask): its shell mass is the specks'
 bool dust_rec_walked = false;
+// the cluster is haze (dust_haze_volumetric, judged once per cluster by main's pre-pass; false
+// with the knob off)
+bool dust_haze_cluster = false;
 #define DUST_SQUEUE_EMIT(mean_, S_, d_, flux_, exposure_, openStart_, openEnd_, rho_, segT_, color_) { \
     if (dust_emitting) { \
         DUST_SQUEUE_PUT(pc.pyramid, dust_squeue_records(dust_squeue_base(pc.pyramid)), dust_rec_at + dust_rec_count, \
@@ -65,6 +68,60 @@ bool dust_rec_walked = false;
                         dust_phot_support, dust_phot_has_origin, dust_phot_origin, dust_phot_sun, dust_phot_rh, dust_rec_cluster, dust_rec_walked) \
     } \
     dust_rec_count++; \
+}
+
+// The per-cluster prelude every lane recomputes (identical values): the stream predecessor and
+// the segment to it, the width ratio, the spiral, the time pieces under the level of detail
+// (dust_time_pieces_lod: capped by the time segment on screen, no fewer than its depth span
+// needs), the view direction and the polyline's depth rule inputs
+struct DustClusterPieces {
+    int pred;
+    uint pi;
+    vec3 seg;
+    float ratio;
+    bool spiral;
+    vec3 spAxis;
+    float spOmega;
+    uint nT;
+    bool perspective;
+    vec3 fwd;
+    bool lodDepth;
+    float lodBinDepth;
+    float lodNear;
+    uint depthMin;
+};
+void dust_cluster_pieces(uint mi, out DustClusterPieces c) {
+    float W = float(pc.pyramid.v[DUST_PYR_WIDTH]);
+    float H = float(pc.pyramid.v[DUST_PYR_HEIGHT]);
+    // the segment to the stream predecessor (the dust emitted between the two samples), and its
+    // width (older: wider) for the cone pieces
+    c.pred = dust_streak_pred(pc.render, mi, dust_first_slot, pc.liveCount);
+    c.pi = c.pred >= 0 ? uint(c.pred) : mi;
+    c.seg = c.pred >= 0 ? dust_mom.m[c.pi].mean_flux.xyz - dust_mom.m[mi].mean_flux.xyz : vec3(0.0);
+    c.ratio = dust_width_ratio(mi, c.pred >= 0, c.pi);
+    // the spiral of a rotating nucleus (dust::spiral_of): the pieces follow it, and there are
+    // enough of them to draw it
+    c.spAxis = vec3(0.0);
+    c.spOmega = 0.0;
+    c.spiral = c.pred >= 0 && dust_spiral_of(mi, c.pi, c.spAxis, c.spOmega);
+    c.nT = c.spiral ? DUST_TIME_PIECES_MAX : dust_time_pieces(c.ratio);
+    // the view direction of the split and the eye-plane cut (dust_view_forward)
+    c.fwd = dust_view_forward(pc.mvp, pc.eyeLocal.xyz, c.perspective);
+    // the cluster level of detail (dust_lod_*, DUST_PYR_LOD; dust::subpackets_cells): the time
+    // pieces capped by the time segment on screen and no fewer than its depth span needs
+    // (dust_time_pieces_depth); the chord groups in the non-merged branch of
+    // dust_splat_subpacket; the sweeps step by the knob (dust_time_sweep). Perspective views only
+    // for the depth rule.
+    dust_lod_px = dust_lod_px_of(pc.pyramid);
+    dust_group = 1u;
+    c.lodBinDepth = 0.0;
+    c.lodNear = 0.0;
+    c.lodDepth = c.perspective && dust_polyline_depth(mi, pc.eyeLocal.xyz, c.fwd, c.lodBinDepth, c.lodNear);
+    float lodSpan = c.pred >= 0 ? dot(dust_mom.m[c.pi].mean_flux.xyz - dust_mom.m[mi].mean_flux.xyz, c.fwd) : 0.0;
+    c.depthMin = dust_time_pieces_depth(c.pred >= 0 && c.perspective, lodSpan, c.lodDepth, c.lodNear);
+    float tPx = 0.0;
+    bool hasT = c.pred >= 0 && dust_time_segment_px(mi, c.pi, pc.mvp, W, H, tPx);
+    c.nT = dust_time_pieces_lod(c.nT, hasT, tPx, dust_lod_px, c.depthMin);
 }
 
 // Sub-packet `sub` of the cluster in ring slot `i` (a warp per cluster, a lane per sub-packet: the slow end bin's
@@ -82,34 +139,26 @@ void dust_splat_subpacket(uint i, uint sub) {
     float age = dust_mom.m[mi].cov_b_age_id.z;
     // the segment to the stream predecessor (the dust emitted between the two samples), and its
     // width (older: wider) for the cone pieces
-    int pred = dust_streak_pred(pc.render, i, dust_first_slot, pc.liveCount);
-    uint pi = pred >= 0 ? uint(pred) : mi;
-    vec3 seg = pred >= 0 ? dust_mom.m[pi].mean_flux.xyz - dust_mom.m[mi].mean_flux.xyz : vec3(0.0);
-    float ratio = dust_width_ratio(mi, pred >= 0, pi);
-    // the spiral of a rotating nucleus (dust::spiral_of): the pieces follow it, and there are
-    // enough of them to draw it
-    vec3 spAxis; float spOmega;
-    bool spiral = pred >= 0 && dust_spiral_of(mi, pi, spAxis, spOmega);
+    DustClusterPieces cp;
+    dust_cluster_pieces(mi, cp);
+    int pred = cp.pred;
+    uint pi = cp.pi;
+    vec3 seg = cp.seg;
+    float ratio = cp.ratio;
+    vec3 spAxis = cp.spAxis; float spOmega = cp.spOmega;
+    bool spiral = cp.spiral;
     float ageO = dust_mom.m[mi].cov_b_age_id.z, ageP = pred >= 0 ? dust_mom.m[pi].cov_b_age_id.z : ageO;
-    uint nT = spiral ? DUST_TIME_PIECES_MAX : dust_time_pieces(ratio);
-    // the view direction of the split and the eye-plane cut (dust_view_forward)
-    bool perspective;
-    vec3 fwd = dust_view_forward(pc.mvp, pc.eyeLocal.xyz, perspective);
-    // the cluster level of detail (dust_lod_*, DUST_PYR_LOD; dust::subpackets_cells): the time
-    // pieces capped by the time segment on screen and no fewer than its depth span needs
-    // (dust_time_pieces_depth); the chord groups in the non-merged branch below; the sweeps step by
-    // the knob (dust_time_sweep). Perspective views only for the depth rule.
-    dust_lod_px = dust_lod_px_of(pc.pyramid);
-    dust_group = 1u;
-    float lodBinDepth = 0.0, lodNear = 0.0;
-    bool lodDepth = perspective && dust_polyline_depth(mi, pc.eyeLocal.xyz, fwd, lodBinDepth, lodNear);
-    float lodSpan = pred >= 0 ? dot(dust_mom.m[pi].mean_flux.xyz - dust_mom.m[mi].mean_flux.xyz, fwd) : 0.0;
-    uint depthMin = dust_time_pieces_depth(pred >= 0 && perspective, lodSpan, lodDepth, lodNear);
-    float tPx = 0.0;
-    bool hasT = pred >= 0 && dust_time_segment_px(mi, pi, pc.mvp, W, H, tPx);
-    nT = dust_time_pieces_lod(nT, hasT, tPx, dust_lod_px, depthMin);
-    // the haze detail (round 8 step G, dust_haze_*): at the top level, fewer sub-packets
+    uint nT = cp.nT;
+    bool perspective = cp.perspective;
+    vec3 fwd = cp.fwd;
+    float lodBinDepth = cp.lodBinDepth, lodNear = cp.lodNear;
+    bool lodDepth = cp.lodDepth;
+    uint depthMin = cp.depthMin;
+    // the haze detail (round 8 step G, round 9 steps A/A2; dust_haze_*): at the top level, fewer
+    // sub-packets for a haze cluster (dust_haze_volumetric, judged once per cluster by main's
+    // pre-pass: dust_haze_cluster); the default pays nothing
     uint hazeDetail = dust_haze_detail_of(pc.flags, levels, pc.pyramid);
+    if (!dust_haze_cluster) hazeDetail = DUST_SIZE_BINS;
     nT = dust_haze_time_pieces(nT, hazeDetail, depthMin);
     float exposure = pc.exposure;
     if ((pc.flags & DUST_VIEW_FLOW) != 0u) {
@@ -135,6 +184,9 @@ void dust_splat_subpacket(uint i, uint sub) {
     bool merged = dust_polyline_merged(mi, pc.mvp, W, H) && predMerged
                && (pred < 0 || dust_time_shallow(mi, pi, pc.mvp))
                && dust_specks_mask(mi) == 0u;
+    // haze detail 1 (round 9 step A2): the cluster is its pooled packet, the one
+    // dust_haze_volumetric judged, whole to the exact ray integral (never a walked cluster)
+    if (hazeDetail == 1u && dust_specks_mask(mi) == 0u) merged = true;
     dust_rec_walked = false;
     // bits 0-7: the split depth limit; bits 8-15: the volume level bias (host-written)
     uint splitWord = pc.pyramid.v[DUST_PYR_SPLIT_DEPTH];
@@ -361,6 +413,8 @@ void dust_splat_subpacket(uint i, uint sub) {
 // records in the chunk's queue
 shared uint dust_sub_counts[64];
 shared uint dust_cluster_base[2];
+// a refusal of the haze predicate by any lane of the warp's cluster (main's pre-pass)
+shared uint dust_haze_keep[2];
 
 void main() {
     // the chunk's cluster range [first, end) (the volume queue header, host-written per chunk:
@@ -403,6 +457,26 @@ void main() {
         uint v = (pc.flags >> 20u) & 0xFFu;
         if ((pc.flags & DUST_VIEW_DEBUG_STREAM) != 0u && (slot & ((1u << shift) - 1u)) != v) live = false;
         if ((pc.flags & DUST_VIEW_DEBUG_SAMPLE) != 0u && ((slot >> shift) % max(v, 1u)) != 0u) live = false;
+    }
+    // the haze predicate once per cluster (round 9 step A2; dust_haze_volumetric's probes spread
+    // over the lanes: lane sub takes probes sub and sub + 32, lane 0 the pooled packet; a shared
+    // word collects a refusal), only with the knob engaged (uniform: the default skips it)
+    bool hazeOn = dust_haze_detail_of(pc.flags, pc.pyramid.v[DUST_PYR_LEVELS], pc.pyramid) < DUST_SIZE_BINS;
+    if (hazeOn) {
+        if (sub == 0u) dust_haze_keep[lane >> 5u] = 0u;
+        barrier();
+        if (live) {
+            DustClusterPieces cp;
+            dust_cluster_pieces(i, cp);
+            uint depthMax = min(pc.pyramid.v[DUST_PYR_SPLIT_DEPTH] & 0xFFu, DUST_SPLIT_DEPTH_MAX);
+            bool ok = cp.perspective
+                   && dust_haze_probe(i, cp.seg, cp.ratio, cp.nT, pc.eyeLocal.xyz, cp.fwd, cp.perspective, depthMax, sub)
+                   && dust_haze_probe(i, cp.seg, cp.ratio, cp.nT, pc.eyeLocal.xyz, cp.fwd, cp.perspective, depthMax, sub + 32u)
+                   && (sub != 0u || dust_haze_pooled(i, cp.seg, pc.eyeLocal.xyz, cp.fwd, cp.perspective, depthMax));
+            if (!ok) atomicOr(dust_haze_keep[lane >> 5u], 1u);
+        }
+        barrier();
+        dust_haze_cluster = dust_haze_keep[lane >> 5u] == 0u;
     }
 #ifdef DUST_PROFILE
     DUST_PROF_BEGIN(thread)

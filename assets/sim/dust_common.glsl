@@ -2002,29 +2002,136 @@ uint dust_time_pieces_lod(uint nT, bool hasT, float tPx, float lodPx, uint depth
     return clamp(max(c, depthMin), 1u, max(nT, 1u));
 }
 
-// ─── The haze detail (mirror of dust::haze_*: the splat's flags bits 11-13; round 8 step G) ───
-// At a frame whose volume bias puts every volumetric piece on the 1 x 1 top level, a cluster is
-// drawn with at most ~detail sub-packets: its chord groups no smaller than 16 / detail bins (never
-// past the depth cap: the split's own criterion) and its time pieces no more than detail (never
-// fewer than the depth minimum). 16 changes nothing; off the top level nothing changes.
+// ─── The haze detail (mirror of dust::haze_*: the splat's flags bits 11-13; round 8 step G,
+// round 9 step A) ───
+// At a frame whose volume bias puts every volumetric piece on the 1 x 1 top level, a cluster the
+// exact ray integral draws whatever its grouping (dust_haze_volumetric: a single bin, or the finest
+// time piece, already deeper than the split tolerates — at the frames' split depth 0 such a packet
+// is never bisected but sent whole to dust_volume_scatter, so the depth rules only multiply the
+// volume packets: 16 bins x up to 8 time pieces, 45 per cluster at 1 km, 1 d/s) is drawn with at
+// most ~detail sub-packets: its chord groups no smaller than 16 / detail bins and its time pieces
+// no more than detail, the depth rules lifted. 16 changes nothing. Off the top level, for a cluster
+// some grouping of which the EWA draws (the far, narrow clusters of the fine levels: step G's
+// frame-wide rule coarsened them into 1-4 Gaussians, p99 10x at 1 km) and under the frame's
+// deep-chord bit (a deep chord KEPT and EWA-drawn: the 40 % loss of dust::deep_chord_factors)
+// nothing changes.
 // the frame's haze detail of a splat's flags word: the knob's value at the top level
-// (dust::volume_top_only: the bias of the split word's bits 8-15 and the level table), else 16
+// (dust::volume_top_only: the bias of the split word's bits 8-15 and the level table) without the
+// deep-chord bit, else 16
 uint dust_haze_detail_of(uint flags, uint levels, DustUintBuffer pyr) {
     uint detail = max(16u >> ((flags >> DUST_FLAGS_HAZE_DETAIL_SHIFT) & 7u), 1u);
     uint bias = (pyr.v[DUST_PYR_SPLIT_DEPTH] >> 8u) & 0xFFu;
     uint topW = pyr.v[DUST_PYR_TABLE + 3u * (levels - 1u) + 1u];
     uint topH = pyr.v[DUST_PYR_TABLE + 3u * (levels - 1u) + 2u];
-    return (bias + 1u >= levels && topW == 1u && topH == 1u) ? detail : DUST_SIZE_BINS;
+    bool deep = (pyr.v[DUST_PYR_FLAGS] & DUST_FRAME_DEEP_CHORD) != 0u;
+    return (bias + 1u >= levels && topW == 1u && topH == 1u && !deep) ? detail : DUST_SIZE_BINS;
 }
-// the chord group under the haze detail (dust::haze_group): no smaller than 16 / detail bins,
-// never past the depth cap
+// the kind of step dust_split_step takes for a root packet (level 0, unclipped, not forced):
+// its decision alone, the same tests in the same order (dust::split_step for the CPU mirror)
+int dust_split_kind(DustPacket p, uint depthMax, vec3 eye, vec3 fwd, bool perspective) {
+    if (!(dot(fwd, fwd) > 0.0)) return DUST_SPLIT_KEEP;
+    float depth = dot(p.mean - eye, fwd);
+    float sigmaV = sqrt(max(dust_var_along(p.S, fwd), 0.0));
+    float spanS = dot(p.seg, fwd);
+    float span = abs(spanS);
+    if (depth + 3.0 * sigmaV + max(spanS, 0.0) < 0.0) return DUST_SPLIT_DROP;
+    if (perspective && dust_is_volumetric(p, eye)) return DUST_SPLIT_VOLUME;
+    float d1 = depth + spanS;
+    if (span > 0.0 && (depth < 0.0) != (d1 < 0.0)) return DUST_SPLIT_CLIP;
+    bool want = 3.0 * sigmaV > depth
+             || (perspective && (sigmaV > DUST_SPLIT_EPS * depth || span > DUST_SPLIT_EPS * depth));
+    if (want && 0u < min(depthMax, DUST_SPLIT_DEPTH_MAX) && (span > 3.0 * sigmaV || sigmaV > 0.0)) return DUST_SPLIT_SPLIT;
+    if (want && perspective) {
+        bool deepOnly = depth > 0.0 && span > 3.0 * sigmaV
+                     && !(3.0 * sigmaV > depth) && !(sigmaV > DUST_SPLIT_EPS * depth);
+        if (!(deepOnly && dust_deep_chord)) return DUST_SPLIT_VOLUME;
+    }
+    return DUST_SPLIT_KEEP;
+}
+// whether a cluster is haze (dust::haze_volumetric; round 9 step A2): the probes of the detail
+// 16's sub-packets - for each size bin, the slow end's sub-bins too (dust_bin_subbins), the
+// first and the last of its nT time pieces (the count after the level of detail, at the width
+// ratio: dust_piece_bound), each as the splat draws the sub-bin: a chord-major bin (its chord
+// longer than the time segment) as the capsule along its chord with the piece as a Gaussian
+// (dust_bin_chord_sub; the bin's own width, no wider than any piece's), a time-major bin as its
+// Gaussian (dust_bin_packet_sub: width and chord) along the piece; the last piece from the own
+// bin shifted along seg - all go whole to the exact ray integral at the frame's
+// split depth (dust_split_kind = DUST_SPLIT_VOLUME) or lie behind the eye (DROP), and so does
+// the pooled packet (the whole polyline as one Gaussian along seg, dust_pooled_packet) the haze
+// detail 1 draws it as. Perspective views only; a cluster with one probe the splitter would keep
+// (EWA-drawn), clip or bisect keeps its level of detail whatever the knob (the pooled packet
+// alone is volumetric for nearly every cluster even 5000 km out - the pooled Gaussians are
+// coma-sized - and pooled the EWA clusters there into volume packets: perf9b/perf9b2). The
+// probes stand in for the packets (capsules, sweeps, cone pieces; fewer pieces are longer): the
+// CPU test measures the kept share they let through
+// The probes, numbered for the splat's lanes (dust_splat.comp: probe k on lane k & 31): sub-bin
+// k >> 1 (the slow end bin's sub-bins first, then a bin each: dust_bin_subbins), its first piece
+// (k even) or its last (k odd); dust_haze_probes of them, a k past the list passes
+uint dust_haze_probes() { return 2u * (dust_bin_subbins(0u) + DUST_SIZE_BINS - 1u); }
+bool dust_haze_probe(uint mi, vec3 seg, float ratio, uint nT, vec3 eye, vec3 fwd, bool perspective, uint depthMax, uint k) {
+    uint nj0 = dust_bin_subbins(0u);
+    if (k >= 2u * (nj0 + DUST_SIZE_BINS - 1u)) return true;
+    uint s = k >> 1u;
+    uint b = s < nj0 ? 0u : s - nj0 + 1u;
+    uint j = s < nj0 ? s : 0u;
+    uint nj = s < nj0 ? nj0 : 1u;
+    bool last = (k & 1u) != 0u;
+    float uFirst = dust_piece_bound(1u, nT, ratio);
+    float uLast = dust_piece_bound(nT - 1u, nT, ratio);
+    float u = last ? uLast : 0.0, du = last ? 1.0 - uLast : uFirst;
+    DustPacket p;
+    p.openStart = false;
+    p.openEnd = false;
+    p.rho = vec2(1.0);
+    p.segT = vec3(0.0);
+    vec3 a, c; float fa, fc;
+    dust_sub_edges(mi, b, j, nj, a, c, fa, fc);
+    bool timeMajor = dot(seg, seg) > dot(c - a, c - a);
+    if (timeMajor) {
+        dust_bin_packet_sub(mi, b, j, nj, p.mean, p.S, p.flux);
+        p.seg = seg * du;
+    } else {
+        vec3 chord;
+        dust_bin_chord_sub(mi, b, j, nj, seg * du, p.mean, chord, p.S, p.flux);
+        p.seg = chord;
+    }
+    p.mean += seg * u;
+    int kind = dust_split_kind(p, depthMax, eye, fwd, perspective);
+    return kind == DUST_SPLIT_VOLUME || kind == DUST_SPLIT_DROP;
+}
+// the pooled packet (the haze detail 1's) whole to the exact ray integral
+bool dust_haze_pooled(uint mi, vec3 seg, vec3 eye, vec3 fwd, bool perspective, uint depthMax) {
+    DustPacket p;
+    p.openStart = false;
+    p.openEnd = false;
+    p.rho = vec2(1.0);
+    p.segT = vec3(0.0);
+    p.seg = seg;
+    dust_pooled_packet(mi, p.mean, p.S, p.flux);
+    return dust_split_kind(p, depthMax, eye, fwd, perspective) == DUST_SPLIT_VOLUME;
+}
+// the serial reference (dust::haze_volumetric word for word; the splat spreads the probes over its lanes)
+bool dust_haze_volumetric(uint mi, vec3 seg, float ratio, uint nT, vec3 eye, vec3 fwd, bool perspective, uint depthMax) {
+    if (!perspective) return false;
+    uint n = dust_haze_probes();
+    for (uint k = 0u; k < n; ++k) {
+        if (!dust_haze_probe(mi, seg, ratio, nT, eye, fwd, perspective, depthMax, k)) return false;
+    }
+    return dust_haze_pooled(mi, seg, eye, fwd, perspective, depthMax);
+}
+// the chord group under the haze detail (dust::haze_group): at 16 the group untouched (never past
+// the depth cap, as dust_lod_group left it); below, no smaller than 16 / detail bins, the depth
+// cap lifted
 uint dust_haze_group(uint g, uint detail, uint depthCap) {
-    return min(max(g, DUST_SIZE_BINS / max(detail, 1u)), max(depthCap, 1u));
+    if (detail >= DUST_SIZE_BINS) return min(max(g, 1u), max(depthCap, 1u));
+    return min(max(g, DUST_SIZE_BINS / max(detail, 1u)), DUST_SIZE_BINS);
 }
-// the time pieces under the haze detail (dust::haze_time_pieces): no more than detail, never fewer
-// than the depth minimum (itself never more than nT)
+// the time pieces under the haze detail (dust::haze_time_pieces): at 16 untouched (never fewer
+// than the depth minimum, itself never more than nT); below, no more than detail, the depth
+// minimum lifted (one piece at least)
 uint dust_haze_time_pieces(uint nT, uint detail, uint depthMin) {
-    return max(min(nT, detail), min(depthMin, nT));
+    if (detail >= DUST_SIZE_BINS) return max(min(nT, detail), min(depthMin, nT));
+    return max(min(nT, detail), 1u);
 }
 
 // ─── Kepler (universal variables, Laguerre-Conway). Mirror of `dust::kepler` ─
