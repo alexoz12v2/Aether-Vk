@@ -108,6 +108,9 @@ void dust_splat_subpacket(uint i, uint sub) {
     float tPx = 0.0;
     bool hasT = pred >= 0 && dust_time_segment_px(mi, pi, pc.mvp, W, H, tPx);
     nT = dust_time_pieces_lod(nT, hasT, tPx, dust_lod_px, depthMin);
+    // the haze detail (round 8 step G, dust_haze_*): at the top level, fewer sub-packets
+    uint hazeDetail = dust_haze_detail_of(pc.flags, levels, pc.pyramid);
+    nT = dust_haze_time_pieces(nT, hazeDetail, depthMin);
     float exposure = pc.exposure;
     if ((pc.flags & DUST_VIEW_FLOW) != 0u) {
         exposure *= dust_flow_factor(age, uintBitsToFloat(pc.pyramid.v[DUST_PYR_T_HI]),
@@ -201,8 +204,9 @@ void dust_splat_subpacket(uint i, uint sub) {
         float ext = 0.0;
         bool hasExt = dust_polyline_extent_px(mi, pc.mvp, W, H, ext);
         // (a cluster with bins walked for specks keeps every bin: the hand-over is per bin)
+        uint depthCap = dust_lod_group_depth_cap(lodDepth, lodBinDepth, lodNear);
         uint g = dust_specks_mask(mi) != 0u ? 1u
-               : dust_lod_group(hasExt, ext, dust_lod_px, dust_lod_group_depth_cap(lodDepth, lodBinDepth, lodNear));
+               : dust_haze_group(dust_lod_group(hasExt, ext, dust_lod_px, depthCap), hazeDetail, depthCap);
         dust_group = g;
         // this lane's sub-packet (b, j) in the order the per-cluster loop ran them: the slow end
         // bin's DUST_END_SUBBINS sub-bins (dust::subpackets_cells), then a bin each (a group

@@ -187,6 +187,51 @@ pub fn volume_detail_from_flags(flags: u32) -> u32 {
   (DUST_VOLUME_DETAIL_MAX >> ((flags >> DUST_FLAGS_VOLUME_DETAIL_SHIFT) & 7)).max(DUST_VOLUME_DETAIL_MIN)
 }
 
+/// Default "haze detail" (Settings › Particle rendering; round 8 step G): at a frame whose volume
+/// bias puts every volumetric piece on the 1 × 1 top level, a cluster is drawn with at most ~this
+/// many sub-packets (chord groups no smaller than `16 / detail` bins, time pieces no more than
+/// `detail`; the level of detail's depth rule kept: `splat::haze_group`, `splat::haze_time_pieces`).
+/// 16 = today's image. Lower values (powers of two): faster, the top texel's light sampled by
+/// fewer packets. Off the top level nothing changes.
+pub const DUST_HAZE_DETAIL_DEFAULT: u32 = 16;
+/// Accepted haze detail range (the powers of two in it)
+pub const DUST_HAZE_DETAIL_MIN: u32 = 1;
+pub const DUST_HAZE_DETAIL_MAX: u32 = 16;
+/// [`DustSplatPushConstants::flags`] bits 11–13: `log2(16 / haze detail)`, 0 at the default
+/// (bits 8–10 are the volume detail; 11–13 were free)
+pub const DUST_FLAGS_HAZE_DETAIL_SHIFT: u32 = 11;
+const _: () = assert!(
+  (7 << DUST_FLAGS_HAZE_DETAIL_SHIFT)
+    & (DUST_VIEW_TRACERS
+      | DUST_VIEW_FLOW
+      | DUST_VIEW_DEBUG_STREAM
+      | DUST_VIEW_DEBUG_SAMPLE
+      | (0xFF << 20)
+      | DUST_VIEW_VOLUME_SPILL
+      | DUST_VIEW_EDGE_ODD
+      | (7 << DUST_FLAGS_VOLUME_DETAIL_SHIFT))
+    == 0
+);
+
+/// Clamps a haze detail to the largest power of two `≤ v` in [`DUST_HAZE_DETAIL_MIN`,
+/// `DUST_HAZE_DETAIL_MAX`] (0 → 1).
+pub fn clamp_haze_detail(v: u32) -> u32 {
+  let v = v.clamp(DUST_HAZE_DETAIL_MIN, DUST_HAZE_DETAIL_MAX);
+  1 << (31 - v.leading_zeros())
+}
+
+/// The push constants' flag bits of a haze detail (clamped first): `log2(16 / detail) << 11`,
+/// so 16 → 0, 8 → 1 << 11, …, 1 → 4 << 11
+pub fn haze_detail_flag_bits(detail: u32) -> u32 {
+  (DUST_HAZE_DETAIL_MAX / clamp_haze_detail(detail)).trailing_zeros() << DUST_FLAGS_HAZE_DETAIL_SHIFT
+}
+
+/// The haze detail of a push constants' flags word, the inverse of [`haze_detail_flag_bits`]
+/// (the codes 5–7, never written, read as 1)
+pub fn haze_detail_from_flags(flags: u32) -> u32 {
+  (DUST_HAZE_DETAIL_MAX >> ((flags >> DUST_FLAGS_HAZE_DETAIL_SHIFT) & 7)).max(DUST_HAZE_DETAIL_MIN)
+}
+
 /// Default "trajectory detail" (Settings › Particle rendering): the size-polyline edges the
 /// propagate solves exactly (a Kepler solve each), 17 = every edge ([`SIZE_EDGES`], today's
 /// image). 9 and 5 solve every second / fourth edge and place the others linearly between their

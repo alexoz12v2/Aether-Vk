@@ -1384,6 +1384,10 @@ pub struct SceneContext {
   /// see `SimulationContext::set_dust_propagate_detail` ("Trajectory detail" setting,
   /// `AETHERVK_DUST_PROPAGATE_DETAIL` default override)
   pub dust_propagate_detail: Arc<core::sync::atomic::AtomicU32>,
+  /// dust haze detail (sub-packets per cluster at the top level, `dust::clamp_haze_detail`), see
+  /// `SimulationContext::set_dust_haze_detail` ("Haze detail" setting, `AETHERVK_DUST_HAZE_DETAIL`
+  /// default override; round 8 step G)
+  pub dust_haze_detail: Arc<core::sync::atomic::AtomicU32>,
   /// dust temporal reuse tolerance in px (0 = off, `dust::clamp_reuse_px`), see
   /// `SimulationContext::set_dust_reuse_px` ("Temporal reuse tolerance" setting,
   /// `AETHERVK_DUST_REUSE_PX` default override)
@@ -1501,6 +1505,12 @@ impl SceneContext {
           .and_then(|v| v.trim().parse::<u32>().ok())
           .map(crate::scene::dust::clamp_propagate_detail)
           .unwrap_or(crate::scene::dust::DUST_PROPAGATE_DETAIL_DEFAULT),
+      )),
+      dust_haze_detail: Arc::new(core::sync::atomic::AtomicU32::new(
+        aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_HAZE_DETAIL")
+          .and_then(|v| v.trim().parse::<u32>().ok())
+          .map(crate::scene::dust::clamp_haze_detail)
+          .unwrap_or(crate::scene::dust::DUST_HAZE_DETAIL_DEFAULT),
       )),
       dust_reuse_px: Arc::new(core::sync::atomic::AtomicU32::new(crate::scene::dust::dust_reuse_px_default())),
       dust_view_flags: Arc::new(core::sync::atomic::AtomicU32::new(

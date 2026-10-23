@@ -1393,6 +1393,47 @@ pub fn set_lod_px_active(v: f32) {
   #[cfg(not(any(test, feature = "std")))]
   LOD_PX_BITS.store(v.to_bits(), core::sync::atomic::Ordering::Relaxed);
 }
+// ─── The haze detail (round 8 step G, mirror of dust_haze_*) ─────────────────────────────
+// The haze detail of the cluster being drawn: the view's knob ([`SplitView::haze_detail`]) when
+// the frame's volume bias puts every volumetric piece on the 1 × 1 top level
+// ([`volume_top_only`]), else 16 (off); set by [`splat_cluster_inner`] next to the level of
+// detail, read by [`subpackets_cells_bins`].
+#[cfg(any(test, feature = "std"))]
+std::thread_local! {
+  static HAZE_ACTIVE: core::cell::Cell<u32> = const { core::cell::Cell::new(super::DUST_HAZE_DETAIL_DEFAULT) };
+}
+#[cfg(not(any(test, feature = "std")))]
+static HAZE_ACTIVE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(super::DUST_HAZE_DETAIL_DEFAULT);
+/// the haze detail of the cluster being drawn (16 = off)
+pub fn haze_active() -> u32 {
+  #[cfg(any(test, feature = "std"))]
+  return HAZE_ACTIVE.with(|c| c.get());
+  #[cfg(not(any(test, feature = "std")))]
+  return HAZE_ACTIVE.load(core::sync::atomic::Ordering::Relaxed);
+}
+pub fn set_haze_active(v: u32) {
+  #[cfg(any(test, feature = "std"))]
+  HAZE_ACTIVE.with(|c| c.set(v));
+  #[cfg(not(any(test, feature = "std")))]
+  HAZE_ACTIVE.store(v, core::sync::atomic::Ordering::Relaxed);
+}
+/// whether the frame's volume bias puts every volumetric piece on a 1 × 1 last level
+/// (`dust_volume_top_only`, `dust_haze_detail_of`: the volume and haze details act only there)
+pub fn volume_top_only(layout: &PyramidLayout, bias: u32) -> bool {
+  let lc = layout.level_count();
+  let (_, tw, th) = layout.levels[(lc - 1) as usize];
+  bias + 1 >= lc && tw == 1 && th == 1
+}
+/// the chord group under the haze detail (`dust_haze_group`): no smaller than `16 / detail` bins,
+/// never past the depth cap ([`lod_group_depth_cap`]: the split's own criterion)
+pub fn haze_group(g: usize, detail: u32, depth_cap: usize) -> usize {
+  g.max(SIZE_BINS as usize / detail.max(1) as usize).min(depth_cap.max(1))
+}
+/// the time pieces under the haze detail (`dust_haze_time_pieces`): no more than `detail`, never
+/// fewer than the depth minimum ([`time_pieces_depth`], itself never more than `n_t`)
+pub fn haze_time_pieces(n_t: u32, detail: u32, depth_min: u32) -> u32 {
+  n_t.min(detail).max(depth_min.min(n_t))
+}
 // The level of detail's depth rule: a group chord or a time piece may not span more depth than
 // the split tolerates for one Jacobian ([`DUST_SPLIT_EPS`] × the depth of the polyline's nearest
 // edge, `split_step`'s own criterion), so the level of detail never makes a packet the split
@@ -1961,6 +2002,9 @@ pub fn subpackets_cells_bins(
     lod_depth,
   );
   let n_t = time_pieces_lod(n_t, px.and_then(|px| time_segment_px(m, pred, px)), lod_px_active(), depth_min);
+  // the haze detail ([`haze_active`], round 8 step G): at the top level, fewer sub-packets
+  let haze = haze_active();
+  let n_t = haze_time_pieces(n_t, haze, depth_min);
   // the predecessor's covariance (and its chord axis) turned with the spiral to the emission
   // direction of the piece's centre: by ω·(age_p − age(u_c)), the turn `spiral_point` gives the
   // piece's mean. Unturned, the radial σ (4× the lateral at 1 km) lay along the predecessor's
@@ -2083,7 +2127,11 @@ pub fn subpackets_cells_bins(
   // (a cluster with bins walked for specks keeps every bin: the hand-over is per bin)
   let g = match requested_group() {
     1 if m.specks_mask() != 0 => 1,
-    1 => px.map_or(1, |px| lod_group(polyline_extent_px(m, px), lod_px_active(), lod_group_depth_cap(lod_depth))),
+    1 => haze_group(
+      px.map_or(1, |px| lod_group(polyline_extent_px(m, px), lod_px_active(), lod_group_depth_cap(lod_depth))),
+      haze,
+      lod_group_depth_cap(lod_depth),
+    ),
     g => g,
   };
   set_group_active(g);
@@ -3289,6 +3337,10 @@ pub struct SplitView {
   /// [`super::DUST_VOLUME_DETAIL_DEFAULT`] by default): the most pieces a volumetric packet is cut
   /// into when the frame's bias puts every piece on a 1 × 1 last level ([`volume_plan_pieces`])
   pub volume_detail: u32,
+  /// the haze detail (`DustSplatPushConstants::flags` bits 11–13, [`super::haze_detail_from_flags`];
+  /// [`super::DUST_HAZE_DETAIL_DEFAULT`] by default): at the top level, at most ~this many
+  /// sub-packets per cluster ([`haze_group`], [`haze_time_pieces`]; round 8 step G)
+  pub haze_detail: u32,
 }
 
 impl SplitView {
@@ -3301,6 +3353,7 @@ impl SplitView {
       volumetric: perspective,
       shell: 0.0,
       volume_detail: super::DUST_VOLUME_DETAIL_DEFAULT,
+      haze_detail: super::DUST_HAZE_DETAIL_DEFAULT,
     }
   }
 }
@@ -4133,9 +4186,7 @@ fn volume_plan_pieces(
   // every piece on a 1 × 1 last level, at most that many pieces, fewer along `seg_t` first
   // (`dust_volume_draw` before its pass A; 16 changes nothing)
   {
-    let lc = layout.level_count();
-    let (_, tw, th) = layout.levels[(lc - 1) as usize];
-    if bias + 1 >= lc && tw == 1 && th == 1 {
+    if volume_top_only(layout, bias) {
       let detail = view.volume_detail.max(1);
       while ax.n_a * ax.n_b > detail {
         if ax.n_b > 1 {
@@ -8180,6 +8231,7 @@ pub fn splat_tier_range(
   let mut view = SplitView::of(&pc.mvp, eye);
   view.shell = super::specks::ShellCut::from_header(pyramid, eye).d_max;
   view.volume_detail = super::volume_detail_from_flags(pc.flags);
+  view.haze_detail = super::haze_detail_from_flags(pc.flags);
   let mut scratch = SplitLeaves::default();
   let n = (pc.live_count as usize).min(moments.len()).min(render.len());
   // `AETHERVK_DUST_PROBE="x,y;x,y"` (diagnostics, CPU particle mode): the clusters' τ at those
@@ -8228,6 +8280,7 @@ pub fn splat_tier_list(
   let mut view = SplitView::of(&pc.mvp, eye);
   view.shell = super::specks::ShellCut::from_header(pyramid, eye).d_max;
   view.volume_detail = super::volume_detail_from_flags(pc.flags);
+  view.haze_detail = super::haze_detail_from_flags(pc.flags);
   let mut scratch = SplitLeaves::default();
   let n = (pc.live_count as usize).min(moments.len()).min(render.len());
   for &i in list {
@@ -8374,6 +8427,7 @@ pub fn splat_tier_probed(
   let mut view = SplitView::of(&pc.mvp, eye);
   view.shell = super::specks::ShellCut::from_header(pyramid, eye).d_max;
   view.volume_detail = super::volume_detail_from_flags(pc.flags);
+  view.haze_detail = super::haze_detail_from_flags(pc.flags);
   let mut scratch = SplitLeaves::default();
   let n = (pc.live_count as usize).min(moments.len()).min(render.len());
   splat_range_probed(
@@ -8590,6 +8644,12 @@ fn splat_cluster_inner(
     // the 2026-10-14 volumetric rule instead (`cluster_group`)
     set_lod_px_active(lod_px(pyramid));
     set_lod_view_active(view.perspective.then_some((view.eye, view.fwd)));
+    // the haze detail (round 8 step G): the view's knob at the top level, off elsewhere
+    set_haze_active(if volume_top_only(layout, VolumeStats::load(pyramid).bias) {
+      view.haze_detail
+    } else {
+      super::DUST_HAZE_DETAIL_DEFAULT
+    });
     if let Some(v) = lab_knob("AETHERVK_DUST_LAB_GROUP") {
       request_group(cluster_group(m, view, v as usize));
     }
@@ -8597,6 +8657,7 @@ fn splat_cluster_inner(
     request_group(1);
     set_lod_px_active(0.0);
     set_lod_view_active(None);
+    set_haze_active(super::DUST_HAZE_DETAIL_DEFAULT);
     #[cfg(any(test, feature = "std"))]
     PACKET_CALLS.with(|c| c.set(c.get() + packets.len() as u32));
     for (p0, support, w_o, bin) in packets {

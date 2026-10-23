@@ -885,6 +885,10 @@ pub struct DustDrawCall {
   /// the scene's setting for now ([`RenderScene::set_dust_volume_detail`]), a system's own later;
   /// [`dust_splat_pc`] puts it in the flags' bits 8–10
   pub volume_detail: u32,
+  /// the haze detail this call draws with (`dust::DUST_HAZE_DETAIL_*`, 16 = every sub-packet):
+  /// the scene's setting ([`RenderScene::set_dust_haze_detail`]); [`dust_splat_pc`] puts it in
+  /// the flags' bits 11–13 (round 8 step G)
+  pub haze_detail: u32,
 }
 
 impl DustDrawCall {
@@ -1487,6 +1491,7 @@ fn dust_splat_pc(
   };
   // per call, never in the frame begin's flags (`PYR_FLAGS`): 0 at the default 16
   let flags = flags | crate::scene::dust::volume_detail_flag_bits(call.volume_detail);
+  let flags = flags | crate::scene::dust::haze_detail_flag_bits(call.haze_detail);
   crate::scene::dust::DustSplatPushConstants {
     moments: 0,
     render: 0,
@@ -1569,6 +1574,7 @@ fn dust_cadence_fingerprint(render_scene: &RenderScene, flags: u32) -> u64 {
       eat(&call.entity_id.as_ffi().to_le_bytes());
       eat(&s.tier.to_le_bytes());
       eat(&call.volume_detail.to_le_bytes());
+      eat(&call.haze_detail.to_le_bytes());
       for v in call.stream_color.iter().chain([s.albedo, s.ttl_s, s.s_ref_um, s.size_q, s.frame.ttl[0], s.frame.ttl[1], s.frame.ttl[2]].iter()) {
         eat(&v.to_bits().to_le_bytes());
       }
@@ -1706,6 +1712,7 @@ fn dust_draw_inputs(
       h.bytes(bytemuck::bytes_of(&s.frame));
       h.f32s(&[s.albedo, s.ttl_s, s.s_ref_um, s.size_q]);
       h.u64(call.volume_detail as u64);
+      h.u64(call.haze_detail as u64);
       let (mvp, params) = call.mvp_params(&camera, render_scene.window_extent);
       h.f32s(&mvp);
       h.f32s(&params);
@@ -1822,6 +1829,9 @@ pub struct RenderScene {
   /// dust volume detail of the scene (`SceneContext::dust_volume_detail`), stamped on every dust
   /// call by [`Self::set_dust_volume_detail`]
   pub dust_volume_detail: u32,
+  /// dust haze detail of the scene (`SceneContext::dust_haze_detail`), stamped on every dust call
+  /// by [`Self::set_dust_haze_detail`] (round 8 step G)
+  pub dust_haze_detail: u32,
   /// dust temporal reuse tolerance of the scene in px (`SceneContext::dust_reuse_px`, 0 = off):
   /// ε > 0 runs the view's cadence with that ε (`Device::dust_cadence_auto`)
   pub dust_reuse_px: u32,
@@ -1859,6 +1869,7 @@ impl RenderScene {
       text2_call: None,
       dust_softening: crate::scene::dust::DUST_SOFTENING_DEFAULT,
       dust_volume_detail: crate::scene::dust::DUST_VOLUME_DETAIL_DEFAULT,
+      dust_haze_detail: crate::scene::dust::DUST_HAZE_DETAIL_DEFAULT,
       dust_reuse_px: crate::scene::dust::dust_reuse_px_default(),
       dust_propagate_detail: crate::scene::dust::DUST_PROPAGATE_DETAIL_DEFAULT,
       dust_view_flags: 0,
@@ -1875,6 +1886,16 @@ impl RenderScene {
     self.dust_volume_detail = d;
     for call in self.depth_layers.iter_mut().flat_map(|l| l.dust_calls.iter_mut()) {
       call.volume_detail = d;
+    }
+  }
+
+  /// Sets the scene's dust haze detail (clamped, `dust::clamp_haze_detail`) and stamps it on
+  /// every dust call (round 8 step G)
+  pub fn set_dust_haze_detail(&mut self, detail: u32) {
+    let d = crate::scene::dust::clamp_haze_detail(detail);
+    self.dust_haze_detail = d;
+    for call in self.depth_layers.iter_mut().flat_map(|l| l.dust_calls.iter_mut()) {
+      call.haze_detail = d;
     }
   }
 
@@ -2855,6 +2876,10 @@ mod dust_volume_detail_tests {
   use crate::scene::dust::{self, DUST_VOLUME_DETAIL_DEFAULT};
 
   fn call(detail: u32) -> DustDrawCall {
+    call2(detail, dust::DUST_HAZE_DETAIL_DEFAULT)
+  }
+
+  fn call2(detail: u32, haze: u32) -> DustDrawCall {
     DustDrawCall {
       entity_id: EntityId::from_ffi(1),
       rte_position: [1.0, 2.0, 3.0],
@@ -2879,7 +2904,59 @@ mod dust_volume_detail_tests {
       eye_m: [0.0; 3],
       nucleus_m: None,
       volume_detail: detail,
+      haze_detail: haze,
     }
+  }
+
+  /// The call's haze detail reaches the push constants' flags (bits 11–13) and nothing else; the
+  /// volume detail's bits beside it are untouched (round 8 step G)
+  #[test]
+  fn dust_splat_pc_carries_the_haze_detail_in_bits_11_to_13() {
+    let camera = CameraRenderData::new(&TransformComponent::default(), &CameraComponent::default(), 1.0, [800, 600]);
+    let view = dust::DUST_VIEW_FLOW;
+    let base = dust_splat_pc(&call2(DUST_VOLUME_DETAIL_DEFAULT, dust::DUST_HAZE_DETAIL_DEFAULT), &camera, [800, 600], view, 1.0);
+    assert_eq!(base.flags, view, "the defaults leave the flags word as it was");
+    for h in [8, 4, 2, 1] {
+      let pc = dust_splat_pc(&call2(DUST_VOLUME_DETAIL_DEFAULT, h), &camera, [800, 600], view, 1.0);
+      assert_eq!(pc.flags, view | dust::haze_detail_flag_bits(h));
+      assert_eq!(dust::haze_detail_from_flags(pc.flags), h);
+      assert_eq!(dust::volume_detail_from_flags(pc.flags), DUST_VOLUME_DETAIL_DEFAULT);
+      let mut same = pc;
+      same.flags = base.flags;
+      assert_eq!(bytemuck::bytes_of(&same), bytemuck::bytes_of(&base), "only the flags change: {h}");
+      // both knobs at once, each read back
+      let both = dust_splat_pc(&call2(4, h), &camera, [800, 600], view, 1.0);
+      assert_eq!(both.flags, view | dust::volume_detail_flag_bits(4) | dust::haze_detail_flag_bits(h));
+      assert_eq!(dust::haze_detail_from_flags(both.flags), h);
+      assert_eq!(dust::volume_detail_from_flags(both.flags), 4);
+    }
+    let pc = dust_splat_pc(&call2(DUST_VOLUME_DETAIL_DEFAULT, 5), &camera, [800, 600], view, 1.0);
+    assert_eq!(dust::haze_detail_from_flags(pc.flags), 4);
+  }
+
+  /// The render scene stamps its haze detail on every dust call, and both frame fingerprints
+  /// change with it (round 8 step G)
+  #[test]
+  fn render_scene_stamps_the_haze_detail_and_the_fingerprints_see_it() {
+    let mut rs = RenderScene::new((TransformComponent::default(), CameraComponent::default()), 0, 0, [800, 600]);
+    assert_eq!(rs.dust_haze_detail, dust::DUST_HAZE_DETAIL_DEFAULT);
+    let mut layer = RenderLayer::new(1, 1.0, Vec3f32::from_array([0.0, 0.0, 0.0]), 0.1, 1000.0);
+    layer.dust_calls = alloc::vec![call(DUST_VOLUME_DETAIL_DEFAULT), call(DUST_VOLUME_DETAIL_DEFAULT)];
+    rs.depth_layers.push(layer);
+    let flow = dust::DustFlowUniform::default();
+    let fingerprints = |rs: &RenderScene| (dust_cadence_fingerprint(rs, 0), dust_draw_inputs(rs, 0, &flow, false));
+    let at_default = fingerprints(&rs);
+    rs.set_dust_haze_detail(5);
+    assert_eq!(rs.dust_haze_detail, 4);
+    assert!(rs.depth_layers[0].dust_calls.iter().all(|c| c.haze_detail == 4));
+    assert!(rs.depth_layers[0].dust_calls.iter().all(|c| c.volume_detail == DUST_VOLUME_DETAIL_DEFAULT));
+    let at_4 = fingerprints(&rs);
+    assert_ne!(at_4.0, at_default.0, "the cadence fingerprint sees the haze detail");
+    assert_ne!(at_4.1, at_default.1, "the frame reuse fingerprint sees the haze detail");
+    rs.set_dust_haze_detail(0);
+    assert!(rs.depth_layers[0].dust_calls.iter().all(|c| c.haze_detail == 1));
+    rs.set_dust_haze_detail(dust::DUST_HAZE_DETAIL_DEFAULT);
+    assert_eq!(fingerprints(&rs), at_default);
   }
 
   /// The call's volume detail reaches the push constants' flags (bits 8–10) and nothing else: at

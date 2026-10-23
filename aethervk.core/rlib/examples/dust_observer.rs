@@ -2144,6 +2144,12 @@ fn main() {
     let got = ctx.set_dust_propagate_detail(scene_id, v);
     log_line(&format!("[observer] trajectory detail {v} requested, set {got:?}"));
   }
+  // lab knob: the scene's haze detail (sub-packets per cluster at the top level,
+  // `set_dust_haze_detail`; round 8 step G)
+  if let Some(v) = std::env::var("OBSERVER_HAZE_DETAIL").ok().and_then(|v| v.trim().parse::<u32>().ok()) {
+    let got = ctx.set_dust_haze_detail(scene_id, v);
+    log_line(&format!("[observer] haze detail {v} requested, set {got:?}"));
+  }
 
   // presentation engine + camera
   let pe = ctx

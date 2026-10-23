@@ -556,6 +556,12 @@
   <data name="Tabs_Settings_PropagateDetailHint" xml:space="preserve">
     <value>Size steps whose orbits are solved exactly per frame; the rest are interpolated. Lower: faster, dust tails a little straighter</value>
   </data>
+  <data name="Tabs_Settings_HazeDetail" xml:space="preserve">
+    <value>Haze detail</value>
+  </data>
+  <data name="Tabs_Settings_HazeDetailHint" xml:space="preserve">
+    <value>Packets per dust cluster when the haze is drawn on the coarsest level. Lower: faster, the haze's light sampled more coarsely</value>
+  </data>
   <data name="Tabs_Settings_ReuseTolerance" xml:space="preserve">
     <value>Temporal reuse tolerance</value>
   </data>
