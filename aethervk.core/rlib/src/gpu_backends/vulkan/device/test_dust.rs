@@ -1412,7 +1412,7 @@ fn splat_parity(
       render: 0,
       pyramid: 0,
       live_count: batch.count,
-      flags: dust::DUST_VIEW_FLOW,
+      flags: dust::DUST_VIEW_FLOW | PARITY_EXTRA_FLAGS.load(core::sync::atomic::Ordering::SeqCst),
       exposure,
       inv_unit: 0.0,
       color: dust::pack_color([1.0, 0.6, 0.2, 1.0]),
@@ -2097,6 +2097,8 @@ std::thread_local! {
 /// `u32::MAX`: none). Process-wide, not thread-local: the device closure of `with_dust_device`
 /// may run on the render frontend's thread
 static PARITY_VOLUME_BIAS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(u32::MAX);
+/// extra flag bits of the next [`splat_parity`]'s push constants (the haze detail's, round 8 step G)
+static PARITY_EXTRA_FLAGS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 /// the volumetric pieces the reference drew per class in the last [`splat_parity`] of a case id
 /// (centre, small, sub-rays, lines: `dust::take_volume_class_counts`, counted on the closure's thread)
 static PARITY_VOLUME_CLASSES: std::sync::Mutex<alloc::vec::Vec<(u64, [u64; 4])>> = std::sync::Mutex::new(alloc::vec::Vec::new());
@@ -2299,6 +2301,174 @@ fn gpu_dust_splat_matches_reference_volume_texel_integral() {
   assert!(all[0] > 0, "no centre-ray piece drawn: {all:?}");
   assert!(all[1] > 0, "no small piece drawn: {all:?}");
   assert!(all[2] > 0, "no sub-ray piece drawn: {all:?}");
+}
+
+/// The haze detail on both mirrors word for word (round 8 step G): the inside-the-cloud scene of
+/// the texel integral case (200 m, perspective: the level of detail's depth rule caps the groups
+/// and time pieces on both sides) at the forced top bias, at haze detail 1 and 4 (the chord
+/// groups of 16 and 4 bins, the time pieces 1 and 4). The top bias leaves the parity few texels
+/// (the EWA leaves draw the fine levels), so the vacuity floor is 30 for these frames; the GPU's
+/// sub-packet records are counted against the full frame's by
+/// `gpu_dust_haze_detail_trades_subpackets_on_the_top_level`.
+#[test]
+fn gpu_dust_splat_matches_reference_haze() {
+  use core::sync::atomic::Ordering::SeqCst;
+  struct Reset;
+  impl Drop for Reset {
+    fn drop(&mut self) {
+      PARITY_EXTRA_FLAGS.store(0, SeqCst);
+      PARITY_MIN_NONZERO.store(300, SeqCst);
+    }
+  }
+  let _reset = Reset;
+  // (at the top bias the pyramid is its 1 × 1 last level: one texel, the Σ-count compare)
+  PARITY_MIN_NONZERO.store(0, SeqCst);
+  for (id, detail) in [(9061u64, 1u32), (9062, 4)] {
+    PARITY_EXTRA_FLAGS.store(dust::haze_detail_flag_bits(detail), SeqCst);
+    let classes = volume_texel_integral_parity(id, 15, 200.0);
+    std::println!("[dust gpu] haze detail {detail} at the top bias: classes (centre, small, sub-rays, lines) {classes:?}");
+  }
+}
+
+/// The haze detail (`dust::haze_detail_flag_bits`, the draw's flags bits 11–13; round 8 step G):
+/// at a bias that puts every volumetric piece on the 1 × 1 last level, detail 16 draws the same
+/// pyramid word for word as flags without the bits, and lower details make fewer sub-packet
+/// records (the enumerator's queue, `dust_squeue_counts`; strictly fewer somewhere) and no more
+/// evaluations, the top texel's light within tolerance; at bias 0 every detail draws the same
+/// pyramid. The volume detail test's frames (a 2-day batch at 2 and 5 days, four eye heights,
+/// the cluster level of detail off / 64 / 512 px).
+#[test]
+fn gpu_dust_haze_detail_trades_subpackets_on_the_top_level() {
+  let id = 9063;
+  with_dust_device(id, |device, capacity, _, _| {
+    let batch = test_batch(1024, 2.0 * 86400.0, 3, capacity);
+    emit(device, id, &batch);
+    let first_slot = batch.first_index & batch.ring_mask;
+    let pe = crate::gpu::PresentationEngineHandle(u64::MAX - 63);
+    let (w, h) = (640u32, 400u32);
+    let flow = dust::DustFlowUniform {
+      t_hi: 1.0e8,
+      t_lo: 0.0,
+      speed: 1.0,
+    };
+    let tan_h = (30.0f32).to_radians().tan();
+    let hw = dust::PYRAMID_HEADER_WORDS as usize;
+    let ev = dust::PYR_VOLUME_EVALS as usize;
+    let mut fewer_somewhere = false;
+    let mut worst_rel = [0.0f64; 2];
+    for lod in [None, Some(64.0f32), Some(512.0f32)] {
+    device.dust_set_lod_px(pe, lod);
+    for days in [2.0f64, 5.0] {
+      let frame = frame_after(days);
+      for d in [200.0f32, 2.0e3, 2.0e4, 2.0e5] {
+        let mut persp = [0.0f32; 16];
+        persp[0] = h as f32 / (w as f32 * tan_h);
+        persp[5] = 1.0 / tan_h;
+        persp[10] = -1e-3;
+        persp[11] = -1.0;
+        persp[15] = d;
+        let base_pc = dust::DustSplatPushConstants {
+          moments: 0,
+          render: 0,
+          pyramid: 0,
+          live_count: batch.count,
+          flags: dust::DUST_VIEW_FLOW,
+          exposure: 1.0,
+          inv_unit: 0.0,
+          color: dust::pack_color([1.0, 0.6, 0.2, 1.0]),
+          albedo: 0.04,
+          eye_local: [0.0, 0.0, d, 30.0 * 86400.0],
+          mvp: persp,
+        };
+        let run = |inv_unit: f32, extra: u32| -> (Vec<u32>, f32, u32) {
+          let mut used = inv_unit;
+          let mut cmds = device
+            .run_transient_commands(|cmd| {
+              device.cmd_dust_pre_propagate_barrier(cmd);
+              let view = device.cmd_dust_frame_begin(cmd, pe, [w, h], base_pc.flags, flow)?;
+              let mut pc = base_pc;
+              pc.flags |= extra;
+              if !(used > 0.0) {
+                used = 1.0 / view.unit;
+              }
+              pc.inv_unit = used;
+              device.cmd_dust_system_begin(id, pc.flags, flow)?;
+              let (render, moments) = device.cmd_dust_propagate(cmd, id, 0, capacity, first_slot, batch.count, &frame)?;
+              device.cmd_dust_pre_splat_barrier(cmd);
+              device.cmd_dust_splat(cmd, pe, id, 0, first_slot, capacity, render, moments, pc)?;
+              device.cmd_dust_post_splat_barrier(cmd);
+              device.cmd_dust_frame_end(cmd, pe)?;
+              device.cmd_dust_system_end(id)?;
+              Ok(())
+            })
+            .unwrap();
+          cmds.cleanup(&device.device);
+          let pyr = device.download_dust_pyramid(pe).unwrap();
+          let (records, overflowed) = device.dust_squeue_counts(pe).unwrap();
+          assert_eq!(overflowed, 0, "{days} d, {d} m: sub-packet records overflowed");
+          (pyr, used, records)
+        };
+        device.dust_set_volume_bias(pe, None);
+        let mut inv_unit = 0.0;
+        for _ in 0..(super::dust::DUST_READBACK_SLOTS + 2) {
+          inv_unit = run(0.0, 0).1;
+        }
+        for bias in [0u32, 15] {
+          device.dust_set_volume_bias(pe, Some(bias));
+          let mut plain = run(inv_unit, 0);
+          let mut settled = false;
+          for _ in 0..24 {
+            let next = run(inv_unit, 0);
+            settled = next.0[hw..] == plain.0[hw..] && next.0[ev] == plain.0[ev] && next.2 == plain.2;
+            plain = next;
+            if settled {
+              break;
+            }
+          }
+          assert!(settled, "{days} d, {d} m, bias {bias}: the frames did not settle in 24");
+          let levels = plain.0[dust::PYR_LEVELS as usize];
+          let top = (dust::PYR_TABLE + 3 * (levels - 1)) as usize;
+          let top_off = plain.0[top] as usize;
+          let d16 = run(inv_unit, dust::haze_detail_flag_bits(16));
+          assert!(
+            plain.0[hw..] == d16.0[hw..] && plain.0[ev] == d16.0[ev] && plain.2 == d16.2,
+            "{days} d, {d} m, bias {bias}: detail 16 drew another pyramid than no detail bits"
+          );
+          for (k, detail) in [4u32, 1].into_iter().enumerate() {
+            let bits = dust::haze_detail_flag_bits(detail);
+            let cut = run(inv_unit, bits);
+            let rel = (cut.0[top_off] as f64 - plain.0[top_off] as f64).abs() / (plain.0[top_off] as f64).max(1.0);
+            std::println!(
+              "[dust haze detail] lod {lod:?}, {days} d, {d} m, bias {bias}, detail {detail}: records {} (16: {}), evaluations {} (16: {}), top texel {} (16: {}, {rel:.2e})",
+              cut.2, plain.2, cut.0[ev], plain.0[ev], cut.0[top_off], plain.0[top_off]
+            );
+            if bias == 15 {
+              assert!(cut.2 <= plain.2, "{days} d, {d} m, detail {detail}: more sub-packet records");
+              assert!(cut.0[ev] <= plain.0[ev], "{days} d, {d} m, detail {detail}: more evaluations");
+              fewer_somewhere |= cut.2 < plain.2;
+              if plain.0[top_off] > 1000 && plain.0[top_off] < u32::MAX / 2 {
+                worst_rel[k] = worst_rel[k].max(rel);
+                // (the top texel's light sampled by fewer packets: tolerances from the first run,
+                // 2026-10-23: H 4 worst 2.17e-1 and H 1 worst 5.36e-1, both at 2 d 2000 m)
+                let tol = if detail == 1 { 0.6 } else { 0.3 };
+                assert!(rel < tol, "{days} d, {d} m, detail {detail}: the top texel moved {rel:.3e}");
+              }
+            } else {
+              assert!(
+                cut.0[hw..] == plain.0[hw..] && cut.2 == plain.2,
+                "{days} d, {d} m, detail {detail}: the haze detail changed a frame below the top level"
+              );
+            }
+          }
+        }
+      }
+    }
+    }
+    device.dust_set_lod_px(pe, None);
+    device.dust_set_volume_bias(pe, None);
+    std::println!("[dust haze detail] worst top-texel move: detail 4 {:.3e}, detail 1 {:.3e}", worst_rel[0], worst_rel[1]);
+    assert!(fewer_somewhere, "no view drew fewer sub-packet records at the top level: the knob was never exercised");
+  });
 }
 
 /// whether a [`splat_parity`] compared the small pieces' path counts (the profiler's words)

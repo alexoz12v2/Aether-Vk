@@ -557,6 +557,12 @@
   <data name="Tabs_Settings_PropagateDetailHint" xml:space="preserve">
     <value>Classi di taglia le cui orbite sono risolte esattamente a ogni fotogramma; le altre sono interpolate. Più basso: più veloce, code di polvere un po' più dritte</value>
   </data>
+  <data name="Tabs_Settings_HazeDetail" xml:space="preserve">
+    <value>Dettaglio della foschia</value>
+  </data>
+  <data name="Tabs_Settings_HazeDetailHint" xml:space="preserve">
+    <value>Pacchetti per gruppo di polvere quando la foschia è disegnata al livello più grossolano. Più basso: più veloce, luce della foschia campionata più grossolanamente</value>
+  </data>
   <data name="Tabs_Settings_ReuseTolerance" xml:space="preserve">
     <value>Tolleranza di riuso temporale</value>
   </data>

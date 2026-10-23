@@ -56,6 +56,10 @@ const uint  DUST_VIEW_DEBUG_SAMPLE = 1u << 17u;
 // the push constants' flags bits 8-10 (dust::volume_detail_flag_bits): the volume detail as
 // log2(16 / detail); dust_volume_draw cuts a top-level packet into at most 16 >> that pieces
 const uint  DUST_FLAGS_VOLUME_DETAIL_SHIFT = 8u;  // diagnostics: one time sample in every m
+// the push constants' flags bits 11-13 (dust::haze_detail_flag_bits): the haze detail as
+// log2(16 / detail); at a frame whose volume bias puts every piece on the 1 x 1 top level the
+// splat draws a cluster with at most ~detail sub-packets (dust_haze_group, dust_haze_time_pieces)
+const uint  DUST_FLAGS_HAZE_DETAIL_SHIFT = 11u;
 // host-internal (dust::DUST_VIEW_VOLUME_SPILL): dust_draw_volume.comp drains the volume spill
 const uint  DUST_VIEW_VOLUME_SPILL = 1u << 28u;
 // host-internal (dust::DUST_VIEW_EDGE_ODD, track 9A t9a2d): the chunk's parity, the deferred edge
@@ -1996,6 +2000,31 @@ uint dust_time_pieces_lod(uint nT, bool hasT, float tPx, float lodPx, uint depth
     if (!(hasT && lodPx > 0.0)) return nT;
     uint c = uint(min(ceil(tPx / lodPx), 1.0e6));
     return clamp(max(c, depthMin), 1u, max(nT, 1u));
+}
+
+// ─── The haze detail (mirror of dust::haze_*: the splat's flags bits 11-13; round 8 step G) ───
+// At a frame whose volume bias puts every volumetric piece on the 1 x 1 top level, a cluster is
+// drawn with at most ~detail sub-packets: its chord groups no smaller than 16 / detail bins (never
+// past the depth cap: the split's own criterion) and its time pieces no more than detail (never
+// fewer than the depth minimum). 16 changes nothing; off the top level nothing changes.
+// the frame's haze detail of a splat's flags word: the knob's value at the top level
+// (dust::volume_top_only: the bias of the split word's bits 8-15 and the level table), else 16
+uint dust_haze_detail_of(uint flags, uint levels, DustUintBuffer pyr) {
+    uint detail = max(16u >> ((flags >> DUST_FLAGS_HAZE_DETAIL_SHIFT) & 7u), 1u);
+    uint bias = (pyr.v[DUST_PYR_SPLIT_DEPTH] >> 8u) & 0xFFu;
+    uint topW = pyr.v[DUST_PYR_TABLE + 3u * (levels - 1u) + 1u];
+    uint topH = pyr.v[DUST_PYR_TABLE + 3u * (levels - 1u) + 2u];
+    return (bias + 1u >= levels && topW == 1u && topH == 1u) ? detail : DUST_SIZE_BINS;
+}
+// the chord group under the haze detail (dust::haze_group): no smaller than 16 / detail bins,
+// never past the depth cap
+uint dust_haze_group(uint g, uint detail, uint depthCap) {
+    return min(max(g, DUST_SIZE_BINS / max(detail, 1u)), max(depthCap, 1u));
+}
+// the time pieces under the haze detail (dust::haze_time_pieces): no more than detail, never fewer
+// than the depth minimum (itself never more than nT)
+uint dust_haze_time_pieces(uint nT, uint detail, uint depthMin) {
+    return max(min(nT, detail), min(depthMin, nT));
 }
 
 // ─── Kepler (universal variables, Laguerre-Conway). Mirror of `dust::kepler` ─

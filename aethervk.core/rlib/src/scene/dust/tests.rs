@@ -7320,6 +7320,7 @@ fn split_keeps_the_moments_and_the_flux() {
     volumetric: true,
     shell: 0.0,
     volume_detail: DUST_VOLUME_DETAIL_DEFAULT,
+    haze_detail: DUST_HAZE_DETAIL_DEFAULT,
   };
   let scale = 1.0e3f32;
   let mut leaves = SplitLeaves::default();
@@ -9098,6 +9099,112 @@ fn volume_detail_caps_the_pieces_on_the_top_level() {
   for detail in [16u32, 8, 4, 2, 1] {
     assert_eq!(volume_detail_from_flags(volume_detail_flag_bits(detail) | DUST_VIEW_FLOW), detail);
   }
+}
+
+/// The haze detail's flag bits (11–13) round trip, clamp to powers of two and leave the volume
+/// detail's bits (8–10) alone; `volume_top_only` is true exactly at a bias that reaches a 1 × 1
+/// last level (round 8 step G)
+#[test]
+fn haze_detail_clamps_and_round_trips_through_the_flags() {
+  for d in [16u32, 8, 4, 2, 1] {
+    assert_eq!(clamp_haze_detail(d), d);
+    let bits = haze_detail_flag_bits(d);
+    assert_eq!(bits & !(7 << DUST_FLAGS_HAZE_DETAIL_SHIFT), 0, "{d}: bits outside 11–13");
+    assert_eq!(haze_detail_from_flags(bits), d);
+    let others = DUST_VIEW_FLOW | DUST_VIEW_TRACERS | volume_detail_flag_bits(2) | DUST_VIEW_EDGE_ODD;
+    assert_eq!(haze_detail_from_flags(bits | others), d, "the other flags leave it: {d}");
+    assert_eq!(volume_detail_from_flags(bits | others), 2, "the haze bits leave the volume detail: {d}");
+  }
+  assert_eq!(haze_detail_flag_bits(DUST_HAZE_DETAIL_DEFAULT), 0);
+  assert_eq!(haze_detail_from_flags(0), DUST_HAZE_DETAIL_DEFAULT);
+  assert_eq!(haze_detail_flag_bits(8), 1 << 11);
+  assert_eq!(haze_detail_flag_bits(1), 4 << 11);
+  assert_eq!(clamp_haze_detail(0), 1);
+  assert_eq!(clamp_haze_detail(3), 2);
+  assert_eq!(clamp_haze_detail(17), 16);
+  assert_eq!(clamp_haze_detail(1000), 16);
+  let layout = PyramidLayout::new(480, 300);
+  let levels = layout.level_count();
+  assert!(volume_top_only(&layout, levels - 1));
+  assert!(volume_top_only(&layout, levels + 7));
+  assert!(!volume_top_only(&layout, levels - 2));
+  assert!(!volume_top_only(&layout, 0));
+}
+
+/// The haze detail caps the sub-packets of a cluster (`subpackets_cells_bins` under
+/// `set_haze_active`, as `splat_cluster_inner` sets it at the top level): 16 draws exactly the
+/// packets of the knob untouched, every lower value no more packets (fewer at 4 and below: at most
+/// `H` chord groups of `H` time pieces), 1 one packet per cluster, the flux conserved at every
+/// value; the young cone (time pieces), the month-old polyline and a cluster without a predecessor
+/// (round 8 step G)
+#[test]
+fn haze_detail_caps_the_subpackets_on_the_top_level() {
+  let axis = unit([0.2, 0.1, 0.97]);
+  let axis_f = [axis[0] as f32, axis[1] as f32, axis[2] as f32];
+  let omega = 2.0 * core::f64::consts::PI / (12.4 * 3600.0);
+  let (rc, vc) = comet_state();
+  let n0 = unit([1.0, -0.3, 0.1]);
+  let off = scale(n0, 2000.0);
+  let month = 30.0 * 86400.0;
+  let t_now = T_START + month + 10.0;
+  let (centre_now, _) = kepler::propagate_f64(rc, vc, SUN_MU_M3_S2, t_now - T_START);
+  let frame = DustFrame::new(centre_now, t_now, [0.0, 0.0, 0.0, 1.0], 1.0e9)
+    .with_spin([axis[0], axis[1], axis[2], omega]);
+  let moments_aged = |age: f64| -> DustMoments {
+    let t_rel = t_now - T_START - age;
+    let mut b = test_batch(1, 0.0);
+    let (centre, v_c) = kepler::propagate_f64(rc, vc, SUN_MU_M3_S2, t_rel);
+    let turned = rotate_axis_angle(off, axis, omega * t_rel);
+    b.spin = [axis_f[0], axis_f[1], axis_f[2], omega as f32];
+    b.rot_start = qaxis_angle(axis_f, (omega * t_rel) as f32);
+    b.site_offset = [off[0] as f32, off[1] as f32, off[2] as f32, 0.0];
+    b.jet_dir_aperture = [n0[0] as f32, n0[1] as f32, n0[2] as f32, 0.0];
+    b.lit = [0.0, 0.0, 0.0, LIT_MODE_ALWAYS];
+    b.set_comet(add(centre, turned), v_c, T_START + t_rel, 0.0);
+    let (_, m) = packet_moments(&emit_cluster(&b, 0), 0, &frame);
+    assert!(m.flux() > 0.0, "age {age}: culled");
+    m
+  };
+  assert_eq!(haze_active(), DUST_HAZE_DETAIL_DEFAULT, "the knob starts off");
+  for (name, age_o, age_p) in [("young", 468.0, Some(2300.0)), ("month", 25.0 * 86400.0, Some(25.1 * 86400.0)), ("alone", 3600.0, None)] {
+    let m = moments_aged(age_o);
+    let p = age_p.map(|a| moments_aged(a));
+    let seg = p.as_ref().map_or([0.0; 3], |p| sub3f(p.mean(), m.mean()));
+    let untouched = subpackets_cells_bins(&m, seg, p.as_ref(), false, false, None);
+    let mut counts = alloc::vec::Vec::new();
+    for h in [16u32, 8, 4, 2, 1] {
+      set_haze_active(h);
+      let packets = subpackets_cells_bins(&m, seg, p.as_ref(), false, false, None);
+      set_haze_active(DUST_HAZE_DETAIL_DEFAULT);
+      let flux: f32 = packets.iter().map(|(q, _, _, _)| q.flux).sum();
+      std::println!("[haze detail] {name} H {h}: {} packets (untouched {}), flux {:.6} of {:.6}", packets.len(), untouched.len(), flux, m.flux());
+      assert!((flux / m.flux() - 1.0).abs() < 1e-4, "{name} H {h}: the packets carry {flux} of {}", m.flux());
+      if h == 16 {
+        // (the Debug strings: the month case carries NaN fields on both sides, NaN != NaN)
+        assert_eq!(alloc::format!("{packets:?}"), alloc::format!("{untouched:?}"), "{name}: H 16 changes the packets");
+      }
+      assert!(packets.len() <= untouched.len(), "{name} H {h}: more packets than untouched");
+      if h <= 4 {
+        assert!(packets.len() <= (h * h) as usize, "{name} H {h}: {} packets", packets.len());
+        assert!(packets.len() < untouched.len(), "{name} H {h}: no fewer packets than untouched ({})", untouched.len());
+      }
+      if h == 1 {
+        assert_eq!(packets.len(), 1, "{name} H 1: one packet");
+      }
+      counts.push(packets.len());
+    }
+    assert!(counts.windows(2).all(|w| w[0] >= w[1]), "{name}: the counts are not monotone: {counts:?}");
+  }
+  // the group and time-piece rules keep the depth criterion: a cap of 2 bins holds against H = 1,
+  // a depth minimum of 3 pieces holds against H = 1 (never past the pieces there are)
+  assert_eq!(haze_group(1, 1, 2), 2);
+  assert_eq!(haze_group(1, 1, 16), 16);
+  assert_eq!(haze_group(4, 16, 16), 4);
+  assert_eq!(haze_group(4, 8, 1), 1);
+  assert_eq!(haze_time_pieces(8, 1, 3), 3);
+  assert_eq!(haze_time_pieces(2, 1, 3), 2);
+  assert_eq!(haze_time_pieces(8, 16, 1), 8);
+  assert_eq!(haze_time_pieces(8, 4, 1), 4);
 }
 
 #[test]

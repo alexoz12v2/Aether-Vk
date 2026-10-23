@@ -26,6 +26,10 @@ public sealed class PreferencesFile
   /// edges; missing = 17.</summary>
   [JsonPropertyName("dust_propagate_detail")]
   public int? DustPropagateDetail { get; set; }
+  /// <summary>Dust haze detail (Settings › Particle rendering): 16, 8, 4, 2 or 1 sub-packets per
+  /// cluster at the coarsest level; missing = 16.</summary>
+  [JsonPropertyName("dust_haze_detail")]
+  public int? DustHazeDetail { get; set; }
   /// <summary>Dust temporal reuse tolerance in pixels (Settings › Particle rendering): 0 (off), 1, 2,
   /// 4, 8 or 16; missing = 0.</summary>
   [JsonPropertyName("dust_reuse_px")]
@@ -97,6 +101,11 @@ public sealed class PreferencesService
   public int DustPropagateDetail =>
     ParticleRenderingViewModel.ClampPropagateDetail(_file.DustPropagateDetail ?? ParticleRenderingViewModel.PropagateDetailDefault);
 
+  /// <summary>The dust haze detail, clamped (<see cref="ParticleRenderingViewModel.ClampHazeDetail"/>);
+  /// 16 when the file has none.</summary>
+  public int DustHazeDetail =>
+    ParticleRenderingViewModel.ClampHazeDetail(_file.DustHazeDetail ?? ParticleRenderingViewModel.HazeDetailDefault);
+
   /// <summary>The dust temporal reuse tolerance in pixels, clamped
   /// (<see cref="ParticleRenderingViewModel.ClampReuseTolerance"/>); 0 (off) when the file has none.</summary>
   public int DustReuseTolerance =>
@@ -160,6 +169,12 @@ public sealed class PreferencesService
   public void SetDustPropagateDetail(int detail)
   {
     _file.DustPropagateDetail = ParticleRenderingViewModel.ClampPropagateDetail(detail);
+    Save();
+  }
+
+  public void SetDustHazeDetail(int detail)
+  {
+    _file.DustHazeDetail = ParticleRenderingViewModel.ClampHazeDetail(detail);
     Save();
   }
 

@@ -40,6 +40,32 @@ public class ParticleRenderingViewTests
   }
 
   [AvaloniaFact]
+  public void HazeDetailPicker_ShowsTheFiveSteps_AndFollowsTheViewModel()
+  {
+    var vm = new DesignSettingsTabViewModel();
+    var view = new SettingsTabView { DataContext = vm };
+    var window = new Window { Content = view, Width = 600, Height = 1600 };
+    window.Show();
+    view.GetLogicalDescendants().OfType<Expander>().Single(e => e.Name == "ParticleRenderingSection").IsExpanded = true;
+    Dispatcher.UIThread.RunJobs();
+
+    var picker = view.GetLogicalDescendants().OfType<ComboBox>().Single(c => c.Name == "HazeDetailPicker");
+    Assert.Equal(5, picker.ItemCount);
+    Assert.Equal(0, picker.SelectedIndex);
+    Assert.Equal(16, vm.ParticleRendering.HazeDetail);
+
+    picker.SelectedIndex = 2;
+    Dispatcher.UIThread.RunJobs();
+    Assert.Equal(4, vm.ParticleRendering.HazeDetail);
+    Assert.Equal(16, vm.ParticleRendering.VolumeDetail);
+
+    vm.ParticleRendering.HazeDetail = 1;
+    Dispatcher.UIThread.RunJobs();
+    Assert.Equal(4, picker.SelectedIndex);
+    window.Close();
+  }
+
+  [AvaloniaFact]
   public void PropagateDetailPicker_ShowsTheThreeSteps_AndFollowsTheViewModel()
   {
     var vm = new DesignSettingsTabViewModel();

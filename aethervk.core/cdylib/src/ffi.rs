@@ -798,6 +798,27 @@ pub unsafe extern "C" fn avkSimulationContext_setDustPropagateDetail(
   ctx_ref.set_dust_propagate_detail(scene_id, detail).is_some()
 }
 
+/// Sets the dust haze detail of `scene_id` ("Haze detail": the sub-packets a dust cluster is drawn
+/// with when the haze is drawn on the coarsest level, 16 = every sub-packet, the default; lower is
+/// faster, the haze's light sampled more coarsely), clamped to the largest power of two `≤ detail`
+/// in `[1, 16]`; returns false without the scene.
+///
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setDustHazeDetail(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  detail: u32,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  ctx_ref.set_dust_haze_detail(scene_id, detail).is_some()
+}
+
 /// Sets the dust temporal reuse tolerance of `scene_id` in px ("Temporal reuse tolerance": 0 =
 /// off, every frame drawn fresh, the default; ε > 0 reuses dust whose on-screen motion stays
 /// within ε px: faster, with errors up to ε px), clamped to 0 or a power of two `≤ 16`; returns

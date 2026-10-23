@@ -123,6 +123,80 @@ public sealed class ParticleRenderingViewModelTests : IDisposable
   }
 
   [Fact]
+  public void ClampHazeDetail_TakesTheLargestPowerOfTwoBelow()
+  {
+    Assert.Equal(1, ParticleRenderingViewModel.ClampHazeDetail(-5));
+    Assert.Equal(1, ParticleRenderingViewModel.ClampHazeDetail(0));
+    Assert.Equal(2, ParticleRenderingViewModel.ClampHazeDetail(3));
+    Assert.Equal(16, ParticleRenderingViewModel.ClampHazeDetail(17));
+    Assert.Equal(16, ParticleRenderingViewModel.ClampHazeDetail(1000));
+    foreach (int d in ParticleRenderingViewModel.HazeDetailSteps)
+      Assert.Equal(d, ParticleRenderingViewModel.ClampHazeDetail(d));
+  }
+
+  /// <summary>No stored value: 16 (today's image), and building the section sends nothing.</summary>
+  [Fact]
+  public void HazeDetail_DefaultsTo16_AndConstructionSendsNothing()
+  {
+    var (vm, runtime, prefs) = Build();
+    Assert.Equal(ParticleRenderingViewModel.HazeDetailDefault, vm.HazeDetail);
+    Assert.Equal(16, vm.HazeDetail);
+    Assert.Equal(0, vm.HazeDetailIndex);
+    Assert.Equal(16, prefs.DustHazeDetail);
+    runtime.Verify(r => r.SetDustHazeDetail(It.IsAny<int>()), Times.Never);
+  }
+
+  [Fact]
+  public void HazeDetail_IsSentClampedAndStored()
+  {
+    var (vm, runtime, prefs) = Build();
+    vm.HazeDetail = 4;
+    runtime.Verify(r => r.SetDustHazeDetail(4), Times.Once);
+    Assert.Equal(4, prefs.DustHazeDetail);
+    Assert.Equal(2, vm.HazeDetailIndex);
+
+    vm.HazeDetail = 3;
+    Assert.Equal(2, vm.HazeDetail);
+    runtime.Verify(r => r.SetDustHazeDetail(2), Times.Once);
+    runtime.Verify(r => r.SetDustHazeDetail(3), Times.Never);
+    vm.HazeDetail = 0;
+    Assert.Equal(1, vm.HazeDetail);
+    runtime.Verify(r => r.SetDustHazeDetail(1), Times.Once);
+    vm.HazeDetail = 1000;
+    Assert.Equal(16, vm.HazeDetail);
+    runtime.Verify(r => r.SetDustHazeDetail(16), Times.Once);
+    Assert.Equal(16, prefs.DustHazeDetail);
+    runtime.Verify(r => r.SetDustVolumeDetail(It.IsAny<int>()), Times.Never);
+    runtime.Verify(r => r.SetDustPropagateDetail(It.IsAny<int>()), Times.Never);
+    runtime.Verify(r => r.SetDustReuseTolerance(It.IsAny<int>()), Times.Never);
+    Assert.Equal(16, prefs.DustVolumeDetail);
+
+    // the picker's index
+    vm.HazeDetailIndex = 1;
+    Assert.Equal(8, vm.HazeDetail);
+    runtime.Verify(r => r.SetDustHazeDetail(8), Times.Once);
+    vm.HazeDetailIndex = -1; // a cleared picker
+    Assert.Equal(8, vm.HazeDetail);
+  }
+
+  [Fact]
+  public void HazeDetail_SurvivesARestart()
+  {
+    var (vm, _, _) = Build();
+    vm.HazeDetail = 2;
+
+    var prefs2 = LoadPrefs();
+    Assert.Equal("loaded", prefs2.LoadOutcome);
+    Assert.Equal(2, prefs2.DustHazeDetail);
+    Assert.Contains("\"dust_haze_detail\": 2", File.ReadAllText(PrefsPath));
+    var runtime2 = new Mock<INativeRuntimeService>();
+    var vm2 = new ParticleRenderingViewModel(runtime2.Object, prefs2);
+    Assert.Equal(2, vm2.HazeDetail);
+    Assert.Equal(3, vm2.HazeDetailIndex);
+    runtime2.Verify(r => r.SetDustHazeDetail(It.IsAny<int>()), Times.Never);
+  }
+
+  [Fact]
   public void ClampPropagateDetail_TakesTheLargestStepBelow()
   {
     Assert.Equal(5, ParticleRenderingViewModel.ClampPropagateDetail(-5));

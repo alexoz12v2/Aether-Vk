@@ -136,6 +136,7 @@ public partial class App : Application
             var runtimeAtStartup = ServiceProviderServiceExtensions.GetRequiredService<INativeRuntimeService>(Host!.Services);
             runtimeAtStartup.SetDustVolumeDetail(preferences.DustVolumeDetail);
             runtimeAtStartup.SetDustPropagateDetail(preferences.DustPropagateDetail);
+            runtimeAtStartup.SetDustHazeDetail(preferences.DustHazeDetail);
             runtimeAtStartup.SetDustReuseTolerance(preferences.DustReuseTolerance);
 
             var mainWindowViewModel =
@@ -302,6 +303,7 @@ public class MockNativeRuntimeService : INativeRuntimeService
   public bool SetDustSoftening(float softening) => true;
   public bool SetDustVolumeDetail(int detail) => true;
   public bool SetDustPropagateDetail(int detail) => true;
+  public bool SetDustHazeDetail(int detail) => true;
   public bool SetDustReuseTolerance(int px) => true;
   public bool SetDustViewFlags(uint flags) => true;
   public bool SetDustFlowSpeed(float speed) => true;

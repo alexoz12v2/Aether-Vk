@@ -60,6 +60,24 @@ public partial class ParticleRenderingViewModel : ObservableObject
     return PropagateDetailMin;
   }
 
+  /// <summary>Default haze detail (every sub-packet: today's image).</summary>
+  public const int HazeDetailDefault = 16;
+  public const int HazeDetailMin = 1;
+  public const int HazeDetailMax = 16;
+
+  /// <summary>The haze picker's steps, finest first (sub-packets per cluster at the coarsest level).</summary>
+  public static readonly IReadOnlyList<int> HazeDetailSteps = new[] { 16, 8, 4, 2, 1 };
+
+  /// <summary>The largest power of two ≤ <paramref name="v"/> in [<see cref="HazeDetailMin"/>,
+  /// <see cref="HazeDetailMax"/>] (0 and below → 1); mirror of <c>dust::clamp_haze_detail</c>.</summary>
+  public static int ClampHazeDetail(int v)
+  {
+    int p = HazeDetailMin;
+    while (p < HazeDetailMax && p * 2 <= v)
+      p *= 2;
+    return p;
+  }
+
   /// <summary>Default reuse tolerance (off: every frame drawn fresh, today's image).</summary>
   public const int ReuseToleranceDefault = 0;
   public const int ReuseToleranceMax = 16;
@@ -137,6 +155,32 @@ public partial class ParticleRenderingViewModel : ObservableObject
     }
   }
 
+  /// <summary>Haze detail: 16, 8, 4, 2 or 1 (other values clamp to a step).</summary>
+  [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(HazeDetailIndex))]
+  private int _hazeDetail = HazeDetailDefault;
+
+  /// <summary>The haze picker's items (<see cref="HazeDetailSteps"/>).</summary>
+  public IReadOnlyList<int> HazeDetailOptions => HazeDetailSteps;
+
+  /// <summary>Picker index over <see cref="HazeDetailSteps"/> (a negative index, a cleared picker,
+  /// is ignored).</summary>
+  public int HazeDetailIndex
+  {
+    get
+    {
+      for (int i = 0; i < HazeDetailSteps.Count; i++)
+        if (HazeDetailSteps[i] == HazeDetail)
+          return i;
+      return 0;
+    }
+    set
+    {
+      if (value >= 0 && value < HazeDetailSteps.Count)
+        HazeDetail = HazeDetailSteps[value];
+    }
+  }
+
   /// <summary>Temporal reuse tolerance in pixels: 0 (off), 1, 2, 4, 8 or 16 (other values clamp
   /// to a step).</summary>
   [ObservableProperty]
@@ -187,6 +231,7 @@ public partial class ParticleRenderingViewModel : ObservableObject
     _suppressDispatch = true;
     VolumeDetail = preferences?.DustVolumeDetail ?? VolumeDetailDefault;
     PropagateDetail = preferences?.DustPropagateDetail ?? PropagateDetailDefault;
+    HazeDetail = preferences?.DustHazeDetail ?? HazeDetailDefault;
     ReuseTolerance = preferences?.DustReuseTolerance ?? ReuseToleranceDefault;
     _suppressDispatch = false;
   }
@@ -217,6 +262,20 @@ public partial class ParticleRenderingViewModel : ObservableObject
       return;
     _preferences?.SetDustPropagateDetail(d);
     _runtimeService?.SetDustPropagateDetail(d);
+  }
+
+  partial void OnHazeDetailChanged(int value)
+  {
+    int d = ClampHazeDetail(value);
+    if (d != value)
+    {
+      HazeDetail = d;
+      return;
+    }
+    if (_suppressDispatch)
+      return;
+    _preferences?.SetDustHazeDetail(d);
+    _runtimeService?.SetDustHazeDetail(d);
   }
 
   partial void OnReuseToleranceChanged(int value)

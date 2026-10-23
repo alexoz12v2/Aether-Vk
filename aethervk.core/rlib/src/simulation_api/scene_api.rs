@@ -714,6 +714,21 @@ impl SimulationContext {
     Some(d)
   }
 
+  /// Sets the dust haze detail ("Haze detail": the sub-packets a dust cluster is drawn with when
+  /// the haze is drawn on the coarsest level, 16 = every sub-packet, the default), clamped to the
+  /// largest power of two `≤ detail` in `[DUST_HAZE_DETAIL_MIN, DUST_HAZE_DETAIL_MAX]`. Returns
+  /// the value applied, or `None` without the scene. Visual only: picked up by the next rendered
+  /// frame (round 8 step G).
+  pub fn set_dust_haze_detail(&self, scene_id: u64, detail: u32) -> Option<u32> {
+    let scene_arc = self.scenes.read().get_scene(scene_id)?;
+    let d = crate::scene::dust::clamp_haze_detail(detail);
+    scene_arc
+      .read()
+      .dust_haze_detail
+      .store(d, core::sync::atomic::Ordering::Relaxed);
+    Some(d)
+  }
+
   /// Sets the dust temporal reuse tolerance in px ("Temporal reuse tolerance": 0 = off, every
   /// frame drawn fresh, the default; ε > 0 reuses clusters whose on-screen motion stays within ε
   /// px), clamped by `dust::clamp_reuse_px`. Returns the value applied, or `None` without the
