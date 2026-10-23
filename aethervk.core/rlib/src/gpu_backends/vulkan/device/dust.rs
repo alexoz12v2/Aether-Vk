@@ -385,6 +385,10 @@ pub struct DustViewHost {
   /// per readback slot: the unit when it was recorded
   slot_unit: [f32; DUST_READBACK_SLOTS],
   slot_valid: [bool; DUST_READBACK_SLOTS],
+  /// per readback slot: the haze detail of the frame's flags (round 9 step B), and the one of the
+  /// readback being absorbed ([`DustViewHost::absorb`]: the haze engaged at a top-only bias)
+  slot_haze: [u32; DUST_READBACK_SLOTS],
+  pub readback_haze: u32,
   /// the view's pixel solid angle (sr; 0 = orthographic or unknown: no speck shell), set by
   /// [`Device::dust_set_shell_camera`] every frame
   pub omega_px_sr: f64,
@@ -521,6 +525,16 @@ pub struct FeedbackSet {
   pub ewa_step_q8: [u32; dust::DUST_EWA_BIAS_MAX as usize + 1],
   pub volume_prev: (u32, u64),
   pub ewa_prev: (u32, u64),
+  /// the top plateau's edge (round 9 step B): the work ratio of the raise that engaged the haze
+  /// (the last sub-top readback's work over the first top-only one's, 8.8 fixed point, 0 =
+  /// unknown), kept apart from the per-bias steps: a raise of k levels into the plateau would
+  /// spread the one-off haze-off ↔ haze-on jump (45–200×) over k steps as its k-th root, and the
+  /// lower rule then saw `work × 6.7 < budget` and left the plateau, the haze disengaged, the
+  /// evaluations jumped back over the budget: a four-readback cycle
+  pub volume_edge_q8: u32,
+  /// consecutive top-only readbacks under budget / 8 with the haze engaged (the hold before a
+  /// lower off the plateau, [`DUST_FEEDBACK_TOP_HOLD`])
+  pub top_under: u32,
 }
 
 impl Default for FeedbackSet {
@@ -534,9 +548,18 @@ impl Default for FeedbackSet {
       ewa_step_q8: [0; dust::DUST_EWA_BIAS_MAX as usize + 1],
       volume_prev: (0, 0),
       ewa_prev: (0, 0),
+      volume_edge_q8: 0,
+      top_under: 0,
     }
   }
 }
+
+/// The plateau edge the feedback assumes before it measured one (the haze engaged, no raise seen):
+/// a lower off the plateau is refused while `work × 64 > budget`
+pub const DUST_FEEDBACK_HAZE_EDGE_DEFAULT: f64 = 64.0;
+/// How many consecutive under-budget/8 top-only readbacks the feedback holds before it lowers off
+/// the plateau with the haze engaged (the readbacks arrive [`DUST_READBACK_SLOTS`] frames late)
+pub const DUST_FEEDBACK_TOP_HOLD: u32 = 8;
 
 /// The step ratio the feedback assumes before a raise measured one: a level quarters the work
 /// (the log₄ rule of the raises); with the band's lower edge at budget / 8 it keeps today's rule
@@ -824,6 +847,8 @@ impl DustViewHost {
       ewa_step_q8: self.fb_memory.ewa_step_q8,
       volume_prev: self.fb_memory.volume_prev,
       ewa_prev: self.fb_memory.ewa_prev,
+      volume_edge_q8: self.fb_memory.volume_edge_q8,
+      top_under: self.fb_memory.top_under,
     }
   }
 
@@ -878,6 +903,8 @@ impl Default for DustViewHost {
       frame: 0,
       slot_unit: [0.0; DUST_READBACK_SLOTS],
       slot_valid: [false; DUST_READBACK_SLOTS],
+      slot_haze: [dust::DUST_HAZE_DETAIL_DEFAULT; DUST_READBACK_SLOTS],
+      readback_haze: dust::DUST_HAZE_DETAIL_DEFAULT,
       omega_px_sr: 0.0,
       shell: ShellUpdate {
         n_eye_m3: 0.0,
@@ -996,37 +1023,77 @@ impl DustViewHost {
     }
     self.split_depth = next;
     let vol = dust::VolumeStats::load(header);
-    FeedbackSet::feedback_remember(
-      &mut self.fb_memory.volume_step_q8,
-      &mut self.fb_memory.volume_prev,
-      vol.bias,
-      vol.evals as u64,
-    );
+    // the haze knob (round 9 step B): below 16 and without the frame's deep-chord bit it engages
+    // at a top-only bias (`dust_haze_detail_of`), where it cuts the evaluations by the plateau's
+    // edge; the plateau (every bias from `volume_top_min` on draws the same frame) is one state
+    let haze_on = self.readback_haze < dust::DUST_HAZE_DETAIL_DEFAULT && !dust::deep_chord(header);
+    let top = dust::volume_top_only_header(header, vol.bias);
+    let engaged = haze_on && top;
+    let (pb, pw) = self.fb_memory.volume_prev;
+    if engaged && vol.bias > pb && pw > 0 && vol.evals > 0 && !dust::volume_top_only_header(header, pb) {
+      // the raise that engaged the haze: the edge, apart from the per-bias steps
+      let r = pw as f64 / vol.evals as f64;
+      self.fb_memory.volume_edge_q8 = (r * 256.0).clamp(256.0, u32::MAX as f64) as u32;
+      self.fb_memory.volume_prev = (vol.bias, vol.evals as u64);
+    } else {
+      FeedbackSet::feedback_remember(
+        &mut self.fb_memory.volume_step_q8,
+        &mut self.fb_memory.volume_prev,
+        vol.bias,
+        vol.evals as u64,
+      );
+    }
     // over the budget: coarser by log4(evals / budget) levels at once (a level divides the
     // texels by 4; inside the coma the first frame asks ~45× the budget, and one level per
     // readback took four slow frames to settle); else the one-step rule, unless the memory says
     // the step would pass the budget again
     // the budget loop's knob (step 5): the target halved `budget_shift` times (0: the constant)
     let vol_budget = dust::DUST_VOLUME_FRAME_BUDGET >> self.budget_shift();
+    let edge = match self.fb_memory.volume_edge_q8 {
+      0 => DUST_FEEDBACK_HAZE_EDGE_DEFAULT,
+      q => q as f64 / 256.0,
+    };
     let bias = if vol.evals > vol_budget {
       let ratio = vol.evals as f64 / vol_budget as f64;
       let up = (ratio.ln() / 4f64.ln()).ceil().max(1.0) as u32;
-      (vol.bias + up).min(dust::DUST_VOLUME_BIAS_MAX)
+      let raised = (vol.bias + up).min(dust::DUST_VOLUME_BIAS_MAX);
+      self.fb_memory.top_under = 0;
+      // with the knob below 16 a raise onto the plateau lands on its lowest bias
+      if haze_on && dust::volume_top_only_header(header, raised) {
+        raised.min(dust::volume_top_min(header)).max(vol.bias)
+      } else {
+        raised
+      }
+    } else if engaged && vol.evals < vol_budget / 8 {
+      // under the band on the plateau with the haze engaged: off the plateau (one step, where the
+      // haze is off) only when the edge keeps the work under the budget, after the hold
+      self.fb_memory.top_under += 1;
+      if vol.evals as f64 * edge <= vol_budget as f64 && self.fb_memory.top_under >= DUST_FEEDBACK_TOP_HOLD {
+        self.fb_memory.top_under = 0;
+        dust::volume_top_min(header).saturating_sub(1).min(self.volume_bias)
+      } else {
+        self.volume_bias
+      }
     } else if vol.evals < vol_budget / 8
       && FeedbackSet::feedback_allows_lower(&self.fb_memory.volume_step_q8, vol.bias, vol.evals as u64, vol_budget as u64)
     {
+      self.fb_memory.top_under = 0;
       vol.suggested_bias_for(vol_budget)
     } else {
       // inside the band: the state stays (as the split depth's)
+      self.fb_memory.top_under = 0;
       self.volume_bias
     };
     if bias != self.volume_bias {
       aethervk_oshal_rlib::log!(
-        "[Dust volume] {} ray-integral evaluations at bias {} (budget {}): bias {} for the next frames",
+        "[Dust volume] {} ray-integral evaluations at bias {} (budget {}): bias {} for the next frames (haze {}, top {}, edge ×{:.1})",
         vol.evals,
         vol.bias,
         vol_budget,
-        bias
+        bias,
+        self.readback_haze,
+        top,
+        edge
       );
     }
     self.volume_bias = bias;
@@ -2041,6 +2108,7 @@ impl Device {
           );
         }
         host.feedback_load(regime_rb);
+        host.readback_haze = host.slot_haze[slot];
         host.absorb(estimate.as_deref().unwrap_or(header), level, 1 << lvl, unit);
         host.feedback_store(regime_rb);
         host.last_regime = regime_rb;
@@ -2185,6 +2253,7 @@ impl Device {
     let shell_cap = host.budget.as_ref().and_then(|b| b.shell_cap_m);
     let unit = host.unit();
     host.slot_unit[slot] = unit;
+    host.slot_haze[slot] = dust::haze_detail_from_flags(flags);
     let (white, softening) = host.display();
     let p50 = host.p50;
     let shell = host.shell;
@@ -3428,7 +3497,21 @@ impl Device {
   pub fn dust_set_volume_bias(&self, pe: gpu::PresentationEngineHandle, bias: Option<u32>) {
     let res = self.res.read();
     if let Some(view) = res.dust_manager.as_ref().and_then(|m| m.views.get(&pe)) {
-      view.host.lock().volume_bias_override = bias;
+      let mut host = view.host.lock();
+      // a released pin continues from the pinned bias (round 9 step B): the feedback's own state
+      // did not run while the frames drew at the pin, and the plateau hold starts afresh
+      if let (Some(b), None) = (host.volume_bias_override, bias) {
+        host.volume_bias = b;
+        host.fb_memory.volume_bias = b;
+        host.fb_memory.top_under = 0;
+        host.fb_full.volume_bias = b;
+        host.fb_full.top_under = 0;
+        if let Some(c) = host.fb_cad.as_mut() {
+          c.volume_bias = b;
+          c.top_under = 0;
+        }
+      }
+      host.volume_bias_override = bias;
     }
   }
 

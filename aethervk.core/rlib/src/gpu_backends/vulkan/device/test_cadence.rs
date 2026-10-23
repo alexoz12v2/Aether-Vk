@@ -2235,6 +2235,120 @@ fn the_feedback_refuses_a_lower_that_would_raise_again() {
   assert!(host.fb_memory.ewa_step_q8[1] > 0);
 }
 
+/// a feedback header with `levels` levels, the last 1 × 1 (the top-only predicate live), the EWA
+/// side in its band and the split in its band (round 9 step B)
+fn feedback_header(levels: u32, vol_bias: u32, evals: u32) -> alloc::vec::Vec<u32> {
+  use crate::scene::dust::{DUST_EWA_FRAME_BUDGET, DUST_EWA_TEXEL_UNIT, EwaStats};
+  let mut h = alloc::vec![0u32; dust::PYRAMID_HEADER_WORDS as usize];
+  EwaStats::store_bias(0, &mut h);
+  h[dust::PYR_EWA_TEXELS as usize] = (DUST_EWA_FRAME_BUDGET as u64 / 4 / DUST_EWA_TEXEL_UNIT as u64) as u32;
+  let w = &mut h[dust::PYR_SPLIT_DEPTH as usize];
+  *w = (*w & !(0xFF << 8)) | (vol_bias << 8);
+  h[dust::PYR_VOLUME_EVALS as usize] = evals;
+  h[dust::PYR_SPLIT_CHILDREN as usize] = dust::DUST_SPLIT_BUDGET / 2;
+  h[dust::PYR_LEVELS as usize] = levels;
+  for l in 0..levels {
+    let t = (dust::PYR_TABLE + 3 * l) as usize;
+    h[t + 1] = 512 >> l;
+    h[t + 2] = 512 >> l;
+  }
+  h
+}
+
+/// with the haze knob below 16 a raise onto the top plateau lands on its lowest bias (`levels − 1`:
+/// every bias from it on draws the same frame), at 16 the raise is today's (round 9 step B)
+#[test]
+fn the_feedback_raises_into_the_lowest_top_bias() {
+  let level = alloc::vec![0u32; 16];
+  let mut host = DustViewHost::default();
+  host.volume_bias = 7;
+  host.readback_haze = 1;
+  // 300 M at 7 (4.5× the budget: two levels) would land at 9 = the plateau's first bias
+  host.absorb(&feedback_header(10, 7, 300_000_000), &level, 1, 1.0);
+  assert_eq!(host.volume_bias, 9);
+  // 3 000 M at 7 (three levels → 10): capped at 9
+  let mut host = DustViewHost::default();
+  host.volume_bias = 7;
+  host.readback_haze = 1;
+  host.absorb(&feedback_header(10, 7, 3_000_000_000), &level, 1, 1.0);
+  assert_eq!(host.volume_bias, 9);
+  // on the plateau and still over the budget: stays (no raise past the lowest top bias)
+  host.absorb(&feedback_header(10, 9, 76_000_000), &level, 1, 1.0);
+  assert_eq!(host.volume_bias, 9);
+  // the knob at 16: today's raise
+  let mut host = DustViewHost::default();
+  host.volume_bias = 7;
+  host.absorb(&feedback_header(10, 7, 3_000_000_000), &level, 1, 1.0);
+  assert_eq!(host.volume_bias, 10);
+  host.absorb(&feedback_header(10, 10, 76_000_000), &level, 1, 1.0);
+  assert_eq!(host.volume_bias, 11);
+}
+
+/// with the haze engaged (the knob below 16 at a top-only bias) the feedback remembers the plateau's
+/// edge (the raise's full ratio) and refuses a lower off the plateau while `work × edge > budget`;
+/// a drift under it is lowered one step off the plateau only after the hold, and an in-band readback
+/// off the plateau keeps the state (round 9 step B)
+#[test]
+fn the_feedback_holds_the_top_bias_while_the_haze_is_engaged() {
+  use crate::scene::dust::DUST_VOLUME_FRAME_BUDGET;
+  let level = alloc::vec![0u32; 16];
+  let mut host = DustViewHost::default();
+  host.volume_bias = 7;
+  host.readback_haze = 1;
+  host.absorb(&feedback_header(10, 7, 300_000_000), &level, 1, 1.0);
+  assert_eq!(host.volume_bias, 9);
+  // the first top-only readback: 1 M (the haze cut 300×): the edge, the lower refused
+  host.absorb(&feedback_header(10, 9, 1_000_000), &level, 1, 1.0);
+  assert_eq!(host.volume_bias, 9, "a lower that would raise again (edge 300×)");
+  assert!((host.fb_memory.volume_edge_q8 as f64 / 256.0 - 300.0).abs() < 0.5, "edge {}", host.fb_memory.volume_edge_q8 as f64 / 256.0);
+  assert_eq!(host.fb_memory.volume_step_q8[9], 0, "the edge is not a step");
+  // the pose drifts: 0.1 M (× 300 = 30 M ≤ the budget) is held DUST_FEEDBACK_TOP_HOLD readbacks
+  for k in 0..(DUST_FEEDBACK_TOP_HOLD - 2) {
+    host.absorb(&feedback_header(10, 9, 100_000), &level, 1, 1.0);
+    assert_eq!(host.volume_bias, 9, "held readback {k}");
+  }
+  host.absorb(&feedback_header(10, 9, 100_000), &level, 1, 1.0);
+  assert_eq!(host.volume_bias, 8, "one step off the plateau after the hold");
+  assert_eq!(host.fb_memory.top_under, 0);
+  // off the plateau, in the band: the state stays
+  host.absorb(&feedback_header(10, 8, DUST_VOLUME_FRAME_BUDGET / 2), &level, 1, 1.0);
+  assert_eq!(host.volume_bias, 8);
+  // without a measured edge the default 64× refuses 2 M (128 M > the budget), lowers 0.5 M
+  let mut host = DustViewHost::default();
+  host.volume_bias = 9;
+  host.readback_haze = 4;
+  for _ in 0..DUST_FEEDBACK_TOP_HOLD {
+    host.absorb(&feedback_header(10, 9, 2_000_000), &level, 1, 1.0);
+  }
+  assert_eq!(host.volume_bias, 9, "the default edge refuses");
+  for _ in 0..DUST_FEEDBACK_TOP_HOLD {
+    host.absorb(&feedback_header(10, 9, 500_000), &level, 1, 1.0);
+  }
+  assert_eq!(host.volume_bias, 8, "the default edge lowers after the hold");
+}
+
+/// with the knob at 16 the memory keeps today's per-step (geometric) ratio and no edge: the raise
+/// 7 → 9 by 300 M records √300 at 9, and 1 M at 9 is lowered as before (round 9 step B)
+#[test]
+fn the_feedback_memory_keeps_the_haze_edge_apart_from_the_steps() {
+  let level = alloc::vec![0u32; 16];
+  let mut host = DustViewHost::default();
+  host.volume_bias = 7;
+  host.absorb(&feedback_header(10, 7, 300_000_000), &level, 1, 1.0);
+  assert_eq!(host.volume_bias, 9);
+  host.absorb(&feedback_header(10, 9, 1_000_000), &level, 1, 1.0);
+  assert_eq!(host.fb_memory.volume_edge_q8, 0);
+  assert!((host.fb_memory.volume_step_q8[9] as f64 / 256.0 - 300f64.sqrt()).abs() < 0.1);
+  assert_eq!(host.volume_bias, 8, "today's lower at 16");
+  // the memory follows the regime
+  host.fb_memory.volume_edge_q8 = 7 * 256;
+  host.fb_memory.top_under = 3;
+  host.feedback_store(1);
+  host.fb_memory = FeedbackSet::default();
+  host.feedback_load(1);
+  assert_eq!((host.fb_memory.volume_edge_q8, host.fb_memory.top_under), (7 * 256, 3));
+}
+
 /// the build members of a frame are `min(step, length − cursor)` per tier slot and pair (a
 /// finished cursor builds nothing); the shown entries are summed over every pair and tier
 #[test]
