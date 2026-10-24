@@ -24,6 +24,15 @@
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
 #endif
+// rotate_cov in scalars (dust_common.glsl: the same products and sums, in the same order; perf9_O)
+#ifndef DUST_ROT_LOOP
+#define DUST_ROT_SCALAR 1
+#endif
+// the long loops of dust_common kept rolled (DUST_NOUNROLL: the same iterations in the same order)
+#extension GL_EXT_control_flow_attributes : require
+#define DUST_NOUNROLL [[dont_unroll]]
+// the profiler's per-thread sums and long clock starts in shared memory (dust_profile.glsl; .prof only)
+#define DUST_PROF_SHARED 64
 #include "dust_common.glsl"
 #include "dust_scatter.glsl"
 
@@ -47,388 +56,285 @@ layout(push_constant, std430) uniform PushConstants {
     vec4  eyeLocal;             // 112: eye in local metres; w = the system's TTL (s), the hue clock
 } pc;                           // 128 bytes
 
-// the volumetric packet draw and its in-frame gate helpers (shared with dust_draw_volume.comp)
-// the records this lane emits (dust_splat_subpacket; counted first, then written at the
-// cluster's base in sub-packet order: main)
-bool dust_emitting = false;
-uint dust_rec_count = 0u;
-uint dust_rec_at = 0u;
-uint dust_rec_cluster = 0u;
-// the tier's live range in ring slots (the volume queue header: DUST_VQUEUE_FIRST_SLOT; main)
+// No helper takes a buffer reference (perf9_O round 11): the Adreno 619 compiler keeps every
+// DustUintBuffer / DustRenderBuffer argument in private memory (48-96 B a fiber on the stages). The
+// helpers below are pointer-free copies of dust_common.glsl's, dust_scatter.glsl's and
+// dust_profile.glsl's (the same statements): they take the address (uvec2(pc.pyramid),
+// uvec2(pc.render)) and access the buffer through DustUintBuffer(pyr).v[...] at each use.
+#define DUST_SPA_V(pyr) DustUintBuffer(pyr).v
+// dust_atomic_add_sat
+void dust_spa_atomic_add_sat(uvec2 buf, uint i, uint b) {
+    if (b == 0u) return;
+    uint old = atomicAdd(DUST_SPA_V(buf)[i], b);
+    if (((dust_pyr_split_word >> 30u) & 3u) == 1u) return;
+    if (old + b < old) atomicMax(DUST_SPA_V(buf)[i], 0xFFFFFFFFu);
+}
+// dust_streak_pred
+int dust_spa_streak_pred(uvec2 render, uint slot, uint firstSlot, uint liveCount) {
+    vec2 yz = DustRenderBuffer(render).c[slot].age_id_dbeta_flux.yz;
+    uint mask = dust_render_mask(yz.x);
+    uint n = 1u << dust_render_shift(yz.x);
+    uint k = (slot - firstSlot) & mask;
+    if (k < n || k >= liveCount || dust_stream_break(yz.y)) return -1;
+    uint p = (slot - n) & mask;
+    return dust_render_live(DustRenderBuffer(render).c[p].age_id_dbeta_flux.y) ? int(p) : -1;
+}
+// dust_lod_px_of
+float dust_spa_lod_px_of(uvec2 pyr) {
+    float v = uintBitsToFloat(DUST_SPA_V(pyr)[DUST_PYR_LOD]);
+    return (!isnan(v) && !isinf(v) && v > 0.0) ? v : 0.0;
+}
+// dust_haze_detail_of
+uint dust_spa_haze_detail_of(uint flags, uint levels, uvec2 pyr) {
+    uint detail = max(16u >> ((flags >> DUST_FLAGS_HAZE_DETAIL_SHIFT) & 7u), 1u);
+    uint bias = (DUST_SPA_V(pyr)[DUST_PYR_SPLIT_DEPTH] >> 8u) & 0xFFu;
+    uint topW = DUST_SPA_V(pyr)[DUST_PYR_TABLE + 3u * (levels - 1u) + 1u];
+    uint topH = DUST_SPA_V(pyr)[DUST_PYR_TABLE + 3u * (levels - 1u) + 2u];
+    bool deep = (DUST_SPA_V(pyr)[DUST_PYR_FLAGS] & DUST_FRAME_DEEP_CHORD) != 0u;
+    return (bias + 1u >= levels && topW == 1u && topH == 1u && !deep) ? detail : DUST_SIZE_BINS;
+}
+// dust_queue_base, dust_vqueue_base, dust_squeue_base
+uint dust_spa_queue_base(uvec2 pyr) {
+    return DUST_SPA_V(pyr)[DUST_PYR_QUEUE_BASE];
+}
+uint dust_spa_vqueue_base(uvec2 pyr) { return dust_spa_queue_base(pyr) + DUST_QUEUE_WORDS; }
+uint dust_spa_squeue_base(uvec2 pyr) {
+    uint vbase = dust_spa_vqueue_base(pyr);
+    uint n = DUST_SPA_V(pyr)[vbase + DUST_VQUEUE_RECORDS];
+    n = n == 0u ? DUST_VQUEUE_CAPACITY : min(n, DUST_VQUEUE_CAPACITY);
+    return vbase + DUST_VQUEUE_HEADER_WORDS + n * DUST_VQUEUE_RECORD_WORDS;
+}
+#ifdef DUST_PROFILE
+// dust_prof_add64, dust_prof_add32, dust_prof_max32, dust_prof_flush_k1c, dust_prof_flush_splat
+void dust_spa_prof_add64(uvec2 pyr, uint w, uint v) {
+    uint hi = subgroupAdd(v >> 16u), lo = subgroupAdd(v & 0xFFFFu);
+    if (subgroupElect()) {
+        uint sumLo = (hi << 16u) + lo;
+        uint sumHi = (hi >> 16u) + (((hi << 16u) > 0xFFFFFFFFu - lo) ? 1u : 0u);
+        uint old = atomicAdd(DUST_SPA_V(pyr)[w], sumLo);
+        sumHi += (old > 0xFFFFFFFFu - sumLo) ? 1u : 0u;
+        if (sumHi > 0u) atomicAdd(DUST_SPA_V(pyr)[w + 1u], sumHi);
+    }
+}
+void dust_spa_prof_add32(uvec2 pyr, uint w, uint v) {
+    uint s = subgroupAdd(v);
+    if (subgroupElect() && s > 0u) atomicAdd(DUST_SPA_V(pyr)[w], s);
+}
+void dust_spa_prof_max32(uvec2 pyr, uint w, uint v) {
+    uint m = subgroupMax(v);
+    if (subgroupElect() && m > 0u) atomicMax(DUST_SPA_V(pyr)[w], m);
+}
+void dust_spa_prof_flush_k1c(uvec2 pyr, uint base) {
+    dust_spa_prof_add64(pyr, base + DUST_PROF_K1C0 + 0u, dust_prof_vclass);
+    dust_spa_prof_add64(pyr, base + DUST_PROF_K1C0 + 2u, dust_prof_vsmallpts);
+    dust_spa_prof_add64(pyr, base + DUST_PROF_K1C0 + 4u, dust_prof_vsmall);
+    dust_spa_prof_add64(pyr, base + DUST_PROF_K1C0 + 6u, dust_prof_vsubline);
+    dust_spa_prof_add64(pyr, base + DUST_PROF_K1C0 + 8u, dust_prof_vcentre);
+    dust_spa_prof_add64(pyr, base + DUST_PROF_K1C0 + 10u, dust_prof_vsmprep);
+    dust_spa_prof_add64(pyr, base + DUST_PROF_K1C0 + 12u, dust_prof_vsmfast);
+    dust_spa_prof_add64(pyr, base + DUST_PROF_K1C0 + 14u, dust_prof_vsmedge);
+    dust_spa_prof_add64(pyr, base + DUST_PROF_K1C0 + 16u, dust_prof_vhead);
+    dust_spa_prof_add64(pyr, base + DUST_PROF_K1C0 + 18u, dust_prof_vbuild);
+    dust_spa_prof_add64(pyr, base + DUST_PROF_K1C0 + 20u, dust_prof_vdecide);
+    dust_spa_prof_add64(pyr, base + DUST_PROF_K1C0 + 22u, dust_prof_vdeposit);
+    dust_spa_prof_add32(pyr, base + DUST_PROF_SMALL_PATHS + 0u, dust_prof_n_small_fast);
+    dust_spa_prof_add32(pyr, base + DUST_PROF_SMALL_PATHS + 1u, dust_prof_n_small_edge);
+}
+void dust_spa_prof_flush_splat(uvec2 pyr, uint base, bool ran) {
+    dust_spa_prof_flush_k1c(pyr, base);
+    if (ran) {
+        uint bucket = uint(clamp(findMSB(max(dust_prof_thread, 1u)), 0, 31));
+        atomicAdd(DUST_SPA_V(pyr)[base + DUST_PROF_HIST + bucket], 1u);
+    }
+}
+#endif
+
+// perf9_O: the enumerator as a chain of stage dispatches (the flags' bits 3-7, host-internal: the
+// stage), a barrier between, each a lean program (one function per stage and per lane group, main
+// an if/else chain over them, values re-read from the plan row, the records and the moments where
+// they are used). Per cluster of the chunk, its plan row (DUST_SPR_*) is built by
+//  LIVE    a lane per cluster: liveness and the ring slots i, pi (dust_streak_pred)
+//          and the two pooled packets' means (the cluster's, its predecessor's: dust_pooled_packet's)
+//  PRE     DUST_SPG_PRE lanes per cluster, independent groups: the width ratio, the spiral gate and
+//          the time pieces (dust_cluster_pieces' first half); the depth rule's inputs (its second);
+//          whether the predecessor is merged; the two samples' cell lines and the own support
+//          (dust_z_support's per-cluster half); a lane per size bin of the cluster and of its
+//          predecessor (twice: pooled, within): the bin's terms of the pooled covariances (dust_pooled_packet's and
+//          dust_pooled_within's loop bodies) into the row's GEO scratch
+//  LOD     DUST_SPG_LOD lanes per cluster: the time pieces under the level of detail
+//          (dust_time_pieces_lod); a lane per covariance word, its 16 terms summed in bin order
+//  HAZE_A, HAZE_B (only with the haze knob engaged) a lane per probe: its packet into the record
+//          region (free until COUNT), then its split kind; a refusal into the row
+//  SHAPE   a lane per cluster: the haze detail, the final time pieces, merged / pooled, the chord group
+//  GEO     32 lanes per cluster: a lane per sub-packet, its sub-bin's edges and the predecessor's
+//          (dust_sub_edges); a lane per time piece, its cell line (the support's, dust_piece_line)
+//  SUBW    32 lanes per cluster, a lane per sub-packet: its kind and record count (its sub word)
+//  COUNT   32 lanes per cluster: the cluster's records allocated in sub-packet order, its table entry,
+//          every record's identity (word 33), the record stages' indirect dispatches
+// and every record by
+//  REC_A   DUST_SPG_A lanes per record (indirect, header words 8-10), a lane per output group: the
+//          per-cluster words (FILL), the support and flags, the start, the scalars, the chord, the
+//          six covariance words one per lane, the tracer (the cluster's first record)
+//  REC_B   DUST_SPG_B lanes per record (indirect, header words 11-13): what reads REC_A's words —
+//          the pooled and time-major pieces' segment from their start, a time-major seg_t turned
+//          with the spiral
+// Every record word is the value DUST_SQUEUE_PUT wrote, from the same expressions in the same
+// order (an intermediate crosses a dispatch only as its f32 bits, never split between a product
+// and the sum it feeds).
+// (a pipeline per stage: the host specializes constant 0, or -DDUST_SPLAT_STAGE=N builds one blob per stage;
+// every stage compiles alone, the others folded away)
+#ifndef DUST_SPLAT_STAGE
+layout(constant_id = 0) const uint DUST_SPLAT_STAGE = 0u;
+#endif
+const uint DUST_SPS_LIVE = 0u;
+const uint DUST_SPS_PRE = 1u;
+const uint DUST_SPS_LOD = 2u;
+const uint DUST_SPS_HAZE_A = 3u;
+const uint DUST_SPS_HAZE_B = 4u;
+const uint DUST_SPS_SHAPE = 5u;
+const uint DUST_SPS_GEO = 6u;
+const uint DUST_SPS_SUBW = 7u;
+const uint DUST_SPS_COUNT = 8u;
+const uint DUST_SPS_REC_A = 9u;
+const uint DUST_SPS_REC_B = 10u;
+const uint DUST_SPS_HAZE_E = 11u;  // (before HAZE_A: a lane per probe, its sub-bin's edges)
+const uint DUST_SPG_PRE = 85u;   // PRE's lanes per cluster: 5, two per bin own and predecessor pooled, one per bin within
+const uint DUST_SPG_LOD = 13u;   // LOD's lanes per cluster: the LOD, the six S words, the six base words
+const uint DUST_SPG_A = 12u;     // REC_A's lanes per record
+const uint DUST_SPG_B = 2u;      // REC_B's lanes per record
+// the sub-packets of a cluster: the slow end bin's sub-bins, then a bin each
+const uint DUST_SP_SUBS = DUST_END_SUBBINS + DUST_SIZE_BINS - 1u;
+// the plan row of chunk cluster c (dust_scatter.glsl's plan region, DUST_SPLAN_WORDS words)
+const uint DUST_SPR_I = 0u;          // LIVE: the ring slot i
+const uint DUST_SPR_PI = 1u;         // LIVE: the predecessor's slot (i without one)
+const uint DUST_SPR_F0 = 2u;         // LIVE: DUST_SPF0_*
+const uint DUST_SPR_RATIO = 3u;      // PRE 0: the width ratio
+const uint DUST_SPR_BINDEPTH = 4u;   // PRE 1: lodBinDepth
+const uint DUST_SPR_NEAR = 5u;       // PRE 1: lodNear
+const uint DUST_SPR_MEAN = 6u;       // LIVE: the pooled packet's mean (3)
+const uint DUST_SPR_S = 9u;          // PRE 3: its covariance (6)
+const uint DUST_SPR_BASEP = 15u;     // PRE 4: the predecessor's width for the pooled pieces (6)
+const uint DUST_SPR_OM = 21u;        // PRE 5: the own cell line o (3), c (3)
+const uint DUST_SPR_CM = 24u;
+const uint DUST_SPR_OP = 27u;        // PRE 6: the predecessor's (3), (3)
+const uint DUST_SPR_CP = 30u;
+const uint DUST_SPR_VSTD = 33u;      // PRE 5: vStd, fLo, the own support (4), its origin
+const uint DUST_SPR_FLO = 34u;
+const uint DUST_SPR_OWNSUP = 35u;
+const uint DUST_SPR_OWNO = 39u;
+const uint DUST_SPR_F1 = 40u;        // PRE 0: DUST_SPF1_SPIRAL | nT << 8 (dust_cluster_pieces' first nT)
+const uint DUST_SPR_F2 = 41u;        // PRE 1: DUST_SPF2_* | depthMin << 8
+const uint DUST_SPR_NTLOD = 42u;     // LOD: nT under the level of detail (cp.nT)
+const uint DUST_SPR_HAZE = 43u;      // HAZE_B: nonzero = a probe refused (atomicOr; LIVE clears)
+const uint DUST_SPR_FS = 44u;        // SHAPE: DUST_SPFS_* | nT << 8 (final) | g << 16
+const uint DUST_SPR_FPOOL = 45u;     // PRE 4: DUST_SPFS_PREDMERGED
+const uint DUST_SPR_FSUP = 46u;      // PRE 5, 6: DUST_SPFSUP_* (atomicOr; LIVE clears)
+const uint DUST_SPR_SUB = 47u;       // SUBW: sub-packet s's word at 47 + s (DUST_SP_SUBS of them)
+const uint DUST_SPR_PSO = 64u;       // GEO: time piece t's cell line o (3), c (3) at 64 + 6 t (the pieces case)
+const uint DUST_SPR_GEO = 112u;      // GEO: sub-packet s's edges at 112 + 16 s (DUST_SPG_*)
+// scratch of LIVE -> PRE -> LOD in the GEO words 64.. (written by GEO only, after LOD):
+const uint DUST_SPR_PMEAN = 64u;     // LIVE: the predecessor's pooled mean (3)
+const uint DUST_SPR_TO = 67u;        // PRE: bin b's terms of the own S at 67 + 6 b (16 x 6)
+const uint DUST_SPR_TPM = 163u;      // PRE: the predecessor's, pooled (dust_pooled_packet) at 163 + 6 b
+const uint DUST_SPR_TPW = 259u;      // PRE: the predecessor's, within (dust_pooled_within) at 259 + 6 b
+// a sub-packet's edges (dust_sub_edges of the cluster and of its predecessor, i without one)
+const uint DUST_SPG_EA = 0u, DUST_SPG_EC = 3u, DUST_SPG_FA = 6u, DUST_SPG_FC = 7u;
+const uint DUST_SPG_PA = 8u, DUST_SPG_PC = 11u, DUST_SPG_PFA = 14u, DUST_SPG_PFC = 15u;
+const uint DUST_SPG_WORDS = 16u;
+const uint DUST_SPF0_LIVE = 1u;
+const uint DUST_SPF0_PRED = 2u;
+const uint DUST_SPF1_SPIRAL = 1u;
+const uint DUST_SPF2_PERSP = 1u;
+const uint DUST_SPF2_LODDEPTH = 2u;
+const uint DUST_SPFS_MERGED = 1u;
+const uint DUST_SPFS_PREDMERGED = 2u;
+const uint DUST_SPFSUP_LINEM = 1u;
+const uint DUST_SPFSUP_OWNHAS = 2u;
+const uint DUST_SPFSUP_LINEP = 4u;
+// a sub-packet word: its records (bits 0-7), kind (8-10), bin b (11-15), sub-bin j (16-17), nj
+// (18-19), walked (24), openStart (25), openEnd (26)
+const uint DUST_SPK_NONE = 0u;
+const uint DUST_SPK_MERGED = 1u;   // the pooled packet's time piece t = sub
+const uint DUST_SPK_TIME = 2u;     // a time-major bin: nT pieces along its time segment
+const uint DUST_SPK_CHORD = 3u;    // a chord-major bin, one time piece, no sweep
+const uint DUST_SPK_SWEEP = 4u;    // ... swept: nS sub-capsules
+const uint DUST_SPK_CONE = 5u;     // a chord-major bin, nT cone pieces
+// a record's identity (word 33, COUNT): chunk cluster c (bits 0-9), sub-packet (10-14), its index
+// in the sub-packet (15-22: the piece t or the sweep k); ~0 no record
+const uint DUST_SQW_ID = 33u;
+uint dust_splan(uint sbase, uint c) { return dust_splan_base(sbase) + c * DUST_SPLAN_WORDS; }
+// the tier's live range in ring slots (the volume queue header: DUST_VQUEUE_FIRST_SLOT)
 uint dust_first_slot = 0u;
-// the record's bin is walked for specks (dust_specks_mask): its shell mass is the specks'
-bool dust_rec_walked = false;
-// the cluster is haze (dust_haze_volumetric, judged once per cluster by main's pre-pass; false
-// with the knob off)
-bool dust_haze_cluster = false;
-#define DUST_SQUEUE_EMIT(mean_, S_, d_, flux_, exposure_, openStart_, openEnd_, rho_, segT_, color_) { \
-    if (dust_emitting) { \
-        DUST_SQUEUE_PUT(pc.pyramid, dust_squeue_records(dust_squeue_base(pc.pyramid)), dust_rec_at + dust_rec_count, \
-                        mean_, S_, d_, flux_, exposure_, openStart_, openEnd_, rho_, segT_, color_, \
-                        dust_phot_support, dust_phot_has_origin, dust_phot_origin, dust_phot_sun, dust_phot_rh, dust_rec_cluster, dust_rec_walked) \
-    } \
-    dust_rec_count++; \
+// a record's word k (the layout of DUST_SQUEUE_PUT: a_ the record's first word)
+#define DUST_SQW(k_, v_) pc.pyramid.v[a_ + (k_) * DUST_SQUEUE_CAPACITY] = floatBitsToUint(v_);
+#define DUST_SQW3(k_, v_) { vec3 w3_ = (v_); DUST_SQW(k_, w3_.x) DUST_SQW((k_) + 1u, w3_.y) DUST_SQW((k_) + 2u, w3_.z) }
+#define DUST_SQR(k_) uintBitsToFloat(pc.pyramid.v[a_ + (k_) * DUST_SQUEUE_CAPACITY])
+// plan row words (P the row's first word)
+#define DUST_SPU(k_) pc.pyramid.v[P + (k_)]
+#define DUST_SPFL(k_) uintBitsToFloat(pc.pyramid.v[P + (k_)])
+#define DUST_SPW(k_, v_) pc.pyramid.v[P + (k_)] = floatBitsToUint(v_);
+#define DUST_SPW3(k_, v_) { vec3 w3_ = (v_); DUST_SPW(k_, w3_.x) DUST_SPW((k_) + 1u, w3_.y) DUST_SPW((k_) + 2u, w3_.z) }
+#define DUST_SPV3(k_) vec3(DUST_SPFL(k_), DUST_SPFL((k_) + 1u), DUST_SPFL((k_) + 2u))
+// the row's values, re-read at every use
+#define SP_MI DUST_SPU(DUST_SPR_I)
+#define SP_PI DUST_SPU(DUST_SPR_PI)
+#define SP_PRED ((DUST_SPU(DUST_SPR_F0) & DUST_SPF0_PRED) != 0u ? int(SP_PI) : -1)
+#define SP_SPIRAL ((DUST_SPU(DUST_SPR_F1) & DUST_SPF1_SPIRAL) != 0u)
+#define SP_RATIO DUST_SPFL(DUST_SPR_RATIO)
+#define SP_NT ((DUST_SPU(DUST_SPR_FS) >> 8u) & 0xFu)
+#define SP_G ((DUST_SPU(DUST_SPR_FS) >> 16u) & 31u)
+
+// ── the stages' inputs, re-read from the moments (identical values each time) ─────────────────
+// the two samples' ages and the spiral (dust_cluster_pieces: the spin only with a predecessor)
+void dust_z_spiral(uint mi, int pred, uint pi, out float ageO, out float ageP, out vec3 spAxis, out float spOmega) {
+    ageO = dust_mom.m[mi].cov_b_age_id.z;
+    ageP = pred >= 0 ? dust_mom.m[pi].cov_b_age_id.z : ageO;
+    spAxis = vec3(0.0);
+    spOmega = 0.0;
+    if (pred >= 0) dust_spiral_of(mi, pi, spAxis, spOmega);
+}
+// the segment to the stream predecessor (dust_cluster_pieces' seg)
+vec3 dust_z_seg(uint mi, int pred, uint pi) {
+    return pred >= 0 ? dust_mom.m[pi].mean_flux.xyz - dust_mom.m[mi].mean_flux.xyz : vec3(0.0);
+}
+// sub-bin (b, j) of the bin: its edges and the time segment to the same sub-bin of the predecessor
+vec3 dust_z_segT(uint mi, int pred, uint pi, uint b, uint j, uint nj, out vec3 ea, out vec3 ec, out float fa, out float fc) {
+    dust_sub_edges(mi, b, j, nj, ea, ec, fa, fc);
+    vec3 segT = vec3(0.0);
+    if (pred >= 0) {
+        vec3 pa, pcc; float pfa, pfc;
+        dust_sub_edges(pi, b, j, nj, pa, pcc, pfa, pfc);
+        segT = 0.5 * (pa + pcc) - 0.5 * (ea + ec);
+    }
+    return segT;
 }
 
-// The per-cluster prelude every lane recomputes (identical values): the stream predecessor and
-// the segment to it, the width ratio, the spiral, the time pieces under the level of detail
-// (dust_time_pieces_lod: capped by the time segment on screen, no fewer than its depth span
-// needs), the view direction and the polyline's depth rule inputs
-struct DustClusterPieces {
-    int pred;
-    uint pi;
-    vec3 seg;
-    float ratio;
-    bool spiral;
-    vec3 spAxis;
-    float spOmega;
-    uint nT;
-    bool perspective;
-    vec3 fwd;
-    bool lodDepth;
-    float lodBinDepth;
-    float lodNear;
-    uint depthMin;
-};
-void dust_cluster_pieces(uint mi, out DustClusterPieces c) {
-    float W = float(pc.pyramid.v[DUST_PYR_WIDTH]);
-    float H = float(pc.pyramid.v[DUST_PYR_HEIGHT]);
-    // the segment to the stream predecessor (the dust emitted between the two samples), and its
-    // width (older: wider) for the cone pieces
-    c.pred = dust_streak_pred(pc.render, mi, dust_first_slot, pc.liveCount);
-    c.pi = c.pred >= 0 ? uint(c.pred) : mi;
-    c.seg = c.pred >= 0 ? dust_mom.m[c.pi].mean_flux.xyz - dust_mom.m[mi].mean_flux.xyz : vec3(0.0);
-    c.ratio = dust_width_ratio(mi, c.pred >= 0, c.pi);
-    // the spiral of a rotating nucleus (dust::spiral_of): the pieces follow it, and there are
-    // enough of them to draw it
-    c.spAxis = vec3(0.0);
-    c.spOmega = 0.0;
-    c.spiral = c.pred >= 0 && dust_spiral_of(mi, c.pi, c.spAxis, c.spOmega);
-    c.nT = c.spiral ? DUST_TIME_PIECES_MAX : dust_time_pieces(c.ratio);
-    // the view direction of the split and the eye-plane cut (dust_view_forward)
-    c.fwd = dust_view_forward(pc.mvp, pc.eyeLocal.xyz, c.perspective);
-    // the cluster level of detail (dust_lod_*, DUST_PYR_LOD; dust::subpackets_cells): the time
-    // pieces capped by the time segment on screen and no fewer than its depth span needs
-    // (dust_time_pieces_depth); the chord groups in the non-merged branch of
-    // dust_splat_subpacket; the sweeps step by the knob (dust_time_sweep). Perspective views only
-    // for the depth rule.
-    dust_lod_px = dust_lod_px_of(pc.pyramid);
-    dust_group = 1u;
-    c.lodBinDepth = 0.0;
-    c.lodNear = 0.0;
-    c.lodDepth = c.perspective && dust_polyline_depth(mi, pc.eyeLocal.xyz, c.fwd, c.lodBinDepth, c.lodNear);
-    float lodSpan = c.pred >= 0 ? dot(dust_mom.m[c.pi].mean_flux.xyz - dust_mom.m[mi].mean_flux.xyz, c.fwd) : 0.0;
-    c.depthMin = dust_time_pieces_depth(c.pred >= 0 && c.perspective, lodSpan, c.lodDepth, c.lodNear);
-    float tPx = 0.0;
-    bool hasT = c.pred >= 0 && dust_time_segment_px(mi, c.pi, pc.mvp, W, H, tPx);
-    c.nT = dust_time_pieces_lod(c.nT, hasT, tPx, dust_lod_px, c.depthMin);
+// ── the per-cluster stages ─────────────────────────────────────────────────────────────────────
+// chunk cluster c's plan row P; false past the chunk (the volume queue header's [first, end),
+// host-written per chunk: Device::cmd_dust_splat) or, with needLive, for a cluster not drawn
+bool dust_sp_cluster(uint c, bool needLive, out uint P) {
+    uint vbase = dust_spa_vqueue_base(uvec2(pc.pyramid));
+    P = dust_splan(dust_spa_squeue_base(uvec2(pc.pyramid)), c);
+    if (c >= DUST_SQUEUE_CLUSTERS || pc.pyramid.v[vbase + DUST_VQUEUE_FIRST] + c >= pc.pyramid.v[vbase + DUST_VQUEUE_END]) return false;
+    return !needLive || (pc.pyramid.v[P + DUST_SPR_F0] & DUST_SPF0_LIVE) != 0u;
 }
 
-// Sub-packet `sub` of the cluster in ring slot `i` (a warp per cluster, a lane per sub-packet: the slow end bin's
-// sub-bins, then a bin each, in the order the per-cluster loop ran them; a merged polyline's time
-// pieces one per lane): its packets (one per dust_project_split_scatter call of the per-cluster
-// thread) as records of the sub-packet queue, in that order, for dust_split.comp. Run twice by
-// main: counting the records, then emitting them at the lane's prefix. The per-cluster setup is
-// recomputed by every lane (identical values).
-void dust_splat_subpacket(uint i, uint sub) {
-    uint mi = i;
-    DUST_PROF_BEGIN(setup)
-    uint levels = pc.pyramid.v[DUST_PYR_LEVELS];
-    float W = float(pc.pyramid.v[DUST_PYR_WIDTH]);
-    float H = float(pc.pyramid.v[DUST_PYR_HEIGHT]);
-    float age = dust_mom.m[mi].cov_b_age_id.z;
-    // the segment to the stream predecessor (the dust emitted between the two samples), and its
-    // width (older: wider) for the cone pieces
-    DustClusterPieces cp;
-    dust_cluster_pieces(mi, cp);
-    int pred = cp.pred;
-    uint pi = cp.pi;
-    vec3 seg = cp.seg;
-    float ratio = cp.ratio;
-    vec3 spAxis = cp.spAxis; float spOmega = cp.spOmega;
-    bool spiral = cp.spiral;
-    float ageO = dust_mom.m[mi].cov_b_age_id.z, ageP = pred >= 0 ? dust_mom.m[pi].cov_b_age_id.z : ageO;
-    uint nT = cp.nT;
-    bool perspective = cp.perspective;
-    vec3 fwd = cp.fwd;
-    float lodBinDepth = cp.lodBinDepth, lodNear = cp.lodNear;
-    bool lodDepth = cp.lodDepth;
-    uint depthMin = cp.depthMin;
-    // the haze detail (round 8 step G, round 9 steps A/A2; dust_haze_*): at the top level, fewer
-    // sub-packets for a haze cluster (dust_haze_volumetric, judged once per cluster by main's
-    // pre-pass: dust_haze_cluster); the default pays nothing
-    uint hazeDetail = dust_haze_detail_of(pc.flags, levels, pc.pyramid);
-    if (!dust_haze_cluster) hazeDetail = DUST_SIZE_BINS;
-    nT = dust_haze_time_pieces(nT, hazeDetail, depthMin);
-    float exposure = pc.exposure;
-    if ((pc.flags & DUST_VIEW_FLOW) != 0u) {
-        exposure *= dust_flow_factor(age, uintBitsToFloat(pc.pyramid.v[DUST_PYR_T_HI]),
-                                     uintBitsToFloat(pc.pyramid.v[DUST_PYR_T_LO]));
-    }
-    // physical photometry: every texel of the packets gets p * Phi(alpha) / r_h^2 at the dust it
-    // holds (dust_texel_weight); the cluster's Sun direction and r_h, the phase table
-    dust_phot_albedo = pc.albedo;
-    dust_pyr_split_word = pc.pyramid.v[DUST_PYR_SPLIT_DEPTH];
-    dust_rec_cluster = i;
-    dust_phot_sun = dust_sun_dir(mi);
-    dust_phot_rh = dust_helio_au(mi);
-    dust_phot_lut_addr = uvec2(pc.pyramid);
-    vec3 stream = vec3(float(pc.color & 0xFFu), float((pc.color >> 8u) & 0xFFu), float((pc.color >> 16u) & 0xFFu)) / 255.0;
-    vec3 color = dust_age_color(stream, age, pc.eyeLocal.w);
-    // a polyline below a pixel is one pooled packet (dust_polyline_merged), uniform along the time
-    // segment; otherwise every size bin is a capsule along its own chord, open towards its
-    // neighbours, with the bin's time segment as a Gaussian (dust::subpackets_merged)
-    bool predMerged = pred < 0 || dust_polyline_merged(pi, pc.mvp, W, H);
-    // (perspective: neither the polylines nor the time segment between them may be deep)
-    // (and never pooled when the speck pass walks some of its bins: the hand-over is per bin)
-    bool merged = dust_polyline_merged(mi, pc.mvp, W, H) && predMerged
-               && (pred < 0 || dust_time_shallow(mi, pi, pc.mvp))
-               && dust_specks_mask(mi) == 0u;
-    // haze detail 1 (round 9 step A2): the cluster is its pooled packet, the one
-    // dust_haze_volumetric judged, whole to the exact ray integral (never a walked cluster)
-    if (hazeDetail == 1u && dust_specks_mask(mi) == 0u) merged = true;
-    dust_rec_walked = false;
-    // bits 0-7: the split depth limit; bits 8-15: the volume level bias (host-written)
-    uint splitWord = pc.pyramid.v[DUST_PYR_SPLIT_DEPTH];
-    uint splitDepth = min(splitWord & 0xFFu, DUST_SPLIT_DEPTH_MAX);
-    uint volumeBias = (splitWord >> 8u) & 0xFFu;
-    // bits 16-17: the volumetric axis mode (AETHERVK_DUST_VOLUME_AXIS, host-written)
-    uint volumeAxis = (splitWord >> 16u) & 0x3u;
-    // bit 28 (diagnostics, AETHERVK_DUST_TIME_CELL=1, dust::time_cell_offset): a chord-major leaf's
-    // time Gaussian centred on its cell (half a segment towards the predecessor), not on its chord
-    bool cellOff = ((splitWord >> 28u) & 1u) != 0u;
-    // the speck shell's radius (0: none; orthographic views and the specks off)
-    float shellDMax = uintBitsToFloat(pc.pyramid.v[DUST_PYR_SPECKS_DMAX]);
-    float r0 = 1.0 / ratio;
-    // the support planes (dust::subpackets_supported): the sample's own for its bins, a cone
-    // piece's from the cell line at its centre age (the two lines interpolated along the spiral,
-    // the predecessor's direction turned like its covariance)
-    vec3 oM, cM, oP, cP;
-    bool lineM = dust_cell_line(mi, oM, cM);
-    bool lineP = pred >= 0 && dust_cell_line(pi, oP, cP);
-    float vStd = 0.0;
-    if (lineM && dot(cM, cM) > 0.0) {
-        float Sv[6];
-        Sv[0] = dust_mom.m[mi].cov_a.x; Sv[1] = dust_mom.m[mi].cov_a.y; Sv[2] = dust_mom.m[mi].cov_a.z;
-        Sv[3] = dust_mom.m[mi].cov_a.w; Sv[4] = dust_mom.m[mi].cov_b_age_id.x; Sv[5] = dust_mom.m[mi].cov_b_age_id.y;
-        vStd = sqrt(max(dust_var_along(Sv, cM * (1.0 / sqrt(dot(cM, cM)))), 0.0) / dot(cM, cM));
-    }
-    float fLo = dust_edge_factor(mi, 0u);
-    vec4 ownSup = lineM ? dust_support_plane(oM, cM, vStd, fLo) : vec4(0.0);
-    // the own cell's origin along its plane's normal (dust::subpackets_cells)
-    bool ownHas = lineM && dust_has_support(ownSup);
-    float ownO = dot(ownSup.xyz, oM);
-    DUST_PROF_END(setup)
-    DUST_PROF_BEGIN(subpk)
-    if (merged) {
-        vec3 mean; float S[6]; float flux;
-        dust_pooled_packet(mi, mean, S, flux);
-        float base[6];
-        for (int k = 0; k < 6; ++k) base[k] = S[k];
-        // the predecessor's width for the pieces: pooled with its midpoint scatter only when
-        // it is a point on screen too, else the mean of its bins (dust::pooled_within_cov)
-        if (nT > 1u) {
-            if (predMerged) { vec3 mp; float fp; dust_pooled_packet(pi, mp, base, fp); }
-            else dust_pooled_within(pi, base);
-        }
-        vec3 pm = mean + seg;
-        // this lane's time piece
-        uint t = sub;
-        if (t < nT) {
-            // the pieces at equal width ratios (dust_piece_bound), the predecessor's covariance
-            // turned with the spiral to the piece's centre (dust::subpackets_swept)
-            float u0 = dust_piece_bound(t, nT, ratio), u1 = dust_piece_bound(t + 1u, nT, ratio);
-            float uc = 0.5 * (u0 + u1);
-            float sc = nT > 1u ? r0 + (1.0 - r0) * uc : 1.0;
-            float sc2 = sc * sc;
-            float St[6];
-            for (int k = 0; k < 6; ++k) St[k] = base[k] * sc2;
-            if (spiral) dust_rotate_cov(St, spAxis, spOmega * (ageP - (ageO + uc * (ageP - ageO))));
-            dust_phot_support = dust_piece_support_o(nT > 1u, lineM, lineP, oM, cM, oP, cP, spiral, spAxis, spOmega, ageO, ageP, uc, vStd, fLo, ownSup, ownHas, ownO, dust_phot_has_origin, dust_phot_origin);
-            vec3 m0 = spiral ? dust_spiral_point(mean, pm, ageO, ageP, spAxis, spOmega, u0) : mean + seg * u0;
-            vec3 s0 = spiral ? dust_spiral_point(mean, pm, ageO, ageP, spAxis, spOmega, u1) - m0 : seg * (u1 - u0);
-            DUST_SQUEUE_EMIT(m0, St, s0, flux * (u1 - u0), exposure, false, false, vec2(1.0), vec3(0.0), color)
-        }
-    } else {
-        // the chord groups of the level of detail (dust_lod_group: a polyline whose bins are
-        // shorter than the knob on screen, never deeper than the split tolerates): g bins per
-        // packet, no sub-bins then (dust::subpackets_cells)
-        float ext = 0.0;
-        bool hasExt = dust_polyline_extent_px(mi, pc.mvp, W, H, ext);
-        // (a cluster with bins walked for specks keeps every bin: the hand-over is per bin)
-        uint depthCap = dust_lod_group_depth_cap(lodDepth, lodBinDepth, lodNear);
-        uint g = dust_specks_mask(mi) != 0u ? 1u
-               : dust_haze_group(dust_lod_group(hasExt, ext, dust_lod_px, depthCap), hazeDetail, depthCap);
-        dust_group = g;
-        // this lane's sub-packet (b, j) in the order the per-cluster loop ran them: the slow end
-        // bin's DUST_END_SUBBINS sub-bins (dust::subpackets_cells), then a bin each (a group
-        // chord each with g > 1); lanes past the count idle
-        uint nj0 = g > 1u ? 1u : dust_bin_subbins(0u);
-        uint b = sub < nj0 ? 0u : (sub - nj0 + 1u) * g;
-        uint j = sub < nj0 ? sub : 0u;
-        if (b < DUST_SIZE_BINS) {
-          uint nj = g > 1u ? 1u : dust_bin_subbins(b);
-          // the bin's speck hand-over (dust::splat_cluster_inner: the per-bin shell)
-          dust_rec_walked = ((dust_specks_mask(mi) >> b) & 1u) != 0u;
-          {
-            vec3 ea, ec; float fa, fc;
-            dust_sub_edges(mi, b, j, nj, ea, ec, fa, fc);
-            // the time segment of this bin: to the same bin of the predecessor
-            vec3 segT = vec3(0.0);
-            if (pred >= 0) {
-                vec3 pa, pcc; float pfa, pfc;
-                dust_sub_edges(pi, b, j, nj, pa, pcc, pfa, pfc);
-                segT = 0.5 * (pa + pcc) - 0.5 * (ea + ec);
-            }
-            bool openStart = b > 0u || j > 0u, openEnd = b + dust_group < DUST_SIZE_BINS || j + 1u < nj;
-            // the longer of the bin's two axes is the exact capsule, the other a Gaussian
-            // (dust::subpackets_merged)
-            vec3 chordV = ec - ea;
-            bool timeMajor = dot(segT, segT) > dot(chordV, chordV);
-            if (timeMajor) {
-                vec3 mean; float S[6]; float flux;
-                dust_bin_packet_sub(mi, b, j, nj, mean, S, flux);
-                float base[6];
-                for (int k = 0; k < 6; ++k) base[k] = S[k];
-                if (nT > 1u) { vec3 mp; float fp; dust_bin_packet_sub(pi, b, j, nj, mp, base, fp); }
-                vec3 pm = mean + segT;
-                for (uint t = 0u; t < nT; ++t) {
-                    float u0 = dust_piece_bound(t, nT, ratio), u1 = dust_piece_bound(t + 1u, nT, ratio);
-                    float uc = 0.5 * (u0 + u1);
-                    float sc = nT > 1u ? r0 + (1.0 - r0) * uc : 1.0;
-                    float sc2 = sc * sc;
-                    float St[6];
-                    for (int k = 0; k < 6; ++k) St[k] = base[k] * sc2;
-                    float turn = spOmega * (ageP - (ageO + uc * (ageP - ageO)));
-                    if (spiral) dust_rotate_cov(St, spAxis, turn);
-                    vec3 m0 = spiral ? dust_spiral_point(mean, pm, ageO, ageP, spAxis, spOmega, u0) : mean + segT * u0;
-                    vec3 s0 = spiral ? dust_spiral_point(mean, pm, ageO, ageP, spAxis, spOmega, u1) - m0 : segT * (u1 - u0);
-                    // seg_t: the size chord of the bin packet the cone is built from, scaled and
-                    // turned with it
-                    vec3 chordB;
-                    {
-                        vec3 qa, qc; float qfa, qfc;
-                        if (nT > 1u) dust_sub_edges(pi, b, j, nj, qa, qc, qfa, qfc); else { qa = ea; qc = ec; }
-                        chordB = qc - qa;
-                    }
-                    vec3 segTB = ((0.5 * chordB) * 2.0) * sc;
-                    if (spiral) segTB = dust_rotate3(segTB, spAxis, turn);
-                    dust_phot_support = dust_piece_support_o(nT > 1u, lineM, lineP, oM, cM, oP, cP, spiral, spAxis, spOmega, ageO, ageP, uc, vStd, fLo, ownSup, ownHas, ownO, dust_phot_has_origin, dust_phot_origin);
-                    DUST_SQUEUE_EMIT(m0, St, s0, flux * (u1 - u0), exposure, false, false, vec2(1.0), segTB, color)
-                }
-            } else if (nT == 1u) {
-                dust_phot_support = ownSup;
-                dust_phot_has_origin = ownHas;
-                dust_phot_origin = ownO;
-                // the time cell of the bin is the quadrilateral between its chord and the
-                // predecessor's: swept when its edges are pixels apart (dust::time_sweep)
-                uint nS = pred >= 0 ? dust_time_sweep(mi, pi, b, pc.mvp, W, H) : 1u;
-                vec2 rho = dust_bin_density_ends(fa, fc);
-                if (nS == 1u) {
-                    vec3 mean, chord; float S[6]; float flux;
-                    dust_bin_chord_sub(mi, b, j, nj, segT, mean, chord, S, flux);
-                    DUST_SQUEUE_EMIT(mean + (cellOff ? 0.5 * segT : vec3(0.0)), S, chord, flux, exposure, openStart, openEnd, rho, (0.5 * segT) * 2.0, color)
-                } else {
-                    for (uint k = 0u; k < nS; ++k) {
-                        vec3 mean, chord; float S[6]; float flux;
-                        dust_bin_sweep_sub(mi, pi, b, j, nj, k, nS, mean, chord, S, flux);
-                        // seg_t: the sweep slab's Gaussianised width (dust::bin_sweep_packet)
-                        vec3 pa, pcc; float pfa, pfc;
-                        dust_sub_edges(pi, b, j, nj, pa, pcc, pfa, pfc);
-                        vec3 da = pa - ea, dc = pcc - ec;
-                        vec3 dmax = dot(da, da) > dot(dc, dc) ? da : dc;
-                        vec3 segTS = (dmax * (0.5 / float(nS))) * 2.0;
-                        DUST_SQUEUE_EMIT(mean, S, chord, flux, exposure, openStart, openEnd, rho, segTS, color)
-                    }
-                }
-            } else {
-                // the cone: nT pieces along the time segment with the predecessor's lateral
-                // covariance scaled from the cluster's width to the predecessor's
-                vec3 mean, chord; float S[6]; float flux;
-                dust_bin_chord_sub(mi, b, j, nj, vec3(0.0), mean, chord, S, flux);
-                vec2 rho = dust_bin_density_ends(fa, fc);
-                float f = 0.5 * (fa + fc);
-                float f2 = f * f;
-                float k = DUST_CHORD_VAR_FACTOR;
-                vec3 mid = 0.5 * (ea + ec);
-                vec3 midP = mid + segT;
-                for (uint t = 0u; t < nT; ++t) {
-                    float u0 = dust_piece_bound(t, nT, ratio), u1 = dust_piece_bound(t + 1u, nT, ratio);
-                    float uc = 0.5 * (u0 + u1);
-                    vec3 hs = 0.5 * (u1 - u0) * segT;
-                    float sc = r0 + (1.0 - r0) * uc;
-                    float sc2 = sc * sc * f2;
-                    vec3 shift = spiral ? dust_spiral_point(mid, midP, ageO, ageP, spAxis, spOmega, u0) - mid : segT * u0;
-                    // the predecessor's covariance turned to the piece's centre, then its time
-                    // Gaussian (dust::subpackets_swept)
-                    float Sp[6];
-                    Sp[0] = dust_mom.m[pi].cov_a.x; Sp[1] = dust_mom.m[pi].cov_a.y; Sp[2] = dust_mom.m[pi].cov_a.z;
-                    Sp[3] = dust_mom.m[pi].cov_a.w; Sp[4] = dust_mom.m[pi].cov_b_age_id.x; Sp[5] = dust_mom.m[pi].cov_b_age_id.y;
-                    if (spiral) dust_rotate_cov(Sp, spAxis, spOmega * (ageP - (ageO + uc * (ageP - ageO))));
-                    dust_phot_support = dust_piece_support_o(nT > 1u, lineM, lineP, oM, cM, oP, cP, spiral, spAxis, spOmega, ageO, ageP, uc, vStd, fLo, ownSup, ownHas, ownO, dust_phot_has_origin, dust_phot_origin);
-                    float St[6];
-                    St[0] = Sp[0] * sc2 + k * hs.x * hs.x;
-                    St[1] = Sp[1] * sc2 + k * hs.x * hs.y;
-                    St[2] = Sp[2] * sc2 + k * hs.x * hs.z;
-                    St[3] = Sp[3] * sc2 + k * hs.y * hs.y;
-                    St[4] = Sp[4] * sc2 + k * hs.y * hs.z;
-                    St[5] = Sp[5] * sc2 + k * hs.z * hs.z;
-                    DUST_SQUEUE_EMIT(mean + shift + (cellOff ? hs : vec3(0.0)), St, chord, flux * (u1 - u0), exposure, openStart, openEnd, rho, hs * 2.0, color)
-                }
-            }
-          }
-        }
-        dust_group = 1u;
-    }
-    DUST_PROF_END(subpk)
-    DUST_PROF_BEGIN(tracer)
-    if (sub == 0u && dust_emitting && (pc.flags & DUST_VIEW_TRACERS) != 0u && dust_is_tracer(floatBitsToUint(dust_mom.m[mi].cov_b_age_id.w))) {
-        // the tracer dot: a real particle at its exact position (dust::splat_tracer)
-        uint counts = uint(max(uintBitsToFloat(pc.pyramid.v[DUST_PYR_TRACER_COUNTS]), 0.0) + 0.5);
-        vec4 clip = pc.mvp * vec4(dust_mom.m[mi].mean_flux.xyz, 1.0);
-        if (counts > 0u && clip.w > 0.0) {
-            vec2 mu = (clip.xy / clip.w * 0.5 + 0.5) * vec2(W, H);
-            uint off = pc.pyramid.v[DUST_PYR_TABLE];
-            uint w = pc.pyramid.v[DUST_PYR_TABLE + 1u];
-            uint h = pc.pyramid.v[DUST_PYR_TABLE + 2u];
-            float r = DUST_TRACER_PX;
-            int x0 = int(max(floor(mu.x - r), 0.0)), x1 = min(int(ceil(mu.x + r)), int(w) - 1);
-            int y0 = int(max(floor(mu.y - r), 0.0)), y1 = min(int(ceil(mu.y + r)), int(h) - 1);
-            for (int ty = y0; ty <= y1; ++ty) {
-                for (int tx = x0; tx <= x1; ++tx) {
-                    vec2 dxy = vec2(tx, ty) + 0.5 - mu;
-                    if (dot(dxy, dxy) > r * r) continue;
-                    uint k = off + (uint(ty) * w + uint(tx)) * DUST_PYRAMID_TEXEL_WORDS;
-                    dust_atomic_add_sat(pc.pyramid, k, counts);
-                    for (uint c = 1u; c < 4u; ++c) dust_atomic_add_sat(pc.pyramid, k + c, counts * uint(DUST_COLOR_SCALE));
-                }
-            }
-            atomicOr(pc.pyramid.v[DUST_PYR_LEVEL_MASK], 1u);
-        }
-    }
-    DUST_PROF_END(tracer)
+// dust_pooled_packet's mean (its first loop, the same expressions in the same order)
+vec3 dust_sp_pooled_mean(uint mi) {
+    float n = float(DUST_SIZE_BINS);
+    vec3 mean = vec3(0.0);
+    DUST_NOUNROLL for (uint b = 0u; b < DUST_SIZE_BINS; ++b) mean += 0.5 * (dust_mom.m[mi].edges[b].xyz + dust_mom.m[mi].edges[b + 1u].xyz) / n;
+    return mean;
 }
-
-// the lanes' record counts (a warp per cluster: lanes 0-31 and 32-63) and the clusters' first
-// records in the chunk's queue
-shared uint dust_sub_counts[64];
-shared uint dust_cluster_base[2];
-// a refusal of the haze predicate by any lane of the warp's cluster (main's pre-pass)
-shared uint dust_haze_keep[2];
-
-void main() {
-    // the chunk's cluster range [first, end) (the volume queue header, host-written per chunk:
-    // Device::cmd_dust_splat; the whole tier when the queue is off), and whether the queue is on
-    uint vbase = dust_vqueue_base(pc.pyramid);
-    uint first = pc.pyramid.v[vbase + DUST_VQUEUE_FIRST];
-    uint end = pc.pyramid.v[vbase + DUST_VQUEUE_END];
-    uint sbase = dust_squeue_base(pc.pyramid);
-    // a warp per cluster, a lane per sub-packet
-    uint lane = gl_LocalInvocationID.x;
-    uint sub = lane & 31u;
-    // the cluster's ring offset kr in the tier's live range and its ring slot i (the render and
-    // moments buffers are slot indexed; the header's ring words, Device::cmd_dust_splat)
-    uint kr = first + (gl_GlobalInvocationID.x >> 5u);
+// LIVE: the cluster's ring offset kr in the tier's live range and its ring slot i (the render and
+// moments buffers are slot indexed; the header's ring words, Device::cmd_dust_splat), whether it is
+// drawn, its stream predecessor
+void dust_sp_live(uint c) {
+    uint P;
+    if (!dust_sp_cluster(c, false, P)) return;
+    uint vbase = dust_spa_vqueue_base(uvec2(pc.pyramid));
+    uint sbase = dust_spa_squeue_base(uvec2(pc.pyramid));
+    uint kr = pc.pyramid.v[vbase + DUST_VQUEUE_FIRST] + c;
     dust_first_slot = pc.pyramid.v[vbase + DUST_VQUEUE_FIRST_SLOT];
     uint i = (dust_first_slot + kr) & pc.pyramid.v[vbase + DUST_VQUEUE_RING_MASK];
     // the cadence (device/dust_cadence.rs): a list of ring slots in the sub-packet queue header's
@@ -437,15 +343,13 @@ void main() {
     uvec2 listAddr = uvec2(pc.pyramid.v[sbase + 4u], pc.pyramid.v[sbase + 5u]);
     bool listed = true;
     if (listAddr != uvec2(0u)) {
-        uint e = kr < end ? DustUintBuffer(listAddr).v[kr] : 0xFFFFFFFFu;
+        uint e = DustUintBuffer(listAddr).v[kr];
         listed = e != 0xFFFFFFFFu;
         i = listed ? e : 0u;
     }
-    // the moments every dust_common function reads by index (dust_mom.m[mi])
-    dust_mom_addr = uvec2(pc.moments);
     // (a list is bounded by its chunks' range, not by the tier's live count: liveCount keeps its
     // meaning for the predecessor rule)
-    bool live = listed && kr < end && (listAddr != uvec2(0u) || kr < pc.liveCount) && dust_mom.m[i].mean_flux.w > 0.0;
+    bool live = listed && (listAddr != uvec2(0u) || kr < pc.liveCount) && dust_mom.m[i].mean_flux.w > 0.0;
     uvec2 ownAddr = uvec2(pc.pyramid.v[sbase + 6u], pc.pyramid.v[sbase + 7u]);
     if (live && ownAddr != uvec2(0u) && ((DustUintBuffer(ownAddr).v[i >> 2u] >> ((i & 3u) * 8u)) & 4u) != 0u) live = false;
     // diagnostics (AETHERVK_DUST_DEBUG_STREAM / _SAMPLE_MOD): draw one stream, or one time
@@ -458,75 +362,1225 @@ void main() {
         if ((pc.flags & DUST_VIEW_DEBUG_STREAM) != 0u && (slot & ((1u << shift) - 1u)) != v) live = false;
         if ((pc.flags & DUST_VIEW_DEBUG_SAMPLE) != 0u && ((slot >> shift) % max(v, 1u)) != 0u) live = false;
     }
-    // the haze predicate once per cluster (round 9 step A2; dust_haze_volumetric's probes spread
-    // over the lanes: lane sub takes probes sub and sub + 32, lane 0 the pooled packet; a shared
-    // word collects a refusal), only with the knob engaged (uniform: the default skips it)
-    bool hazeOn = dust_haze_detail_of(pc.flags, pc.pyramid.v[DUST_PYR_LEVELS], pc.pyramid) < DUST_SIZE_BINS;
-    if (hazeOn) {
-        if (sub == 0u) dust_haze_keep[lane >> 5u] = 0u;
-        barrier();
-        if (live) {
-            DustClusterPieces cp;
-            dust_cluster_pieces(i, cp);
-            uint depthMax = min(pc.pyramid.v[DUST_PYR_SPLIT_DEPTH] & 0xFFu, DUST_SPLIT_DEPTH_MAX);
-            bool ok = cp.perspective
-                   && dust_haze_probe(i, cp.seg, cp.ratio, cp.nT, pc.eyeLocal.xyz, cp.fwd, cp.perspective, depthMax, sub)
-                   && dust_haze_probe(i, cp.seg, cp.ratio, cp.nT, pc.eyeLocal.xyz, cp.fwd, cp.perspective, depthMax, sub + 32u)
-                   && (sub != 0u || dust_haze_pooled(i, cp.seg, pc.eyeLocal.xyz, cp.fwd, cp.perspective, depthMax));
-            if (!ok) atomicOr(dust_haze_keep[lane >> 5u], 1u);
+    DUST_SPU(DUST_SPR_I) = i;
+    DUST_SPU(DUST_SPR_HAZE) = 0u;
+    DUST_SPU(DUST_SPR_FSUP) = 0u;
+    if (!live) { DUST_SPU(DUST_SPR_F0) = 0u; return; }
+    // the segment to the stream predecessor (the dust emitted between the two samples)
+    int pred = dust_spa_streak_pred(uvec2(pc.render), i, dust_first_slot, pc.liveCount);
+    DUST_SPU(DUST_SPR_PI) = pred >= 0 ? uint(pred) : i;
+    DUST_SPU(DUST_SPR_F0) = DUST_SPF0_LIVE | (pred >= 0 ? DUST_SPF0_PRED : 0u);
+    // the pooled packets' means (the predecessor's: i without one, as pool_pred's SP_PI)
+    DUST_SPW3(DUST_SPR_MEAN, dust_sp_pooled_mean(SP_MI))
+    DUST_SPW3(DUST_SPR_PMEAN, dust_sp_pooled_mean(SP_PI))
+}
+
+// PRE 0 (dust_cluster_pieces): the width ratio (older: wider) for the cone pieces; the spiral of
+// a rotating nucleus (dust::spiral_of): the pieces follow it, and there are enough of them to draw it
+void dust_sp_pre_pieces(uint P) {
+    uint mi = SP_MI, pi = SP_PI;
+    int pred = SP_PRED;
+    float ratio = dust_width_ratio(mi, pred >= 0, pi);
+    vec3 spAxis = vec3(0.0);
+    float spOmega = 0.0;
+    bool spiral = pred >= 0 && dust_spiral_of(mi, pi, spAxis, spOmega);
+    uint nT = spiral ? DUST_TIME_PIECES_MAX : dust_time_pieces(ratio);
+    DUST_SPW(DUST_SPR_RATIO, ratio)
+    DUST_SPU(DUST_SPR_F1) = (spiral ? DUST_SPF1_SPIRAL : 0u) | (nT << 8u);
+}
+// PRE 1 (dust_cluster_pieces): the view direction of the split and the eye-plane cut
+// (dust_view_forward); the depth rule's inputs (perspective views only), the time pieces its depth
+// span needs (dust_time_pieces_depth)
+void dust_sp_pre_depth(uint P) {
+    uint mi = SP_MI, pi = SP_PI;
+    int pred = SP_PRED;
+    bool perspective;
+    vec3 fwd = dust_view_forward(pc.mvp, pc.eyeLocal.xyz, perspective);
+    float lodBinDepth = 0.0;
+    float lodNear = 0.0;
+    bool lodDepth = perspective && dust_polyline_depth(mi, pc.eyeLocal.xyz, fwd, lodBinDepth, lodNear);
+    float lodSpan = pred >= 0 ? dot(dust_mom.m[pi].mean_flux.xyz - dust_mom.m[mi].mean_flux.xyz, fwd) : 0.0;
+    uint depthMin = dust_time_pieces_depth(pred >= 0 && perspective, lodSpan, lodDepth, lodNear);
+    DUST_SPW(DUST_SPR_BINDEPTH, lodBinDepth)
+    DUST_SPW(DUST_SPR_NEAR, lodNear)
+    DUST_SPU(DUST_SPR_F2) = (perspective ? DUST_SPF2_PERSP : 0u) | (lodDepth ? DUST_SPF2_LODDEPTH : 0u) | (depthMin << 8u);
+}
+// PRE 5-68: size bin b's terms of a pooled packet's covariance (dust_pooled_packet's second loop
+// body: (Sb[k] + d_i d_j) / n with d = mb - the mean LIVE wrote), two lanes per bin (h 0: words 0-2,
+// h 1: 3-5): the cluster's (5-36: mean at MEAN, terms at TO) or its predecessor's (37-68: PMEAN,
+// TPM), one code path; LOD sums them in bin order
+void dust_sp_pre_term(uint P, uint mi, uint mw, uint tw, uint b, uint h) {
+    float n = float(DUST_SIZE_BINS);
+    vec3 mb; float Sb[6]; float fb;
+    dust_bin_packet(mi, b, mb, Sb, fb);
+    vec3 d = mb - DUST_SPV3(mw);
+    uint w = tw + 6u * b;
+    if (h == 0u) {
+        DUST_SPW(w, (Sb[0] + d.x * d.x) / n)
+        DUST_SPW(w + 1u, (Sb[1] + d.x * d.y) / n)
+        DUST_SPW(w + 2u, (Sb[2] + d.x * d.z) / n)
+    } else {
+        DUST_SPW(w + 3u, (Sb[3] + d.y * d.y) / n)
+        DUST_SPW(w + 4u, (Sb[4] + d.y * d.z) / n)
+        DUST_SPW(w + 5u, (Sb[5] + d.z * d.z) / n)
+    }
+}
+// PRE 69-84: the predecessor's bin b, the mean of its bins' terms (dust::pooled_within_cov: Sb[k] / n)
+void dust_sp_pre_term_within(uint P, uint b) {
+    float n = float(DUST_SIZE_BINS);
+    vec3 mb; float Sb[6]; float fb;
+    dust_bin_packet(SP_PI, b, mb, Sb, fb);
+    uint v = DUST_SPR_TPW + 6u * b;
+    DUST_SPW(v, Sb[0] / n)
+    DUST_SPW(v + 1u, Sb[1] / n)
+    DUST_SPW(v + 2u, Sb[2] / n)
+    DUST_SPW(v + 3u, Sb[3] / n)
+    DUST_SPW(v + 4u, Sb[4] / n)
+    DUST_SPW(v + 5u, Sb[5] / n)
+}
+// PRE 2: whether the predecessor is a point on screen too (dust_polyline_merged): its width for the
+// pooled pieces is then pooled with its midpoint scatter — the pieces take it with more than one piece
+void dust_sp_pre_pool_merged(uint P) {
+    bool predMerged = SP_PRED < 0 || dust_polyline_merged(SP_PI, pc.mvp, float(pc.pyramid.v[DUST_PYR_WIDTH]), float(pc.pyramid.v[DUST_PYR_HEIGHT]));
+    DUST_SPU(DUST_SPR_FPOOL) = predMerged ? DUST_SPFS_PREDMERGED : 0u;
+}
+// PRE 15 (dust_z_support's per-cluster half): the sample's own cell line, the velocity spread
+// along it, the slowest grain, its support plane and the plane's origin
+void dust_sp_pre_sup_own(uint P) {
+    uint mi = SP_MI;
+    vec3 oM, cM;
+    bool lineM = dust_cell_line(mi, oM, cM);
+    float vStd = 0.0;
+    if (lineM && dot(cM, cM) > 0.0) {
+        float Sv[6];
+        Sv[0] = dust_mom.m[mi].cov_a.x; Sv[1] = dust_mom.m[mi].cov_a.y; Sv[2] = dust_mom.m[mi].cov_a.z;
+        Sv[3] = dust_mom.m[mi].cov_a.w; Sv[4] = dust_mom.m[mi].cov_b_age_id.x; Sv[5] = dust_mom.m[mi].cov_b_age_id.y;
+        vStd = sqrt(max(dust_var_along(Sv, cM * (1.0 / sqrt(dot(cM, cM)))), 0.0) / dot(cM, cM));
+    }
+    float fLo = dust_edge_factor(mi, 0u);
+    vec4 ownSup = lineM ? dust_support_plane(oM, cM, vStd, fLo) : vec4(0.0);
+    bool ownHas = lineM && dust_has_support(ownSup);
+    float ownO = dot(ownSup.xyz, oM);
+    DUST_SPW3(DUST_SPR_OM, oM)
+    DUST_SPW3(DUST_SPR_CM, cM)
+    DUST_SPW(DUST_SPR_VSTD, vStd)
+    DUST_SPW(DUST_SPR_FLO, fLo)
+    DUST_SPW3(DUST_SPR_OWNSUP, ownSup.xyz)
+    DUST_SPW(DUST_SPR_OWNSUP + 3u, ownSup.w)
+    DUST_SPW(DUST_SPR_OWNO, ownO)
+    atomicOr(DUST_SPU(DUST_SPR_FSUP), (lineM ? DUST_SPFSUP_LINEM : 0u) | (ownHas ? DUST_SPFSUP_OWNHAS : 0u));
+}
+// PRE 16: the predecessor's cell line
+void dust_sp_pre_sup_pred(uint P) {
+    vec3 oP = vec3(0.0), cP = vec3(0.0);
+    bool lineP = SP_PRED >= 0 && dust_cell_line(SP_PI, oP, cP);
+    DUST_SPW3(DUST_SPR_OP, oP)
+    DUST_SPW3(DUST_SPR_CP, cP)
+    if (lineP) atomicOr(DUST_SPU(DUST_SPR_FSUP), DUST_SPFSUP_LINEP);
+}
+void dust_sp_pre(uint gid) {
+    uint c = gid / DUST_SPG_PRE, q = gid - c * DUST_SPG_PRE;
+    uint P;
+    if (!dust_sp_cluster(c, true, P)) return;
+    if (q == 0u) dust_sp_pre_pieces(P);
+    else if (q == 1u) dust_sp_pre_depth(P);
+    else if (q == 2u) dust_sp_pre_pool_merged(P);
+    else if (q == 3u) dust_sp_pre_sup_own(P);
+    else if (q == 4u) dust_sp_pre_sup_pred(P);
+    else if (q < 5u + 4u * DUST_SIZE_BINS) {
+        uint r = q - 5u;
+        bool own = r < 2u * DUST_SIZE_BINS;
+        uint rb = own ? r : r - 2u * DUST_SIZE_BINS;
+        dust_sp_pre_term(P, own ? SP_MI : SP_PI, own ? DUST_SPR_MEAN : DUST_SPR_PMEAN, own ? DUST_SPR_TO : DUST_SPR_TPM, rb >> 1u, rb & 1u);
+    }
+    else dust_sp_pre_term_within(P, q - (5u + 4u * DUST_SIZE_BINS));
+}
+
+// LOD (dust_cluster_pieces): the time pieces capped by the time segment on screen and no fewer than
+// its depth span needs (dust_time_pieces_lod)
+void dust_sp_lod_n(uint P);
+void dust_sp_lod_sum(uint P, uint w, uint t);
+void dust_sp_lod(uint gid) {
+    uint c = gid / DUST_SPG_LOD, q = gid - c * DUST_SPG_LOD;
+    uint P;
+    if (!dust_sp_cluster(c, true, P)) return;
+    if (q == 0u) dust_sp_lod_n(P);
+    else if (q < 7u) dust_sp_lod_sum(P, DUST_SPR_S + (q - 1u), DUST_SPR_TO + (q - 1u));
+    else dust_sp_lod_sum(P, DUST_SPR_BASEP + (q - 7u), ((DUST_SPU(DUST_SPR_FPOOL) & DUST_SPFS_PREDMERGED) != 0u ? DUST_SPR_TPM : DUST_SPR_TPW) + (q - 7u));
+}
+// LOD 1-12: covariance word w, the sum of its 16 bin terms at t + 6 b in bin order (the loops'
+// S[k] = 0, S[k] += term: the same additions in the same order)
+void dust_sp_lod_sum(uint P, uint w, uint t) {
+    float s = 0.0;
+    DUST_NOUNROLL for (uint b = 0u; b < DUST_SIZE_BINS; ++b) s += DUST_SPFL(t + 6u * b);
+    DUST_SPW(w, s)
+}
+void dust_sp_lod_n(uint P) {
+    float W = float(pc.pyramid.v[DUST_PYR_WIDTH]);
+    float H = float(pc.pyramid.v[DUST_PYR_HEIGHT]);
+    float tPx = 0.0;
+    bool hasT = SP_PRED >= 0 && dust_time_segment_px(SP_MI, SP_PI, pc.mvp, W, H, tPx);
+    uint nT = dust_time_pieces_lod((DUST_SPU(DUST_SPR_F1) >> 8u) & 0xFu, hasT, tPx, dust_spa_lod_px_of(uvec2(pc.pyramid)), (DUST_SPU(DUST_SPR_F2) >> 8u) & 0xFu);
+    DUST_SPU(DUST_SPR_NTLOD) = nT;
+}
+
+// HAZE (round 9 step A2; only with the knob engaged): dust_haze_volumetric's probes, a lane each —
+// HAZE_A builds probe k's packet (k < dust_haze_probes(); the pooled packet at k = DUST_SP_PROBES - 1)
+// into the record region, HAZE_B judges it (dust_split_kind); a refusal into the row. As main's
+// pre-pass did: before the split word is read, so dust_bin_subbins sees the global's initial 0.
+const uint DUST_SP_PROBES = 2u * DUST_SP_SUBS + 1u;   // 35: the probes, then the pooled packet
+const uint DUST_SP_HAZE_G = 2u;        // HAZE_A's lanes per probe: mean + S, seg + flux
+const uint DUST_SP_PROBE_WORDS = 22u;  // mean 3, S 6, seg 3, flux, kind; HAZE_E's edges a 3, c 3, fa, fc
+const uint DUST_SP_PROBE_EDGES = 14u;
+bool dust_sp_haze_on() { return dust_spa_haze_detail_of(pc.flags, pc.pyramid.v[DUST_PYR_LEVELS], uvec2(pc.pyramid)) < DUST_SIZE_BINS; }
+// probe k of chunk cluster c: its words in the record region (free until COUNT)
+uint dust_sp_probe(uint c, uint k) { return dust_squeue_records(dust_spa_squeue_base(uvec2(pc.pyramid))) + (c * DUST_SP_PROBES + k) * DUST_SP_PROBE_WORDS; }
+// HAZE_E: a lane per probe, its sub-bin's edges (dust_sub_edges) into its slot's words 14-21, its
+// list flag into 13 (the probe list's end: dust_haze_probe_packet's false)
+void dust_sp_haze_e(uint gid) {
+    uint c = gid / DUST_SP_PROBES, k = gid - c * DUST_SP_PROBES;
+    uint P;
+    if (!dust_sp_haze_on() || !dust_sp_cluster(c, true, P)) return;
+    uint a_ = dust_sp_probe(c, k);
+    if (k + 1u == DUST_SP_PROBES) { pc.pyramid.v[a_ + 13u] = 1u; return; }
+    uint b, j, nj;
+    bool has = dust_haze_probe_bin(k, b, j, nj);
+    pc.pyramid.v[a_ + 13u] = has ? 1u : 0u;
+    if (!has) return;
+    vec3 a, cc; float fa, fc;
+    dust_sub_edges(SP_MI, b, j, nj, a, cc, fa, fc);
+    uint e_ = a_ + DUST_SP_PROBE_EDGES;
+    pc.pyramid.v[e_] = floatBitsToUint(a.x); pc.pyramid.v[e_ + 1u] = floatBitsToUint(a.y); pc.pyramid.v[e_ + 2u] = floatBitsToUint(a.z);
+    pc.pyramid.v[e_ + 3u] = floatBitsToUint(cc.x); pc.pyramid.v[e_ + 4u] = floatBitsToUint(cc.y); pc.pyramid.v[e_ + 5u] = floatBitsToUint(cc.z);
+    pc.pyramid.v[e_ + 6u] = floatBitsToUint(fa); pc.pyramid.v[e_ + 7u] = floatBitsToUint(fc);
+}
+// HAZE_A: DUST_SP_HAZE_G lanes per probe, one per output group (g 0: mean and S, g 1: seg and flux),
+// each the whole packet's expressions (dust_haze_probe_packet_at from HAZE_E's edges; the pooled
+// packet: the row's, its whole flux, along seg) and only its words written
+void dust_sp_haze_pkt(uint c, uint k, uint P, uint a_, out DustPacket p) {
+    uint mi = SP_MI;
+    vec3 seg = SP_PRED >= 0 ? dust_mom.m[SP_PI].mean_flux.xyz - dust_mom.m[mi].mean_flux.xyz : vec3(0.0);
+    if (k + 1u < DUST_SP_PROBES) {
+        uint b, j, nj;
+        dust_haze_probe_bin(k, b, j, nj);
+        uint e_ = a_ + DUST_SP_PROBE_EDGES;
+        vec3 a = vec3(uintBitsToFloat(pc.pyramid.v[e_]), uintBitsToFloat(pc.pyramid.v[e_ + 1u]), uintBitsToFloat(pc.pyramid.v[e_ + 2u]));
+        vec3 cc = vec3(uintBitsToFloat(pc.pyramid.v[e_ + 3u]), uintBitsToFloat(pc.pyramid.v[e_ + 4u]), uintBitsToFloat(pc.pyramid.v[e_ + 5u]));
+        dust_haze_probe_packet_at(mi, seg, SP_RATIO, DUST_SPU(DUST_SPR_NTLOD), k, b, j, nj, a, cc,
+                                  uintBitsToFloat(pc.pyramid.v[e_ + 6u]), uintBitsToFloat(pc.pyramid.v[e_ + 7u]), p);
+    } else {
+        p.openStart = false;
+        p.openEnd = false;
+        p.rho = vec2(1.0);
+        p.segT = vec3(0.0);
+        p.mean = DUST_SPV3(DUST_SPR_MEAN);
+        for (uint s = 0u; s < 6u; ++s) p.S[s] = DUST_SPFL(DUST_SPR_S + s);
+        p.flux = dust_mom.m[mi].mean_flux.w;
+        p.seg = seg;
+    }
+}
+void dust_sp_haze_a_ms(uint c, uint k, uint P, uint a_) {
+    DustPacket p;
+    dust_sp_haze_pkt(c, k, P, a_, p);
+    pc.pyramid.v[a_] = floatBitsToUint(p.mean.x); pc.pyramid.v[a_ + 1u] = floatBitsToUint(p.mean.y); pc.pyramid.v[a_ + 2u] = floatBitsToUint(p.mean.z);
+    for (uint s = 0u; s < 6u; ++s) pc.pyramid.v[a_ + 3u + s] = floatBitsToUint(p.S[s]);
+}
+void dust_sp_haze_a_sf(uint c, uint k, uint P, uint a_) {
+    DustPacket p;
+    dust_sp_haze_pkt(c, k, P, a_, p);
+    pc.pyramid.v[a_ + 9u] = floatBitsToUint(p.seg.x); pc.pyramid.v[a_ + 10u] = floatBitsToUint(p.seg.y); pc.pyramid.v[a_ + 11u] = floatBitsToUint(p.seg.z);
+    pc.pyramid.v[a_ + 12u] = floatBitsToUint(p.flux);
+}
+void dust_sp_haze_a(uint gid) {
+    uint c = gid / (DUST_SP_PROBES * DUST_SP_HAZE_G), r = gid - c * (DUST_SP_PROBES * DUST_SP_HAZE_G);
+    uint k = r / DUST_SP_HAZE_G, g = r - k * DUST_SP_HAZE_G;
+    uint P;
+    if (!dust_sp_haze_on() || !dust_sp_cluster(c, true, P)) return;
+    uint a_ = dust_sp_probe(c, k);
+    if (pc.pyramid.v[a_ + 13u] == 0u) return;
+    if (g == 0u) dust_sp_haze_a_ms(c, k, P, a_);
+    else dust_sp_haze_a_sf(c, k, P, a_);
+}
+void dust_sp_haze_b(uint gid) {
+    uint c = gid / DUST_SP_PROBES, k = gid - c * DUST_SP_PROBES;
+    uint P;
+    if (!dust_sp_haze_on() || !dust_sp_cluster(c, true, P)) return;
+    uint a_ = dust_sp_probe(c, k);
+    bool perspective;
+    vec3 fwd = dust_view_forward(pc.mvp, pc.eyeLocal.xyz, perspective);
+    bool ok = perspective;
+    if (ok && pc.pyramid.v[a_ + 13u] != 0u) {
+        DustPacket p;
+        p.openStart = false;
+        p.openEnd = false;
+        p.rho = vec2(1.0);
+        p.segT = vec3(0.0);
+        p.mean = vec3(uintBitsToFloat(pc.pyramid.v[a_]), uintBitsToFloat(pc.pyramid.v[a_ + 1u]), uintBitsToFloat(pc.pyramid.v[a_ + 2u]));
+        for (uint s = 0u; s < 6u; ++s) p.S[s] = uintBitsToFloat(pc.pyramid.v[a_ + 3u + s]);
+        p.seg = vec3(uintBitsToFloat(pc.pyramid.v[a_ + 9u]), uintBitsToFloat(pc.pyramid.v[a_ + 10u]), uintBitsToFloat(pc.pyramid.v[a_ + 11u]));
+        p.flux = uintBitsToFloat(pc.pyramid.v[a_ + 12u]);
+        uint depthMax = min(pc.pyramid.v[DUST_PYR_SPLIT_DEPTH] & 0xFFu, DUST_SPLIT_DEPTH_MAX);
+        int kind = dust_split_kind(p, depthMax, pc.eyeLocal.xyz, fwd, perspective);
+        // a probe: whole to the exact ray integral or behind the eye; the pooled packet: whole
+        ok = kind == DUST_SPLIT_VOLUME || (k + 1u < DUST_SP_PROBES && kind == DUST_SPLIT_DROP);
+    }
+    if (!ok) atomicOr(DUST_SPU(DUST_SPR_HAZE), 1u);
+}
+
+// SHAPE: what dust_splat_subpacket decided before its sub-packet
+void dust_sp_shape(uint c) {
+    uint P;
+    if (!dust_sp_cluster(c, true, P)) return;
+    uint mi = SP_MI, pi = SP_PI;
+    int pred = SP_PRED;
+    uint levels = pc.pyramid.v[DUST_PYR_LEVELS];
+    float W = float(pc.pyramid.v[DUST_PYR_WIDTH]);
+    float H = float(pc.pyramid.v[DUST_PYR_HEIGHT]);
+    // the haze detail (round 8 step G, round 9 steps A/A2; dust_haze_*): at the top level, fewer
+    // sub-packets for a haze cluster (dust_haze_volumetric, judged by HAZE_A/B: no refusal with
+    // the knob engaged); the default pays nothing
+    uint hazeDetail = dust_spa_haze_detail_of(pc.flags, levels, uvec2(pc.pyramid));
+    if (!(hazeDetail < DUST_SIZE_BINS && DUST_SPU(DUST_SPR_HAZE) == 0u)) hazeDetail = DUST_SIZE_BINS;
+    uint nT = dust_haze_time_pieces(DUST_SPU(DUST_SPR_NTLOD), hazeDetail, (DUST_SPU(DUST_SPR_F2) >> 8u) & 0xFu);
+    // a polyline below a pixel is one pooled packet (dust_polyline_merged), uniform along the time
+    // segment; otherwise every size bin is a capsule along its own chord, open towards its
+    // neighbours, with the bin's time segment as a Gaussian (dust::subpackets_merged)
+    bool predMerged = (DUST_SPU(DUST_SPR_FPOOL) & DUST_SPFS_PREDMERGED) != 0u;
+    // (perspective: neither the polylines nor the time segment between them may be deep)
+    // (and never pooled when the speck pass walks some of its bins: the hand-over is per bin)
+    bool merged = dust_polyline_merged(mi, pc.mvp, W, H) && predMerged
+               && (pred < 0 || dust_time_shallow(mi, pi, pc.mvp))
+               && dust_specks_mask(mi) == 0u;
+    // haze detail 1 (round 9 step A2): the cluster is its pooled packet, the one
+    // dust_haze_volumetric judged, whole to the exact ray integral (never a walked cluster)
+    if (hazeDetail == 1u && dust_specks_mask(mi) == 0u) merged = true;
+    uint g = 1u;
+    if (!merged) {
+        // the chord groups of the level of detail (dust_lod_group: a polyline whose bins are
+        // shorter than the knob on screen, never deeper than the split tolerates): g bins per
+        // packet, no sub-bins then (dust::subpackets_cells)
+        float ext = 0.0;
+        bool hasExt = dust_polyline_extent_px(mi, pc.mvp, W, H, ext);
+        // (a cluster with bins walked for specks keeps every bin: the hand-over is per bin)
+        uint depthCap = dust_lod_group_depth_cap((DUST_SPU(DUST_SPR_F2) & DUST_SPF2_LODDEPTH) != 0u,
+                                                 DUST_SPFL(DUST_SPR_BINDEPTH), DUST_SPFL(DUST_SPR_NEAR));
+        g = dust_specks_mask(mi) != 0u ? 1u
+          : dust_haze_group(dust_lod_group(hasExt, ext, dust_spa_lod_px_of(uvec2(pc.pyramid)), depthCap), hazeDetail, depthCap);
+    }
+    DUST_SPU(DUST_SPR_FS) = (merged ? DUST_SPFS_MERGED : 0u) | (predMerged ? DUST_SPFS_PREDMERGED : 0u) | (nT << 8u) | (g << 16u);
+}
+
+// a sub-packet's (b, j) of the plan's chord group g, in the order the per-cluster loop ran them:
+// the slow end bin's DUST_END_SUBBINS sub-bins (dust::subpackets_cells), then a bin each (a group
+// chord each with g > 1); false past the bins. Sets dust_group (dust_pyr_split_word read first).
+bool dust_sp_bin_of(uint P, uint sub, out uint b, out uint j, out uint nj) {
+    uint g = SP_G;
+    dust_group = g;
+    uint nj0 = g > 1u ? 1u : dust_bin_subbins(0u);
+    // g is a power of two in 1..16. SHAPE is its only writer: 1, or dust_haze_group of dust_lod_group
+    // (doubling from 2, capped at 16) and dust_lod_group_depth_cap (doubling from 1), combined by
+    // min/max or with 16 / detail (detail = 16 >> k, at least 1: dust_haze_detail_of). Each step keeps
+    // a power of two, so m * g == m << findLSB(g) for every g SP_G can hold. A new producer of the
+    // chord group must keep this invariant. The shift form is the Adreno 619 fix: the product, data dependent on
+    // the sub-bin path, fails to compile in SUBW (perf9_O round 5).
+    b = sub < nj0 ? 0u : (sub - nj0 + 1u) << uint(findLSB(g));
+    j = sub < nj0 ? sub : 0u;
+    nj = 1u;
+    if (b >= DUST_SIZE_BINS) return false;
+    // nj = g > 1 ? 1 : dust_bin_subbins(b), with b == 0 written as sub < nj0. On g == 1, b is 0 when
+    // sub < nj0 and sub - nj0 + 1 >= 1 otherwise, so b == 0 <=> sub < nj0. On g > 1, nj is 1 either
+    // way. Integer-identical. The Adreno 619 compiler fails (-13) on SUBW when that test reads b, which
+    // is data dependent on g (perf9_O round 8).
+    nj = g > 1u ? 1u : ((sub < nj0 && !dust_legacy_kernel()) ? DUST_END_SUBBINS : 1u);
+    return true;
+}
+// a sub-packet's edges in the plan row (GEO) and its time segment (dust_z_segT's, from them)
+#define SG_W(k_) (DUST_SPR_GEO + sub * DUST_SPG_WORDS + (k_))
+#define SG3(k_) DUST_SPV3(SG_W(k_))
+#define SGF(k_) DUST_SPFL(SG_W(k_))
+vec3 dust_sp_segT(uint P, uint sub) {
+    vec3 segT = vec3(0.0);
+    if (SP_PRED >= 0) segT = 0.5 * (SG3(DUST_SPG_PA) + SG3(DUST_SPG_PC)) - 0.5 * (SG3(DUST_SPG_EA) + SG3(DUST_SPG_EC));
+    return segT;
+}
+// the time piece's bounds at equal width ratios (dust_piece_bound)
+#define SP_U01() float u0 = dust_piece_bound(t, SP_NT, SP_RATIO), u1 = dust_piece_bound(t + 1u, SP_NT, SP_RATIO);
+#define SP_SPIRAL_IN() float ageO, ageP; vec3 spAxis; float spOmega; dust_z_spiral(SP_MI, SP_PRED, SP_PI, ageO, ageP, spAxis, spOmega);
+
+// GEO: lanes 0-16 a sub-packet's edges (a chord-major or time-major bin; dust_sub_edges of the
+// cluster and of its predecessor, i without one, with the plan's chord group); lanes 17-24 time
+// piece t's cell line at its centre age (dust_piece_line: the pieces case of dust_z_support —
+// more than one piece and both samples' lines; the same for every sub-packet of the cluster)
+void dust_sp_geo_edges(uint P, uint sub) {
+    if ((DUST_SPU(DUST_SPR_FS) & DUST_SPFS_MERGED) != 0u) return;
+    dust_pyr_split_word = pc.pyramid.v[DUST_PYR_SPLIT_DEPTH];
+    uint b, j, nj;
+    if (!dust_sp_bin_of(P, sub, b, j, nj)) return;
+    vec3 a, c; float fa, fc;
+    dust_sub_edges(SP_MI, b, j, nj, a, c, fa, fc);
+    DUST_SPW3(SG_W(DUST_SPG_EA), a)
+    DUST_SPW3(SG_W(DUST_SPG_EC), c)
+    DUST_SPW(SG_W(DUST_SPG_FA), fa)
+    DUST_SPW(SG_W(DUST_SPG_FC), fc)
+}
+void dust_sp_geo_pred(uint P, uint sub) {
+    if ((DUST_SPU(DUST_SPR_FS) & DUST_SPFS_MERGED) != 0u) return;
+    dust_pyr_split_word = pc.pyramid.v[DUST_PYR_SPLIT_DEPTH];
+    uint b, j, nj;
+    if (!dust_sp_bin_of(P, sub, b, j, nj)) return;
+    vec3 a, c; float fa, fc;
+    dust_sub_edges(SP_PI, b, j, nj, a, c, fa, fc);
+    DUST_SPW3(SG_W(DUST_SPG_PA), a)
+    DUST_SPW3(SG_W(DUST_SPG_PC), c)
+    DUST_SPW(SG_W(DUST_SPG_PFA), fa)
+    DUST_SPW(SG_W(DUST_SPG_PFC), fc)
+}
+void dust_sp_geo_piece(uint P, uint t, bool wantO) {
+    uint fs = DUST_SPU(DUST_SPR_FSUP);
+    if (!(t < SP_NT && SP_NT > 1u && (fs & DUST_SPFSUP_LINEM) != 0u && (fs & DUST_SPFSUP_LINEP) != 0u)) return;
+    SP_U01()
+    float uc = 0.5 * (u0 + u1);
+    SP_SPIRAL_IN()
+    vec3 o, c;
+    dust_piece_line(SP_SPIRAL, DUST_SPV3(DUST_SPR_OM), DUST_SPV3(DUST_SPR_CM), DUST_SPV3(DUST_SPR_OP), DUST_SPV3(DUST_SPR_CP),
+                    spAxis, spOmega, ageO, ageP, uc, o, c);
+    if (wantO) { DUST_SPW3(DUST_SPR_PSO + 6u * t, o) }
+    else { DUST_SPW3(DUST_SPR_PSO + 6u * t + 3u, c) }
+}
+void dust_sp_geo(uint gid) {
+    uint c = gid >> 6u, l = gid & 63u;
+    uint P;
+    if (!dust_sp_cluster(c, true, P)) return;
+    if (l < DUST_SP_SUBS) dust_sp_geo_edges(P, l);
+    else if (l >= 32u && l < 32u + DUST_SP_SUBS) dust_sp_geo_pred(P, l - 32u);
+    else if (l >= 17u && l < 25u) dust_sp_geo_piece(P, l - 17u, true);
+    else if (l >= 49u && l < 57u) dust_sp_geo_piece(P, l - 49u, false);
+}
+
+// SUBW: sub-packet `sub`'s word; a merged polyline's time pieces one per sub-packet; 0 past the count
+void dust_sp_subw(uint gid) {
+    uint c = gid >> 5u, sub = gid & 31u;
+    uint P;
+    if (sub >= DUST_SP_SUBS || !dust_sp_cluster(c, true, P)) return;
+    dust_pyr_split_word = pc.pyramid.v[DUST_PYR_SPLIT_DEPTH];
+    uint nT = SP_NT;
+    // the level of detail's pixels per segment, a header load with no arithmetic. Only dust_time_sweep
+    // (the chord branch below) reads dust_lod_px, so writing it here, on every lane, gives that call the
+    // same value. The Qualcomm Adreno 619 compiler rejects SUBW (-13) with the write at its original
+    // place in the chord branch (perf9_O round 10). The word is read through atomicOr(word, 0u): the
+    // value is the plain load's, bit for bit (an or with 0 writes the word back unchanged), and the
+    // test is dust_lod_px_of's. The Adreno 619 rejects SUBW (-13) with every pointer-free plain-load
+    // form of this read and with the atomic anywhere but here (perf9_O round 14).
+    {
+        float v = uintBitsToFloat(atomicOr(pc.pyramid.v[DUST_PYR_LOD], 0u));
+        dust_lod_px = (!isnan(v) && !isinf(v) && v > 0.0) ? v : 0.0;
+    }
+    uint w = 0u;
+    uint b, j, nj;
+    if ((DUST_SPU(DUST_SPR_FS) & DUST_SPFS_MERGED) != 0u) {
+        w = sub < nT ? (1u | (DUST_SPK_MERGED << 8u)) : 0u;
+    } else if (dust_sp_bin_of(P, sub, b, j, nj)) {
+        uint mi = SP_MI;
+        // the bin's speck hand-over (dust::splat_cluster_inner: the per-bin shell)
+        bool walked = ((dust_specks_mask(mi) >> b) & 1u) != 0u;
+        bool openStart = b > 0u || j > 0u, openEnd = b + dust_group < DUST_SIZE_BINS || j + 1u < nj;
+        // the longer of the bin's two axes is the exact capsule, the other a Gaussian
+        // (dust::subpackets_merged)
+        vec3 segT = dust_sp_segT(P, sub);
+        vec3 chordV = SG3(DUST_SPG_EC) - SG3(DUST_SPG_EA);
+        bool timeMajor = dot(segT, segT) > dot(chordV, chordV);
+        uint kind, n;
+        if (timeMajor) {
+            kind = DUST_SPK_TIME;
+            n = nT;
+        } else if (nT == 1u) {
+            // the time cell of the bin is the quadrilateral between its chord and the
+            // predecessor's: swept when its edges are pixels apart (dust::time_sweep)
+            n = SP_PRED >= 0 ? dust_time_sweep(mi, SP_PI, b, pc.mvp, float(pc.pyramid.v[DUST_PYR_WIDTH]), float(pc.pyramid.v[DUST_PYR_HEIGHT])) : 1u;
+            kind = n == 1u ? DUST_SPK_CHORD : DUST_SPK_SWEEP;
+        } else {
+            // the cone: nT pieces along the time segment
+            kind = DUST_SPK_CONE;
+            n = nT;
         }
-        barrier();
-        dust_haze_cluster = dust_haze_keep[lane >> 5u] == 0u;
+        w = n | (kind << 8u) | (b << 11u) | (j << 16u) | (nj << 18u)
+          | (walked ? 1u << 24u : 0u) | (openStart ? 1u << 25u : 0u) | (openEnd ? 1u << 26u : 0u);
     }
-#ifdef DUST_PROFILE
-    DUST_PROF_BEGIN(thread)
-#endif
-    // the counting pass: the records this lane's sub-packet makes
+    DUST_SPU(DUST_SPR_SUB + sub) = w;
+}
+
+// COUNT: a warp per cluster, a lane per sub-packet. The lanes' record counts (lanes 0-31 and 32-63)
+// and the clusters' first records in the chunk's queue
+shared uint dust_sub_counts[64];
+shared uint dust_cluster_base[2];
+bool dust_sp_ran = false;   // (the profiler's thread count: a lane with records)
+void dust_sp_count(uint gid, uint lane) {
+    uint sbase = dust_spa_squeue_base(uvec2(pc.pyramid));
+    uint sub = lane & 31u;
+    uint c = gid >> 5u;
+    uint P;
+    bool inChunk = dust_sp_cluster(c, false, P);
+    bool live = inChunk && (DUST_SPU(DUST_SPR_F0) & DUST_SPF0_LIVE) != 0u;
+    // the records this lane's sub-packet makes
     uint count = 0u;
-    DUST_PROF_BEGIN_AS(cnt)
-    if (live) {
-        dust_emitting = false;
-        dust_counting = true;   // (the profiler's inner probes muted: this pass is `ecount`)
-        dust_rec_count = 0u;
-        dust_splat_subpacket(i, sub);
-        count = dust_rec_count;
-        dust_counting = false;
-    }
-    DUST_PROF_END_AS(count, cnt)
+    if (live && sub < DUST_SP_SUBS) count = DUST_SPU(DUST_SPR_SUB + sub) & 0xFFu;
     dust_sub_counts[lane] = count;
     barrier();
     // this lane's record base within the cluster: the records of its earlier sub-packets; the
     // cluster's base in the chunk's queue (lane 0 of the warp), and the cluster's table entry
     uint base = 0u;
-    for (uint k = 0u; k < sub; ++k) base += dust_sub_counts[(lane & 32u) + k];
-    if (sub == 0u) {
+    DUST_NOUNROLL for (uint k = 0u; k < sub; ++k) base += dust_sub_counts[(lane & 32u) + k];
+    if (sub == 0u && inChunk) {
         uint total = 0u;
-        for (uint k = 0u; k < 32u; ++k) total += dust_sub_counts[(lane & 32u) + k];
+        DUST_NOUNROLL for (uint k = 0u; k < 32u; ++k) total += dust_sub_counts[(lane & 32u) + k];
         uint cb = total > 0u ? atomicAdd(pc.pyramid.v[sbase], total) : 0u;
+        // the record stages' indirect groups (header words 8-10, 11-13): the largest end in the queue
+        if (total > 0u) {
+            uint end = min(cb + total, DUST_SQUEUE_CAPACITY);
+            atomicMax(pc.pyramid.v[sbase + 8u], (end * DUST_SPG_A + 63u) / 64u);
+            atomicMax(pc.pyramid.v[sbase + 11u], (end * DUST_SPG_B + 63u) / 64u);
+        }
         // (never by construction: a chunk of DUST_SQUEUE_CLUSTERS clusters fits; counted if it
         // happens, the records dropped)
         if (cb + total > DUST_SQUEUE_CAPACITY) { atomicAdd(pc.pyramid.v[sbase + 2u], total); total = 0u; }
         dust_cluster_base[lane >> 5u] = cb;
-        uint c = kr - first;
-        if (c < DUST_SQUEUE_CLUSTERS) {
-            uint t = dust_squeue_table(sbase) + c * DUST_SQUEUE_TABLE_WORDS;
-            pc.pyramid.v[t] = cb;
-            pc.pyramid.v[t + 1u] = total;
-            pc.pyramid.v[t + 2u] = i;
-        }
+        uint t = dust_squeue_table(sbase) + c * DUST_SQUEUE_TABLE_WORDS;
+        pc.pyramid.v[t] = cb;
+        pc.pyramid.v[t + 1u] = total;
+        pc.pyramid.v[t + 2u] = DUST_SPU(DUST_SPR_I);
     }
     barrier();
-    // the emitting pass
-    if (live && count > 0u && dust_cluster_base[lane >> 5u] + base + count <= DUST_SQUEUE_CAPACITY) {
-        dust_emitting = true;
-        dust_rec_at = dust_cluster_base[lane >> 5u] + base;
-        dust_rec_count = 0u;
-        dust_splat_subpacket(i, sub);
+    uint cb = dust_cluster_base[lane >> 5u];
+    bool emits = live && count > 0u && cb + base + count <= DUST_SQUEUE_CAPACITY;
+    dust_sp_ran = live && count > 0u;
+    // every record's identity (the record stages' lane → its cluster, sub-packet and piece; ~0: a
+    // record the queue refused, never written); a pooled piece's index is its sub-packet
+    uint recs = dust_squeue_records(sbase);
+    bool pooled = false;
+    if (count > 0u) pooled = ((DUST_SPU(DUST_SPR_SUB + sub) >> 8u) & 7u) == DUST_SPK_MERGED;
+    for (uint r = 0u; r < count && cb + base + r < DUST_SQUEUE_CAPACITY; ++r)
+        pc.pyramid.v[recs + cb + base + r + DUST_SQW_ID * DUST_SQUEUE_CAPACITY] = emits ? (c | (sub << 10u) | ((pooled ? sub : r) << 15u)) : 0xFFFFFFFFu;
+}
+
+// ── the record stages: a lane per (record, output group) of the chunk's queue (indirect) ──────
+// record r: its first word a_, its cluster's plan row P, its sub-packet and piece t (the pooled
+// packet's piece is its sub-packet, the sweep's sub-capsule k for a sweep); false past the queue
+// or for a record without an identity. The globals the dust_common functions read: the split
+// word, the chord group (1 for the pooled packet, as dust_cluster_pieces left it).
+bool dust_sp_rec(uint r, out uint a_, out uint P, out uint sub, out uint t) {
+    a_ = 0u; P = 0u; sub = 0u; t = 0u;
+    uint sbase = dust_spa_squeue_base(uvec2(pc.pyramid));
+    if (r >= min(pc.pyramid.v[sbase], DUST_SQUEUE_CAPACITY)) return false;
+    a_ = dust_squeue_records(sbase) + r;
+    uint id = pc.pyramid.v[a_ + DUST_SQW_ID * DUST_SQUEUE_CAPACITY];
+    if (id == 0xFFFFFFFFu) return false;
+    P = dust_splan(sbase, id & 1023u);
+    sub = (id >> 10u) & 31u;
+    t = id >> 15u;
+    dust_pyr_split_word = pc.pyramid.v[DUST_PYR_SPLIT_DEPTH];
+    dust_group = (DUST_SPU(DUST_SPR_FS) & DUST_SPFS_MERGED) != 0u ? 1u : SP_G;
+    return true;
+}
+// the sub-packet's word and its fields (re-read at every use)
+#define SP_SW DUST_SPU(DUST_SPR_SUB + sub)
+#define SP_KIND ((SP_SW >> 8u) & 7u)
+#define SP_B ((SP_SW >> 11u) & 31u)
+#define SP_J ((SP_SW >> 16u) & 3u)
+#define SP_NJ ((SP_SW >> 18u) & 3u)
+#define SP_WALKED (((SP_SW >> 24u) & 1u) != 0u)
+#define SP_OPEN_START (((SP_SW >> 25u) & 1u) != 0u)
+#define SP_OPEN_END (((SP_SW >> 26u) & 1u) != 0u)
+#define SP_CELLOFF (((pc.pyramid.v[DUST_PYR_SPLIT_DEPTH] >> 28u) & 1u) != 0u)
+// the sub-bin's packets from its edges (GEO): the cluster's bin packet, the predecessor's, the
+// chord packet, the sweep sub-capsule (dust_bin_*_at: dust_bin_*_sub after dust_sub_edges)
+#define SP_EDGES SG3(DUST_SPG_EA), SG3(DUST_SPG_EC), SGF(DUST_SPG_FA), SGF(DUST_SPG_FC)
+#define SP_PEDGES SG3(DUST_SPG_PA), SG3(DUST_SPG_PC), SGF(DUST_SPG_PFA), SGF(DUST_SPG_PFC)
+#define SP_BIN_PACKET(mean_, S_, flux_) dust_bin_packet_at(SP_MI, SP_B, SP_J, SP_NJ, SP_EDGES, mean_, S_, flux_)
+#define SP_PRED_PACKET(mean_, S_, flux_) dust_bin_packet_at(SP_PI, SP_B, SP_J, SP_NJ, SP_PEDGES, mean_, S_, flux_)
+#define SP_CHORD_PACKET(segT_, mean_, chord_, S_, flux_) dust_bin_chord_at(SP_MI, SP_B, SP_J, SP_NJ, SP_EDGES, segT_, mean_, chord_, S_, flux_)
+#define SP_SWEEP_PACKET(mean_, chord_, S_, flux_) dust_bin_sweep_at(SP_MI, SP_B, SP_J, SP_NJ, SP_EDGES, SG3(DUST_SPG_PA), SG3(DUST_SPG_PC), t, SP_SW & 0xFFu, mean_, chord_, S_, flux_)
+
+// group 0: the per-cluster words — 13 the exposure (the stream colour's alpha, the flow marks'
+// factor at the cluster's age), 20-22 the colour (the stream colour's hue rotated by the age,
+// dust_age_color), 28-30 the Sun direction and 31 r_h (physical photometry: dust_texel_weight), 32
+// the cluster (its seed) — the values every record of the cluster carried, from the same expressions
+void dust_ra_fill(uint a_, uint P) {
+    uint mi = SP_MI;
+    float age = dust_mom.m[mi].cov_b_age_id.z;
+    float exposure = pc.exposure;
+    if ((pc.flags & DUST_VIEW_FLOW) != 0u) {
+        exposure *= dust_flow_factor(age, uintBitsToFloat(pc.pyramid.v[DUST_PYR_T_HI]),
+                                     uintBitsToFloat(pc.pyramid.v[DUST_PYR_T_LO]));
     }
+    vec3 stream = vec3(float(pc.color & 0xFFu), float((pc.color >> 8u) & 0xFFu), float((pc.color >> 16u) & 0xFFu)) / 255.0;
+    vec3 color = dust_age_color(stream, age, pc.eyeLocal.w);
+    vec3 sun = dust_sun_dir(mi);
+    float rh = dust_helio_au(mi);
+    DUST_SQW(13u, exposure)
+    DUST_SQW3(20u, color)
+    DUST_SQW3(28u, sun)
+    DUST_SQW(31u, rh)
+    pc.pyramid.v[a_ + 32u * DUST_SQUEUE_CAPACITY] = mi;
+}
+// group 1: the support plane (23-26), its origin (27) and the flags (14) (dust_z_support; the
+// support planes, dust::subpackets_supported: the sample's own for its bins, a cone piece's from
+// the cell line at its centre age, GEO's; the pooled packet and the time-major bin closed, the
+// pooled packet never walked; a chord or a sweep is one time piece, its own support)
+void dust_ra_sup(uint a_, uint P, uint sub, uint t) {
+    uint kind = SP_KIND;
+    bool closed = kind == DUST_SPK_MERGED || kind == DUST_SPK_TIME;
+    bool openStart = closed ? false : SP_OPEN_START, openEnd = closed ? false : SP_OPEN_END;
+    bool walked = kind == DUST_SPK_MERGED ? false : SP_WALKED;
+    uint fs = DUST_SPU(DUST_SPR_FSUP);
+    bool hasO; float origin; vec4 sup;
+    if (!(SP_NT > 1u && (fs & DUST_SPFSUP_LINEM) != 0u && (fs & DUST_SPFSUP_LINEP) != 0u)) {
+        hasO = (fs & DUST_SPFSUP_OWNHAS) != 0u; origin = DUST_SPFL(DUST_SPR_OWNO);
+        sup = vec4(DUST_SPV3(DUST_SPR_OWNSUP), DUST_SPFL(DUST_SPR_OWNSUP + 3u));
+    } else {
+        vec3 o = DUST_SPV3(DUST_SPR_PSO + 6u * t);
+        sup = dust_support_plane(o, DUST_SPV3(DUST_SPR_PSO + 6u * t + 3u), DUST_SPFL(DUST_SPR_VSTD), DUST_SPFL(DUST_SPR_FLO));
+        hasO = dust_has_support(sup);
+        origin = dot(sup.xyz, o);
+    }
+    DUST_SQW(23u, sup.x) DUST_SQW(24u, sup.y) DUST_SQW(25u, sup.z) DUST_SQW(26u, sup.w)
+    DUST_SQW(27u, origin)
+    pc.pyramid.v[a_ + 14u * DUST_SQUEUE_CAPACITY] = ((openStart) ? 1u : 0u) | ((openEnd) ? 2u : 0u) | ((hasO) ? 4u : 0u) | ((walked) ? 8u : 0u);
+}
+
+// group 2: the start (0-2)
+void dust_ra_start_merged(uint a_, uint P, uint t) {
+    SP_U01()
+    // the pooled packet's piece start along the time segment (the spiral's point)
+    SP_SPIRAL_IN()
+    vec3 mean = DUST_SPV3(DUST_SPR_MEAN);
+    vec3 seg = dust_z_seg(SP_MI, SP_PRED, SP_PI);
+    vec3 pm = mean + seg;
+    vec3 m0 = SP_SPIRAL ? dust_spiral_point(mean, pm, ageO, ageP, spAxis, spOmega, u0) : mean + seg * u0;
+    DUST_SQW3(0u, m0)
+}
+void dust_ra_start_time(uint a_, uint P, uint sub, uint t) {
+    SP_U01()
+    // the bin packet along its time segment, the piece's start
+    SP_SPIRAL_IN()
+    vec3 segT = dust_sp_segT(P, sub);
+    vec3 mean; float S[6]; float flux;
+    SP_BIN_PACKET(mean, S, flux);
+    vec3 pm = mean + segT;
+    vec3 m0 = SP_SPIRAL ? dust_spiral_point(mean, pm, ageO, ageP, spAxis, spOmega, u0) : mean + segT * u0;
+    DUST_SQW3(0u, m0)
+}
+void dust_ra_start_chord(uint a_, uint P, uint sub) {
+    // the chord packet's start (bit 28 of the split word, diagnostics, AETHERVK_DUST_TIME_CELL=1,
+    // dust::time_cell_offset: a chord-major leaf's time Gaussian centred on its cell)
+    vec3 segT = dust_sp_segT(P, sub);
+    vec3 mean, chord; float S[6]; float flux;
+    SP_CHORD_PACKET(segT, mean, chord, S, flux);
+    DUST_SQW3(0u, mean + (SP_CELLOFF ? 0.5 * segT : vec3(0.0)))
+}
+void dust_ra_start_sweep(uint a_, uint P, uint sub, uint t) {
+    // the sweep sub-capsule's start (dust::bin_sweep_packet)
+    vec3 mean, chord; float S[6]; float flux;
+    SP_SWEEP_PACKET(mean, chord, S, flux);
+    DUST_SQW3(0u, mean)
+}
+void dust_ra_start_cone(uint a_, uint P, uint sub, uint t) {
+    SP_U01()
+    // the chord packet's start shifted along the time segment
+    SP_SPIRAL_IN()
+    vec3 segT = dust_sp_segT(P, sub);
+    vec3 mean, chord; float S[6]; float flux;
+    SP_CHORD_PACKET(vec3(0.0), mean, chord, S, flux);
+    vec3 mid = 0.5 * (SG3(DUST_SPG_EA) + SG3(DUST_SPG_EC));
+    vec3 midP = mid + segT;
+    vec3 hs = 0.5 * (u1 - u0) * segT;
+    vec3 shift = SP_SPIRAL ? dust_spiral_point(mid, midP, ageO, ageP, spAxis, spOmega, u0) - mid : segT * u0;
+    DUST_SQW3(0u, mean + shift + (SP_CELLOFF ? hs : vec3(0.0)))
+}
+
+// group 3: the scalars — the flux (12), the density ends (15-16), seg_t (17-19; a time-major
+// bin's before its spiral turn, REC_B)
+void dust_ra_scal_merged(uint a_, uint P, uint t) {
+    SP_U01()
+    // (the pooled packet's flux, the unit density ends, no seg_t)
+    float flux = dust_mom.m[SP_MI].mean_flux.w;
+    DUST_SQW(12u, flux * (u1 - u0))
+    DUST_SQW(15u, 1.0) DUST_SQW(16u, 1.0)
+    DUST_SQW3(17u, vec3(0.0))
+}
+void dust_ra_scal_time(uint a_, uint P, uint sub, uint t) {
+    SP_U01()
+    {
+        vec3 mean; float S[6]; float flux;
+        SP_BIN_PACKET(mean, S, flux);
+        DUST_SQW(12u, flux * (u1 - u0))
+        DUST_SQW(15u, 1.0) DUST_SQW(16u, 1.0)
+    }
+    // seg_t: the size chord of the bin packet the cone is built from, scaled with it
+    uint nT = SP_NT;
+    float uc = 0.5 * (u0 + u1);
+    float r0 = 1.0 / SP_RATIO;
+    float sc = nT > 1u ? r0 + (1.0 - r0) * uc : 1.0;
+    vec3 chordB = nT > 1u ? SG3(DUST_SPG_PC) - SG3(DUST_SPG_PA) : SG3(DUST_SPG_EC) - SG3(DUST_SPG_EA);
+    vec3 segTB = ((0.5 * chordB) * 2.0) * sc;
+    DUST_SQW3(17u, segTB)
+}
+void dust_ra_scal_chord(uint a_, uint P, uint sub) {
+    vec3 segT = dust_sp_segT(P, sub);
+    vec2 rho = dust_bin_density_ends(SGF(DUST_SPG_FA), SGF(DUST_SPG_FC));
+    vec3 mean, chord; float S[6]; float flux;
+    SP_CHORD_PACKET(segT, mean, chord, S, flux);
+    DUST_SQW(12u, flux)
+    DUST_SQW(15u, rho.x) DUST_SQW(16u, rho.y)
+    DUST_SQW3(17u, (0.5 * segT) * 2.0)
+}
+void dust_ra_scal_sweep(uint a_, uint P, uint sub, uint t) {
+    // seg_t the sweep slab's Gaussianised width (dust::bin_sweep_packet)
+    uint nS = SP_SW & 0xFFu;
+    vec2 rho = dust_bin_density_ends(SGF(DUST_SPG_FA), SGF(DUST_SPG_FC));
+    vec3 mean, chord; float S[6]; float flux;
+    SP_SWEEP_PACKET(mean, chord, S, flux);
+    vec3 da = SG3(DUST_SPG_PA) - SG3(DUST_SPG_EA), dc = SG3(DUST_SPG_PC) - SG3(DUST_SPG_EC);
+    vec3 dmax = dot(da, da) > dot(dc, dc) ? da : dc;
+    vec3 segTS = (dmax * (0.5 / float(nS))) * 2.0;
+    DUST_SQW(12u, flux)
+    DUST_SQW(15u, rho.x) DUST_SQW(16u, rho.y)
+    DUST_SQW3(17u, segTS)
+}
+void dust_ra_scal_cone(uint a_, uint P, uint sub, uint t) {
+    SP_U01()
+    // the piece's flux, the density ends, seg_t the piece's half segment doubled
+    vec3 segT = dust_sp_segT(P, sub);
+    vec3 mean, chord; float S[6]; float flux;
+    SP_CHORD_PACKET(vec3(0.0), mean, chord, S, flux);
+    vec2 rho = dust_bin_density_ends(SGF(DUST_SPG_FA), SGF(DUST_SPG_FC));
+    vec3 hs = 0.5 * (u1 - u0) * segT;
+    DUST_SQW(12u, flux * (u1 - u0))
+    DUST_SQW(15u, rho.x) DUST_SQW(16u, rho.y)
+    DUST_SQW3(17u, hs * 2.0)
+}
+
+// group 4: the chord (9-11) of the chord-major kinds
+void dust_ra_chord_chord(uint a_, uint P, uint sub) {
+    vec3 segT = dust_sp_segT(P, sub);
+    vec3 mean, chord; float S[6]; float flux;
+    SP_CHORD_PACKET(segT, mean, chord, S, flux);
+    DUST_SQW3(9u, chord)
+}
+void dust_ra_chord_sweep(uint a_, uint P, uint sub, uint t) {
+    vec3 mean, chord; float S[6]; float flux;
+    SP_SWEEP_PACKET(mean, chord, S, flux);
+    DUST_SQW3(9u, chord)
+}
+void dust_ra_chord_cone(uint a_, uint P, uint sub) {
+    vec3 mean, chord; float S[6]; float flux;
+    SP_CHORD_PACKET(vec3(0.0), mean, chord, S, flux);
+    DUST_SQW3(9u, chord)
+}
+
+// groups 5-10: covariance word 3 + k
+void dust_ra_cov_merged(uint a_, uint P, uint t, uint k) {
+    SP_U01()
+    // the predecessor's width for the pieces (PRE 9-14) with more than one, else the pooled
+    // packet's; scaled to the piece, turned with the spiral to the piece's centre
+    uint nT = SP_NT;
+    uint w = nT > 1u ? DUST_SPR_BASEP : DUST_SPR_S;
+    float base[6];
+    for (uint s = 0u; s < 6u; ++s) base[s] = DUST_SPFL(w + s);
+    SP_SPIRAL_IN()
+    float uc = 0.5 * (u0 + u1);
+    float r0 = 1.0 / SP_RATIO;
+    float sc = nT > 1u ? r0 + (1.0 - r0) * uc : 1.0;
+    float sc2 = sc * sc;
+    float St[6];
+    for (int s = 0; s < 6; ++s) St[s] = base[s] * sc2;
+    if (SP_SPIRAL) dust_rotate_cov(St, spAxis, spOmega * (ageP - (ageO + uc * (ageP - ageO))));
+    DUST_SQW(3u + k, St[k])
+}
+void dust_ra_cov_time(uint a_, uint P, uint sub, uint t, uint k) {
+    SP_U01()
+    // the predecessor's width scaled to the piece, turned with the spiral to the piece's centre
+    uint nT = SP_NT;
+    SP_SPIRAL_IN()
+    vec3 mean; float S[6]; float flux;
+    SP_BIN_PACKET(mean, S, flux);
+    float base[6];
+    for (int s = 0; s < 6; ++s) base[s] = S[s];
+    if (nT > 1u) { vec3 mp; float fp; SP_PRED_PACKET(mp, base, fp); }
+    float uc = 0.5 * (u0 + u1);
+    float r0 = 1.0 / SP_RATIO;
+    float sc = nT > 1u ? r0 + (1.0 - r0) * uc : 1.0;
+    float sc2 = sc * sc;
+    float St[6];
+    for (int s = 0; s < 6; ++s) St[s] = base[s] * sc2;
+    float turn = spOmega * (ageP - (ageO + uc * (ageP - ageO)));
+    if (SP_SPIRAL) dust_rotate_cov(St, spAxis, turn);
+    DUST_SQW(3u + k, St[k])
+}
+void dust_ra_cov_chord(uint a_, uint P, uint sub, uint k) {
+    vec3 segT = dust_sp_segT(P, sub);
+    vec3 mean, chord; float S[6]; float flux;
+    SP_CHORD_PACKET(segT, mean, chord, S, flux);
+    DUST_SQW(3u + k, S[k])
+}
+void dust_ra_cov_sweep(uint a_, uint P, uint sub, uint t, uint k) {
+    vec3 mean, chord; float S[6]; float flux;
+    SP_SWEEP_PACKET(mean, chord, S, flux);
+    DUST_SQW(3u + k, S[k])
+}
+void dust_ra_cov_cone(uint a_, uint P, uint sub, uint t, uint k) {
+    SP_U01()
+    // the predecessor's turned to the piece's centre, scaled from the cluster's width to the
+    // predecessor's and by the bin's speed factor, then its time Gaussian (dust::subpackets_swept)
+    float uc = 0.5 * (u0 + u1);
+    float r0 = 1.0 / SP_RATIO;
+    float sc = r0 + (1.0 - r0) * uc;
+    SP_SPIRAL_IN()
+    vec3 segT = dust_sp_segT(P, sub);
+    float f = 0.5 * (SGF(DUST_SPG_FA) + SGF(DUST_SPG_FC));
+    float f2 = f * f;
+    float sc2 = sc * sc * f2;
+    vec3 hs = 0.5 * (u1 - u0) * segT;
+    float kv = DUST_CHORD_VAR_FACTOR;
+    uint pi = SP_PI;
+    float Sp[6];
+    Sp[0] = dust_mom.m[pi].cov_a.x; Sp[1] = dust_mom.m[pi].cov_a.y; Sp[2] = dust_mom.m[pi].cov_a.z;
+    Sp[3] = dust_mom.m[pi].cov_a.w; Sp[4] = dust_mom.m[pi].cov_b_age_id.x; Sp[5] = dust_mom.m[pi].cov_b_age_id.y;
+    if (SP_SPIRAL) dust_rotate_cov(Sp, spAxis, spOmega * (ageP - (ageO + uc * (ageP - ageO))));
+    float St[6];
+    St[0] = Sp[0] * sc2 + kv * hs.x * hs.x;
+    St[1] = Sp[1] * sc2 + kv * hs.x * hs.y;
+    St[2] = Sp[2] * sc2 + kv * hs.x * hs.z;
+    St[3] = Sp[3] * sc2 + kv * hs.y * hs.y;
+    St[4] = Sp[4] * sc2 + kv * hs.y * hs.z;
+    St[5] = Sp[5] * sc2 + kv * hs.z * hs.z;
+    DUST_SQW(3u + k, St[k])
+}
+// (k a literal at every call: each lane's program computes its own word only)
+#define DUST_RA_COV(k_) \
+    if (kind == DUST_SPK_MERGED) dust_ra_cov_merged(a_, P, t, k_); \
+    else if (kind == DUST_SPK_TIME) dust_ra_cov_time(a_, P, sub, t, k_); \
+    else if (kind == DUST_SPK_CHORD) dust_ra_cov_chord(a_, P, sub, k_); \
+    else if (kind == DUST_SPK_SWEEP) dust_ra_cov_sweep(a_, P, sub, t, k_); \
+    else if (kind == DUST_SPK_CONE) dust_ra_cov_cone(a_, P, sub, t, k_);
+
+// group 11: the tracer dot of the cluster (its first record: the sub-packet 0 the per-cluster
+// thread drew it with, once its records were in the queue), a real particle at its exact position
+// (dust::splat_tracer)
+void dust_ra_tracer(uint P) {
+    uint mi = SP_MI;
+    if ((pc.flags & DUST_VIEW_TRACERS) == 0u || !dust_is_tracer(floatBitsToUint(dust_mom.m[mi].cov_b_age_id.w))) return;
+    float Wt = float(pc.pyramid.v[DUST_PYR_WIDTH]);
+    float Ht = float(pc.pyramid.v[DUST_PYR_HEIGHT]);
+    uint counts = uint(max(uintBitsToFloat(pc.pyramid.v[DUST_PYR_TRACER_COUNTS]), 0.0) + 0.5);
+    vec4 clip = pc.mvp * vec4(dust_mom.m[mi].mean_flux.xyz, 1.0);
+    if (counts > 0u && clip.w > 0.0) {
+        vec2 mu = (clip.xy / clip.w * 0.5 + 0.5) * vec2(Wt, Ht);
+        uint off = pc.pyramid.v[DUST_PYR_TABLE];
+        uint w = pc.pyramid.v[DUST_PYR_TABLE + 1u];
+        uint h = pc.pyramid.v[DUST_PYR_TABLE + 2u];
+        float r = DUST_TRACER_PX;
+        int x0 = int(max(floor(mu.x - r), 0.0)), x1 = min(int(ceil(mu.x + r)), int(w) - 1);
+        int y0 = int(max(floor(mu.y - r), 0.0)), y1 = min(int(ceil(mu.y + r)), int(h) - 1);
+        for (int ty = y0; ty <= y1; ++ty) {
+            for (int tx = x0; tx <= x1; ++tx) {
+                vec2 dxy = vec2(tx, ty) + 0.5 - mu;
+                if (dot(dxy, dxy) > r * r) continue;
+                uint k = off + (uint(ty) * w + uint(tx)) * DUST_PYRAMID_TEXEL_WORDS;
+                dust_spa_atomic_add_sat(uvec2(pc.pyramid), k, counts);
+                for (uint cc = 1u; cc < 4u; ++cc) dust_spa_atomic_add_sat(uvec2(pc.pyramid), k + cc, counts * uint(DUST_COLOR_SCALE));
+            }
+        }
+        atomicOr(pc.pyramid.v[DUST_PYR_LEVEL_MASK], 1u);
+    }
+}
+#if defined(DUST_SP_REC_MONO)
+// perf9_X gate variant: the whole record in one lane, the old per-cluster thread's EMIT body
+// (dust_splat_subpacket) per kind, its words in DUST_SQUEUE_PUT's layout (word 33, the identity,
+// is COUNT's)
+#define DUST_RM_PUT(mean_, S_, d_, flux_, exposure_, openStart_, openEnd_, rho_, segT_, color_, support_, hasO_, origin_, sun_, rh_, i_, walked_) { \
+    DUST_SQW(0u, (mean_).x) DUST_SQW(1u, (mean_).y) DUST_SQW(2u, (mean_).z) \
+    DUST_SQW(3u, (S_)[0]) DUST_SQW(4u, (S_)[1]) DUST_SQW(5u, (S_)[2]) \
+    DUST_SQW(6u, (S_)[3]) DUST_SQW(7u, (S_)[4]) DUST_SQW(8u, (S_)[5]) \
+    DUST_SQW(9u, (d_).x) DUST_SQW(10u, (d_).y) DUST_SQW(11u, (d_).z) \
+    DUST_SQW(12u, flux_) \
+    DUST_SQW(13u, exposure_) \
+    pc.pyramid.v[a_ + 14u * DUST_SQUEUE_CAPACITY] = ((openStart_) ? 1u : 0u) | ((openEnd_) ? 2u : 0u) | ((hasO_) ? 4u : 0u) | ((walked_) ? 8u : 0u); \
+    DUST_SQW(15u, (rho_).x) DUST_SQW(16u, (rho_).y) \
+    DUST_SQW(17u, (segT_).x) DUST_SQW(18u, (segT_).y) DUST_SQW(19u, (segT_).z) \
+    DUST_SQW(20u, (color_).x) DUST_SQW(21u, (color_).y) DUST_SQW(22u, (color_).z) \
+    DUST_SQW(23u, (support_).x) DUST_SQW(24u, (support_).y) DUST_SQW(25u, (support_).z) DUST_SQW(26u, (support_).w) \
+    DUST_SQW(27u, origin_) \
+    DUST_SQW(28u, (sun_).x) DUST_SQW(29u, (sun_).y) DUST_SQW(30u, (sun_).z) \
+    DUST_SQW(31u, rh_) \
+    pc.pyramid.v[a_ + 32u * DUST_SQUEUE_CAPACITY] = (i_); \
+}
+void dust_rm_record(uint a_, uint P, uint sub, uint t, uint kind) {
+    uint mi = SP_MI, pi = SP_PI;
+    int pred = SP_PRED;
+    uint nT = SP_NT;
+    float ratio = SP_RATIO;
+    bool spiral = SP_SPIRAL;
+    float ageO, ageP; vec3 spAxis; float spOmega;
+    dust_z_spiral(mi, pred, pi, ageO, ageP, spAxis, spOmega);
+    float age = dust_mom.m[mi].cov_b_age_id.z;
+    float exposure = pc.exposure;
+    if ((pc.flags & DUST_VIEW_FLOW) != 0u) {
+        exposure *= dust_flow_factor(age, uintBitsToFloat(pc.pyramid.v[DUST_PYR_T_HI]),
+                                     uintBitsToFloat(pc.pyramid.v[DUST_PYR_T_LO]));
+    }
+    vec3 sun = dust_sun_dir(mi);
+    float rh = dust_helio_au(mi);
+    vec3 stream = vec3(float(pc.color & 0xFFu), float((pc.color >> 8u) & 0xFFu), float((pc.color >> 16u) & 0xFFu)) / 255.0;
+    vec3 color = dust_age_color(stream, age, pc.eyeLocal.w);
+    bool cellOff = SP_CELLOFF;
+    float r0 = 1.0 / ratio;
+    // the support inputs (dust_splat_subpacket's setup, from the plan row)
+    uint fs = DUST_SPU(DUST_SPR_FSUP);
+    bool lineM = (fs & DUST_SPFSUP_LINEM) != 0u, lineP = (fs & DUST_SPFSUP_LINEP) != 0u;
+    vec3 oM = DUST_SPV3(DUST_SPR_OM), cM = DUST_SPV3(DUST_SPR_CM), oP = DUST_SPV3(DUST_SPR_OP), cP = DUST_SPV3(DUST_SPR_CP);
+    float vStd = DUST_SPFL(DUST_SPR_VSTD), fLo = DUST_SPFL(DUST_SPR_FLO);
+    vec4 ownSup = vec4(DUST_SPV3(DUST_SPR_OWNSUP), DUST_SPFL(DUST_SPR_OWNSUP + 3u));
+    bool ownHas = (fs & DUST_SPFSUP_OWNHAS) != 0u;
+    float ownO = DUST_SPFL(DUST_SPR_OWNO);
+    bool hasO; float wO; vec4 sup;
+    if (kind == DUST_SPK_MERGED) {
+        vec3 mean = DUST_SPV3(DUST_SPR_MEAN);
+        float S[6]; float flux = dust_mom.m[mi].mean_flux.w;
+        float base[6];
+#ifdef DUST_SP_POOL_INLINE
+        dust_pooled_packet(mi, mean, S, flux);
+        for (int k = 0; k < 6; ++k) base[k] = S[k];
+        if (nT > 1u) {
+            if ((DUST_SPU(DUST_SPR_FS) & DUST_SPFS_PREDMERGED) != 0u) { vec3 mp; float fp; dust_pooled_packet(pi, mp, base, fp); }
+            else dust_pooled_within(pi, base);
+        }
+#else
+        for (uint s = 0u; s < 6u; ++s) S[s] = DUST_SPFL(DUST_SPR_S + s);
+        for (int k = 0; k < 6; ++k) base[k] = S[k];
+        if (nT > 1u) { for (uint s = 0u; s < 6u; ++s) base[s] = DUST_SPFL(DUST_SPR_BASEP + s); }
+#endif
+        vec3 seg = dust_z_seg(mi, pred, pi);
+        vec3 pm = mean + seg;
+        float u0 = dust_piece_bound(t, nT, ratio), u1 = dust_piece_bound(t + 1u, nT, ratio);
+        float uc = 0.5 * (u0 + u1);
+        float sc = nT > 1u ? r0 + (1.0 - r0) * uc : 1.0;
+        float sc2 = sc * sc;
+        float St[6];
+        for (int k = 0; k < 6; ++k) St[k] = base[k] * sc2;
+        if (spiral) dust_rotate_cov(St, spAxis, spOmega * (ageP - (ageO + uc * (ageP - ageO))));
+        sup = dust_piece_support_o(nT > 1u, lineM, lineP, oM, cM, oP, cP, spiral, spAxis, spOmega, ageO, ageP, uc, vStd, fLo, ownSup, ownHas, ownO, hasO, wO);
+        vec3 m0 = spiral ? dust_spiral_point(mean, pm, ageO, ageP, spAxis, spOmega, u0) : mean + seg * u0;
+        vec3 s0 = spiral ? dust_spiral_point(mean, pm, ageO, ageP, spAxis, spOmega, u1) - m0 : seg * (u1 - u0);
+        DUST_RM_PUT(m0, St, s0, flux * (u1 - u0), exposure, false, false, vec2(1.0), vec3(0.0), color, sup, hasO, wO, sun, rh, mi, false)
+        return;
+    }
+    vec3 ea = SG3(DUST_SPG_EA), ec = SG3(DUST_SPG_EC);
+    float fa = SGF(DUST_SPG_FA), fc = SGF(DUST_SPG_FC);
+    vec3 segT = vec3(0.0);
+    if (pred >= 0) {
+        vec3 pa = SG3(DUST_SPG_PA), pcc = SG3(DUST_SPG_PC);
+        segT = 0.5 * (pa + pcc) - 0.5 * (ea + ec);
+    }
+    bool walked = SP_WALKED;
+    bool openStart = SP_OPEN_START, openEnd = SP_OPEN_END;
+    if (kind == DUST_SPK_TIME) {
+        vec3 mean; float S[6]; float flux;
+        SP_BIN_PACKET(mean, S, flux);
+        float base[6];
+        for (int k = 0; k < 6; ++k) base[k] = S[k];
+        if (nT > 1u) { vec3 mp; float fp; SP_PRED_PACKET(mp, base, fp); }
+        vec3 pm = mean + segT;
+        float u0 = dust_piece_bound(t, nT, ratio), u1 = dust_piece_bound(t + 1u, nT, ratio);
+        float uc = 0.5 * (u0 + u1);
+        float sc = nT > 1u ? r0 + (1.0 - r0) * uc : 1.0;
+        float sc2 = sc * sc;
+        float St[6];
+        for (int k = 0; k < 6; ++k) St[k] = base[k] * sc2;
+        float turn = spOmega * (ageP - (ageO + uc * (ageP - ageO)));
+        if (spiral) dust_rotate_cov(St, spAxis, turn);
+        vec3 m0 = spiral ? dust_spiral_point(mean, pm, ageO, ageP, spAxis, spOmega, u0) : mean + segT * u0;
+        vec3 s0 = spiral ? dust_spiral_point(mean, pm, ageO, ageP, spAxis, spOmega, u1) - m0 : segT * (u1 - u0);
+        vec3 chordB;
+        {
+            vec3 qa, qc;
+            if (nT > 1u) { qa = SG3(DUST_SPG_PA); qc = SG3(DUST_SPG_PC); } else { qa = ea; qc = ec; }
+            chordB = qc - qa;
+        }
+        vec3 segTB = ((0.5 * chordB) * 2.0) * sc;
+        if (spiral) segTB = dust_rotate3(segTB, spAxis, turn);
+        sup = dust_piece_support_o(nT > 1u, lineM, lineP, oM, cM, oP, cP, spiral, spAxis, spOmega, ageO, ageP, uc, vStd, fLo, ownSup, ownHas, ownO, hasO, wO);
+        DUST_RM_PUT(m0, St, s0, flux * (u1 - u0), exposure, false, false, vec2(1.0), segTB, color, sup, hasO, wO, sun, rh, mi, walked)
+    } else if (kind == DUST_SPK_CHORD) {
+        vec2 rho = dust_bin_density_ends(fa, fc);
+        vec3 mean, chord; float S[6]; float flux;
+        SP_CHORD_PACKET(segT, mean, chord, S, flux);
+        DUST_RM_PUT(mean + (cellOff ? 0.5 * segT : vec3(0.0)), S, chord, flux, exposure, openStart, openEnd, rho, (0.5 * segT) * 2.0, color, ownSup, ownHas, ownO, sun, rh, mi, walked)
+    } else if (kind == DUST_SPK_SWEEP) {
+        uint nS = SP_SW & 0xFFu;
+        vec2 rho = dust_bin_density_ends(fa, fc);
+        vec3 mean, chord; float S[6]; float flux;
+        SP_SWEEP_PACKET(mean, chord, S, flux);
+        vec3 pa = SG3(DUST_SPG_PA), pcc = SG3(DUST_SPG_PC);
+        vec3 da = pa - ea, dc = pcc - ec;
+        vec3 dmax = dot(da, da) > dot(dc, dc) ? da : dc;
+        vec3 segTS = (dmax * (0.5 / float(nS))) * 2.0;
+        DUST_RM_PUT(mean, S, chord, flux, exposure, openStart, openEnd, rho, segTS, color, ownSup, ownHas, ownO, sun, rh, mi, walked)
+    } else if (kind == DUST_SPK_CONE) {
+        vec3 mean, chord; float S[6]; float flux;
+        SP_CHORD_PACKET(vec3(0.0), mean, chord, S, flux);
+        vec2 rho = dust_bin_density_ends(fa, fc);
+        float f = 0.5 * (fa + fc);
+        float f2 = f * f;
+        float kv = DUST_CHORD_VAR_FACTOR;
+        vec3 mid = 0.5 * (ea + ec);
+        vec3 midP = mid + segT;
+        float u0 = dust_piece_bound(t, nT, ratio), u1 = dust_piece_bound(t + 1u, nT, ratio);
+        float uc = 0.5 * (u0 + u1);
+        vec3 hs = 0.5 * (u1 - u0) * segT;
+        float sc = r0 + (1.0 - r0) * uc;
+        float sc2 = sc * sc * f2;
+        vec3 shift = spiral ? dust_spiral_point(mid, midP, ageO, ageP, spAxis, spOmega, u0) - mid : segT * u0;
+        float Sp[6];
+        Sp[0] = dust_mom.m[pi].cov_a.x; Sp[1] = dust_mom.m[pi].cov_a.y; Sp[2] = dust_mom.m[pi].cov_a.z;
+        Sp[3] = dust_mom.m[pi].cov_a.w; Sp[4] = dust_mom.m[pi].cov_b_age_id.x; Sp[5] = dust_mom.m[pi].cov_b_age_id.y;
+        if (spiral) dust_rotate_cov(Sp, spAxis, spOmega * (ageP - (ageO + uc * (ageP - ageO))));
+        sup = dust_piece_support_o(nT > 1u, lineM, lineP, oM, cM, oP, cP, spiral, spAxis, spOmega, ageO, ageP, uc, vStd, fLo, ownSup, ownHas, ownO, hasO, wO);
+        float St[6];
+        St[0] = Sp[0] * sc2 + kv * hs.x * hs.x;
+        St[1] = Sp[1] * sc2 + kv * hs.x * hs.y;
+        St[2] = Sp[2] * sc2 + kv * hs.x * hs.z;
+        St[3] = Sp[3] * sc2 + kv * hs.y * hs.y;
+        St[4] = Sp[4] * sc2 + kv * hs.y * hs.z;
+        St[5] = Sp[5] * sc2 + kv * hs.z * hs.z;
+        DUST_RM_PUT(mean + shift + (cellOff ? hs : vec3(0.0)), St, chord, flux * (u1 - u0), exposure, openStart, openEnd, rho, hs * 2.0, color, sup, hasO, wO, sun, rh, mi, walked)
+    }
+}
+#endif
+#if defined(DUST_SP_COV6)
+// perf9_X gate variant: the six covariance words of a record in one lane (the cov functions'
+// bodies, every word stored)
+#define DUST_SQW6(St_) DUST_SQW(3u, (St_)[0]) DUST_SQW(4u, (St_)[1]) DUST_SQW(5u, (St_)[2]) DUST_SQW(6u, (St_)[3]) DUST_SQW(7u, (St_)[4]) DUST_SQW(8u, (St_)[5])
+void dust_c6_merged(uint a_, uint P, uint t) {
+    SP_U01()
+    uint nT = SP_NT;
+    uint w = nT > 1u ? DUST_SPR_BASEP : DUST_SPR_S;
+    float base[6];
+    for (uint s = 0u; s < 6u; ++s) base[s] = DUST_SPFL(w + s);
+    SP_SPIRAL_IN()
+    float uc = 0.5 * (u0 + u1);
+    float r0 = 1.0 / SP_RATIO;
+    float sc = nT > 1u ? r0 + (1.0 - r0) * uc : 1.0;
+    float sc2 = sc * sc;
+    float St[6];
+    for (int s = 0; s < 6; ++s) St[s] = base[s] * sc2;
+    if (SP_SPIRAL) dust_rotate_cov(St, spAxis, spOmega * (ageP - (ageO + uc * (ageP - ageO))));
+    DUST_SQW6(St)
+}
+void dust_c6_time(uint a_, uint P, uint sub, uint t) {
+    SP_U01()
+    uint nT = SP_NT;
+    SP_SPIRAL_IN()
+    vec3 mean; float S[6]; float flux;
+    SP_BIN_PACKET(mean, S, flux);
+    float base[6];
+    for (int s = 0; s < 6; ++s) base[s] = S[s];
+    if (nT > 1u) { vec3 mp; float fp; SP_PRED_PACKET(mp, base, fp); }
+    float uc = 0.5 * (u0 + u1);
+    float r0 = 1.0 / SP_RATIO;
+    float sc = nT > 1u ? r0 + (1.0 - r0) * uc : 1.0;
+    float sc2 = sc * sc;
+    float St[6];
+    for (int s = 0; s < 6; ++s) St[s] = base[s] * sc2;
+    float turn = spOmega * (ageP - (ageO + uc * (ageP - ageO)));
+    if (SP_SPIRAL) dust_rotate_cov(St, spAxis, turn);
+    DUST_SQW6(St)
+}
+void dust_c6_chord(uint a_, uint P, uint sub) {
+    vec3 segT = dust_sp_segT(P, sub);
+    vec3 mean, chord; float S[6]; float flux;
+    SP_CHORD_PACKET(segT, mean, chord, S, flux);
+    DUST_SQW6(S)
+}
+void dust_c6_sweep(uint a_, uint P, uint sub, uint t) {
+    vec3 mean, chord; float S[6]; float flux;
+    SP_SWEEP_PACKET(mean, chord, S, flux);
+    DUST_SQW6(S)
+}
+void dust_c6_cone(uint a_, uint P, uint sub, uint t) {
+    SP_U01()
+    float uc = 0.5 * (u0 + u1);
+    float r0 = 1.0 / SP_RATIO;
+    float sc = r0 + (1.0 - r0) * uc;
+    SP_SPIRAL_IN()
+    vec3 segT = dust_sp_segT(P, sub);
+    float f = 0.5 * (SGF(DUST_SPG_FA) + SGF(DUST_SPG_FC));
+    float f2 = f * f;
+    float sc2 = sc * sc * f2;
+    vec3 hs = 0.5 * (u1 - u0) * segT;
+    float kv = DUST_CHORD_VAR_FACTOR;
+    uint pi = SP_PI;
+    float Sp[6];
+    Sp[0] = dust_mom.m[pi].cov_a.x; Sp[1] = dust_mom.m[pi].cov_a.y; Sp[2] = dust_mom.m[pi].cov_a.z;
+    Sp[3] = dust_mom.m[pi].cov_a.w; Sp[4] = dust_mom.m[pi].cov_b_age_id.x; Sp[5] = dust_mom.m[pi].cov_b_age_id.y;
+    if (SP_SPIRAL) dust_rotate_cov(Sp, spAxis, spOmega * (ageP - (ageO + uc * (ageP - ageO))));
+    float St[6];
+    St[0] = Sp[0] * sc2 + kv * hs.x * hs.x;
+    St[1] = Sp[1] * sc2 + kv * hs.x * hs.y;
+    St[2] = Sp[2] * sc2 + kv * hs.x * hs.z;
+    St[3] = Sp[3] * sc2 + kv * hs.y * hs.y;
+    St[4] = Sp[4] * sc2 + kv * hs.y * hs.z;
+    St[5] = Sp[5] * sc2 + kv * hs.z * hs.z;
+    DUST_SQW6(St)
+}
+void dust_c6(uint a_, uint P, uint sub, uint t, uint kind) {
+    if (kind == DUST_SPK_MERGED) dust_c6_merged(a_, P, t);
+    else if (kind == DUST_SPK_TIME) dust_c6_time(a_, P, sub, t);
+    else if (kind == DUST_SPK_CHORD) dust_c6_chord(a_, P, sub);
+    else if (kind == DUST_SPK_SWEEP) dust_c6_sweep(a_, P, sub, t);
+    else if (kind == DUST_SPK_CONE) dust_c6_cone(a_, P, sub, t);
+}
+#endif
+// (REC_B's section defines it)
+void dust_ra_lerp_time(uint a_, uint P, uint sub, uint t);
+void dust_sp_rec_a(uint gid) {
+    uint r = gid / DUST_SPG_A, q = gid - r * DUST_SPG_A;
+    uint a_, P, sub, t;
+    if (!dust_sp_rec(r, a_, P, sub, t)) return;
+    uint kind = SP_KIND;
+#if defined(DUST_SP_REC_MONO)
+    if (q == 0u) { dust_rm_record(a_, P, sub, t, kind); if (sub == 0u && t == 0u) dust_ra_tracer(P); }
+    return;
+#endif
+#if defined(DUST_SP_COV6)
+    if (q >= 5u && q <= 10u) { if (q == 5u) dust_c6(a_, P, sub, t, kind); return; }
+#endif
+    if (q == 0u) dust_ra_fill(a_, P);
+    else if (q == 1u) dust_ra_sup(a_, P, sub, t);
+    else if (q == 2u) {
+        if (kind == DUST_SPK_MERGED) dust_ra_start_merged(a_, P, t);
+        else if (kind == DUST_SPK_TIME) dust_ra_start_time(a_, P, sub, t);
+        else if (kind == DUST_SPK_CHORD) dust_ra_start_chord(a_, P, sub);
+        else if (kind == DUST_SPK_SWEEP) dust_ra_start_sweep(a_, P, sub, t);
+        else if (kind == DUST_SPK_CONE) dust_ra_start_cone(a_, P, sub, t);
+    } else if (q == 3u) {
+        if (kind == DUST_SPK_MERGED) dust_ra_scal_merged(a_, P, t);
+        else if (kind == DUST_SPK_TIME) dust_ra_scal_time(a_, P, sub, t);
+        else if (kind == DUST_SPK_CHORD) dust_ra_scal_chord(a_, P, sub);
+        else if (kind == DUST_SPK_SWEEP) dust_ra_scal_sweep(a_, P, sub, t);
+        else if (kind == DUST_SPK_CONE) dust_ra_scal_cone(a_, P, sub, t);
+    } else if (q == 4u) {
+        if (kind == DUST_SPK_CHORD) dust_ra_chord_chord(a_, P, sub);
+        else if (kind == DUST_SPK_SWEEP) dust_ra_chord_sweep(a_, P, sub, t);
+        else if (kind == DUST_SPK_CONE) dust_ra_chord_cone(a_, P, sub);
+        else if (kind == DUST_SPK_TIME && SP_SPIRAL) dust_ra_lerp_time(a_, P, sub, t);
+    }
+    else if (q == 5u) { DUST_RA_COV(0u) }
+    else if (q == 6u) { DUST_RA_COV(1u) }
+    else if (q == 7u) { DUST_RA_COV(2u) }
+    else if (q == 8u) { DUST_RA_COV(3u) }
+    else if (q == 9u) { DUST_RA_COV(4u) }
+    else if (q == 10u) { DUST_RA_COV(5u) }
+    else if (q == 11u) { if (sub == 0u && t == 0u) dust_ra_tracer(P); }
+}
+
+// REC_B group 0: the pooled and time-major pieces' segment to the piece's end (9-11), from their
+// start (REC_A's words 0-2)
+void dust_rb_seg_merged(uint a_, uint P, uint t) {
+    SP_U01()
+    SP_SPIRAL_IN()
+    vec3 seg = dust_z_seg(SP_MI, SP_PRED, SP_PI);
+    vec3 mean = DUST_SPV3(DUST_SPR_MEAN);
+    vec3 pm = mean + seg;
+    vec3 m0 = vec3(DUST_SQR(0u), DUST_SQR(1u), DUST_SQR(2u));
+    vec3 s0 = SP_SPIRAL ? dust_spiral_point(mean, pm, ageO, ageP, spAxis, spOmega, u1) - m0 : seg * (u1 - u0);
+    DUST_SQW3(9u, s0)
+}
+// REC_A group 4 of a time-major spiral piece: dust_spiral_point's lerp at u1 into words 9-11 (REC_B's
+// q0 turns it back; free until then: REC_A's chord words are a chord / sweep / cone's)
+void dust_ra_lerp_time(uint a_, uint P, uint sub, uint t) {
+    float u1 = dust_piece_bound(t + 1u, SP_NT, SP_RATIO);
+    SP_SPIRAL_IN()
+    vec3 segT = dust_sp_segT(P, sub);
+    vec3 mean; float S[6]; float flux;
+    SP_BIN_PACKET(mean, S, flux);
+    vec3 pm = mean + segT;
+    DUST_SQW3(9u, dust_spiral_lerp(mean, pm, ageO, ageP, spAxis, spOmega, u1))
+}
+void dust_rb_seg_time(uint a_, uint P, uint sub, uint t) {
+    SP_U01()
+    vec3 m0 = vec3(DUST_SQR(0u), DUST_SQR(1u), DUST_SQR(2u));
+    vec3 s0;
+    if (SP_SPIRAL) {
+        SP_SPIRAL_IN()
+        vec3 l = vec3(DUST_SQR(9u), DUST_SQR(10u), DUST_SQR(11u));
+        s0 = dust_spiral_back(l, ageO, ageP, spAxis, spOmega, u1) - m0;
+    } else {
+        s0 = dust_sp_segT(P, sub) * (u1 - u0);
+    }
+    DUST_SQW3(9u, s0)
+}
+// REC_B group 1: a time-major piece's seg_t (REC_A's 17-19) turned with the spiral to the piece's centre
+void dust_rb_turn_time(uint a_, uint P, uint t) {
+    SP_U01()
+    SP_SPIRAL_IN()
+    float uc = 0.5 * (u0 + u1);
+    float turn = spOmega * (ageP - (ageO + uc * (ageP - ageO)));
+    vec3 segTB = vec3(DUST_SQR(17u), DUST_SQR(18u), DUST_SQR(19u));
+    DUST_SQW3(17u, dust_rotate3(segTB, spAxis, turn))
+}
+void dust_sp_rec_b(uint gid) {
+#if defined(DUST_SP_REC_MONO)
+    return;
+#endif
+    uint r = gid / DUST_SPG_B, q = gid - r * DUST_SPG_B;
+    uint a_, P, sub, t;
+    if (!dust_sp_rec(r, a_, P, sub, t)) return;
+    uint kind = SP_KIND;
+    if (q == 0u) {
+        if (kind == DUST_SPK_MERGED) dust_rb_seg_merged(a_, P, t);
+        else if (kind == DUST_SPK_TIME) dust_rb_seg_time(a_, P, sub, t);
+    } else if (kind == DUST_SPK_TIME && SP_SPIRAL) dust_rb_turn_time(a_, P, t);
+}
+
+#ifdef DUST_PROFILE
+// (COUNT's flush: the thread clock of the stage, the threads with records, their maximum, the histogram)
+void dust_sp_prof_flush_count(uvec2 pyr, uint base, bool ran) {
+    dust_spa_prof_add64(pyr, base + DUST_PROF_STAGE0, dust_prof_thread);
+    dust_spa_prof_max32(pyr, base + DUST_PROF_MAX_THREAD, ran ? dust_prof_thread : 0u);
+    dust_spa_prof_add32(pyr, base + DUST_PROF_THREADS, ran ? 1u : 0u);
+    if (ran) {
+        uint bucket = uint(clamp(findMSB(max(dust_prof_thread, 1u)), 0, 31));
+        atomicAdd(DUST_SPA_V(pyr)[base + DUST_PROF_HIST + bucket], 1u);
+    }
+}
+#endif
+void main() {
+    const uint stage = DUST_SPLAT_STAGE;
+    uint gid = gl_GlobalInvocationID.x;
+    uint lane = gl_LocalInvocationID.x;
+    // the moments every dust_common function reads by index (dust_mom.m[mi])
+    dust_mom_addr = uvec2(pc.moments);
+#ifdef DUST_PROFILE
+    dust_prof_zero();
+    DUST_PROF_BEGIN_SH(thread)
+#endif
+    if (stage == DUST_SPS_LIVE) dust_sp_live(gid);
+    else if (stage == DUST_SPS_PRE) dust_sp_pre(gid);
+    else if (stage == DUST_SPS_LOD) dust_sp_lod(gid);
+    else if (stage == DUST_SPS_HAZE_E) dust_sp_haze_e(gid);
+    else if (stage == DUST_SPS_HAZE_A) dust_sp_haze_a(gid);
+    else if (stage == DUST_SPS_HAZE_B) dust_sp_haze_b(gid);
+    else if (stage == DUST_SPS_SHAPE) dust_sp_shape(gid);
+    else if (stage == DUST_SPS_GEO) dust_sp_geo(gid);
+    else if (stage == DUST_SPS_SUBW) dust_sp_subw(gid);
+    else if (stage == DUST_SPS_COUNT) dust_sp_count(gid, lane);
+    else if (stage == DUST_SPS_REC_A) dust_sp_rec_a(gid);
+    else if (stage == DUST_SPS_REC_B) dust_sp_rec_b(gid);
 #ifdef DUST_PROFILE
     DUST_PROF_END(thread)
-    // every lane reaches this with its sums (0 for one without a sub-packet): the subgroup
-    // reductions of the flush need them all
-    DUST_PROF_FLUSH_SPLAT(pc.pyramid, dust_queue_base(pc.pyramid), live && count > 0u)
+    // every lane reaches this with its sums (0 for one without work): the subgroup reductions of
+    // the flush need them all
+    if (stage == DUST_SPS_COUNT) dust_sp_prof_flush_count(uvec2(pc.pyramid), dust_spa_queue_base(uvec2(pc.pyramid)), dust_sp_ran);
+    else dust_spa_prof_flush_splat(uvec2(pc.pyramid), dust_spa_queue_base(uvec2(pc.pyramid)), dust_sp_ran);
 #endif
 }

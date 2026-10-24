@@ -258,6 +258,9 @@ pub struct DustGpuSystem {
   pub render: Option<DustBuffer>,
   pub moments: Option<DustBuffer>,
   pub batches: Option<DustBuffer>,
+  /// the propagate's solve rows (round 9 step O): one chunk of `DUST_PROP_CHUNK_WGS` workgroups,
+  /// 64 rows of `DUST_PROP_ROW_WORDS` words each; the chunks are serialised by barriers
+  pub rows: Option<DustBuffer>,
   batches_mapped: *mut u8,
   pub host: spin::Mutex<DustSystemHost>,
   /// dust trace (`gpu::dust_trace`): host-visible copies of the traced render clusters per
@@ -296,6 +299,7 @@ impl DustGpuSystem {
       render: None,
       moments: None,
       batches: None,
+      rows: None,
       batches_mapped: core::ptr::null_mut(),
       host: spin::Mutex::new(DustSystemHost {
         frame: 0,
@@ -455,6 +459,11 @@ pub struct DustViewHost {
   pub vspill_counts: (u32, u32),
   pub vqueue_chunk: u32,
   pub vqueue_ppc: f32,
+  /// the splitter family's chunk feedback (perf9 steps Z / O): the leaves and the candidates per
+  /// cluster (EMAs of the leaf queue header's frame-wide words 8 / 9 of the frames read back);
+  /// the auto chunk fits the leaf queue and the candidate buffer twice over (`dust_split_auto_chunk`)
+  pub lqueue_lpc: f32,
+  pub cqueue_cpc: f32,
   pub vqueue_chunks_frame: u32,
   pub vqueue_clusters_frame: u32,
   slot_clusters: [u32; DUST_READBACK_SLOTS],
@@ -937,6 +946,9 @@ impl Default for DustViewHost {
       vspill_counts: (0, 0),
       vqueue_chunk: 0,
       vqueue_ppc: 64.0,
+      lqueue_lpc: 64.0,
+      // (a cold start sized for dense clusters: a refused candidate run loses its cluster)
+      cqueue_cpc: 256.0,
       vqueue_chunks_frame: 0,
       vqueue_clusters_frame: 0,
       slot_clusters: [0; DUST_READBACK_SLOTS],
@@ -1266,6 +1278,8 @@ impl DustView {
       + w * h * dust::PYRAMID_TEXEL_WORDS
       + dust::DUST_QUEUE_HEADER_WORDS
       + dust::DUST_VQUEUE_HEADER_WORDS
+      // the splitter family (perf9 steps Z / O): the leaf queue's and the candidate buffer's headers
+      + 2 * dust::DUST_VQUEUE_HEADER_WORDS
   }
   /// `(level, offset, width, height)` of the measurement grid
   fn white_level(layout: &PyramidLayout) -> (u32, u32, u32, u32) {
@@ -1325,6 +1339,7 @@ impl DustManager {
       sys.render.take(),
       sys.moments.take(),
       sys.batches.take(),
+      sys.rows.take(),
     ]
     .into_iter()
     .flatten()
@@ -1509,6 +1524,8 @@ impl Device {
         sys.clusters = Some(make(size_c, DustMem::Device, true, none, "DustClusters")?.0);
         sys.render = Some(make(size_r, DustMem::Device, false, none, "DustRender")?.0);
         sys.moments = Some(make(size_m, DustMem::Device, false, none, "DustMoments")?.0);
+        let size_rows = dust::DUST_PROP_CHUNK_WGS as u64 * DUST_WG as u64 * dust::DUST_PROP_ROW_WORDS as u64 * 4;
+        sys.rows = Some(make(size_rows, DustMem::Device, false, none, "DustRows")?.0);
         let (b, mapped) = make(size_b, DustMem::HostWrite, false, none, "DustBatches")?;
         sys.batches = Some(b);
         sys.batches_mapped = mapped;
@@ -1577,11 +1594,11 @@ impl Device {
       );
     }
     let trace = sys.trace_rb.get_mut().take().map(|(b, _)| b);
-    let (render, moments) = (sys.render.take(), sys.moments.take());
+    let (render, moments, rows) = (sys.render.take(), sys.moments.take(), sys.rows.take());
     let compute_written = if compute_done {
-      [render, moments]
+      [render, moments, rows]
     } else {
-      [None, None]
+      [None, None, None]
     };
     for b in compute_written.into_iter().chain([trace]).flatten() {
       res.discard_pool.discard_buffer(
@@ -1674,18 +1691,46 @@ impl Device {
       clusters: clusters.address + ring_base as u64 * cluster_size,
       batch: batches.address + (slot * stride) as u64,
     };
-    let pipeline = self.kernels.pipelines.dust_emit;
-    self.kernels.pipelines.assert_pc_size(pipeline, core::mem::size_of_val(&pc));
-    unsafe {
-      self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
+    let pipelines = &self.kernels.pipelines;
+    pipelines.assert_pc_size(pipelines.dust_emit, core::mem::size_of_val(&pc));
+    let run = |p: vk::Pipeline| unsafe {
+      self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, p);
       self.device.cmd_push_constants(
         cmd,
-        self.kernels.pipelines.pipeline_layout,
+        pipelines.pipeline_layout,
         vk::ShaderStageFlags::COMPUTE,
         0,
         bytemuck::bytes_of(&pc),
       );
       self.device.cmd_dispatch(cmd, batch.count.div_ceil(DUST_WG), 1, 1);
+    };
+    // (perf9_K) the pre-package emission (`dust_emit_mono.comp`, the GTX 1070 default): one
+    // dispatch, the same push constants and grid
+    if !self.dust_prop_staged() {
+      if let Some(m) = pipelines.dust_emit_mono {
+        pipelines.assert_pc_size(m, core::mem::size_of_val(&pc));
+        run(m);
+        return Ok(());
+      }
+    }
+    match pipelines.dust_emit_passes {
+      // round 9 step O, the staged emission: 1, (2, 3) × DUST_KEPLER_ITERS_DF, 6, 4, 5r, 5v, 71,
+      // 72 over the same threads, a barrier between passes (each reads the record words the
+      // previous one wrote)
+      Some(passes) => {
+        run(passes[0]);
+        for _ in 0..dust::DUST_KEPLER_ITERS_DF {
+          self.cmd_dust_pre_splat_barrier(cmd);
+          run(passes[1]);
+          self.cmd_dust_pre_splat_barrier(cmd);
+          run(passes[2]);
+        }
+        for p in &passes[3..] {
+          self.cmd_dust_pre_splat_barrier(cmd);
+          run(*p);
+        }
+      }
+      None => run(pipelines.dust_emit),
     }
     Ok(())
   }
@@ -1720,6 +1765,146 @@ impl Device {
       .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
       .dst_access_mask(
         vk::AccessFlags2::SHADER_STORAGE_READ | vk::AccessFlags2::SHADER_STORAGE_WRITE,
+      );
+    let dep = vk::DependencyInfo::default().memory_barriers(core::slice::from_ref(&b));
+    unsafe { self.device.synchronization2.cmd_pipeline_barrier2(cmd, &dep) };
+  }
+
+  /// perf9_K: whether the splat runs the stage chain ([`Self::cmd_dust_splat_chain`]) or the
+  /// monolithic enumerator (`dust_splat_mono.comp`): the override of
+  /// [`Self::dust_set_splat_staged`], else the vendor rule
+  /// (`physics::dust_splat_staged_default`, env `AETHERVK_DUST_SPLAT_STAGED`); the chain
+  /// wherever the monolith is not built
+  pub fn dust_splat_staged(&self) -> bool {
+    if self.kernels.pipelines.dust_splat_mono.is_none() {
+      return true;
+    }
+    match self.kernels.pipelines.dust_splat_mode.load(core::sync::atomic::Ordering::Relaxed) {
+      1 => true,
+      2 => false,
+      _ => crate::gpu_backends::vulkan::physics::dust_splat_staged_default(
+        self.query_result.physical_device_properties.vendor_id,
+      ),
+    }
+  }
+
+  /// perf9_K: the splat path of this device from now on (true: the stage chain, false: the
+  /// monolith, where built), overriding the vendor rule and the env (the parity tests run both)
+  pub fn dust_set_splat_staged(&self, staged: bool) {
+    self.kernels.pipelines.dust_splat_mode.store(if staged { 1 } else { 2 }, core::sync::atomic::Ordering::Relaxed);
+  }
+
+  /// perf9_K: back to the vendor rule and the env
+  pub fn dust_reset_splat_staged(&self) {
+    self.kernels.pipelines.dust_splat_mode.store(0, core::sync::atomic::Ordering::Relaxed);
+  }
+
+  /// perf9_K: logs the splat path once per change (the byte gate's and the observer's logs say
+  /// which path ran), with the other staged switches beside it
+  fn dust_splat_log_path(&self, mono: bool) {
+    let v = if mono { 2u8 } else { 1u8 };
+    let p = &self.kernels.pipelines;
+    if p.dust_splat_logged.swap(v, core::sync::atomic::Ordering::Relaxed) != v {
+      aethervk_oshal_rlib::log!(
+        "[dust] STAGED splat={} (AETHERVK_DUST_SPLAT_STAGED={:?}, override {}, vendor {:#X}, monolith built {}); propagate/emit staged={} (family {}), volume stages={}",
+        if mono { "mono" } else { "chain" },
+        aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_SPLAT_STAGED"),
+        p.dust_splat_mode.load(core::sync::atomic::Ordering::Relaxed),
+        self.query_result.physical_device_properties.vendor_id,
+        p.dust_splat_mono.is_some(),
+        p.dust_propagate_passes.is_some(),
+        if self.dust_prop_staged() { "package" } else { "mono" },
+        p.dust_draw_volume_stages.is_some()
+      );
+    }
+  }
+
+  /// The enumerator as a stage chain (round 9 step O, `dust_splat.comp` stages): over a chunk's
+  /// `n` clusters LIVE, PRE, LOD, with the haze knob engaged HAZE_E, HAZE_A, HAZE_B (the stages
+  /// return at once on the clusters without the haze, so the host skips them at the default
+  /// detail), then SHAPE, GEO, SUBW, COUNT at [`dust::DUST_SPLAT_STAGE_LANES`] lanes per cluster,
+  /// REC_A and REC_B per record, indirect from the sub-packet queue header's args (COUNT atomicMaxes
+  /// them). The push constants are the same for every stage (pushed once; the layout is shared);
+  /// a barrier between stages: compute writes → compute reads and the indirect args.
+  fn cmd_dust_splat_chain(
+    &self,
+    cmd: vk::CommandBuffer,
+    stages: &[vk::Pipeline; dust::DUST_SPLAT_STAGES],
+    pc: &DustSplatPushConstants,
+    n: u32,
+    buffer: vk::Buffer,
+    sbase: u64,
+  ) {
+    let between = vk::MemoryBarrier2::default()
+      .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+      .src_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE)
+      .dst_stage_mask(vk::PipelineStageFlags2::DRAW_INDIRECT | vk::PipelineStageFlags2::COMPUTE_SHADER)
+      .dst_access_mask(
+        vk::AccessFlags2::INDIRECT_COMMAND_READ
+          | vk::AccessFlags2::SHADER_STORAGE_READ
+          | vk::AccessFlags2::SHADER_STORAGE_WRITE,
+      );
+    let dep = vk::DependencyInfo::default().memory_barriers(core::slice::from_ref(&between));
+    let haze = dust::haze_detail_from_flags(pc.flags) < dust::DUST_HAZE_DETAIL_DEFAULT;
+    let order: [usize; 12] = [
+      dust::DUST_SPLAT_STAGE_LIVE,
+      dust::DUST_SPLAT_STAGE_PRE,
+      dust::DUST_SPLAT_STAGE_LOD,
+      dust::DUST_SPLAT_STAGE_HAZE_E,
+      dust::DUST_SPLAT_STAGE_HAZE_A,
+      dust::DUST_SPLAT_STAGE_HAZE_B,
+      dust::DUST_SPLAT_STAGE_SHAPE,
+      dust::DUST_SPLAT_STAGE_GEO,
+      dust::DUST_SPLAT_STAGE_SUBW,
+      dust::DUST_SPLAT_STAGE_COUNT,
+      dust::DUST_SPLAT_STAGE_REC_A,
+      dust::DUST_SPLAT_STAGE_REC_B,
+    ];
+    let mut first = true;
+    for s in order {
+      let lanes = dust::DUST_SPLAT_STAGE_LANES[s];
+      if lanes == 35 || lanes == 70 {
+        // the haze trio
+        if !haze {
+          continue;
+        }
+      }
+      unsafe {
+        if !first {
+          self.device.synchronization2.cmd_pipeline_barrier2(cmd, &dep);
+        }
+        self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, stages[s]);
+        if first {
+          self.device.cmd_push_constants(
+            cmd,
+            self.kernels.pipelines.pipeline_layout,
+            vk::ShaderStageFlags::COMPUTE,
+            0,
+            bytemuck::bytes_of(pc),
+          );
+        }
+        if lanes == 0 {
+          let args = if s == dust::DUST_SPLAT_STAGE_REC_A { dust::DUST_SQUEUE_REC_A_ARGS } else { dust::DUST_SQUEUE_REC_B_ARGS };
+          self.device.cmd_dispatch_indirect(cmd, buffer, sbase + args as u64 * 4);
+        } else {
+          self.device.cmd_dispatch(cmd, (n * lanes).div_ceil(DUST_WG), 1, 1);
+        }
+      }
+      first = false;
+    }
+  }
+
+  /// Barrier between the speck walk's passes (round 9 step O): compute writes → compute reads
+  /// and atomics, and the indirect args the region holds.
+  pub fn cmd_dust_walk_barrier(&self, cmd: vk::CommandBuffer) {
+    let b = vk::MemoryBarrier2::default()
+      .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+      .src_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE | vk::AccessFlags2::SHADER_STORAGE_READ)
+      .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER | vk::PipelineStageFlags2::DRAW_INDIRECT)
+      .dst_access_mask(
+        vk::AccessFlags2::SHADER_STORAGE_READ
+          | vk::AccessFlags2::SHADER_STORAGE_WRITE
+          | vk::AccessFlags2::INDIRECT_COMMAND_READ,
       );
     let dep = vk::DependencyInfo::default().memory_barriers(core::slice::from_ref(&b));
     unsafe { self.device.synchronization2.cmd_pipeline_barrier2(cmd, &dep) };
@@ -1889,7 +2074,9 @@ impl Device {
       // then the sub-packet queue and the speck walk's spill (its slots in proportion to the
       // volume queue's records), placed after the records this view has: the shaders read them
       // from the volume header's `DUST_VQUEUE_RECORDS` word (`dust_squeue_base`)
-      let offsets = dust::dust_queue_offsets(vqueue_records);
+      // (perf9_O C2 v5) the staged consumer's scratch rows, when its pipelines are built
+      let staged = self.kernels.pipelines.dust_draw_volume_stages.is_some();
+      let offsets = dust::dust_queue_offsets_for(vqueue_records, staged);
       let spill_slots = offsets.spill_slots;
       let queue_words = offsets.end;
       // the cadence's class images (`DustCadenceGpu::image_span`): between the frame pyramid and
@@ -2051,6 +2238,8 @@ impl Device {
         };
         let unit = host.slot_unit[slot];
         let (header, rest) = words.split_at(dust::PYRAMID_HEADER_WORDS as usize);
+        let (rest, split_hdrs) = rest.split_at(rest.len() - 2 * dust::DUST_VQUEUE_HEADER_WORDS as usize);
+        let (lqueue_hdr, cqueue_hdr) = split_hdrs.split_at(dust::DUST_VQUEUE_HEADER_WORDS as usize);
         let (rest, vqueue) = rest.split_at(rest.len() - dust::DUST_VQUEUE_HEADER_WORDS as usize);
         let (level, queue) = rest.split_at(rest.len() - dust::DUST_QUEUE_HEADER_WORDS as usize);
         // the counters by target (the probe after the builds; fresh = the frame's less them)
@@ -2134,6 +2323,54 @@ impl Device {
           );
         }
         let clusters = host.slot_clusters[slot];
+        // the splitter family (perf9 steps Z / O), never silent: a leaf the leaf queue and its spill
+        // refused (the frame's count) was not drawn; nor were the candidates of a cluster the
+        // candidate buffer refused (its header is reset per chunk: the last chunk's count)
+        let llost = lqueue_hdr[dust::DUST_LQUEUE_LOST];
+        if llost > 0 {
+          aethervk_oshal_rlib::log!(
+            "[Dust] view {}: leaf queue lost {} leaves (the queue and its spill full): the image misses them",
+            pe.0, llost
+          );
+        }
+        let clost = cqueue_hdr[dust::DUST_CQUEUE_LOST];
+        if clost > 0 {
+          aethervk_oshal_rlib::log!(
+            "[Dust] view {}: candidate buffer refused {} candidates in the last chunk ({} reserved): the image misses them",
+            pe.0, clost, cqueue_hdr[3]
+          );
+        }
+        // the splitter family's chunk feedback: the frame's leaves and candidates per cluster
+        let (lframe, cframe) =
+          (lqueue_hdr[dust::DUST_LQUEUE_FRAME_LEAVES], lqueue_hdr[dust::DUST_LQUEUE_FRAME_CANDIDATES]);
+        // fast attack (a higher demand taken at once: a refused run loses its cluster), slow decay;
+        // the candidates by the larger of the frame's mean and its densest chunk, doubled after a
+        // frame that refused any
+        let refused = lqueue_hdr[dust::DUST_LQUEUE_FRAME_REFUSED];
+        if clusters > 0 && lframe > 0 {
+          let l = lframe as f32 / clusters as f32;
+          host.lqueue_lpc = if l > host.lqueue_lpc { l } else { host.lqueue_lpc + (l - host.lqueue_lpc) * 0.25 };
+        }
+        if clusters > 0 && cframe > 0 {
+          let c = (cframe as f32 / clusters as f32).max(lqueue_hdr[dust::DUST_LQUEUE_FRAME_CPC_MAX] as f32);
+          host.cqueue_cpc = if c > host.cqueue_cpc { c } else { host.cqueue_cpc + (c - host.cqueue_cpc) * 0.25 };
+          if refused > 0 {
+            host.cqueue_cpc *= 2.0;
+          }
+        }
+        if refused > 0 {
+          aethervk_oshal_rlib::log!(
+            "[Dust] view {}: candidate buffer refused {} of {} candidates this frame (densest chunk {} a cluster): those clusters are missing; next estimate {:.1} a cluster",
+            pe.0, refused, cframe, lqueue_hdr[dust::DUST_LQUEUE_FRAME_CPC_MAX], host.cqueue_cpc
+          );
+        }
+        if aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_VQUEUE_LOG").is_some_and(|v| v.trim() == "1") {
+          aethervk_oshal_rlib::log!(
+            "[Dust] view {}: leaves {} (large {}, spilled {}), candidates {} over {} clusters (estimates {:.1} / {:.1} a cluster)",
+            pe.0, lframe, lqueue_hdr[dust::DUST_LQUEUE_FRAME_LARGE], lqueue_hdr[dust::DUST_LQUEUE_FRAME_SPILLED],
+            cframe, clusters, host.lqueue_lpc, host.cqueue_cpc
+          );
+        }
         if clusters > 0 && vdrawn + voverflowed > 0 {
           let ppc = (vdrawn + voverflowed) as f32 / clusters as f32;
           host.vqueue_ppc += (ppc - host.vqueue_ppc) * 0.25;
@@ -2445,6 +2682,12 @@ impl Device {
         q[1] = 1;
         q[2] = 1;
         q[4] = queue_capacity;
+        // the splitter family (perf9 steps Z / O): the leaf queue, the leaf spill and the large
+        // leaves' list, in words from this header (`dust_lqueue_base` and the others)
+        let split_offsets = dust::dust_queue_offsets(view.vqueue_records);
+        q[dust::DUST_QUEUE_LQUEUE_OFFSET] = split_offsets.lqueue;
+        q[dust::DUST_QUEUE_LSPILL_OFFSET] = split_offsets.lspill;
+        q[dust::DUST_QUEUE_BLIST_OFFSET] = split_offsets.blist;
         self.device.cmd_update_buffer(
           cmd,
           pyramid.buffer,
@@ -2482,6 +2725,44 @@ impl Device {
             bytemuck::cast_slice(&ve),
           );
         }
+        // the splitter family (perf9 steps Z / O): the leaf queue, its spill and the large-leaf
+        // list empty, their lost counts (word 5) zero for the frame; the leaf queue's words 6-7 the
+        // candidate buffer's and the screen-packet slots' places (words from the EWA queue base);
+        // the candidate buffer empty, its word 0 (the indirect x) and word 3 zero (again per chunk)
+        let mut lq = [0u32; dust::DUST_VQUEUE_HEADER_WORDS as usize];
+        lq[1] = 1;
+        lq[2] = 1;
+        lq[4] = offsets.lqueue_records;
+        lq[dust::DUST_LQUEUE_CQUEUE_OFFSET] = offsets.cqueue;
+        lq[dust::DUST_LQUEUE_PQUEUE_OFFSET] = offsets.pqueue;
+        self.device.cmd_update_buffer(
+          cmd,
+          pyramid.buffer,
+          (view.queue_word() + offsets.lqueue) as u64 * 4,
+          bytemuck::cast_slice(&lq),
+        );
+        lq[dust::DUST_LQUEUE_CQUEUE_OFFSET] = 0;
+        lq[dust::DUST_LQUEUE_PQUEUE_OFFSET] = 0;
+        self.device.cmd_update_buffer(
+          cmd,
+          pyramid.buffer,
+          (view.queue_word() + offsets.lspill) as u64 * 4,
+          bytemuck::cast_slice(&lq),
+        );
+        lq[4] = 2 * offsets.lqueue_records;
+        self.device.cmd_update_buffer(
+          cmd,
+          pyramid.buffer,
+          (view.queue_word() + offsets.blist) as u64 * 4,
+          bytemuck::cast_slice(&lq),
+        );
+        lq[4] = offsets.cqueue_records;
+        self.device.cmd_update_buffer(
+          cmd,
+          pyramid.buffer,
+          (view.queue_word() + offsets.cqueue) as u64 * 4,
+          bytemuck::cast_slice(&lq),
+        );
       }
     }
     Ok((DustViewParams {
@@ -2752,26 +3033,51 @@ impl Device {
       return Ok(());
     }
     // the gate pass (a thread per cluster × bin: the density at the eye, the walk gate, the
-    // cluster's walk mask), a barrier for the mask, then the walk pass (a workgroup of 32 lanes
-    // per cluster × bin; the ones not marked return at once)
-    let pipeline = self.kernels.pipelines.dust_specks;
-    let walk = self.kernels.pipelines.dust_specks_walk;
-    self.kernels.pipelines.assert_pc_size(pipeline, core::mem::size_of_val(&pc));
-    self.kernels.pipelines.assert_pc_size(walk, core::mem::size_of_val(&pc));
+    // cluster's walk mask), then the breadth-first walk (round 9 step O): setup1 (a thread per
+    // marked (cluster, bin): its record in the walk region), setup2a / 2b / 3 / 4 / 5 (a thread
+    // per record, indirect from the region header), a step pass per tree level (indirect from
+    // the level's args; push word 24 = the level), the many- and single-speck leaves (indirect),
+    // the trace fill (the test hook). A barrier after every pass: each reads what the previous
+    // one wrote, and the indirect args.
+    let pipelines = &self.kernels.pipelines;
+    let pipeline = pipelines.dust_specks;
+    pipelines.assert_pc_size(pipeline, core::mem::size_of_val(&pc));
+    pipelines.assert_pc_size(pipelines.dust_specks_walk, core::mem::size_of_val(&pc));
     let threads = pc.live_count.saturating_mul(dust::SIZE_BINS);
     // the spill's header for this pass, before the gate (both passes read its ring words): no
     // slot claimed, the view's slot count, the trace's capacity (a test hook) and count, the
-    // tier's live range start (ring slot) and ring mask (the buffers are slot indexed). After the
-    // previous tier's walk (its spill atomics) and before this tier's passes.
-    let spill_offset = (view.queue_word() + dust::dust_queue_offsets(view.vqueue_records).spill) as u64 * 4;
+    // tier's live range start (ring slot) and ring mask (the buffers are slot indexed), the
+    // cadence's owner bytes, word 8 (the former stack limit: unread), words 9-13 the walk region
+    // (its first word, the capacities: records, many-speck leaves, frontier, single-speck
+    // leaves). After the previous tier's walk (its region atomics) and before this tier's passes.
+    let offsets = dust::dust_queue_offsets(view.vqueue_records);
+    let spill_word = view.queue_word() + offsets.spill;
+    let spill_offset = spill_word as u64 * 4;
     let trace_cap = if view.host.lock().specks_trace { dust::DUST_SPECKS_TRACE_CAPACITY } else { 0 };
-    // word 8: the walk's stack limit (a test hook; 0 = the whole stack)
     let stack_limit = view.host.lock().specks_stack_limit;
     // the cadence's owner bytes (SHOWN slots are not walked; 0: no cadence)
     let owner = self.cad_owner_address(mgr, pe, id, ring_base);
+    let region = spill_word + dust::DUST_SPILL_HEADER_WORDS;
+    let caps = dust::dust_walk_region_caps(view.spill_slots);
+    // the region's header: every count and `x` 0, every `y` and `z` 1
+    let mut region_header = [0u32; dust::DUST_WR_REGION_HEADER as usize];
+    let mut args = |at: usize| {
+      region_header[at + 1] = 1;
+      region_header[at + 2] = 1;
+    };
+    args(0);
+    args(5);
+    for s in 0..dust::DUST_WR_STEPS as usize {
+      args(9 + 4 * s);
+    }
+    args(dust::DUST_WR_LEAF1 as usize + 1);
     let to_update = vk::MemoryBarrier2::default()
-      .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
-      .src_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE | vk::AccessFlags2::SHADER_STORAGE_READ)
+      .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER | vk::PipelineStageFlags2::DRAW_INDIRECT)
+      .src_access_mask(
+        vk::AccessFlags2::SHADER_STORAGE_WRITE
+          | vk::AccessFlags2::SHADER_STORAGE_READ
+          | vk::AccessFlags2::INDIRECT_COMMAND_READ,
+      )
       .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
       .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE);
     unsafe {
@@ -2793,38 +3099,82 @@ impl Device {
           owner as u32,
           (owner >> 32) as u32,
           stack_limit,
+          region,
+          caps[0],
+          caps[1],
+          caps[2],
+          caps[3],
         ]),
       );
+      self.device.cmd_update_buffer(cmd, pyramid.buffer, region as u64 * 4, bytemuck::cast_slice(&region_header));
     }
     self.cmd_dust_pre_splat_barrier(cmd);
-    unsafe {
-      self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
+    let push = |pc: &DustSpecksPushConstants| unsafe {
       self.device.cmd_push_constants(
         cmd,
-        self.kernels.pipelines.pipeline_layout,
+        pipelines.pipeline_layout,
         vk::ShaderStageFlags::COMPUTE,
         0,
-        bytemuck::bytes_of(&pc),
+        bytemuck::bytes_of(pc),
       );
-      self.device.cmd_dispatch(cmd, threads.div_ceil(DUST_WG), 1, 1);
+    };
+    let bind = |p: vk::Pipeline| unsafe {
+      self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, p);
+    };
+    let indirect = |word: u32| unsafe {
+      self.device.cmd_dispatch_indirect(cmd, pyramid.buffer, word as u64 * 4);
+    };
+    // the gate
+    bind(pipeline);
+    push(&pc);
+    unsafe { self.device.cmd_dispatch(cmd, threads.div_ceil(DUST_WG), 1, 1) };
+    // the gate's walk masks → setup1 (direct, the gate's threads)
+    // (`AETHERVK_DUST_SETUP_PASSES=n`: a diagnostic cap on the setup dispatches, 0 = the gate only)
+    let setup_passes = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_SETUP_PASSES")
+      .and_then(|v| v.trim().parse::<usize>().ok())
+      .unwrap_or(usize::MAX);
+    self.cmd_dust_walk_barrier(cmd);
+    if setup_passes >= 1 {
+      bind(pipelines.dust_specks_setup[0]);
+      push(&pc);
+      unsafe { self.device.cmd_dispatch(cmd, threads.div_ceil(DUST_WG), 1, 1) };
     }
-    // the gate's walk masks → the walk pass
-    self.cmd_dust_pre_splat_barrier(cmd);
-    unsafe {
-      self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, walk);
-      self.device.cmd_push_constants(
-        cmd,
-        self.kernels.pipelines.pipeline_layout,
-        vk::ShaderStageFlags::COMPUTE,
-        0,
-        bytemuck::bytes_of(&pc),
-      );
-      // a workgroup per cluster × bin in two dimensions: at most DUST_DISPATCH_MAX_X per
-      // dimension (Vulkan's required maxComputeWorkGroupCount is 65 535, which the baseline
-      // devices report; a tier of 131 072 clusters is 2.1 M workgroups)
-      let x = threads.min(DUST_DISPATCH_MAX_X);
-      let y = threads.div_ceil(x.max(1));
-      self.device.cmd_dispatch(cmd, x, y, 1);
+    // setup 2a, 2b, 3, 4, 5: a thread per record (the args at region word 5)
+    for p in pipelines.dust_specks_setup[1..].iter().take(setup_passes.saturating_sub(1)) {
+      self.cmd_dust_walk_barrier(cmd);
+      bind(*p);
+      push(&pc);
+      indirect(region + 5);
+    }
+    // the steps: level s from the frontier s & 1 (its args at region word 9 + 4 s); an empty
+    // level is a zero-group dispatch
+    // (`AETHERVK_DUST_WALK_STEPS=n`: a diagnostic cap on the step dispatches, the frontiers past it
+    // left as they are)
+    let steps = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_WALK_STEPS")
+      .and_then(|v| v.trim().parse::<u32>().ok())
+      .map_or(dust::DUST_WR_STEPS, |n| n.min(dust::DUST_WR_STEPS));
+    bind(pipelines.dust_specks_walk);
+    for s in 0..steps {
+      self.cmd_dust_walk_barrier(cmd);
+      let step_pc = DustSpecksPushConstants { live_count: s, ..pc };
+      push(&step_pc);
+      indirect(region + 9 + 4 * s);
+    }
+    // the leaves: many-speck (a workgroup each, args at region word 0) and single-speck (a lane
+    // each, args after the single leaf count)
+    self.cmd_dust_walk_barrier(cmd);
+    bind(pipelines.dust_specks_leaves);
+    push(&pc);
+    indirect(region);
+    bind(pipelines.dust_specks_leaves1);
+    push(&pc);
+    indirect(region + dust::DUST_WR_LEAF1 + 1);
+    if trace_cap > 0 {
+      // the trace fill (the test hook): a thread per trace entry
+      self.cmd_dust_walk_barrier(cmd);
+      bind(pipelines.dust_specks_trace);
+      push(&pc);
+      unsafe { self.device.cmd_dispatch(cmd, trace_cap.div_ceil(DUST_WG), 1, 1) };
     }
     Ok(())
   }
@@ -2881,6 +3231,11 @@ impl Device {
     assert!(
       pc.flags & dust::DUST_VIEW_EDGE_ODD == 0,
       "cmd_dust_splat: the caller's flags carry the host-internal DUST_VIEW_EDGE_ODD bit"
+    );
+    // the leaf spill's drain flag is the host's own (set on the leaf consumer's second dispatch)
+    assert!(
+      pc.flags & dust::DUST_VIEW_LEAF_SPILL == 0,
+      "cmd_dust_splat: the caller's flags carry the host-internal DUST_VIEW_LEAF_SPILL bit"
     );
     let res = self.res.read();
     let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
@@ -2968,27 +3323,140 @@ impl Device {
     };
     // the profiler variants while the request is on (`dust_profile.glsl`; same drawing)
     let profiling = crate::gpu_backends::vulkan::physics::dust_profile_requested();
-    let producer = match self.kernels.pipelines.dust_splat_prof {
+    let stages = match &self.kernels.pipelines.dust_splat_prof_stages {
       Some(p) if profiling => p,
-      _ => self.kernels.pipelines.dust_splat,
+      _ => &self.kernels.pipelines.dust_splat_stages,
     };
+    let producer = stages[0];
+    // perf9_K: the splat path (`Self::dust_splat_staged`): `Some` the monolithic enumerator
+    // (its profiler variant while the request is on), `None` the stage chain above
+    let splat_mono = if self.dust_splat_staged() {
+      None
+    } else {
+      match self.kernels.pipelines.dust_splat_mono_prof {
+        Some(p) if profiling => Some(p),
+        _ => self.kernels.pipelines.dust_splat_mono,
+      }
+    };
+    self.dust_splat_log_path(splat_mono.is_some());
+    if let Some(m) = splat_mono {
+      self.kernels.pipelines.assert_pc_size(m, core::mem::size_of_val(&pc));
+    }
     let volume_plain = view.host.lock().volume_plain;
     let consumer = match (self.kernels.pipelines.dust_draw_volume_prof, self.kernels.pipelines.dust_draw_volume_plain) {
       (Some(p), _) if profiling => p,
       (_, Some(p)) if volume_plain => p,
       _ => self.kernels.pipelines.dust_draw_volume,
     };
+    // (perf9_O C2 v5) the staged consumer, unless the consumer above is the profiler's or the plain
+    // blob (the same conditions as that match)
+    let staged_stages = if (profiling && self.kernels.pipelines.dust_draw_volume_prof.is_some())
+      || (volume_plain && self.kernels.pipelines.dust_draw_volume_plain.is_some())
+    {
+      None
+    } else {
+      self.kernels.pipelines.dust_draw_volume_stages
+    };
     let splitter = match self.kernels.pipelines.dust_split_prof {
       Some(p) if profiling => p,
       _ => self.kernels.pipelines.dust_split,
     };
+    // (perf9_K) the split family (`dust_split_staged`): `Some` the pre-split splitter (its profiler
+    // variant while the request is on; the GTX 1070 default), `None` the staged chain below
+    let split_mono = if self.dust_split_staged() {
+      None
+    } else {
+      match self.kernels.pipelines.dust_split_mono_prof {
+        Some(p) if profiling => Some(p),
+        _ => Some(self.kernels.pipelines.dust_split_mono),
+      }
+    };
+    // the splitter family (perf9 steps Z / O): PREP → walk → project passes 1-3 → SEQ order →
+    // SEQ draw (`cmd_dust_split_chain`), then the leaf consumers beside the volume consumer
+    let hard_axis = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_HARD_AXIS")
+      .and_then(|v| v.trim().parse::<u32>().ok())
+      .unwrap_or(0)
+      .min(15)
+      != 0;
+    let split_prep = match self.kernels.pipelines.dust_split_prep_prof {
+      Some(p) if profiling => p,
+      _ => self.kernels.pipelines.dust_split_prep,
+    };
+    let split_walk = if hard_axis {
+      match self.kernels.pipelines.dust_split_hard_prof {
+        Some(p) if profiling => p,
+        _ => self.kernels.pipelines.dust_split_hard,
+      }
+    } else {
+      splitter
+    };
+    let project = [
+      (self.kernels.pipelines.dust_project_leaf_p1, self.kernels.pipelines.dust_project_leaf_p1_prof),
+      (self.kernels.pipelines.dust_project_leaf_p2, self.kernels.pipelines.dust_project_leaf_p2_prof),
+      (self.kernels.pipelines.dust_project_leaf_p3, self.kernels.pipelines.dust_project_leaf_p3_prof),
+    ]
+    .map(|(plain, prof)| match prof {
+      Some(p) if profiling => p,
+      _ => plain,
+    });
+    let seq = match self.kernels.pipelines.dust_split_seq_prof {
+      Some(p) if profiling => p,
+      _ => self.kernels.pipelines.dust_split_seq,
+    };
+    let seq_draw = match self.kernels.pipelines.dust_split_seq_draw_prof {
+      Some(p) if profiling => p,
+      _ => self.kernels.pipelines.dust_split_seq_draw,
+    };
+    let leaf = match self.kernels.pipelines.dust_draw_leaf_prof {
+      Some(p) if profiling => p,
+      _ => self.kernels.pipelines.dust_draw_leaf,
+    };
+    let leaf_wg = match self.kernels.pipelines.dust_draw_leaf_wg_prof {
+      Some(p) if profiling => p,
+      _ => self.kernels.pipelines.dust_draw_leaf_wg,
+    };
+    let split_stages = [
+      if hard_axis { None } else { Some(split_prep) },
+      Some(split_walk),
+      Some(project[0]),
+      Some(project[1]),
+      Some(project[2]),
+      Some(seq),
+      Some(seq_draw),
+    ];
     let edge_pass = match self.kernels.pipelines.dust_draw_small_edge_prof {
       Some(p) if profiling => p,
       _ => self.kernels.pipelines.dust_draw_small_edge,
     };
     self.kernels.pipelines.assert_pc_size(producer, core::mem::size_of_val(&pc));
+    // (perf9_K) the mono draw family (`dust_draw_staged` false, the GTX 1070 default): the
+    // pre-perf9_O consumer (the profiler's, the plain or the default blob, chosen as above) and edge
+    // pass, never the staged consumer's stages. Their dispatches are the staged family's single
+    // blobs' (the same indirect headers, push constants and barriers)
+    let (consumer, staged_stages, edge_pass) = if self.dust_draw_staged() {
+      (consumer, staged_stages, edge_pass)
+    } else {
+      (
+        match (self.kernels.pipelines.dust_draw_volume_mono_prof, self.kernels.pipelines.dust_draw_volume_mono_plain) {
+          (Some(p), _) if profiling => p,
+          (_, Some(p)) if volume_plain => p,
+          _ => self.kernels.pipelines.dust_draw_volume_mono,
+        },
+        None,
+        match self.kernels.pipelines.dust_draw_small_edge_mono_prof {
+          Some(p) if profiling => p,
+          _ => self.kernels.pipelines.dust_draw_small_edge_mono,
+        },
+      )
+    };
     self.kernels.pipelines.assert_pc_size(consumer, core::mem::size_of_val(&pc));
     self.kernels.pipelines.assert_pc_size(splitter, core::mem::size_of_val(&pc));
+    if let Some(m) = split_mono {
+      self.kernels.pipelines.assert_pc_size(m, core::mem::size_of_val(&pc));
+    }
+    for p in [split_prep, split_walk, project[0], project[1], project[2], seq, seq_draw, leaf, leaf_wg] {
+      self.kernels.pipelines.assert_pc_size(p, core::mem::size_of_val(&pc));
+    }
     self.kernels.pipelines.assert_pc_size(edge_pass, core::mem::size_of_val(&pc));
     // the tier in chunks of clusters (`dust::DUST_VQUEUE_*`): per chunk the volume queue and
     // volume spill headers (empty, the range [first, end), the capacities), the producer over
@@ -2996,7 +3464,7 @@ impl Device {
     // spill's (`dust::DUST_VIEW_VOLUME_SPILL`); with the queue off every record goes through the
     // spill. `AETHERVK_DUST_VQUEUE_NODRAW=1` skips the consumer (diagnostics: the producer
     // alone; the image wrong by design).
-    let (chunk, vqueue_capacity, vspill_capacity) = {
+    let (chunk, vqueue_capacity, vspill_capacity, leaf_capacity) = {
       let mut host = view.host.lock();
       host.vqueue_clusters_frame += count;
       let capacity = if host.vqueue_capacity > 0 {
@@ -3029,7 +3497,23 @@ impl Device {
       let spill_records = dust::dust_vspill_records(view.vqueue_records);
       let spill_capacity =
         if host.vspill_capacity > 0 { host.vspill_capacity.min(spill_records) } else { spill_records };
-      (chunk.max(1), capacity, spill_capacity)
+      // the splitter family (perf9 steps Z / O): the auto chunk also fits the leaf queue and the
+      // candidate buffer twice over at the frame-wide estimates (a refused candidate run loses
+      // its cluster's leaves; a refused leaf goes to the spill, then is lost)
+      // (perf9_K: the pre-split splitter keeps the volume queue's chunk, as before the family)
+      let chunk = if host.vqueue_chunk > 0 || split_mono.is_some() {
+        chunk
+      } else {
+        chunk
+          .min(dust::dust_split_auto_chunk(dust::dust_lqueue_records(view.vqueue_records), host.lqueue_lpc))
+          .min(dust::dust_split_auto_chunk(dust::dust_cqueue_records(view.vqueue_records), host.cqueue_cpc))
+      };
+      // the leaf queue's capacity per chunk: the view's records or the queue hook's
+      // (`dust_set_queue_capacity`; the rest goes to the leaf spill), never 0
+      let leaf_records = dust::dust_lqueue_records(view.vqueue_records);
+      let leaf_capacity =
+        if host.queue_capacity > 0 { host.queue_capacity.min(leaf_records) } else { leaf_records };
+      (chunk.max(1), capacity, spill_capacity, leaf_capacity)
     };
     let nodraw =
       aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_VQUEUE_NODRAW").is_some_and(|v| v.trim() == "1");
@@ -3042,6 +3526,15 @@ impl Device {
       (view.queue_word() + offsets.vedge[0]) as u64 * 4,
       (view.queue_word() + offsets.vedge[1]) as u64 * 4,
     ];
+    // the splitter family's regions (perf9 steps Z / O): the leaf queue, the leaf spill, the large
+    // leaves' list (the leaf consumers' indirect dispatches) and the candidate buffer (the project
+    // passes' and the SEQ draw stage's); the leaf consumer's second dispatch drains the leaf spill
+    let lqbase = (view.queue_word() + offsets.lqueue) as u64 * 4;
+    let lsbase = (view.queue_word() + offsets.lspill) as u64 * 4;
+    let blbase = (view.queue_word() + offsets.blist) as u64 * 4;
+    let cqbase = (view.queue_word() + offsets.cqueue) as u64 * 4;
+    let mut pc_leaf_spill = pc;
+    pc_leaf_spill.flags |= dust::DUST_VIEW_LEAF_SPILL;
     // the consumer's second dispatch of each chunk drains the volume spill (host-internal flag);
     // both drains of an odd chunk append their edge pieces to region 1, the edge pass of an odd
     // chunk drains it (host-internal flag)
@@ -3082,6 +3575,13 @@ impl Device {
           | vk::AccessFlags2::SHADER_STORAGE_READ
           | vk::AccessFlags2::SHADER_STORAGE_WRITE,
       );
+    // (perf9_O C2 v5) between two stages of the staged consumer: a stage's writes (its scratch rows,
+    // records and pyramid) → the next stage's reads and writes
+    let stage_to_stage = vk::MemoryBarrier2::default()
+      .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+      .src_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE)
+      .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+      .dst_access_mask(vk::AccessFlags2::SHADER_STORAGE_READ | vk::AccessFlags2::SHADER_STORAGE_WRITE);
     let mut first = 0u32;
     let mut chunks = 0u32;
     loop {
@@ -3105,8 +3605,24 @@ impl Device {
           bytemuck::cast_slice(&ring),
         );
         // the sub-packet queue: empty (its record counter and overflow count)
-        // (words 4-5 the list, 6-7 the owner bytes: dust_splat.comp)
-        let shdr = [0u32, dust::DUST_SQUEUE_CAPACITY, 0, 0, list as u32, (list >> 32) as u32, owner as u32, (owner >> 32) as u32];
+        // (words 4-5 the list, 6-7 the owner bytes: dust_splat.comp; round 9 step O: words 8-10
+        // and 11-13 the record stages' indirect args, x 0 and y = z = 1, COUNT atomicMaxes x)
+        let shdr = [
+          0u32,
+          dust::DUST_SQUEUE_CAPACITY,
+          0,
+          0,
+          list as u32,
+          (list >> 32) as u32,
+          owner as u32,
+          (owner >> 32) as u32,
+          0,
+          1,
+          1,
+          0,
+          1,
+          1,
+        ];
         self.device.cmd_update_buffer(cmd, pyramid.buffer, sbase, bytemuck::cast_slice(&shdr));
         // the volume spill: empty, its dispatch (0, 1, 1), its capacity (covered by the same
         // `to_update` / `to_producer` barriers as the main header)
@@ -3119,6 +3635,22 @@ impl Device {
         let odd = chunks & 1 == 1;
         let vehdr = [0u32, 1, 1, 0, offsets.vedge_records];
         self.device.cmd_update_buffer(cmd, pyramid.buffer, vebase[odd as usize], bytemuck::cast_slice(&vehdr));
+        // the splitter family (perf9 steps Z / O): the leaf queue, its spill and the large-leaf list
+        // empty, their dispatch (0, 1, 1), their capacities (words 5-7, the lost count and the
+        // offsets, kept for the frame); the candidate buffer empty (word 0 the project passes' and
+        // the SEQ draw stage's x, word 3 the reservations, word 5 the refused: the draw stage's
+        // granted range is [0, word 3 − word 5) of this chunk). The same barriers as the headers above
+        // (perf9_K) not with the pre-split splitter: it feeds none of them
+        if split_mono.is_none() {
+          let lqhdr = [0u32, 1, 1, 0, leaf_capacity];
+          self.device.cmd_update_buffer(cmd, pyramid.buffer, lqbase, bytemuck::cast_slice(&lqhdr));
+          let lshdr = [0u32, 1, 1, 0, offsets.lqueue_records];
+          self.device.cmd_update_buffer(cmd, pyramid.buffer, lsbase, bytemuck::cast_slice(&lshdr));
+          let blhdr = [0u32, 1, 1, 0, 2 * offsets.lqueue_records];
+          self.device.cmd_update_buffer(cmd, pyramid.buffer, blbase, bytemuck::cast_slice(&blhdr));
+          let cqhdr = [0u32, 1, 1, 0, offsets.cqueue_records, 0];
+          self.device.cmd_update_buffer(cmd, pyramid.buffer, cqbase, bytemuck::cast_slice(&cqhdr));
+        }
         self.device.synchronization2.cmd_pipeline_barrier2(
           cmd,
           &vk::DependencyInfo::default().memory_barriers(core::slice::from_ref(&to_producer)),
@@ -3138,57 +3670,136 @@ impl Device {
           );
           self.device.cmd_dispatch_indirect(cmd, pyramid.buffer, vebase[!odd as usize]);
         }
-        // the enumerator: a warp per cluster, a lane per sub-packet (`dust_splat.comp`)
-        self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, producer);
-        self.device.cmd_push_constants(
-          cmd,
-          self.kernels.pipelines.pipeline_layout,
-          vk::ShaderStageFlags::COMPUTE,
-          0,
-          bytemuck::bytes_of(&pc),
-        );
-        self.device.cmd_dispatch(cmd, ((end - first) * dust::DUST_SPLAT_LANES).div_ceil(DUST_WG), 1, 1);
+        // the enumerator: the stage chain over the chunk's clusters (`dust_splat.comp`, round 9
+        // step O; `cmd_dust_splat_chain`)
+        if let Some(mono) = splat_mono {
+          // perf9_K: the monolithic enumerator as before step O: a warp per cluster, a lane per
+          // sub-packet (`dust_splat_mono.comp`); the same barriers around it as the chain (the
+          // header update before, the splitter's below); the header's words 8-13 (the chain's
+          // indirect args) and the plan rows are not read
+          self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, mono);
+          self.device.cmd_push_constants(
+            cmd,
+            self.kernels.pipelines.pipeline_layout,
+            vk::ShaderStageFlags::COMPUTE,
+            0,
+            bytemuck::bytes_of(&pc),
+          );
+          self.device.cmd_dispatch(cmd, ((end - first) * dust::DUST_SPLAT_LANES).div_ceil(DUST_WG), 1, 1);
+        } else {
+          self.cmd_dust_splat_chain(cmd, stages, &pc, end - first, pyramid.buffer, sbase);
+        }
         // the splitter: a workgroup per cluster of the chunk over its records (`dust_split.comp`)
         self.device.synchronization2.cmd_pipeline_barrier2(
           cmd,
           &vk::DependencyInfo::default().memory_barriers(core::slice::from_ref(&to_consumer)),
         );
-        self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, splitter);
-        self.device.cmd_push_constants(
-          cmd,
-          self.kernels.pipelines.pipeline_layout,
-          vk::ShaderStageFlags::COMPUTE,
-          0,
-          bytemuck::bytes_of(&pc),
-        );
-        self.device.cmd_dispatch(cmd, end - first, 1, 1);
+        // (perf9 steps Z / O) PREP → walk → project passes 1-3 → SEQ order → SEQ draw
+        if let Some(mono) = split_mono {
+          // perf9_K: the pre-split splitter (`dust_split_mono.comp`): a workgroup per cluster of the
+          // chunk over its records, EWA leaves drawn in-thread or put on the EWA queue (drained at
+          // the frame end), volumetric packets to the volume queue / spill; the same barriers
+          self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, mono);
+          self.device.cmd_push_constants(
+            cmd,
+            self.kernels.pipelines.pipeline_layout,
+            vk::ShaderStageFlags::COMPUTE,
+            0,
+            bytemuck::bytes_of(&pc),
+          );
+          self.device.cmd_dispatch(cmd, end - first, 1, 1);
+        } else {
+          self.cmd_dust_split_chain(cmd, &split_stages, &pc, end - first, pyramid.buffer, cqbase);
+        }
         if !nodraw {
           self.device.synchronization2.cmd_pipeline_barrier2(
             cmd,
             &vk::DependencyInfo::default().memory_barriers(core::slice::from_ref(&to_consumer)),
           );
-          self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, consumer);
-          self.device.cmd_push_constants(
-            cmd,
-            self.kernels.pipelines.pipeline_layout,
-            vk::ShaderStageFlags::COMPUTE,
-            0,
-            bytemuck::bytes_of(&with_parity(pc, odd)),
-          );
-          self.device.cmd_dispatch_indirect(cmd, pyramid.buffer, vbase);
-          // the same consumer over the chunk's volume spill (the records the queue refused). No
-          // barrier between the two drains: the spill's records and dispatch were made visible
-          // by the splitter → consumer barrier above, and the drains share only order-free
-          // atomics (the in-frame gate's evaluation count is order-dependent past the gate, as
-          // among the lanes of one drain)
-          self.device.cmd_push_constants(
-            cmd,
-            self.kernels.pipelines.pipeline_layout,
-            vk::ShaderStageFlags::COMPUTE,
-            0,
-            bytemuck::bytes_of(&with_parity(pc_spill, odd)),
-          );
-          self.device.cmd_dispatch_indirect(cmd, pyramid.buffer, vsbase);
+          // (perf9_K) not with the pre-split splitter (no leaf queue)
+          if split_mono.is_none() {
+            // the leaf consumers (`dust_draw_leaf.comp`): a lane per record of the leaf queue, again
+            // over the leaf spill (host-internal flag), a workgroup per entry of the large-leaf list
+            self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, leaf);
+            self.device.cmd_push_constants(
+              cmd,
+              self.kernels.pipelines.pipeline_layout,
+              vk::ShaderStageFlags::COMPUTE,
+              0,
+              bytemuck::bytes_of(&pc),
+            );
+            self.device.cmd_dispatch_indirect(cmd, pyramid.buffer, lqbase);
+            self.device.cmd_push_constants(
+              cmd,
+              self.kernels.pipelines.pipeline_layout,
+              vk::ShaderStageFlags::COMPUTE,
+              0,
+              bytemuck::bytes_of(&pc_leaf_spill),
+            );
+            self.device.cmd_dispatch_indirect(cmd, pyramid.buffer, lsbase);
+            self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, leaf_wg);
+            self.device.cmd_push_constants(
+              cmd,
+              self.kernels.pipelines.pipeline_layout,
+              vk::ShaderStageFlags::COMPUTE,
+              0,
+              bytemuck::bytes_of(&pc),
+            );
+            self.device.cmd_dispatch_indirect(cmd, pyramid.buffer, blbase);
+          }
+          if let Some(stages) = staged_stages {
+            // (perf9_O C2 v5) the seven stages in order (s1 s2 s3a s3b s4a s4b s5), each a main drain
+            // then its spill drain, with no barrier between the two drains (their rows and records
+            // are per drain); a compute barrier between the stages (6)
+            for (k, stage) in stages.into_iter().enumerate() {
+              self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, stage);
+              self.device.cmd_push_constants(
+                cmd,
+                self.kernels.pipelines.pipeline_layout,
+                vk::ShaderStageFlags::COMPUTE,
+                0,
+                bytemuck::bytes_of(&with_parity(pc, odd)),
+              );
+              self.device.cmd_dispatch_indirect(cmd, pyramid.buffer, vbase);
+              self.device.cmd_push_constants(
+                cmd,
+                self.kernels.pipelines.pipeline_layout,
+                vk::ShaderStageFlags::COMPUTE,
+                0,
+                bytemuck::bytes_of(&with_parity(pc_spill, odd)),
+              );
+              self.device.cmd_dispatch_indirect(cmd, pyramid.buffer, vsbase);
+              if k < 6 {
+                self.device.synchronization2.cmd_pipeline_barrier2(
+                  cmd,
+                  &vk::DependencyInfo::default().memory_barriers(core::slice::from_ref(&stage_to_stage)),
+                );
+              }
+            }
+          } else {
+            self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, consumer);
+            self.device.cmd_push_constants(
+              cmd,
+              self.kernels.pipelines.pipeline_layout,
+              vk::ShaderStageFlags::COMPUTE,
+              0,
+              bytemuck::bytes_of(&with_parity(pc, odd)),
+            );
+            self.device.cmd_dispatch_indirect(cmd, pyramid.buffer, vbase);
+            // the same consumer over the chunk's volume spill (the records the queue refused). No
+            // barrier between the two drains: the spill's records and dispatch were made visible
+            // by the splitter → consumer barrier above, and the drains share only order-free
+            // atomics (the in-frame gate's evaluation count is order-dependent past the gate, as
+            // among the lanes of one drain)
+            self.device.cmd_push_constants(
+              cmd,
+              self.kernels.pipelines.pipeline_layout,
+              vk::ShaderStageFlags::COMPUTE,
+              0,
+              bytemuck::bytes_of(&with_parity(pc_spill, odd)),
+            );
+            self.device.cmd_dispatch_indirect(cmd, pyramid.buffer, vsbase);
+          }
         }
       }
       chunks += 1;
@@ -3220,6 +3831,60 @@ impl Device {
     Ok(())
   }
 
+  /// The splitter family over a chunk's `n` clusters (perf9 steps Z / O; Z DESIGN §4 item 5, §7
+  /// item 11, §8.3 item 18, O DESIGN §3 items 3 and 3b): PREP (`stages[0]`; `None` with the
+  /// hard-axis walk, which builds its cut itself) and the walk (`stages[1]`), a workgroup per
+  /// cluster; the project stage's passes 1, 2, 3 (`stages[2..5]`), a lane per candidate, indirect
+  /// from the candidate header's word 0 (`cqbase`, maintained by `dust_cqueue_reserve`); the SEQ
+  /// order stage (`stages[5]`), a workgroup per cluster; the SEQ draw stage (`stages[6]`), indirect
+  /// from the same word. The same push constants for every stage; a barrier between stages:
+  /// compute writes → compute reads and the indirect args. The caller orders the enumerator before
+  /// and the consumers after.
+  fn cmd_dust_split_chain(
+    &self,
+    cmd: vk::CommandBuffer,
+    stages: &[Option<vk::Pipeline>; 7],
+    pc: &DustSplatPushConstants,
+    n: u32,
+    buffer: vk::Buffer,
+    cqbase: u64,
+  ) {
+    let between = vk::MemoryBarrier2::default()
+      .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+      .src_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE)
+      .dst_stage_mask(vk::PipelineStageFlags2::DRAW_INDIRECT | vk::PipelineStageFlags2::COMPUTE_SHADER)
+      .dst_access_mask(
+        vk::AccessFlags2::INDIRECT_COMMAND_READ
+          | vk::AccessFlags2::SHADER_STORAGE_READ
+          | vk::AccessFlags2::SHADER_STORAGE_WRITE,
+      );
+    let dep = vk::DependencyInfo::default().memory_barriers(core::slice::from_ref(&between));
+    let mut first = true;
+    for (k, stage) in stages.iter().enumerate() {
+      let Some(p) = *stage else { continue };
+      unsafe {
+        if !first {
+          self.device.synchronization2.cmd_pipeline_barrier2(cmd, &dep);
+        }
+        self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, p);
+        self.device.cmd_push_constants(
+          cmd,
+          self.kernels.pipelines.pipeline_layout,
+          vk::ShaderStageFlags::COMPUTE,
+          0,
+          bytemuck::bytes_of(pc),
+        );
+        match k {
+          // the project passes and the SEQ draw stage: a lane per candidate
+          2 | 3 | 4 | 6 => self.device.cmd_dispatch_indirect(cmd, buffer, cqbase),
+          // PREP, the walk, the SEQ order stage: a workgroup per cluster
+          _ => self.device.cmd_dispatch(cmd, n, 1, 1),
+        }
+      }
+      first = false;
+    }
+  }
+
   /// Test only (fault injection): the splat dispatch of one tier with an explicit pyramid
   /// address, bypassing the view lookup.
   #[cfg(test)]
@@ -3235,7 +3900,9 @@ impl Device {
     pc.render = render;
     pc.moments = moments;
     pc.pyramid = pyramid;
-    let pipeline = self.kernels.pipelines.dust_splat;
+    // the chain's first stage (LIVE, a lane per cluster): its first header read faults as the
+    // whole enumerator's did (the later stages need the queue's indirect args: not here)
+    let pipeline = self.kernels.pipelines.dust_splat_stages[dust::DUST_SPLAT_STAGE_LIVE];
     unsafe {
       self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
       self.device.cmd_push_constants(
@@ -3245,7 +3912,7 @@ impl Device {
         0,
         bytemuck::bytes_of(&pc),
       );
-      self.device.cmd_dispatch(cmd, (pc.live_count * dust::DUST_SPLAT_LANES).div_ceil(DUST_WG), 1, 1);
+      self.device.cmd_dispatch(cmd, pc.live_count.div_ceil(DUST_WG), 1, 1);
     }
     Ok(())
   }
@@ -3310,6 +3977,15 @@ impl Device {
       let pipeline = match self.kernels.pipelines.dust_draw_queue_prof {
         Some(p) if crate::gpu_backends::vulkan::physics::dust_profile_requested() => p,
         _ => self.kernels.pipelines.dust_draw_queue,
+      };
+      // (perf9_K) the mono draw family's queue draw (the pre-perf9_O blob; the same dispatch)
+      let pipeline = if self.dust_draw_staged() {
+        pipeline
+      } else {
+        match self.kernels.pipelines.dust_draw_queue_mono_prof {
+          Some(p) if crate::gpu_backends::vulkan::physics::dust_profile_requested() => p,
+          _ => self.kernels.pipelines.dust_draw_queue_mono,
+        }
       };
       self.kernels.pipelines.assert_pc_size(pipeline, core::mem::size_of_val(&qpc));
       let to_queue = vk::MemoryBarrier2::default()
@@ -3404,6 +4080,7 @@ impl Device {
         &vk::DependencyInfo::default().memory_barriers(core::slice::from_ref(&to_copy)),
       );
     }
+    let split_offsets = dust::dust_queue_offsets(view.vqueue_records);
     let regions = [
       vk::BufferCopy::default()
         .src_offset(0)
@@ -3417,11 +4094,20 @@ impl Device {
         .src_offset(view.queue_word() as u64 * 4)
         .dst_offset(
           (slot as u64 + 1) * rb_words * 4
-            - (dust::DUST_QUEUE_HEADER_WORDS + dust::DUST_VQUEUE_HEADER_WORDS) as u64 * 4,
+            - (dust::DUST_QUEUE_HEADER_WORDS + 3 * dust::DUST_VQUEUE_HEADER_WORDS) as u64 * 4,
         )
         .size(dust::DUST_QUEUE_HEADER_WORDS as u64 * 4),
       vk::BufferCopy::default()
         .src_offset((view.queue_word() + dust::DUST_QUEUE_WORDS) as u64 * 4)
+        .dst_offset((slot as u64 + 1) * rb_words * 4 - 3 * dust::DUST_VQUEUE_HEADER_WORDS as u64 * 4)
+        .size(dust::DUST_VQUEUE_HEADER_WORDS as u64 * 4),
+      // the splitter family (perf9 steps Z / O): the leaf queue's and the candidate buffer's headers
+      vk::BufferCopy::default()
+        .src_offset((view.queue_word() + split_offsets.lqueue) as u64 * 4)
+        .dst_offset((slot as u64 + 1) * rb_words * 4 - 2 * dust::DUST_VQUEUE_HEADER_WORDS as u64 * 4)
+        .size(dust::DUST_VQUEUE_HEADER_WORDS as u64 * 4),
+      vk::BufferCopy::default()
+        .src_offset((view.queue_word() + split_offsets.cqueue) as u64 * 4)
         .dst_offset((slot as u64 + 1) * rb_words * 4 - dust::DUST_VQUEUE_HEADER_WORDS as u64 * 4)
         .size(dust::DUST_VQUEUE_HEADER_WORDS as u64 * 4),
     ];
@@ -3544,8 +4230,9 @@ impl Device {
   }
 
   /// The speck walk's spill header after the last walk pass ([`dust::DUST_SPILL_HEADER_WORDS`]
-  /// words: 0 the slots claimed, 1 the view's slots, 2-3 the trace's capacity and count, 8 the
-  /// stack limit). GPU views only.
+  /// words: 0 the slots claimed (0: the breadth-first walk claims none), 1 the view's slots, 2-3
+  /// the trace's capacity and count, 8 the former stack limit (unread), 9-13 the walk region's
+  /// first word and capacities). GPU views only.
   pub fn download_dust_spill_header(&self, pe: gpu::PresentationEngineHandle) -> GpuResult<alloc::vec::Vec<u32>> {
     let (buffer, spill_offset) = {
       let res = self.res.read();
@@ -3556,6 +4243,32 @@ impl Device {
       (pyramid.buffer, off)
     };
     Ok(pod_vec(&self.dust_download_bytes(buffer, spill_offset, dust::DUST_SPILL_HEADER_WORDS as u64 * 4)?))
+  }
+
+  /// `n` words of the view's queue allocation from `word` (pyramid-buffer words; diagnostics).
+  pub fn download_dust_words(&self, pe: gpu::PresentationEngineHandle, word: u32, n: u32) -> GpuResult<alloc::vec::Vec<u32>> {
+    let buffer = {
+      let res = self.res.read();
+      let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
+      let view = mgr.views.get(&pe).ok_or(gpu_err!("dust view of PE {} absent", pe.0))?;
+      view.queue_pyramid()?.buffer
+    };
+    Ok(pod_vec(&self.dust_download_bytes(buffer, word as u64 * 4, n as u64 * 4)?))
+  }
+
+  /// The walk region's header after the last walk pass ([`dust::DUST_WR_REGION_HEADER`] words:
+  /// 3 the record count, 4 the many-speck leaf count, 8 + 4s the frontier count of step s,
+  /// [`dust::DUST_WR_LEAF1`] the single-speck leaf count, the rest indirect args). GPU views only.
+  pub fn download_dust_walk_region_header(&self, pe: gpu::PresentationEngineHandle) -> GpuResult<alloc::vec::Vec<u32>> {
+    let (buffer, region_offset) = {
+      let res = self.res.read();
+      let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
+      let view = mgr.views.get(&pe).ok_or(gpu_err!("dust view of PE {} absent", pe.0))?;
+      let pyramid = view.queue_pyramid()?;
+      let off = (view.queue_word() + dust::dust_queue_offsets(view.vqueue_records).spill + dust::DUST_SPILL_HEADER_WORDS) as u64 * 4;
+      (pyramid.buffer, off)
+    };
+    Ok(pod_vec(&self.dust_download_bytes(buffer, region_offset, dust::DUST_WR_REGION_HEADER as u64 * 4)?))
   }
 
   /// The specks the last frame's walk passes recorded (`(hash, dp)` in local metres from the eye;
@@ -3645,6 +4358,44 @@ impl Device {
     Ok((dust::dust_queue_held(&w), w[3]))
   }
 
+  /// `pe`'s last frame's refused candidates (whole clusters the candidate buffer refused: not
+  /// drawn) and its densest chunk (candidates a cluster); diagnostics, waits for the GPU
+  pub fn dust_candidates_refused(&self, pe: gpu::PresentationEngineHandle) -> GpuResult<(u32, u32)> {
+    let (buffer, base) = {
+      let res = self.res.read();
+      let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
+      let view = mgr.views.get(&pe).ok_or(gpu_err!("dust view of PE {} absent", pe.0))?;
+      let pyramid = view.queue_pyramid()?;
+      let offsets = dust::dust_queue_offsets(view.vqueue_records);
+      (pyramid.buffer, (view.queue_word() + offsets.lqueue) as u64 * 4)
+    };
+    let w: alloc::vec::Vec<u32> =
+      pod_vec(&self.dust_download_bytes(buffer, base, dust::DUST_VQUEUE_HEADER_WORDS as u64 * 4)?);
+    Ok((w[dust::DUST_LQUEUE_FRAME_REFUSED], w[dust::DUST_LQUEUE_FRAME_CPC_MAX]))
+  }
+
+  /// `pe`'s last frame's leaf queue (the splitter family, perf9 steps Z / O; diagnostics, waits
+  /// for the GPU): the leaves the sequencer queued, the large ones listed for the workgroup blob,
+  /// the ones the queue refused (sent to the leaf spill), the ones the spill refused too (lost)
+  pub fn dust_leaf_counts(&self, pe: gpu::PresentationEngineHandle) -> GpuResult<(u32, u32, u32, u32)> {
+    let (buffer, base) = {
+      let res = self.res.read();
+      let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
+      let view = mgr.views.get(&pe).ok_or(gpu_err!("dust view of PE {} absent", pe.0))?;
+      let pyramid = view.queue_pyramid()?;
+      let offsets = dust::dust_queue_offsets(view.vqueue_records);
+      (pyramid.buffer, (view.queue_word() + offsets.lqueue) as u64 * 4)
+    };
+    let w: alloc::vec::Vec<u32> =
+      pod_vec(&self.dust_download_bytes(buffer, base, dust::DUST_VQUEUE_HEADER_WORDS as u64 * 4)?);
+    Ok((
+      w[dust::DUST_LQUEUE_FRAME_LEAVES],
+      w[dust::DUST_LQUEUE_FRAME_LARGE],
+      w[dust::DUST_LQUEUE_FRAME_SPILLED],
+      w[dust::DUST_LQUEUE_LOST],
+    ))
+  }
+
   /// The volume packet queue's records per chunk for a new view, from the device-local memory
   /// (the chunking makes the capacity a speed knob only: a smaller queue means more chunks, the
   /// same image): [`dust::DUST_VQUEUE_CAPACITY`] (32 MiB) from 4 GiB of device-local memory,
@@ -3668,12 +4419,19 @@ impl Device {
       .map(|h| h.size)
       .sum();
     const GIB: u64 = 1 << 30;
-    if device_local >= 4 * GIB {
+    let records = if device_local >= 4 * GIB {
       dust::DUST_VQUEUE_CAPACITY
     } else if device_local >= 2 * GIB {
       dust::DUST_VQUEUE_CAPACITY / 4
     } else {
       dust::DUST_VQUEUE_CAPACITY / 16
+    };
+    // (perf9_O C2 v5) the staged consumer's scratch rows (`DUST_VW_SX_WORDS` words each, for the
+    // main and the spill drains): at most a sixteenth of the queue (at full capacity 1.03 GB)
+    if self.kernels.pipelines.dust_draw_volume_stages.is_some() {
+      records.min(dust::DUST_VQUEUE_CAPACITY / 16)
+    } else {
+      records
     }
   }
 
@@ -3686,6 +4444,149 @@ impl Device {
     if let Some(view) = res.dust_manager.as_ref().and_then(|m| m.views.get(&pe)) {
       view.host.lock().vqueue_mode = mode;
     }
+  }
+
+  /// perf9_K: the draw family's vendor rule. The staged family (perf9_O: the workgroup-per-record
+  /// volume consumer, the texel-lane queue draw, the grouped edge pass; the zero-spill design) on
+  /// Qualcomm (0x5143) and ARM (0x13B5), the mono family (the pre-perf9_O blobs, `*_mono.comp`:
+  /// ~14x faster on the GTX 1070) on NVIDIA (0x10DE) and the others. `AETHERVK_DUST_DRAW_STAGED=1`
+  /// / `0` overrides it.
+  pub fn dust_draw_staged_wanted(vendor_id: u32) -> bool {
+    match aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_DRAW_STAGED").as_deref().map(str::trim) {
+      Some("1") => true,
+      Some("0") => false,
+      _ => matches!(vendor_id, 0x5143 | 0x13B5),
+    }
+  }
+
+  /// perf9_K: whether this device's frames draw with the staged family (the test hook's choice,
+  /// else [`Self::dust_draw_staged_wanted`], resolved once and logged)
+  pub fn dust_draw_staged(&self) -> bool {
+    use core::sync::atomic::Ordering;
+    let mode = &self.kernels.pipelines.dust_draw_mode;
+    match mode.load(Ordering::Relaxed) {
+      1 | 3 => false,
+      2 | 4 => true,
+      _ => {
+        let vendor = self.query_result.physical_device_properties.vendor_id;
+        let staged = Self::dust_draw_staged_wanted(vendor);
+        let _ = mode.compare_exchange(0, if staged { 4 } else { 3 }, Ordering::Relaxed, Ordering::Relaxed);
+        aethervk_oshal_rlib::log!(
+          "[dust] draw family: {} (vendor {vendor:#X}, AETHERVK_DUST_DRAW_STAGED={:?})",
+          if staged { "staged (perf9_O)" } else { "mono (pre-perf9_O)" },
+          aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_DRAW_STAGED")
+        );
+        staged
+      }
+    }
+  }
+
+  /// perf9_K test hook: `Some(true)` / `Some(false)` draws with the staged / mono family from the
+  /// next recorded frame on (every view of the device), `None` returns to the vendor rule
+  pub fn dust_set_draw_staged(&self, staged: Option<bool>) {
+    let m = match staged {
+      Some(false) => 1,
+      Some(true) => 2,
+      None => 0,
+    };
+    self.kernels.pipelines.dust_draw_mode.store(m, core::sync::atomic::Ordering::Relaxed);
+  }
+
+  /// perf9_K (K4): the propagate / emit family's vendor rule. The perf9_O package (the propagate's
+  /// lanes-per-cluster solve over the rows buffer and its moments stage, the emission's record-stash
+  /// solve; the staged passes where `AETHERVK_DUST_STAGED` picks them) on Qualcomm (0x5143) and ARM
+  /// (0x13B5), the pre-package monoliths (`dust_propagate_mono.comp`, `dust_emit_mono.comp`: the
+  /// GTX 1070's propagate 12.7 ms against 22.4 ms with the package) on NVIDIA (0x10DE) and the
+  /// others. `AETHERVK_DUST_PROP_STAGED=1` / `0` overrides it.
+  pub fn dust_prop_staged_wanted(vendor_id: u32) -> bool {
+    match aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_PROP_STAGED").as_deref().map(str::trim) {
+      Some("1") => true,
+      Some("0") => false,
+      _ => matches!(vendor_id, 0x5143 | 0x13B5),
+    }
+  }
+
+  /// perf9_K (K4): whether this device propagates and emits with the perf9_O package (the test
+  /// hook's choice, else [`Self::dust_prop_staged_wanted`], resolved once and logged); always the
+  /// package where the mono pipelines are not built
+  pub fn dust_prop_staged(&self) -> bool {
+    use core::sync::atomic::Ordering;
+    let p = &self.kernels.pipelines;
+    let built = p.dust_propagate_mono.is_some() && p.dust_emit_mono.is_some();
+    let mode = &p.dust_prop_mode;
+    match mode.load(Ordering::Relaxed) {
+      1 | 3 => !built,
+      2 | 4 => true,
+      _ => {
+        let vendor = self.query_result.physical_device_properties.vendor_id;
+        let staged = !built || Self::dust_prop_staged_wanted(vendor);
+        let _ = mode.compare_exchange(0, if staged { 4 } else { 3 }, Ordering::Relaxed, Ordering::Relaxed);
+        aethervk_oshal_rlib::log!(
+          "[dust] propagate/emit family: {} (vendor {vendor:#X}, AETHERVK_DUST_PROP_STAGED={:?}, mono built {built})",
+          if staged { "staged (perf9_O package)" } else { "mono (pre-package monoliths)" },
+          aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_PROP_STAGED")
+        );
+        staged
+      }
+    }
+  }
+
+  /// perf9_K (K4) test hook: `Some(true)` / `Some(false)` propagates and emits with the package /
+  /// the mono pipelines (where built) from the next recorded command on, `None` returns to the
+  /// vendor rule
+  pub fn dust_set_prop_staged(&self, staged: Option<bool>) {
+    let m = match staged {
+      Some(false) => 1,
+      Some(true) => 2,
+      None => 0,
+    };
+    self.kernels.pipelines.dust_prop_mode.store(m, core::sync::atomic::Ordering::Relaxed);
+  }
+
+  /// perf9_K: the split family's vendor rule. The staged leaf path (perf9 steps Z / O: prep, walk,
+  /// project passes 1-3, sequencer, leaf consumers; the zero-spill design) on Qualcomm (0x5143) and
+  /// ARM (0x13B5), the pre-split splitter (`dust_split_mono.comp`, one dispatch per chunk: the 1 km
+  /// still ~0.3 s against several seconds with the family on the GTX 1070, byte gate perf9b_split2)
+  /// on NVIDIA (0x10DE) and the others. `AETHERVK_DUST_SPLIT_STAGED=1` / `0` overrides it.
+  pub fn dust_split_staged_wanted(vendor_id: u32) -> bool {
+    match aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_SPLIT_STAGED").as_deref().map(str::trim) {
+      Some("1") => true,
+      Some("0") => false,
+      _ => matches!(vendor_id, 0x5143 | 0x13B5),
+    }
+  }
+
+  /// perf9_K: whether this device's frames split with the staged family (the test hook's choice,
+  /// else [`Self::dust_split_staged_wanted`], resolved once and logged)
+  pub fn dust_split_staged(&self) -> bool {
+    use core::sync::atomic::Ordering;
+    let mode = &self.kernels.pipelines.dust_split_mode;
+    match mode.load(Ordering::Relaxed) {
+      1 | 3 => false,
+      2 | 4 => true,
+      _ => {
+        let vendor = self.query_result.physical_device_properties.vendor_id;
+        let staged = Self::dust_split_staged_wanted(vendor);
+        let _ = mode.compare_exchange(0, if staged { 4 } else { 3 }, Ordering::Relaxed, Ordering::Relaxed);
+        aethervk_oshal_rlib::log!(
+          "[dust] split family: {} (vendor {vendor:#X}, AETHERVK_DUST_SPLIT_STAGED={:?})",
+          if staged { "staged (perf9 Z/O leaf queue)" } else { "mono (pre-split splitter)" },
+          aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_SPLIT_STAGED")
+        );
+        staged
+      }
+    }
+  }
+
+  /// perf9_K test hook: `Some(true)` / `Some(false)` splits with the staged / mono family from the
+  /// next recorded frame on (every view of the device), `None` returns to the vendor rule
+  pub fn dust_set_split_staged(&self, staged: Option<bool>) {
+    let m = match staged {
+      Some(false) => 1,
+      Some(true) => 2,
+      None => 0,
+    };
+    self.kernels.pipelines.dust_split_mode.store(m, core::sync::atomic::Ordering::Relaxed);
   }
 
   /// Runs `pe`'s volume consumer with the plain blob instead of the `.sg` one from the next
@@ -4317,7 +5218,13 @@ impl Device {
       }
       e.1
     };
-    if live_count > 0 && !skipped {
+    // (perf9_K) the propagate family (`dust_prop_staged`): `Some` the pre-package monolith (the
+    // GTX 1070 default), `None` the package below
+    let prop_mono = if self.dust_prop_staged() { None } else { self.kernels.pipelines.dust_propagate_mono };
+    if let (Some(mono), true) = (prop_mono, live_count > 0 && !skipped) {
+      // perf9_K: the pre-package dispatch (`dust_propagate_mono.comp`): a thread per live slot, one
+      // dispatch, no rows buffer, no moments stage; push word 8 is the ring mask (the package's
+      // `rows_lo`), skip.x only the flag and the stride bits
       let pc = DustPropagatePushConstants {
         clusters: clusters.address + ring_base as u64 * core::mem::size_of::<DustCluster>() as u64,
         render: render.address + render_offset,
@@ -4328,7 +5235,7 @@ impl Device {
         },
         first_slot,
         live_count,
-        ring_mask: mask,
+        rows_lo: mask,
         generation,
         skip: [
           (prop_mask != 0 || sys.propagate_skip.load(core::sync::atomic::Ordering::Relaxed)) as u32
@@ -4341,10 +5248,9 @@ impl Device {
           ..*frame
         },
       };
-      let pipeline = self.kernels.pipelines.dust_propagate;
-      self.kernels.pipelines.assert_pc_size(pipeline, core::mem::size_of_val(&pc));
+      self.kernels.pipelines.assert_pc_size(mono, core::mem::size_of_val(&pc));
       unsafe {
-        self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
+        self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, mono);
         self.device.cmd_push_constants(
           cmd,
           self.kernels.pipelines.pipeline_layout,
@@ -4353,6 +5259,91 @@ impl Device {
           bytemuck::bytes_of(&pc),
         );
         self.device.cmd_dispatch(cmd, live_count.div_ceil(DUST_WG), 1, 1);
+      }
+    } else if live_count > 0 && !skipped {
+      // round 9 step O: 3 clusters per workgroup, each lane's df64 solve state in its row of the
+      // rows buffer (one chunk of `DUST_PROP_CHUNK_WGS` workgroups at a time): per chunk the solve
+      // stage (the monolith, or the staged passes 1, (2, 3) × iters, 6, 4, 5m, 5s where the
+      // monolith does not compile), a barrier, the moments stage over the same groups, a barrier
+      // before the next chunk reuses the rows. The shader maps a chunk's offset `i` to the slot
+      // `(firstSlot + i) & mask`, so the chunk's `first_slot` advances by its clusters.
+      let rows = sys.rows.as_ref().ok_or(gpu_err!("dust system {} has no rows buffer", id))?;
+      if rows.address >> dust::DUST_PROP_ROWS_ADDR_BITS != 0 {
+        return Err(gpu_err!("dust rows buffer address {:#x} beyond 56 bits", rows.address));
+      }
+      let rows_hi = ((rows.address >> 32) as u32) & 0x00FF_FFFF;
+      let log2cap = capacity.trailing_zeros();
+      let skip0 = (prop_mask != 0 || sys.propagate_skip.load(core::sync::atomic::Ordering::Relaxed)) as u32
+        | dust::propagate_stride_bits(stride)
+        | (log2cap << 3)
+        | (rows_hi << 8);
+      let per_chunk = dust::DUST_PROP_CHUNK_WGS * dust::DUST_PROP_CLUSTERS;
+      let chunks = live_count.div_ceil(per_chunk);
+      let pipelines = &self.kernels.pipelines;
+      let moments_stage = pipelines.dust_propagate_moments;
+      pipelines.assert_pc_size(pipelines.dust_propagate, core::mem::size_of::<DustPropagatePushConstants>());
+      pipelines.assert_pc_size(moments_stage, core::mem::size_of::<DustPropagatePushConstants>());
+      for c in 0..chunks {
+        let live_c = (live_count - c * per_chunk).min(per_chunk);
+        let groups = live_c.div_ceil(dust::DUST_PROP_CLUSTERS);
+        let x = groups.min(DUST_DISPATCH_MAX_X);
+        let y = groups.div_ceil(x);
+        let pc = DustPropagatePushConstants {
+          clusters: clusters.address + ring_base as u64 * core::mem::size_of::<DustCluster>() as u64,
+          render: render.address + render_offset,
+          moments: if skip_moments {
+            0
+          } else {
+            moments.address + moments_offset
+          },
+          first_slot: first_slot.wrapping_add(c * per_chunk),
+          live_count: live_c,
+          rows_lo: rows.address as u32,
+          generation,
+          skip: [skip0, prop_mask as u32],
+          // `spin.w` (unused by the shader) carries the bitmask address's high word
+          frame: DustFrame {
+            spin: [frame.spin[0], frame.spin[1], frame.spin[2], f32::from_bits((prop_mask >> 32) as u32)],
+            ..*frame
+          },
+        };
+        let run = |p: vk::Pipeline| unsafe {
+          self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, p);
+          self.device.cmd_push_constants(
+            cmd,
+            pipelines.pipeline_layout,
+            vk::ShaderStageFlags::COMPUTE,
+            0,
+            bytemuck::bytes_of(&pc),
+          );
+          self.device.cmd_dispatch(cmd, x, y, 1);
+        };
+        match pipelines.dust_propagate_passes {
+          Some(passes) => {
+            // 1, (2, 3) × DUST_KEPLER_ITERS_DF, 6, 4, 5m, 5s: a barrier between passes (the two
+            // pass-5 blobs touch disjoint lanes and words: none between them)
+            run(passes[0]);
+            for _ in 0..dust::DUST_KEPLER_ITERS_DF {
+              self.cmd_dust_pre_splat_barrier(cmd);
+              run(passes[1]);
+              self.cmd_dust_pre_splat_barrier(cmd);
+              run(passes[2]);
+            }
+            self.cmd_dust_pre_splat_barrier(cmd);
+            run(passes[3]);
+            self.cmd_dust_pre_splat_barrier(cmd);
+            run(passes[4]);
+            self.cmd_dust_pre_splat_barrier(cmd);
+            run(passes[5]);
+            run(passes[6]);
+          }
+          None => run(pipelines.dust_propagate),
+        }
+        self.cmd_dust_pre_splat_barrier(cmd);
+        run(moments_stage);
+        if c + 1 < chunks {
+          self.cmd_dust_pre_splat_barrier(cmd);
+        }
       }
     }
     Ok((

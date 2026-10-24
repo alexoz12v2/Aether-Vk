@@ -184,6 +184,10 @@ fn with_dust_device(id: u64, f: impl FnOnce(&Device, u32, vk::Buffer, vk::Buffer
 #[test]
 fn gpu_dust_emit_matches_reference() {
   with_dust_device(9001, |device, capacity, clusters, _| {
+    // (perf9_K) in both propagate / emit families: the pre-package monoliths, then the package
+    for prop in [false, true] {
+    device.dust_set_prop_staged(Some(prop));
+    std::println!("[dust prop family] staged {prop}");
     // starts 100 slots before the ring end: exercises the wrap-around
     let single = test_batch(512, 1800.0, capacity - 100, capacity);
     // 64 streams on a site going in and out of daylight, after a missing window: stream breaks;
@@ -293,12 +297,18 @@ fn gpu_dust_emit_matches_reference() {
         dust::emit_cluster(&batch, 0).t0().to_f64()
       );
     }
+    }
+    device.dust_set_prop_staged(None);
   });
 }
 
 #[test]
 fn gpu_dust_propagate_matches_reference() {
   with_dust_device(9002, |device, capacity, _, render| {
+    // (perf9_K) in both propagate / emit families: the pre-package monoliths, then the package
+    for prop in [false, true] {
+    device.dust_set_prop_staged(Some(prop));
+    std::println!("[dust prop family] staged {prop}");
     let batch = test_batch(1024, 3600.0, 7, capacity);
     emit(device, 9002, &batch);
     let frame = frame_after(10.0);
@@ -356,6 +366,8 @@ fn gpu_dust_propagate_matches_reference() {
       );
     }
     std::println!("[dust gpu] propagate parity: worst |Δpos| = {worst:.3} m");
+    }
+    device.dust_set_prop_staged(None);
   });
 }
 
@@ -365,6 +377,10 @@ fn gpu_dust_df64_keeps_zero_beta_cluster_on_comet() {
   // 5.5 AU (8e11 m) is pure round-off of the GPU df64 path: f32 would give ~1e5 m, df64 < 1 m.
   // Fails if the driver contracts the error-free transformations into FMAs.
   with_dust_device(9003, |device, capacity, _, render| {
+    // (perf9_K) in both propagate / emit families: the pre-package monoliths, then the package
+    for prop in [false, true] {
+    device.dust_set_prop_staged(Some(prop));
+    std::println!("[dust prop family] staged {prop}");
     let mut batch = test_batch(64, 600.0, 0, capacity);
     batch.vel_params[0] = 0.0; // no ejection
     batch.vel_params[3] = 0.0; // β = 0
@@ -389,6 +405,8 @@ fn gpu_dust_df64_keeps_zero_beta_cluster_on_comet() {
         "{days} d: β=0 cluster drifted {worst} m from the comet (df64 broken?)"
       );
     }
+    }
+    device.dust_set_prop_staged(None);
   });
 }
 
@@ -406,6 +424,10 @@ fn gpu_dust_emit_lit_time_matches_reference() {
   let n0 = unit([1.0, -0.3, 0.1]);
   let dur = 2.5 * P_ROT;
   with_dust_device(9004, |device, capacity, clusters, _| {
+    // (perf9_K) in both propagate / emit families: the pre-package monoliths, then the package
+    for prop in [false, true] {
+    device.dust_set_prop_staged(Some(prop));
+    std::println!("[dust prop family] staged {prop}");
     let (rc, vc) = comet_state();
     let sun = unit([-rc[0], -rc[1], -rc[2]]);
     let mut batch = test_batch(2048, dur, 0, capacity);
@@ -464,6 +486,8 @@ fn gpu_dust_emit_lit_time_matches_reference() {
       boundary_outliers <= batch.count / 200,
       "{boundary_outliers} clusters off the reference lit arc"
     );
+    }
+    device.dust_set_prop_staged(None);
   });
 }
 
@@ -1128,6 +1152,10 @@ fn moments_buffer(device: &Device, id: u64) -> vk::Buffer {
 #[test]
 fn gpu_dust_moments_match_reference() {
   with_dust_device(9007, |device, capacity, _, _| {
+    // (perf9_K) in both propagate / emit families: the pre-package monoliths, then the package
+    for prop in [false, true] {
+    device.dust_set_prop_staged(Some(prop));
+    std::println!("[dust prop family] staged {prop}");
     let batch = test_batch(512, 3600.0, 7, capacity);
     emit(device, 9007, &batch);
     let moments = moments_buffer(device, 9007);
@@ -1267,6 +1295,8 @@ fn gpu_dust_moments_match_reference() {
     }
     }
     assert_eq!(device.dust_set_propagate_detail(dust::DUST_PROPAGATE_DETAIL_DEFAULT), 17);
+    }
+    device.dust_set_prop_staged(None);
   });
 }
 
@@ -1282,11 +1312,17 @@ fn gpu_dust_moments_match_reference() {
 #[test]
 fn gpu_dust_propagate_stamp_skips_at_the_same_time() {
   with_dust_device(9040, |device, capacity, _, _| {
+    // (perf9_K) in both propagate / emit families: the pre-package monoliths, then the package
+    for prop in [false, true] {
+    device.dust_set_prop_staged(Some(prop));
+    std::println!("[dust prop family] staged {prop}");
     for detail in [17u32, 9, 5] {
       assert_eq!(device.dust_set_propagate_detail(detail), detail);
       stamp_skips_at_the_same_time(device, capacity, detail);
     }
     device.dust_set_propagate_detail(dust::DUST_PROPAGATE_DETAIL_DEFAULT);
+    }
+    device.dust_set_prop_staged(None);
   });
 }
 
@@ -1377,6 +1413,9 @@ fn stamp_skips_at_the_same_time(device: &Device, capacity: u32, detail: u32) {
 /// ±`half` m around the anchor (or through `camera`: an mvp and the eye in local metres, for
 /// the perspective case of the split), against the CPU splat of the GPU's own moments.
 #[allow(clippy::too_many_arguments)]
+/// perf9_K: every splat parity case on both paths, the monolithic enumerator first, then the
+/// stage chain (`Device::dust_set_splat_staged`; a device without the monolith runs the chain only)
+#[allow(clippy::too_many_arguments)]
 fn splat_parity(
   id: u64,
   batch_of: &dyn Fn(u32) -> DustBatch,
@@ -1390,7 +1429,41 @@ fn splat_parity(
   legacy: bool,
   lod: Option<f32>,
 ) {
+  for staged in [false, true] {
+    // (perf9_K) and both split families: the pre-split splitter, then the staged leaf path
+    for split in [false, true] {
+      splat_parity_in(staged, split, id, batch_of, frame, half, exposure, expect_spiral, albedo, camera, shell, legacy, lod);
+    }
+  }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn splat_parity_in(
+  staged: bool,
+  split: bool,
+  id: u64,
+  batch_of: &dyn Fn(u32) -> DustBatch,
+  frame: DustFrame,
+  half: f32,
+  exposure: f32,
+  expect_spiral: bool,
+  albedo: f32,
+  camera: Option<([f32; 16], [f32; 3])>,
+  shell: Option<f32>,
+  legacy: bool,
+  lod: Option<f32>,
+) {
   with_dust_device(id, |device, capacity, _, _| {
+    // perf9_K: the splat path of this run
+    device.dust_set_splat_staged(staged);
+    if device.dust_splat_staged() != staged {
+      std::println!("[dust gpu] splat parity case {id}: the monolith is not built on this device, mono run skipped");
+      return;
+    }
+    std::println!("[dust gpu] splat parity case {id}: path {}", if staged { "chain" } else { "mono" });
+    // perf9_K: the split family of this run
+    device.dust_set_split_staged(Some(split));
+    std::println!("[dust gpu] splat parity case {id}: split family {}", if split { "staged" } else { "mono" });
     let batch = batch_of(capacity);
     emit(device, id, &batch);
     let first_slot = batch.first_index & batch.ring_mask;
@@ -1467,6 +1540,18 @@ fn splat_parity(
     assert_eq!(layout, dust::PyramidLayout::new(w, h));
     // every volumetric record the GPU emitted was drawn (the CPU draws them all; a record the
     // volume spill refused would be a mismatch that is not the drawing's)
+    // the splitter family (perf9 steps Z / O): every candidate run granted (a refused one loses its
+    // cluster's leaves, volumetric ones included), no leaf lost
+    {
+      let leaves = device.dust_leaf_counts(pe).unwrap();
+      let (refused, densest) = device.dust_candidates_refused(pe).unwrap();
+      let chunks = device.dust_vqueue_counts(pe).unwrap().2;
+      std::println!(
+        "[dust gpu] leaves (queued, large, spilled, lost) {leaves:?}, candidates refused {refused} (densest chunk {densest} a cluster), {chunks} chunks"
+      );
+      assert_eq!(refused, 0, "the candidate buffer refused {refused} candidates (densest chunk {densest} a cluster, {chunks} chunks)");
+      assert_eq!(leaves.3, 0, "leaves lost: {leaves:?}");
+    }
     let (_, lost) = device.dust_vqueue_spill_counts(pe).unwrap();
     assert_eq!(lost, 0, "case {id}: the volume spill lost {lost} records");
     // a fixed volume bias must have reached the header the GPU drew with, before anything else
@@ -2344,6 +2429,10 @@ fn gpu_dust_haze_detail_trades_subpackets_on_the_top_level() {
     let batch = test_batch(1024, 2.0 * 86400.0, 3, capacity);
     emit(device, id, &batch);
     let first_slot = batch.first_index & batch.ring_mask;
+    // (perf9_K) in both draw families: mono (the pre-perf9_O blobs), then staged
+    for staged in [false, true] {
+    device.dust_set_draw_staged(Some(staged));
+    std::println!("[dust draw family] staged {staged}");
     let pe = crate::gpu::PresentationEngineHandle(u64::MAX - 63);
     let (w, h) = (640u32, 400u32);
     let flow = dust::DustFlowUniform {
@@ -2468,6 +2557,8 @@ fn gpu_dust_haze_detail_trades_subpackets_on_the_top_level() {
     device.dust_set_volume_bias(pe, None);
     std::println!("[dust haze detail] worst top-texel move: detail 4 {:.3e}, detail 1 {:.3e}", worst_rel[0], worst_rel[1]);
     assert!(fewer_somewhere, "no view drew fewer sub-packet records at the top level: the knob was never exercised");
+    }
+    device.dust_set_draw_staged(None);
   });
 }
 
@@ -2958,6 +3049,15 @@ fn gpu_dust_queue_draws_the_same_pyramid() {
     let batch = test_batch(1024, 3600.0, 3, capacity);
     emit(device, id, &batch);
     let first_slot = batch.first_index & batch.ring_mask;
+    // (perf9_K) in both draw families: mono (the pre-perf9_O blobs), then staged
+    for staged in [false, true] {
+    device.dust_set_draw_staged(Some(staged));
+    std::println!("[dust draw family] staged {staged}");
+    // (perf9_K) in both split families: mono (the pre-split splitter: the EWA queue fed), then staged
+    // (the leaf queue)
+    for split in [false, true] {
+    device.dust_set_split_staged(Some(split));
+    std::println!("[dust split family] staged {split}");
     let pe = crate::gpu::PresentationEngineHandle(u64::MAX - 34);
     let (w, h) = (640u32, 400u32);
     let flow = dust::DustFlowUniform {
@@ -3029,45 +3129,103 @@ fn gpu_dust_queue_draws_the_same_pyramid() {
       }
       let (default, _) = run(inv_unit);
       let default_counts = device.dust_queue_counts(pe).unwrap();
+      let default_leaf = device.dust_leaf_counts(pe).unwrap();
       device.dust_set_queue_mode(pe, Some(dust::DUST_FRAME_QUEUE_OFF));
       let (off, _) = run(inv_unit);
       let off_counts = device.dust_queue_counts(pe).unwrap();
+      let off_leaf = device.dust_leaf_counts(pe).unwrap();
       device.dust_set_queue_mode(pe, Some(dust::DUST_FRAME_QUEUE_ALL));
       let (all, _) = run(inv_unit);
       let all_counts = device.dust_queue_counts(pe).unwrap();
+      let all_leaf = device.dust_leaf_counts(pe).unwrap();
       device.dust_set_queue_capacity(pe, 5);
       let (overflow, _) = run(inv_unit);
       let overflow_counts = device.dust_queue_counts(pe).unwrap();
+      let overflow_leaf = device.dust_leaf_counts(pe).unwrap();
+      let overflow_chunks = device.dust_vqueue_counts(pe).unwrap().2;
       device.dust_set_queue_mode(pe, None);
       device.dust_set_queue_capacity(pe, 0);
       // and with the level of detail off (the frames above draw at the default knob): the queue
       // is as order-free at full detail
       device.dust_set_lod_px(pe, Some(0.0));
+      // (the chunk feedback settles at the new demand: readbacks are DUST_READBACK_SLOTS frames late)
+      for _ in 0..(super::dust::DUST_READBACK_SLOTS + 1) {
+        run(inv_unit);
+      }
       let (default_lod0, _) = run(inv_unit);
+      let refused_default_lod0 = device.dust_candidates_refused(pe).unwrap();
+      let leaves_default_lod0 = device.dust_leaf_counts(pe).unwrap();
       device.dust_set_queue_mode(pe, Some(dust::DUST_FRAME_QUEUE_OFF));
       let (off_lod0, _) = run(inv_unit);
+      let refused_off_lod0 = device.dust_candidates_refused(pe).unwrap();
+      let leaves_off_lod0 = device.dust_leaf_counts(pe).unwrap();
       device.dust_set_queue_mode(pe, None);
       device.dust_set_lod_px(pe, None);
+      std::println!(
+        "[dust queue] {name} lod 0: leaves (queued, large, spilled, lost) default {leaves_default_lod0:?} off {leaves_off_lod0:?}, candidates (refused, densest) default {refused_default_lod0:?} off {refused_off_lod0:?}"
+      );
+      assert_eq!((refused_default_lod0.0, refused_off_lod0.0), (0, 0), "{name}: candidates refused at lod 0");
+      assert_eq!((leaves_default_lod0.3, leaves_off_lod0.3), (0, 0), "{name}: leaves lost at lod 0");
       assert!(default_lod0.iter().any(|&v| v != 0), "{name}: the frame at lod 0 drew nothing");
+      {
+        let tw = dust::PYRAMID_TEXEL_WORDS as usize;
+        let differ: Vec<usize> = (0..default_lod0.len().min(off_lod0.len())).filter(|&i| default_lod0[i] != off_lod0[i]).collect();
+        if let Some(&i) = differ.first() {
+          std::println!(
+            "[dust queue] {name} lod 0: {} words differ, the first at {i} (texel {} word {}): default {} off {}",
+            differ.len(), i / tw, i % tw, default_lod0[i], off_lod0[i]
+          );
+        }
+      }
       assert!(default_lod0 == off_lod0, "{name}: the queue changed the pyramid at lod 0");
       std::println!(
         "[dust queue] {name}: queue records (drawn, appended): default {default_counts:?}, off {off_counts:?}, all {all_counts:?}, capacity 5 {overflow_counts:?}"
       );
       assert!(off.iter().any(|&v| v != 0), "{name}: the frame drew nothing");
       assert_eq!(off_counts.1, 0, "{name}: the queue was used while off");
-      // the perspective view inside the cloud draws volumetric packets only (never queued)
-      if name == "orthographic" {
-        assert!(all_counts.0 > 0, "{name}: nothing was queued with every packet queued");
-      }
-      if all_counts.1 > 5 {
-        assert_eq!(overflow_counts.0, 5, "{name}: the capped queue did not fill");
-        assert!(overflow_counts.1 > 5, "{name}: the capped queue did not overflow");
+      // the splitter family (perf9 steps Z / O, Z DESIGN §5): the EWA queue is unfed, the leaf
+      // queue routes the leaves (large: the workgroup blob's list; DUST_FRAME_QUEUE_OFF none,
+      // _ALL every one)
+      std::println!(
+        "[dust queue] {name}: leaves (queued, large, spilled, lost): default {default_leaf:?}, off {off_leaf:?}, all {all_leaf:?}, capacity 5 {overflow_leaf:?} over {overflow_chunks} chunks"
+      );
+      if split {
+        assert_eq!(off_leaf.1, 0, "{name}: large leaves were listed with the queue off");
+        for (what, c) in [("default", default_leaf), ("off", off_leaf), ("all", all_leaf), ("capacity 5", overflow_leaf)] {
+          assert_eq!(c.3, 0, "{name}: {what}: leaves lost");
+        }
+        // the perspective view inside the cloud draws volumetric packets only (no leaves)
+        if name == "orthographic" {
+          assert!(all_leaf.0 > 0 && all_leaf.1 == all_leaf.0, "{name}: not every leaf was listed with every leaf queued");
+        }
+        // a chunk of n leaves spills n − 5 of them
+        if overflow_leaf.0 > 5 * overflow_chunks {
+          assert!(overflow_leaf.2 >= overflow_leaf.0 - 5 * overflow_chunks, "{name}: the capped leaf queue did not spill");
+        }
+      } else {
+        // (perf9_K) the pre-split splitter: the EWA queue routes the large leaves, the leaf queue
+        // stays unfed; the perspective view inside the cloud draws volumetric packets only (never
+        // queued)
+        for (what, c) in [("default", default_leaf), ("off", off_leaf), ("all", all_leaf), ("capacity 5", overflow_leaf)] {
+          assert_eq!(c, (0, 0, 0, 0), "{name}: {what}: the leaf queue was fed by the pre-split splitter");
+        }
+        if name == "orthographic" {
+          assert!(all_counts.0 > 0, "{name}: nothing was queued with every packet queued");
+        }
+        if all_counts.1 > 5 {
+          assert_eq!(overflow_counts.0, 5, "{name}: the capped queue did not fill");
+          assert!(overflow_counts.1 > 5, "{name}: the capped queue did not overflow");
+        }
       }
       let diff = |a: &[u32], b: &[u32]| a.iter().zip(b).filter(|(x, y)| x != y).count();
       assert_eq!(diff(&all, &off), 0, "{name}: every packet queued drew another pyramid than none queued");
       assert_eq!(diff(&default, &off), 0, "{name}: the default queue drew another pyramid than none queued");
       assert_eq!(diff(&overflow, &off), 0, "{name}: an overflowing queue drew another pyramid");
     }
+    }
+    device.dust_set_split_staged(None);
+    }
+    device.dust_set_draw_staged(None);
   });
 }
 
@@ -3088,6 +3246,10 @@ fn gpu_dust_volume_queue_draws_the_same_pyramid() {
     let batch = test_batch(1024, 3600.0, 3, capacity);
     emit(device, id, &batch);
     let first_slot = batch.first_index & batch.ring_mask;
+    // (perf9_K) in both draw families: mono (the pre-perf9_O blobs), then staged
+    for staged in [false, true] {
+    device.dust_set_draw_staged(Some(staged));
+    std::println!("[dust draw family] staged {staged}");
     let pe = crate::gpu::PresentationEngineHandle(u64::MAX - 37);
     let (w, h) = (640u32, 400u32);
     let flow = dust::DustFlowUniform {
@@ -3245,6 +3407,8 @@ fn gpu_dust_volume_queue_draws_the_same_pyramid() {
       assert!(srecords > 0 && soverflow == 0, "{name}: sub-packet records {srecords}, overflowed {soverflow}");
       assert_eq!(diff(&serial, &off), 0, "{name}: the splitter's counting pass and prefix differ from the serial order");
     }
+    }
+    device.dust_set_draw_staged(None);
   });
 }
 
@@ -3394,6 +3558,10 @@ fn gpu_dust_volume_detail_trades_pieces_on_the_top_level() {
     let batch = test_batch(1024, 2.0 * 86400.0, 3, capacity);
     emit(device, id, &batch);
     let first_slot = batch.first_index & batch.ring_mask;
+    // (perf9_K) in both draw families: mono (the pre-perf9_O blobs), then staged
+    for staged in [false, true] {
+    device.dust_set_draw_staged(Some(staged));
+    std::println!("[dust draw family] staged {staged}");
     let pe = crate::gpu::PresentationEngineHandle(u64::MAX - 59);
     let (w, h) = (640u32, 400u32);
     let flow = dust::DustFlowUniform {
@@ -3499,6 +3667,52 @@ fn gpu_dust_volume_detail_trades_pieces_on_the_top_level() {
               "[dust volume detail] lod {lod:?}, {days} d, {d} m, bias {bias}, detail {detail}: evaluations {} (16: {}), top texel {} (16: {}, {rel:.2e})",
               cut[ev], plain[ev], cut[top_off], plain[top_off]
             );
+            // (perf9_O fix2) where the top-level path and its reference differ
+            if cut[hw..] != cut_ref[hw..] {
+              let tw = dust::PYRAMID_TEXEL_WORDS as usize;
+              let nlen = cut.len().min(cut_ref.len());
+              // a word's level: the level whose texels hold it (offset, width, height from the table)
+              let level_of = |i: usize| -> Option<(u32, usize, usize, usize)> {
+                for l in 0..levels {
+                  let t = (dust::PYR_TABLE + 3 * l) as usize;
+                  let (off, lw, lh) = (cut[t] as usize, cut[t + 1] as usize, cut[t + 2] as usize);
+                  if i >= off && i < off + lw * lh * tw {
+                    let tex = (i - off) / tw;
+                    return Some((l, tex % lw.max(1), tex / lw.max(1), (i - off) % tw));
+                  }
+                }
+                None
+              };
+              let mut per_level = alloc::vec![0usize; levels as usize + 1];
+              let mut n = 0usize;
+              let mut shown = 0usize;
+              for i in hw..nlen {
+                if cut[i] == cut_ref[i] {
+                  continue;
+                }
+                n += 1;
+                let lv = level_of(i);
+                per_level[lv.map_or(levels as usize, |v| v.0 as usize)] += 1;
+                if shown < 8 {
+                  shown += 1;
+                  std::eprintln!(
+                    "[detail diff] word {i}: top {:#010x} ({}) ref {:#010x} ({}) at {}",
+                    cut[i], cut[i], cut_ref[i], cut_ref[i],
+                    match lv {
+                      Some((l, x, y, w)) => alloc::format!("level {l} texel ({x}, {y}) word {w}"),
+                      None => alloc::string::String::from("no level (measure grid / past the levels)"),
+                    }
+                  );
+                }
+              }
+              std::eprintln!(
+                "[detail diff] lod {lod:?}, {days} d, {d} m, bias {bias}, detail {detail}: {n} words differ past the header (lengths {} / {}), per level (last: no level) {per_level:?}, levels {levels}, top offset {top_off}",
+                cut.len(), cut_ref.len()
+              );
+              let hd: alloc::vec::Vec<(usize, u32, u32)> =
+                (0..hw).filter(|&i| cut[i] != cut_ref[i]).map(|i| (i, cut[i], cut_ref[i])).take(16).collect();
+              std::eprintln!("[detail diff] header words differing (index, top, ref): {hd:?}");
+            }
             assert!(cut[hw..] == cut_ref[hw..], "{days} d, {d} m, bias {bias}, detail {detail}: the top-level path and its reference differ");
             if bias == 15 {
               assert!(cut[ev] <= plain[ev], "{days} d, {d} m, detail {detail}: more evaluations");
@@ -3521,6 +3735,8 @@ fn gpu_dust_volume_detail_trades_pieces_on_the_top_level() {
     device.dust_set_lod_px(pe, None);
     device.dust_set_volume_bias(pe, None);
     assert!(cut_somewhere, "no view had a volumetric packet of several pieces on the top level: the cut was never exercised");
+    }
+    device.dust_set_draw_staged(None);
   });
 }
 

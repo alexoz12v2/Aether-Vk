@@ -1,0 +1,100 @@
+// @assets/sim/dust_draw_leaf.comp
+//
+// The leaf queues' consumer (round 9 step Z; dust_scatter.glsl DUST_LQUEUE_*): the EWA leaves the
+// sequencer stage (dust_split.comp -DDUST_SPLIT_SEQ) found on their bands. A leaf record is its
+// seed, its sub-packet record, its levels and its candidate slot, whose screen packet
+// (dust_project_leaf.comp's, widened and closed by the sequencer as the splitter's was) is drawn
+// as it is: the band's rows with dust_scatter_rows_pq — the rows, segments and carry seeds of
+// dust_scatter_rows, each segment in two passes over the lane's shared tau row
+// (dust_scatter_segment_pq: the texel arithmetic of dust_scatter_segment in its order) — so the
+// pyramid is the same word for word (the sums, the depth minimum and the level mask are
+// order-free). The plain blob is a lane per record of the chunk's small leaves (the large skipped;
+// over the leaf spill with DUST_VIEW_LEAF_SPILL in the flags); with -DDUST_LEAF_WG=1 a workgroup
+// per entry of the large leaves' index list (dust_scatter_rows_wg_pq). Dispatched indirectly after
+// every chunk's sequencer (Device::dust_splat_impl). The same push constants as the splat
+// (dust::DustSplatPushConstants). No CPU mirror: dust::scatter_into is the same drawing.
+#version 450 core
+#extension GL_GOOGLE_include_directive : require
+#ifdef DUST_PROFILE
+#extension GL_ARB_shader_clock : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#endif
+#ifdef DUST_LEAF_WG
+#define DUST_QUEUE_WORKGROUP 1
+// (perf9_O) 64-row chunks: the workgroup's shared words within 2048 B
+#define DUST_QUEUE_ROW_CHUNK_N 64u
+#endif
+#define DUST_DRAW_LEAF 1
+#include "dust_common.glsl"
+#include "dust_scatter.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PushConstants {
+    DustMomentsBuffer moments;  // 0
+    DustRenderBuffer  render;   // 8
+    DustUintBuffer    pyramid;  // 16: header + levels + measure grid + the queues
+    uint  liveCount;            // 24
+    uint  flags;                // 28
+    float exposure;             // 32
+    float invUnit;              // 36
+    uint  color;                // 40
+    float albedo;               // 44
+    mat4  mvp;                  // 48
+    vec4  eyeLocal;             // 112
+} pc;                           // 128 bytes
+
+void main() {
+    DUST_PROF_BEGIN(qthread)
+#ifdef DUST_LEAF_WG
+    // the large leaves' list: an entry per workgroup (bit 31 the spill, bits 0-30 the slot)
+    uint lb = dust_blist_base_o(uvec2(pc.pyramid));
+    // (the dispatch is 2-D past DUST_LQUEUE_DISPATCH_MAX_X entries: dust_lqueue_append)
+    uint g = gl_WorkGroupID.y * DUST_LQUEUE_DISPATCH_MAX_X + gl_WorkGroupID.x;
+    // (the chunk's large leaves into the leaf queue header's frame-wide word: the host's chunk feedback)
+    if (g == 0u && gl_LocalInvocationID.x == 0u) atomicAdd(pc.pyramid.v[dust_lqueue_base_o(uvec2(pc.pyramid)) + DUST_LQUEUE_FRAME_LARGE], pc.pyramid.v[lb + 3u]);
+    bool mine = g < dust_lqueue_held_o(uvec2(pc.pyramid), lb);
+    uint entry = mine ? pc.pyramid.v[lb + DUST_VQUEUE_HEADER_WORDS + g] : 0u;
+    uint lbase = dust_leaf_slot_base_o(uvec2(pc.pyramid), entry);
+    uint r = entry & ~DUST_LQUEUE_SPILL_BIT;
+#else
+    uint lbase = (pc.flags & DUST_VIEW_LEAF_SPILL) != 0u ? dust_lspill_base_o(uvec2(pc.pyramid)) : dust_lqueue_base_o(uvec2(pc.pyramid));
+    uint r = gl_GlobalInvocationID.x;
+    bool mine = r < dust_lqueue_held_o(uvec2(pc.pyramid), lbase);
+    // (the chunk's raw appends into the leaf queue header's frame-wide words: the host's chunk feedback)
+    if (r == 0u) atomicAdd(pc.pyramid.v[dust_lqueue_base_o(uvec2(pc.pyramid)) + ((pc.flags & DUST_VIEW_LEAF_SPILL) != 0u ? DUST_LQUEUE_FRAME_SPILLED : DUST_LQUEUE_FRAME_LEAVES)], pc.pyramid.v[lbase + 3u]);
+#endif
+    uint cap = dust_lqueue_capacity_o(uvec2(pc.pyramid), lbase);
+    uint seed = 0u, rec = 0u, level = 0u, levelValve = 0u, cslot = 0u;
+    if (mine) {
+        DUST_LQUEUE_GET(pc.pyramid, lbase, cap, r, seed, rec, level, levelValve, cslot)
+#ifdef DUST_LEAF_WG
+        level &= ~DUST_LQUEUE_SPILL_BIT;
+#else
+        // (a large leaf: the workgroup blob's)
+        mine = level < DUST_LQUEUE_SPILL_BIT;
+#endif
+    }
+    if (mine) {
+        dust_phot_lut_addr = uvec2(pc.pyramid);
+        uint pbase = dust_pqueue_base_o(uvec2(pc.pyramid));
+        uint pcap = dust_cqueue_capacity_o(uvec2(pc.pyramid), dust_cqueue_base_o(uvec2(pc.pyramid)));
+        uint off = pc.pyramid.v[DUST_PYR_TABLE + 3u * level];
+        uint w = pc.pyramid.v[DUST_PYR_TABLE + 3u * level + 1u];
+        uint h = pc.pyramid.v[DUST_PYR_TABLE + 3u * level + 2u];
+        float s = float(1u << level);
+#ifdef DUST_LEAF_WG
+        // (perf9_O) the level into the slot's walk word 39 (the walk's s and the flag's bit read it)
+        if (gl_LocalInvocationID.x == 0u) pc.pyramid.v[pbase + cslot * DUST_PQUEUE_RECORD_WORDS + 39u] = level;
+        bool any_ = dust_scatter_rows_wg_pq(uvec2(pc.pyramid), pc.invUnit, pbase, pcap, cslot, rec, s, off, w, h, seed, 0, int(h) - 1, 64u, gl_LocalInvocationID.x);
+#else
+        pc.pyramid.v[pbase + cslot * DUST_PQUEUE_RECORD_WORDS + 39u] = level;
+        bool any_ = dust_scatter_rows_pq(uvec2(pc.pyramid), pc.invUnit, pbase, pcap, cslot, rec, s, off, w, h, seed, 0, int(h) - 1);
+#endif
+        if (any_) atomicOr(pc.pyramid.v[DUST_PYR_LEVEL_MASK], 1u << DustLRowV(dust_l_slot).v[39u]);
+    }
+    // every lane reaches this (the subgroup reductions need them all)
+    DUST_PROF_END(qthread)
+    DUST_PROF_FLUSH_QUEUE(pc.pyramid, dust_queue_base_o(uvec2(pc.pyramid)))
+}

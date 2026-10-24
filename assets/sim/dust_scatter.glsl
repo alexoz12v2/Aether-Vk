@@ -92,20 +92,90 @@ bool dust_scatter_rows(DustUintBuffer pyr, float invUnit, DustScreenPacket P, ve
 // O(rows) per lane for a sixty-fourth of the segments). y0, y1 and the chunks are uniform over the
 // workgroup, so the barriers are reached by every lane.
 #ifdef DUST_QUEUE_WORKGROUP
-const uint DUST_QUEUE_ROW_CHUNK = 256u;
+float dust_queue_get_f(DustUintBuffer pyr, uint at);
+DustScreenPacket dust_queue_get_screen_packet(DustUintBuffer pyr, uint k);
+// Round 9 step Z: the workgroup consumer's segment in two passes over its texels, the capsule's
+// tau of each texel into the lane's row of dust_q_tau, then the photometry and the deposit
+// (dust_scatter_segment's texel arithmetic in its order: capsule x area x invUnit, x the weight
+// when lit, the rounding with the carry). The record's packet is read from the queue at each pass
+// (reads of the pyramid buffer inside a loop with its atomics stay where they are), so a pass holds
+// its own fields of it: the capsule's twelve, then the photometry's twenty, never the whole packet
+// over the texel loop (Mali: 184 B of spill)
+#ifndef DUST_DRAW_LEAF  // (_ws) not in the leaf consumer
+shared float dust_q_tau[64u * DUST_SEGMENT_TEXELS];
+bool dust_scatter_segment_wg(DustUintBuffer pyr, uint at, float s, uint off, uint w, uint seed, int ty, int xa, int xb, uint lane) {
+    float yc = (float(ty) + 0.5) * s;
+    float area = s * s;
+    uint row = lane * DUST_SEGMENT_TEXELS;
+    {
+        DustScreenPacket P = dust_queue_get_screen_packet(pyr, at + 11u);
+        float invUnit = dust_queue_get_f(pyr, at + 10u);
+        for (int tx = xa; tx <= xb; ++tx) {
+            vec2 x = vec2((float(tx) + 0.5) * s, yc);
+            dust_q_tau[row + uint(tx - xa)] = dust_capsule_tau(P, x) * area * invUnit;
+        }
+    }
+    {
+        DustScreenPacket P = dust_queue_get_screen_packet(pyr, at + 11u);
+        if (P.albedo > 0.0) {
+            for (int tx = xa; tx <= xb; ++tx) {
+                vec2 x = vec2((float(tx) + 0.5) * s, yc);
+                dust_q_tau[row + uint(tx - xa)] *= dust_texel_weight(P, x);
+            }
+        }
+    }
+    vec3 color = vec3(dust_queue_get_f(pyr, at + 7u), dust_queue_get_f(pyr, at + 8u), dust_queue_get_f(pyr, at + 9u));
+    uint depthBits = floatBitsToUint(max(dust_queue_get_f(pyr, at + 11u + 10u), 0.0));
+    bool any_ = false;
+    float carry = dust_segment_carry(seed, (uint(ty) << 16u) | uint(xa));
+    for (int tx = xa; tx <= xb; ++tx) {
+        float tau = dust_q_tau[row + uint(tx - xa)];
+        if (!(tau >= 0.0) || isinf(tau)) continue;
+        float tauC = min(tau, DUST_COUNT_MAX_PER_ADD) + carry;
+        uint counts = uint(tauC + 0.5);
+        carry = tauC - float(counts);
+        if (counts == 0u) continue;
+        uint i = off + (uint(ty) * w + uint(tx)) * DUST_PYRAMID_TEXEL_WORDS;
+        dust_atomic_add_sat(pyr, i, counts);
+        // colour words floor(counts * c + h), h a hashed threshold per texel, an ordered
+        // dither (dust::scatter_into): rounding counts * c + 0.5 per deposit turned every
+        // faint texel into (1, 1, 0)
+        float hf = float(dust_hash32(i) >> 8u) * (1.0 / 16777216.0);
+        uvec3 n = uvec3(float(counts) * color * DUST_COLOR_SCALE + hf);
+        dust_atomic_add_sat(pyr, i + 1u, n.r);
+        dust_atomic_add_sat(pyr, i + 2u, n.g);
+        dust_atomic_add_sat(pyr, i + 3u, n.b);
+        // nearest dust: 0 means "no dust yet" (positive f32 bits order as uints)
+        uint cur = pyr.v[i + 4u];
+        if (cur == 0u || depthBits < cur) {
+            uint seen = atomicCompSwap(pyr.v[i + 4u], 0u, depthBits);
+            if (seen != 0u) atomicMin(pyr.v[i + 4u], depthBits);
+        }
+        any_ = true;
+    }
+    return any_;
+}
+#endif  // !DUST_DRAW_LEAF
+// (perf9_O) a blob may set the chunk's rows lower (dust_draw_leaf.comp's workgroup blob: its shared
+// budget); the rows, segments and carries are the same at any chunk size
+#ifndef DUST_QUEUE_ROW_CHUNK_N
+#define DUST_QUEUE_ROW_CHUNK_N 256u
+#endif
+const uint DUST_QUEUE_ROW_CHUNK = DUST_QUEUE_ROW_CHUNK_N;
 shared int  dust_q_x0[DUST_QUEUE_ROW_CHUNK];
 shared int  dust_q_x1[DUST_QUEUE_ROW_CHUNK];
 shared uint dust_q_seg[DUST_QUEUE_ROW_CHUNK + 1u];
-bool dust_scatter_rows_wg(DustUintBuffer pyr, float invUnit, DustScreenPacket P, vec3 color, float s,
+#ifndef DUST_DRAW_LEAF  // (_ws) the queue-record rows: not in the leaf consumer
+bool dust_scatter_rows_wg(DustUintBuffer pyr, uint at, float s,
                           uint off, uint w, uint h, uint seed, int rowA, int rowB, uint lanes, uint lane) {
     DUST_PROF_BEGIN(qrows)
-    DustBand B = dust_band_new(P);
     int y0, y1;
-    if (!dust_band_rows(B, s, h, y0, y1)) { DUST_PROF_END(qrows) return false; }
+    if (!dust_band_rows(dust_band_new(dust_queue_get_screen_packet(pyr, at + 11u)), s, h, y0, y1)) { DUST_PROF_END(qrows) return false; }
     y0 = max(y0, rowA);
     y1 = min(y1, rowB);
     bool any_ = false;
     for (int yc0 = y0; yc0 <= y1; yc0 += int(DUST_QUEUE_ROW_CHUNK)) {
+        DustBand B = dust_band_new(dust_queue_get_screen_packet(pyr, at + 11u));
         int n = min(int(DUST_QUEUE_ROW_CHUNK), y1 - yc0 + 1);
         for (int r = int(lane); r < n; r += int(lanes)) {
             int x0, x1;
@@ -133,7 +203,7 @@ bool dust_scatter_rows_wg(DustUintBuffer pyr, float invUnit, DustScreenPacket P,
             int xa = dust_q_x0[r] + int(j * DUST_SEGMENT_TEXELS);
             int xb = min(xa + int(DUST_SEGMENT_TEXELS) - 1, dust_q_x1[r]);
             DUST_PROF_BEGIN_AS(seg)
-            any_ = dust_scatter_segment(pyr, invUnit, P, color, s, off, w, seed, yc0 + r, xa, xb, true) || any_;
+            any_ = dust_scatter_segment_wg(pyr, at, s, off, w, seed, yc0 + r, xa, xb, lane) || any_;
             DUST_PROF_END_AS(qseg, seg)
             DUST_PROF_COUNT(qtexels, xb - xa + 1)
         }
@@ -142,6 +212,7 @@ bool dust_scatter_rows_wg(DustUintBuffer pyr, float invUnit, DustScreenPacket P,
     DUST_PROF_END(qrows)
     return any_;
 }
+#endif  // !DUST_DRAW_LEAF
 #endif
 
 // One Gaussian piece of a volumetric packet (dust::VolumePiece)
@@ -1126,6 +1197,161 @@ bool dust_volume_small_edge_points(DustSmallEdge ed, vec3 r0, vec3 r1, vec3 r3, 
     return demote;
 }
 
+#ifdef DUST_EDGE_PASS
+// Round 9 step Z, the edge pass: the small segment in two passes over its texels, the points'
+// rectangle integrals (tau per px^2) into the lane's row of dust_e_tau, then the deposits
+// (dust_volume_segment_small's texel arithmetic in its order; the frame test of a texel made
+// again in the second pass, the same expressions)
+float dust_small_rect(DustSmallPoint q, float xa, float xb, float ya, float yb);
+bool dust_volume_deposit(DustUintBuffer pyr, float tauPx, float area, float invUnit, vec3 color, uint depthBits,
+                         uint off, uint lw, int ty, int tx, bool noWrites, inout float carry, inout float peak);
+shared float dust_e_pts[64u * 18u];
+void dust_small_pt_put(uint lane, uint q, DustSmallPoint p) {
+    uint a = lane * 18u + q * 6u;
+    dust_e_pts[a] = p.mx; dust_e_pts[a + 1u] = p.my; dust_e_pts[a + 2u] = p.ix;
+    dust_e_pts[a + 3u] = p.iy; dust_e_pts[a + 4u] = p.rho; dust_e_pts[a + 5u] = p.m;
+}
+DustSmallPoint dust_small_pt_get(uint lane, uint q) {
+    uint a = lane * 18u + q * 6u;
+    DustSmallPoint p;
+    p.mx = dust_e_pts[a]; p.my = dust_e_pts[a + 1u]; p.ix = dust_e_pts[a + 2u];
+    p.iy = dust_e_pts[a + 3u]; p.rho = dust_e_pts[a + 4u]; p.m = dust_e_pts[a + 5u];
+    return p;
+}
+shared float dust_e_tau[64u * DUST_SEGMENT_TEXELS];
+bool dust_volume_segment_small_wg(DustUintBuffer pyr, float invUnit, float W, float H, float sz, vec3 color,
+                                  uint depthBits, uint off, uint lw, uint seed, int ty, int xa, int xb,
+                                  DustSmallPoint s0, DustSmallPoint s1, DustSmallPoint s2, DustSmallPoint s3,
+                                  DustSmallPoint s4, inout float peak, uint lane) {
+    bool noWrites = ((dust_pyr_split_word >> 30u) & 3u) == 2u;
+    float area = sz * sz;
+    float ya = max(float(ty) * sz, 0.0);
+    float yb = min(float(ty + 1) * sz, H);
+    uint row = lane * DUST_SEGMENT_TEXELS;
+    DUST_PROF_BEGIN(vsmall)
+    for (int tx = xa; tx <= xb; ++tx) {
+        float xa_ = max(float(tx) * sz, 0.0);
+        float xb_ = min(float(tx + 1) * sz, W);
+        if (!(xb_ > xa_ && yb > ya)) continue;
+        float acc = dust_small_rect(dust_small_pt_get(lane, 0u), xa_, xb_, ya, yb) + dust_small_rect(dust_small_pt_get(lane, 1u), xa_, xb_, ya, yb)
+                  + dust_small_rect(dust_small_pt_get(lane, 2u), xa_, xb_, ya, yb) + dust_small_rect(s3, xa_, xb_, ya, yb)
+                  + dust_small_rect(s4, xa_, xb_, ya, yb);
+        dust_e_tau[row + uint(tx - xa)] = max(acc, 0.0) / ((xb_ - xa_) * (yb - ya));
+    }
+    DUST_PROF_END(vsmall)
+    float carry = dust_segment_carry(seed, (uint(ty) << 16u) | uint(xa));
+    bool any_ = false;
+    DUST_PROF_BEGIN(vdeposit)
+    for (int tx = xa; tx <= xb; ++tx) {
+        float xa_ = max(float(tx) * sz, 0.0);
+        float xb_ = min(float(tx + 1) * sz, W);
+        if (!(xb_ > xa_ && yb > ya)) continue;
+        float tauPx = dust_e_tau[row + uint(tx - xa)];
+        any_ = dust_volume_deposit(pyr, tauPx, area, invUnit, color, depthBits, off, lw, ty, tx, noWrites, carry, peak)
+            || any_;
+    }
+    DUST_PROF_END(vdeposit)
+    return any_;
+}
+// the edge pass (dust_draw_small_edge.comp): the same slices, each slice's final
+// point stored to the lane's slot of dust_e_pts as it is made (dust_small_pt_put) instead of held
+// across the next slices' predictions (Mali: the pass's spill)
+void dust_small_edge_get_ed(DustUintBuffer pyr, uint ebase, uint cap, uint i, out DustSmallEdge ed);
+#define DUST_EDGE_LOAD(ed) dust_small_edge_get_ed(pyr, ebase, cap, i, ed); \
+    W = float(pyr.v[DUST_PYR_WIDTH]); H = float(pyr.v[DUST_PYR_HEIGHT]); \
+    mean = ed.mean; g = ed.g; x1 = ed.x1; x2 = ed.x2; y1 = ed.y1; y2 = ed.y2; w1 = ed.w1; w2 = ed.w2; \
+    massW = ed.massW; wr0 = ed.wr0; wr1 = ed.wr1; wr2 = ed.wr2;
+bool dust_volume_small_edge_points_st(DustUintBuffer pyr, uint ebase, uint cap, uint i, vec3 r0, vec3 r1, vec3 r3, vec3 t, float W, float H, uint lane) {
+    DustSmallPoint s0, s1, s2, s3, s4;
+    bool five = false;
+    DustSmallEdge ed;
+    vec3 mean, g;
+    float x1, x2, y1, y2, w1, w2, massW, wr0, wr1, wr2, wr3 = 1.0, wr4 = 1.0;
+    DUST_EDGE_LOAD(ed)
+    s3 = dust_small_none(); s4 = dust_small_none();
+    DUST_PROF_BEGIN(vsmfast)
+    s0 = dust_volume_small_fast(0u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr0, r0, r1, r3, t, W, H);
+    s1 = dust_volume_small_fast(1u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr1, r0, r1, r3, t, W, H);
+    s2 = dust_volume_small_fast(2u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr2, r0, r1, r3, t, W, H);
+    DUST_PROF_END(vsmfast)
+    DUST_PROF_BEGIN(vsmedge)
+    // track 9A: the demotion (dust::volume_small_points: the gate (t9a2c, on the fast centre slice:
+    // a few operations, so most edge pieces that keep the sigma points never reach the predictor),
+    // then the slices' predictions in order, the mass-weighted mean against DUST_SMALL_DEMOTE_EPS,
+    // strict); vsmedge holds its cost.
+    // t9a2b: the fast points' masses are kept and the fast points die; each slice is predicted
+    // and corrected from one evaluation of its terms (dust_small_demote_slice, its corrected
+    // point written in place: an edge piece that is not demoted overwrites every slice below),
+    // and the next slice is evaluated only while the running sum acc / ms is under the constant.
+    // The sum only grows (m > 0, e >= 0, each rounding monotone), so a prefix at or over the
+    // constant means the full sum is too: the decision is the full rule's exactly, the slices
+    // are sequential (no two slices' terms live at once) and most edge pieces that keep the
+    // sigma points stop after the centre slice
+    bool demote = false;
+    if (DUST_SMALL_DEMOTE_EPS > 0.0 && s0.m > 0.0 && s1.m > 0.0 && s2.m > 0.0
+        && (!five || (s3.m > 0.0 && s4.m > 0.0))
+        && dust_small_demote_gate(s0, mean, r3, t.z, w1, w2, W, H) < DUST_SMALL_DEMOTE_GATE * DUST_SMALL_DEMOTE_EPS) {
+        float m0 = s0.m, m1 = s1.m, m2 = s2.m, m3 = s3.m, m4 = s4.m;
+        float ms = m0 + m1 + m2;
+        if (five) {
+            ms += m3;
+            ms += m4;
+        }
+        DUST_EDGE_LOAD(ed)
+        float e = dust_small_demote_slice(0u, five, mean, g, x1, x2, y1, y2, w1, w2, r0, r1, r3, t, W, H, m0, s0);
+        dust_small_pt_put(lane, 0u, s0);
+        float acc = m0 * e;
+        bool go = e >= 0.0 && acc / ms < DUST_SMALL_DEMOTE_EPS;
+        if (go) {
+            DUST_EDGE_LOAD(ed)
+            e = dust_small_demote_slice(1u, five, mean, g, x1, x2, y1, y2, w1, w2, r0, r1, r3, t, W, H, m1, s1);
+            dust_small_pt_put(lane, 1u, s1);
+            acc += m1 * e;
+            go = e >= 0.0 && acc / ms < DUST_SMALL_DEMOTE_EPS;
+        }
+        if (go) {
+            DUST_EDGE_LOAD(ed)
+            e = dust_small_demote_slice(2u, five, mean, g, x1, x2, y1, y2, w1, w2, r0, r1, r3, t, W, H, m2, s2);
+            dust_small_pt_put(lane, 2u, s2);
+            acc += m2 * e;
+            go = e >= 0.0 && acc / ms < DUST_SMALL_DEMOTE_EPS;
+        }
+        if (five && go) {
+            e = dust_small_demote_slice(3u, five, mean, g, x1, x2, y1, y2, w1, w2, r0, r1, r3, t, W, H, m3, s3);
+            acc += m3 * e;
+            go = e >= 0.0 && acc / ms < DUST_SMALL_DEMOTE_EPS;
+        }
+        if (five && go) {
+            e = dust_small_demote_slice(4u, five, mean, g, x1, x2, y1, y2, w1, w2, r0, r1, r3, t, W, H, m4, s4);
+            acc += m4 * e;
+            go = e >= 0.0 && acc / ms < DUST_SMALL_DEMOTE_EPS;
+        }
+        demote = go;
+    }
+    if (!demote) {
+        DUST_EDGE_LOAD(ed)
+        s0 = dust_volume_small_edge(0u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr0, r0, r1, r3, t, W, H);
+        dust_small_pt_put(lane, 0u, s0);
+        s1 = dust_volume_small_edge(1u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr1, r0, r1, r3, t, W, H);
+        dust_small_pt_put(lane, 1u, s1);
+        s2 = dust_volume_small_edge(2u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr2, r0, r1, r3, t, W, H);
+        dust_small_pt_put(lane, 2u, s2);
+        if (five) {
+            s3 = dust_volume_small_edge(3u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr3, r0, r1, r3, t, W, H);
+            s4 = dust_volume_small_edge(4u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr4, r0, r1, r3, t, W, H);
+        }
+    }
+    DUST_PROF_END(vsmedge)
+    if (demote) {
+        DUST_PROF_COUNT(small_fast, 1u)
+    } else {
+        DUST_PROF_COUNT(small_edge, 1u)
+    }
+    // t9a2e: whether the piece was demoted (the edge pass counts them, DUST_VEDGE_DEMOTED)
+    return demote;
+}
+#endif
+
 // the texels a small piece's points cover (their +-DUST_SMALL_COVER sigma) within its range r
 // (dust::volume_scatter's small branch); empty when none
 ivec4 dust_volume_small_range(DustSmallPoint s0, DustSmallPoint s1, DustSmallPoint s2, DustSmallPoint s3,
@@ -1494,6 +1720,9 @@ const uint DUST_FRAME_QUEUE_ALL = 1u << 29u;
 uint dust_queue_base(DustUintBuffer pyr) {
     return pyr.v[DUST_PYR_QUEUE_BASE];
 }
+uint dust_queue_base_o(uvec2 pyr) {
+    return DustUintBuffer(pyr).v[DUST_PYR_QUEUE_BASE];
+}
 
 // the queue's capacity: DUST_QUEUE_CAPACITY, or less when header word 4 says so (a test hook,
 // dust::Device::dust_set_queue_capacity; 0 = the default)
@@ -1558,8 +1787,13 @@ const uint DUST_FRAME_SPLIT_SERIAL = 1u << 31u;
 const uint DUST_FRAME_TOP_PASS_A = 1u << 2u;
 
 uint dust_vqueue_base(DustUintBuffer pyr) { return dust_queue_base(pyr) + DUST_QUEUE_WORDS; }
+uint dust_vqueue_base_o(uvec2 pyr) { return dust_queue_base_o(pyr) + DUST_QUEUE_WORDS; }
 uint dust_vqueue_capacity(DustUintBuffer pyr, uint base) {
     uint c = pyr.v[base + 4u];
+    return c == 0u ? DUST_VQUEUE_CAPACITY : min(c, DUST_VQUEUE_CAPACITY);
+}
+uint dust_vqueue_capacity_o(uvec2 pyr, uint base) {
+    uint c = DustUintBuffer(pyr).v[base + 4u];
     return c == 0u ? DUST_VQUEUE_CAPACITY : min(c, DUST_VQUEUE_CAPACITY);
 }
 // A record index, or ~0u when the chunk's queue is full (the main queue's refusal goes to the
@@ -1568,6 +1802,12 @@ uint dust_vqueue_append(DustUintBuffer pyr, uint base) {
     uint r = atomicAdd(pyr.v[base + 3u], 1u);
     if (r >= dust_vqueue_capacity(pyr, base)) return 0xFFFFFFFFu;
     atomicMax(pyr.v[base], (r >> 6u) + 1u);
+    return r;
+}
+uint dust_vqueue_append_o(uvec2 pyr, uint base) {
+    uint r = atomicAdd(DustUintBuffer(pyr).v[base + 3u], 1u);
+    if (r >= dust_vqueue_capacity_o(pyr, base)) return 0xFFFFFFFFu;
+    atomicMax(DustUintBuffer(pyr).v[base], (r >> 6u) + 1u);
     return r;
 }
 // The volume spill (dust::dust_vspill_records): a second volume queue in the same format (header
@@ -1584,6 +1824,10 @@ uint dust_vspill_base(DustUintBuffer pyr) {
     uint vbase = dust_vqueue_base(pyr);
     return vbase + pyr.v[vbase + DUST_VQUEUE_SPILL_OFFSET];
 }
+uint dust_vspill_base_o(uvec2 pyr) {
+    uint vbase = dust_vqueue_base_o(pyr);
+    return vbase + DustUintBuffer(pyr).v[vbase + DUST_VQUEUE_SPILL_OFFSET];
+}
 // A volume record, structure-of-arrays: word w of record r at base + DUST_VQUEUE_HEADER_WORDS +
 // w * capacity + r, so a warp's 32 consecutive records load and store each word from 128
 // contiguous bytes (one transaction a word; the former 128-B stride made 32). Words: 0-2 mean,
@@ -1597,7 +1841,8 @@ uint dust_vspill_base(DustUintBuffer pyr) {
 // the volume queue's format (words 0-2 the edge pass's indirect dispatch, 3 the raw append counter,
 // 4 the capacity: dust_vqueue_append and dust_vqueue_capacity serve it; 5 the frame's pieces drawn,
 // 6 those refused) and dust::dust_vedge_records records of DUST_VEDGE_RECORD_WORDS words,
-// structure-of-arrays at the capacity's stride. A chunk's consumer (both drains) appends its edge
+// array-of-structures (word w of record i at the records' base + i * DUST_VEDGE_RECORD_WORDS + w:
+// the edge pass reads a piece's words together; perf9_O). A chunk's consumer (both drains) appends its edge
 // small pieces to the region of the chunk's parity (DUST_VIEW_EDGE_ODD), and dust_draw_small_edge.comp
 // draws them beside the next chunk's producer (Device::cmd_dust_splat), so the pass costs no extra
 // serialisation; the deposits are the consumer's order-free atomics, so the pyramid is the same
@@ -1607,6 +1852,8 @@ uint dust_vspill_base(DustUintBuffer pyr) {
 // the slices' weights, 16 the range's x0 | x1 << 16, 17 its y0 | y1 << 16 (texels of its level,
 // each < 2^16), 18 the level, 19-21 colour, 22 the depth bits, 23 the piece's rounding seed.
 const uint DUST_VEDGE_RECORD_WORDS = 24u;
+// the edge pass's workgroup takes 1 << DUST_VEDGE_GROUP_SHIFT pieces (dust_draw_small_edge.comp)
+const uint DUST_VEDGE_GROUP_SHIFT = 4u;
 const uint DUST_VEDGE_DRAWN = 5u;
 const uint DUST_VEDGE_LOST = 6u;
 const uint DUST_VEDGE_DEMOTED = 7u;
@@ -1626,61 +1873,79 @@ uint dust_vedge_base(DustUintBuffer pyr, bool odd) {
 void dust_small_edge_put(DustUintBuffer pyr, bool odd, DustSmallEdge ed, ivec4 r, uint lev, vec3 color,
                          uint depthBits, uint seed) {
     uint ebase = dust_vedge_base(pyr, odd);
-    uint i = dust_vqueue_append(pyr, ebase);
-    if (i == 0xFFFFFFFFu) return;
-    uint cap = dust_vqueue_capacity(pyr, ebase);
-    uint a = ebase + DUST_VQUEUE_HEADER_WORDS + i;
-    pyr.v[a + 0u * cap] = floatBitsToUint(ed.mean.x);
-    pyr.v[a + 1u * cap] = floatBitsToUint(ed.mean.y);
-    pyr.v[a + 2u * cap] = floatBitsToUint(ed.mean.z);
-    pyr.v[a + 3u * cap] = floatBitsToUint(ed.g.x);
-    pyr.v[a + 4u * cap] = floatBitsToUint(ed.g.y);
-    pyr.v[a + 5u * cap] = floatBitsToUint(ed.g.z);
-    pyr.v[a + 6u * cap] = floatBitsToUint(ed.x1);
-    pyr.v[a + 7u * cap] = floatBitsToUint(ed.x2);
-    pyr.v[a + 8u * cap] = floatBitsToUint(ed.y1);
-    pyr.v[a + 9u * cap] = floatBitsToUint(ed.y2);
-    pyr.v[a + 10u * cap] = floatBitsToUint(ed.w1);
-    pyr.v[a + 11u * cap] = floatBitsToUint(ed.w2);
-    pyr.v[a + 12u * cap] = floatBitsToUint(ed.massW);
-    pyr.v[a + 13u * cap] = floatBitsToUint(ed.wr0);
-    pyr.v[a + 14u * cap] = floatBitsToUint(ed.wr1);
-    pyr.v[a + 15u * cap] = floatBitsToUint(ed.wr2);
-    pyr.v[a + 16u * cap] = uint(r.x) | (uint(r.y) << 16u);
-    pyr.v[a + 17u * cap] = uint(r.z) | (uint(r.w) << 16u);
-    pyr.v[a + 18u * cap] = lev;
-    pyr.v[a + 19u * cap] = floatBitsToUint(color.x);
-    pyr.v[a + 20u * cap] = floatBitsToUint(color.y);
-    pyr.v[a + 21u * cap] = floatBitsToUint(color.z);
-    pyr.v[a + 22u * cap] = depthBits;
-    pyr.v[a + 23u * cap] = seed;
+    // dust_vqueue_append's, the dispatch in the edge pass's workgroups (DUST_VEDGE_GROUP_SHIFT)
+    uint i = atomicAdd(pyr.v[ebase + 3u], 1u);
+    if (i >= dust_vqueue_capacity(pyr, ebase)) return;
+    atomicMax(pyr.v[ebase], (i >> DUST_VEDGE_GROUP_SHIFT) + 1u);
+    uint a = ebase + DUST_VQUEUE_HEADER_WORDS + i * DUST_VEDGE_RECORD_WORDS;
+    pyr.v[a + 0u] = floatBitsToUint(ed.mean.x);
+    pyr.v[a + 1u] = floatBitsToUint(ed.mean.y);
+    pyr.v[a + 2u] = floatBitsToUint(ed.mean.z);
+    pyr.v[a + 3u] = floatBitsToUint(ed.g.x);
+    pyr.v[a + 4u] = floatBitsToUint(ed.g.y);
+    pyr.v[a + 5u] = floatBitsToUint(ed.g.z);
+    pyr.v[a + 6u] = floatBitsToUint(ed.x1);
+    pyr.v[a + 7u] = floatBitsToUint(ed.x2);
+    pyr.v[a + 8u] = floatBitsToUint(ed.y1);
+    pyr.v[a + 9u] = floatBitsToUint(ed.y2);
+    pyr.v[a + 10u] = floatBitsToUint(ed.w1);
+    pyr.v[a + 11u] = floatBitsToUint(ed.w2);
+    pyr.v[a + 12u] = floatBitsToUint(ed.massW);
+    pyr.v[a + 13u] = floatBitsToUint(ed.wr0);
+    pyr.v[a + 14u] = floatBitsToUint(ed.wr1);
+    pyr.v[a + 15u] = floatBitsToUint(ed.wr2);
+    pyr.v[a + 16u] = uint(r.x) | (uint(r.y) << 16u);
+    pyr.v[a + 17u] = uint(r.z) | (uint(r.w) << 16u);
+    pyr.v[a + 18u] = lev;
+    pyr.v[a + 19u] = floatBitsToUint(color.x);
+    pyr.v[a + 20u] = floatBitsToUint(color.y);
+    pyr.v[a + 21u] = floatBitsToUint(color.z);
+    pyr.v[a + 22u] = depthBits;
+    pyr.v[a + 23u] = seed;
 }
 // the edge pass's read of record i of the region at ebase (capacity cap): the inputs into ed, the
 // range, level, colour, depth bits and seed
+void dust_small_edge_get_ed(DustUintBuffer pyr, uint ebase, uint cap, uint i, out DustSmallEdge ed) {
+    uint a = ebase + DUST_VQUEUE_HEADER_WORDS + i * DUST_VEDGE_RECORD_WORDS;
+    ed.mean = vec3(uintBitsToFloat(pyr.v[a + 0u]), uintBitsToFloat(pyr.v[a + 1u]),
+                   uintBitsToFloat(pyr.v[a + 2u]));
+    ed.g = vec3(uintBitsToFloat(pyr.v[a + 3u]), uintBitsToFloat(pyr.v[a + 4u]),
+                uintBitsToFloat(pyr.v[a + 5u]));
+    ed.x1 = uintBitsToFloat(pyr.v[a + 6u]);
+    ed.x2 = uintBitsToFloat(pyr.v[a + 7u]);
+    ed.y1 = uintBitsToFloat(pyr.v[a + 8u]);
+    ed.y2 = uintBitsToFloat(pyr.v[a + 9u]);
+    ed.w1 = uintBitsToFloat(pyr.v[a + 10u]);
+    ed.w2 = uintBitsToFloat(pyr.v[a + 11u]);
+    ed.massW = uintBitsToFloat(pyr.v[a + 12u]);
+    ed.wr0 = uintBitsToFloat(pyr.v[a + 13u]);
+    ed.wr1 = uintBitsToFloat(pyr.v[a + 14u]);
+    ed.wr2 = uintBitsToFloat(pyr.v[a + 15u]);
+}
 void dust_small_edge_get(DustUintBuffer pyr, uint ebase, uint cap, uint i, out DustSmallEdge ed, out ivec4 r,
                          out uint lev, out vec3 color, out uint depthBits, out uint seed) {
-    uint a = ebase + DUST_VQUEUE_HEADER_WORDS + i;
-    ed.mean = vec3(uintBitsToFloat(pyr.v[a + 0u * cap]), uintBitsToFloat(pyr.v[a + 1u * cap]),
-                   uintBitsToFloat(pyr.v[a + 2u * cap]));
-    ed.g = vec3(uintBitsToFloat(pyr.v[a + 3u * cap]), uintBitsToFloat(pyr.v[a + 4u * cap]),
-                uintBitsToFloat(pyr.v[a + 5u * cap]));
-    ed.x1 = uintBitsToFloat(pyr.v[a + 6u * cap]);
-    ed.x2 = uintBitsToFloat(pyr.v[a + 7u * cap]);
-    ed.y1 = uintBitsToFloat(pyr.v[a + 8u * cap]);
-    ed.y2 = uintBitsToFloat(pyr.v[a + 9u * cap]);
-    ed.w1 = uintBitsToFloat(pyr.v[a + 10u * cap]);
-    ed.w2 = uintBitsToFloat(pyr.v[a + 11u * cap]);
-    ed.massW = uintBitsToFloat(pyr.v[a + 12u * cap]);
-    ed.wr0 = uintBitsToFloat(pyr.v[a + 13u * cap]);
-    ed.wr1 = uintBitsToFloat(pyr.v[a + 14u * cap]);
-    ed.wr2 = uintBitsToFloat(pyr.v[a + 15u * cap]);
-    uint rxy = pyr.v[a + 16u * cap], rzw = pyr.v[a + 17u * cap];
+    uint a = ebase + DUST_VQUEUE_HEADER_WORDS + i * DUST_VEDGE_RECORD_WORDS;
+    ed.mean = vec3(uintBitsToFloat(pyr.v[a + 0u]), uintBitsToFloat(pyr.v[a + 1u]),
+                   uintBitsToFloat(pyr.v[a + 2u]));
+    ed.g = vec3(uintBitsToFloat(pyr.v[a + 3u]), uintBitsToFloat(pyr.v[a + 4u]),
+                uintBitsToFloat(pyr.v[a + 5u]));
+    ed.x1 = uintBitsToFloat(pyr.v[a + 6u]);
+    ed.x2 = uintBitsToFloat(pyr.v[a + 7u]);
+    ed.y1 = uintBitsToFloat(pyr.v[a + 8u]);
+    ed.y2 = uintBitsToFloat(pyr.v[a + 9u]);
+    ed.w1 = uintBitsToFloat(pyr.v[a + 10u]);
+    ed.w2 = uintBitsToFloat(pyr.v[a + 11u]);
+    ed.massW = uintBitsToFloat(pyr.v[a + 12u]);
+    ed.wr0 = uintBitsToFloat(pyr.v[a + 13u]);
+    ed.wr1 = uintBitsToFloat(pyr.v[a + 14u]);
+    ed.wr2 = uintBitsToFloat(pyr.v[a + 15u]);
+    uint rxy = pyr.v[a + 16u], rzw = pyr.v[a + 17u];
     r = ivec4(int(rxy & 0xFFFFu), int(rxy >> 16u), int(rzw & 0xFFFFu), int(rzw >> 16u));
-    lev = pyr.v[a + 18u * cap];
-    color = vec3(uintBitsToFloat(pyr.v[a + 19u * cap]), uintBitsToFloat(pyr.v[a + 20u * cap]),
-                 uintBitsToFloat(pyr.v[a + 21u * cap]));
-    depthBits = pyr.v[a + 22u * cap];
-    seed = pyr.v[a + 23u * cap];
+    lev = pyr.v[a + 18u];
+    color = vec3(uintBitsToFloat(pyr.v[a + 19u]), uintBitsToFloat(pyr.v[a + 20u]),
+                 uintBitsToFloat(pyr.v[a + 21u]));
+    depthBits = pyr.v[a + 22u];
+    seed = pyr.v[a + 23u];
 }
 
 // ── The sub-packet queue (dust::DUST_SQUEUE_*) ──────────────────────────────────────────────────
@@ -1698,7 +1963,7 @@ const uint DUST_SQUEUE_TABLE_WORDS = 4u;
 const uint DUST_SQUEUE_CLUSTERS = 1024u;
 const uint DUST_SQUEUE_PER_CLUSTER = 136u;
 const uint DUST_SQUEUE_CAPACITY = DUST_SQUEUE_CLUSTERS * DUST_SQUEUE_PER_CLUSTER;
-const uint DUST_SQUEUE_RECORD_WORDS = 36u;
+const uint DUST_SQUEUE_RECORD_WORDS = 68u;
 const uint DUST_VQUEUE_WORDS = DUST_VQUEUE_HEADER_WORDS + DUST_VQUEUE_CAPACITY * DUST_VQUEUE_RECORD_WORDS;
 // After the volume records this view allocated (its header's DUST_VQUEUE_RECORDS word,
 // host-written each drawn frame, 0 = DUST_VQUEUE_CAPACITY: a device with less memory allocates
@@ -1709,11 +1974,20 @@ uint dust_squeue_base(DustUintBuffer pyr) {
     n = n == 0u ? DUST_VQUEUE_CAPACITY : min(n, DUST_VQUEUE_CAPACITY);
     return vbase + DUST_VQUEUE_HEADER_WORDS + n * DUST_VQUEUE_RECORD_WORDS;
 }
+uint dust_squeue_base_o(uvec2 pyr) {
+    uint vbase = dust_vqueue_base_o(pyr);
+    uint n = DustUintBuffer(pyr).v[vbase + DUST_VQUEUE_RECORDS];
+    n = n == 0u ? DUST_VQUEUE_CAPACITY : min(n, DUST_VQUEUE_CAPACITY);
+    return vbase + DUST_VQUEUE_HEADER_WORDS + n * DUST_VQUEUE_RECORD_WORDS;
+}
 uint dust_squeue_table(uint base) { return base + DUST_SQUEUE_HEADER_WORDS; }
 // the speck walk's spill after the sub-packet queue (dust::DUST_SPILL_*): a header (word 0 the
 // slots claimed this pass, word 1 the slots the view has), then the slots of DUST_SPILL_NODES
 // nodes of DUST_SPILL_NODE_WORDS words each
-const uint DUST_SQUEUE_WORDS = DUST_SQUEUE_HEADER_WORDS + DUST_SQUEUE_CLUSTERS * DUST_SQUEUE_TABLE_WORDS + DUST_SQUEUE_CAPACITY * DUST_SQUEUE_RECORD_WORDS;
+// the splat's plan rows after the records (perf9_O: dust_splat.comp's stages, a row per chunk cluster)
+const uint DUST_SPLAN_WORDS = 384u;
+const uint DUST_SQUEUE_WORDS = DUST_SQUEUE_HEADER_WORDS + DUST_SQUEUE_CLUSTERS * DUST_SQUEUE_TABLE_WORDS + DUST_SQUEUE_CAPACITY * DUST_SQUEUE_RECORD_WORDS
+                             + DUST_SQUEUE_CLUSTERS * DUST_SPLAN_WORDS;
 const uint DUST_SPILL_HEADER_WORDS = 16u;
 const uint DUST_SPILL_NODE_WORDS = 6u;
 const uint DUST_SPILL_NODES = 1024u;
@@ -1724,10 +1998,12 @@ uint dust_spill_base(DustUintBuffer pyr) { return dust_squeue_base(pyr) + DUST_S
 const uint DUST_SPECKS_TRACE_WORDS = 12u;
 uint dust_specks_trace_base(uint spillBase, uint slots) { return spillBase + DUST_SPILL_HEADER_WORDS + slots * DUST_SPILL_NODES * DUST_SPILL_NODE_WORDS; }
 uint dust_squeue_records(uint base) { return base + DUST_SQUEUE_HEADER_WORDS + DUST_SQUEUE_CLUSTERS * DUST_SQUEUE_TABLE_WORDS; }
+uint dust_splan_base(uint base) { return dust_squeue_records(base) + DUST_SQUEUE_CAPACITY * DUST_SQUEUE_RECORD_WORDS; }
 // A sub-packet record: 0-2 mean, 3-8 S, 9-11 the segment d, 12 flux, 13 exposure, 14 flags
 // (bit 0 openStart, 1 openEnd, 2 the support has an origin), 15-16 rho, 17-19 segT, 20-22
 // colour, 23-26 the support plane, 27 its origin, 28-30 the Sun direction, 31 r_h, 32 the
-// cluster's index (its seed). Macros: a struct argument would be copied per call.
+// cluster's index (its seed); 33-44 the cone words (below). Macros: a struct argument would be
+// copied per call.
 #define DUST_SQUEUE_PUT(pyr, recs, r, mean_, S_, d_, flux_, exposure_, openStart_, openEnd_, rho_, segT_, color_, support_, hasO_, origin_, sun_, rh_, i_, walked_) { \
     uint a_ = (recs) + (r); const uint c_ = DUST_SQUEUE_CAPACITY; \
     pyr.v[a_ + 0u * c_] = floatBitsToUint((mean_).x); pyr.v[a_ + 1u * c_] = floatBitsToUint((mean_).y); pyr.v[a_ + 2u * c_] = floatBitsToUint((mean_).z); \
@@ -1765,6 +2041,60 @@ uint dust_squeue_records(uint base) { return base + DUST_SQUEUE_HEADER_WORDS + D
     rh_ = uintBitsToFloat(pyr.v[a_ + 31u * c_]); \
     i_ = pyr.v[a_ + 32u * c_]; \
 }
+// the record's cone words (round 9 step Z; written by the splitter's prep stage, dust_split.comp
+// -DDUST_SPLIT_PREP, dust_leaf_prep, after the enumerator): 33 the kind (DUST_SQUEUE_KIND_*: the
+// packet drawn whole, its truncation's moments, its cone of grains, or whole by the volume path),
+// 34-36 the support plane's covariance column S n, 37 v0 = n.S n, 38 the cone's apex depth dC,
+// 39 its cut flag, 40 the kept shares' renormalisation, 41-44 the truncation bounds (za, zb,
+// before, inner). The walk stage reads them with every piece it builds.
+const uint DUST_SQUEUE_KIND_PLAIN  = 0u;
+const uint DUST_SQUEUE_KIND_TRUNC  = 1u;
+const uint DUST_SQUEUE_KIND_CONIC  = 2u;
+const uint DUST_SQUEUE_KIND_VOLUME = 3u;
+#define DUST_SQUEUE_PUT_CONE(pyr, recs, r, kind_, sn_, v0_, dC_, cut_, renorm_, tb_) { \
+    uint a_ = (recs) + (r); const uint c_ = DUST_SQUEUE_CAPACITY; \
+    pyr.v[a_ + 33u * c_] = (kind_); \
+    pyr.v[a_ + 34u * c_] = floatBitsToUint((sn_).x); pyr.v[a_ + 35u * c_] = floatBitsToUint((sn_).y); pyr.v[a_ + 36u * c_] = floatBitsToUint((sn_).z); \
+    pyr.v[a_ + 37u * c_] = floatBitsToUint(v0_); \
+    pyr.v[a_ + 38u * c_] = floatBitsToUint(dC_); \
+    pyr.v[a_ + 39u * c_] = (cut_) ? 1u : 0u; \
+    pyr.v[a_ + 40u * c_] = floatBitsToUint(renorm_); \
+    pyr.v[a_ + 41u * c_] = floatBitsToUint((tb_).za); pyr.v[a_ + 42u * c_] = floatBitsToUint((tb_).zb); \
+    pyr.v[a_ + 43u * c_] = (tb_).before; pyr.v[a_ + 44u * c_] = (tb_).inner; \
+}
+#define DUST_SQUEUE_GET_CONE(pyr, recs, r, sn_, v0_, dC_, cut_, tb_) { \
+    uint a_ = (recs) + (r); const uint c_ = DUST_SQUEUE_CAPACITY; \
+    sn_ = vec3(uintBitsToFloat(pyr.v[a_ + 34u * c_]), uintBitsToFloat(pyr.v[a_ + 35u * c_]), uintBitsToFloat(pyr.v[a_ + 36u * c_])); \
+    v0_ = uintBitsToFloat(pyr.v[a_ + 37u * c_]); \
+    dC_ = uintBitsToFloat(pyr.v[a_ + 38u * c_]); \
+    cut_ = pyr.v[a_ + 39u * c_] != 0u; \
+    (tb_).za = uintBitsToFloat(pyr.v[a_ + 41u * c_]); (tb_).zb = uintBitsToFloat(pyr.v[a_ + 42u * c_]); \
+    (tb_).before = pyr.v[a_ + 43u * c_]; (tb_).inner = pyr.v[a_ + 44u * c_]; \
+}
+uint dust_squeue_kind(DustUintBuffer pyr, uint recs, uint r) { return pyr.v[recs + r + 33u * DUST_SQUEUE_CAPACITY]; }
+uint dust_squeue_kind_o(uvec2 pyr, uint recs, uint r) { return DustUintBuffer(pyr).v[recs + r + 33u * DUST_SQUEUE_CAPACITY]; }
+float dust_squeue_renorm(DustUintBuffer pyr, uint recs, uint r) { return uintBitsToFloat(pyr.v[recs + r + 40u * DUST_SQUEUE_CAPACITY]); }
+// the record's packet (its root: dust::Packet), support plane and origin, read where they are
+// used (the walk stage re-reads the root at every piece load instead of keeping it live)
+DustPacket dust_squeue_packet(DustUintBuffer pyr, uint recs, uint r) {
+    uint a_ = recs + r; const uint c_ = DUST_SQUEUE_CAPACITY;
+    DustPacket p;
+    p.mean = vec3(uintBitsToFloat(pyr.v[a_ + 0u * c_]), uintBitsToFloat(pyr.v[a_ + 1u * c_]), uintBitsToFloat(pyr.v[a_ + 2u * c_]));
+    p.S[0] = uintBitsToFloat(pyr.v[a_ + 3u * c_]); p.S[1] = uintBitsToFloat(pyr.v[a_ + 4u * c_]); p.S[2] = uintBitsToFloat(pyr.v[a_ + 5u * c_]);
+    p.S[3] = uintBitsToFloat(pyr.v[a_ + 6u * c_]); p.S[4] = uintBitsToFloat(pyr.v[a_ + 7u * c_]); p.S[5] = uintBitsToFloat(pyr.v[a_ + 8u * c_]);
+    p.seg = vec3(uintBitsToFloat(pyr.v[a_ + 9u * c_]), uintBitsToFloat(pyr.v[a_ + 10u * c_]), uintBitsToFloat(pyr.v[a_ + 11u * c_]));
+    p.flux = uintBitsToFloat(pyr.v[a_ + 12u * c_]);
+    uint f_ = pyr.v[a_ + 14u * c_];
+    p.openStart = (f_ & 1u) != 0u; p.openEnd = (f_ & 2u) != 0u;
+    p.rho = vec2(uintBitsToFloat(pyr.v[a_ + 15u * c_]), uintBitsToFloat(pyr.v[a_ + 16u * c_]));
+    p.segT = vec3(uintBitsToFloat(pyr.v[a_ + 17u * c_]), uintBitsToFloat(pyr.v[a_ + 18u * c_]), uintBitsToFloat(pyr.v[a_ + 19u * c_]));
+    return p;
+}
+vec4 dust_squeue_support(DustUintBuffer pyr, uint recs, uint r) {
+    uint a_ = recs + r; const uint c_ = DUST_SQUEUE_CAPACITY;
+    return vec4(uintBitsToFloat(pyr.v[a_ + 23u * c_]), uintBitsToFloat(pyr.v[a_ + 24u * c_]), uintBitsToFloat(pyr.v[a_ + 25u * c_]), uintBitsToFloat(pyr.v[a_ + 26u * c_]));
+}
+float dust_squeue_origin(DustUintBuffer pyr, uint recs, uint r) { return uintBitsToFloat(pyr.v[recs + r + 27u * DUST_SQUEUE_CAPACITY]); }
 #define DUST_VQUEUE_PUT(pyr, base, cap, r, p, seed, exposure, color, support, sun, rh) { \
     uint a_ = (base) + DUST_VQUEUE_HEADER_WORDS + (r); uint c_ = (cap); \
     pyr.v[a_ + 0u * c_] = floatBitsToUint((p).mean.x); pyr.v[a_ + 1u * c_] = floatBitsToUint((p).mean.y); pyr.v[a_ + 2u * c_] = floatBitsToUint((p).mean.z); \
@@ -1861,3 +2191,711 @@ DustScreenPacket dust_queue_get_screen_packet(DustUintBuffer pyr, uint k) {
     P.wMean = dust_queue_get_f(pyr, k + 32u);
     return P;
 }
+
+// ── Round 9 step Z: the leaf queue ───────────────────────────────────────────────────────────────
+// The splitter draws no texel and stores no screen packet (both were the lanes' spill on Mali):
+// every EWA leaf of the split walk goes to the leaf queue as the leaf packet itself — the split's
+// q (16 words) and its sub-packet record's index (the consumer re-reads the exposure, colour and
+// photometry there), its rounding seed (drawn by the splitter in the per-cluster thread's order,
+// where it was: a leaf found on its band after the projection), the level the splitter chose and
+// the level its per-packet valve alone gave (the gate and the texel-count atomics stay in the
+// splitter, so the in-frame gate's order is the splitter's). The consumer dust_draw_leaf.comp projects
+// the leaf again (dust_project_packet: the same bits), widens it past the valve as the splitter
+// did, and draws the band's rows with dust_scatter_rows — the arithmetic the splitter's texel loop
+// had, segment for segment. Its plain blob is a lane per record (the small leaves: a band of at
+// most DUST_QUEUE_MIN_TEXELS texels; the large skipped), its workgroup blob a
+// workgroup per entry of the large leaves' index list (a word per large leaf, appended when the
+// band is known: bit 31 the spill, bits 0-30 the slot; dust_scatter_rows_wg; a leaf has at most
+// DUST_SPLAT_MAX_TEXELS texels, the valve's). A full queue sends the leaf to the leaf spill, a second queue
+// of the same format (the lane blob drains it in a second dispatch, DUST_VIEW_LEAF_SPILL); a leaf
+// the spill refuses too is dropped and counted (DUST_LQUEUE_LOST, word 5 of the queue's header;
+// the host logs it). Headers as the volume queue's (words 0-2 the indirect dispatch, 3 the raw
+// append counter, 4 the capacity), the records structure-of-arrays at the capacity's stride. The
+// three lie where the EWA header's offset words say (host-written per frame, words from the EWA
+// queue base: dust::dust_queue_offsets).
+const uint DUST_QUEUE_LQUEUE_OFFSET = 5u;   // the leaf queue
+const uint DUST_QUEUE_LSPILL_OFFSET = 6u;   // the leaf spill
+const uint DUST_QUEUE_BLIST_OFFSET  = 7u;   // the large leaves' index list
+const uint DUST_LQUEUE_LOST = 5u;
+const uint DUST_LQUEUE_RECORD_WORDS = 5u;
+const uint DUST_LQUEUE_CAPACITY = 262144u;
+const uint DUST_LQUEUE_SPILL_BIT = 0x80000000u;
+// DustSplatPushConstants::flags bit, host-internal: dust_draw_leaf.comp (the lane blob) drains
+// the leaf spill instead of the leaf queue
+const uint DUST_VIEW_LEAF_SPILL = 1u << 15u;  // dust::DUST_VIEW_LEAF_SPILL (bits 20-27 are the debug value)
+// the leaf queue header's frame-wide words (zero per frame, never reset per chunk: the host sizes
+// the chunks from them; dust::DUST_LQUEUE_FRAME_*): the leaves (Σ the queue's word 3), the
+// candidates (Σ the candidate header's word 3), the large leaves (Σ the list's word 3), the
+// spilled leaves (Σ the spill's word 3); each added once per chunk by one lane of its consumer
+const uint DUST_LQUEUE_FRAME_LEAVES = 8u;
+const uint DUST_LQUEUE_FRAME_CANDIDATES = 9u;
+const uint DUST_LQUEUE_FRAME_LARGE = 10u;
+const uint DUST_LQUEUE_FRAME_SPILLED = 11u;
+// the candidates the candidate buffer refused (Σ its word 5) and the largest chunk density
+// (max ceil(word 3 / the chunk's clusters)); the SEQ order stage's workgroup 0
+const uint DUST_LQUEUE_FRAME_REFUSED = 12u;
+const uint DUST_LQUEUE_FRAME_CPC_MAX = 13u;
+// a workgroup-per-record list's dispatch: x at most this, the rows in y (dust::DUST_LQUEUE_DISPATCH_MAX_X)
+const uint DUST_LQUEUE_DISPATCH_MAX_X = 65535u;
+uint dust_lqueue_base(DustUintBuffer pyr) { uint b = dust_queue_base(pyr); return b + pyr.v[b + DUST_QUEUE_LQUEUE_OFFSET]; }
+uint dust_lqueue_base_o(uvec2 pyr) { uint b = dust_queue_base_o(pyr); return b + DustUintBuffer(pyr).v[b + DUST_QUEUE_LQUEUE_OFFSET]; }
+uint dust_lspill_base(DustUintBuffer pyr) { uint b = dust_queue_base(pyr); return b + pyr.v[b + DUST_QUEUE_LSPILL_OFFSET]; }
+uint dust_lspill_base_o(uvec2 pyr) { uint b = dust_queue_base_o(pyr); return b + DustUintBuffer(pyr).v[b + DUST_QUEUE_LSPILL_OFFSET]; }
+uint dust_blist_base(DustUintBuffer pyr) { uint b = dust_queue_base(pyr); return b + pyr.v[b + DUST_QUEUE_BLIST_OFFSET]; }
+uint dust_blist_base_o(uvec2 pyr) { uint b = dust_queue_base_o(pyr); return b + DustUintBuffer(pyr).v[b + DUST_QUEUE_BLIST_OFFSET]; }
+uint dust_lqueue_capacity(DustUintBuffer pyr, uint base) {
+    uint c = pyr.v[base + 4u];
+    return c == 0u ? DUST_LQUEUE_CAPACITY : min(c, DUST_LQUEUE_CAPACITY);
+}
+uint dust_lqueue_capacity_o(uvec2 pyr, uint base) {
+    uint c = DustUintBuffer(pyr).v[base + 4u];
+    return c == 0u ? DUST_LQUEUE_CAPACITY : min(c, DUST_LQUEUE_CAPACITY);
+}
+// a record index, or ~0u when the queue is full; the dispatch a lane per record (`lanes` 64) or a
+// workgroup per record (`lanes` 1)
+uint dust_lqueue_append(DustUintBuffer pyr, uint base, uint lanes) {
+    uint r = atomicAdd(pyr.v[base + 3u], 1u);
+    if (r >= dust_lqueue_capacity(pyr, base)) return 0xFFFFFFFFu;
+    // (a workgroup per record: x at most DUST_LQUEUE_DISPATCH_MAX_X, the rows in y, word 1 from 1)
+    if (lanes == 1u) {
+        atomicMax(pyr.v[base], min(r + 1u, DUST_LQUEUE_DISPATCH_MAX_X));
+        if (r >= DUST_LQUEUE_DISPATCH_MAX_X) atomicMax(pyr.v[base + 1u], r / DUST_LQUEUE_DISPATCH_MAX_X + 1u);
+    } else atomicMax(pyr.v[base], r / lanes + 1u);
+    return r;
+}
+uint dust_lqueue_append_o(uvec2 pyr, uint base, uint lanes) {
+    uint r = atomicAdd(DustUintBuffer(pyr).v[base + 3u], 1u);
+    if (r >= dust_lqueue_capacity_o(pyr, base)) return 0xFFFFFFFFu;
+    // (a workgroup per record: x at most DUST_LQUEUE_DISPATCH_MAX_X, the rows in y, word 1 from 1)
+    if (lanes == 1u) {
+        atomicMax(DustUintBuffer(pyr).v[base], min(r + 1u, DUST_LQUEUE_DISPATCH_MAX_X));
+        if (r >= DUST_LQUEUE_DISPATCH_MAX_X) atomicMax(DustUintBuffer(pyr).v[base + 1u], r / DUST_LQUEUE_DISPATCH_MAX_X + 1u);
+    } else atomicMax(DustUintBuffer(pyr).v[base], r / lanes + 1u);
+    return r;
+}
+uint dust_lqueue_held(DustUintBuffer pyr, uint base) { return min(pyr.v[base + 3u], dust_lqueue_capacity(pyr, base)); }
+uint dust_lqueue_held_o(uvec2 pyr, uint base) { return min(DustUintBuffer(pyr).v[base + 3u], dust_lqueue_capacity_o(pyr, base)); }
+// words: 0 the seed, 1 the sub-packet record (recs + r), 2 the level (bit 31: a large leaf), 3 the
+// valve's level, 4 the candidate slot (its screen packet: DUST_PQUEUE_*)
+#define DUST_LQUEUE_PUT(pyr, base, cap, r, rec, seed, level, levelValve, cslot) { \
+    uint b_ = (base) + DUST_VQUEUE_HEADER_WORDS + (r); uint c_ = (cap); \
+    pyr.v[b_ + 0u * c_] = (seed); pyr.v[b_ + 1u * c_] = (rec); pyr.v[b_ + 2u * c_] = (level); pyr.v[b_ + 3u * c_] = (levelValve); pyr.v[b_ + 4u * c_] = (cslot); \
+}
+#define DUST_LQUEUE_GET(pyr, base, cap, r, seed, rec, level, levelValve, cslot) { \
+    uint b_ = (base) + DUST_VQUEUE_HEADER_WORDS + (r); uint c_ = (cap); \
+    seed = pyr.v[b_ + 0u * c_]; rec = pyr.v[b_ + 1u * c_]; level = pyr.v[b_ + 2u * c_]; levelValve = pyr.v[b_ + 3u * c_]; cslot = pyr.v[b_ + 4u * c_]; \
+}
+uint dust_leaf_slot_base(DustUintBuffer pyr, uint slot) { return (slot & DUST_LQUEUE_SPILL_BIT) != 0u ? dust_lspill_base(pyr) : dust_lqueue_base(pyr); }
+uint dust_leaf_slot_base_o(uvec2 pyr, uint slot) { return (slot & DUST_LQUEUE_SPILL_BIT) != 0u ? dust_lspill_base_o(pyr) : dust_lqueue_base_o(pyr); }
+// the leaf to the queue, else to the spill (a leaf neither takes is counted lost); a large one
+// listed for the workgroup blob
+void dust_leaf_emit(DustUintBuffer pyr, uint cslot, uint rec, uint seed, uint level, uint levelValve, bool large) {
+    uint base = dust_lqueue_base(pyr);
+    uint slot = dust_lqueue_append(pyr, base, 64u);
+    if (slot == 0xFFFFFFFFu) {
+        slot = dust_lqueue_append(pyr, dust_lspill_base(pyr), 64u);
+        if (slot == 0xFFFFFFFFu) { atomicAdd(pyr.v[base + DUST_LQUEUE_LOST], 1u); return; }
+        slot |= DUST_LQUEUE_SPILL_BIT;
+    }
+    base = dust_leaf_slot_base(pyr, slot);
+    DUST_LQUEUE_PUT(pyr, base, dust_lqueue_capacity(pyr, base), slot & ~DUST_LQUEUE_SPILL_BIT, rec, seed, level | (large ? DUST_LQUEUE_SPILL_BIT : 0u), levelValve, cslot)
+    if (large) {
+        uint lb = dust_blist_base(pyr);
+        uint i = dust_lqueue_append(pyr, lb, 1u);
+        // (the list holds as many entries as the queue and the spill hold records: never full)
+        if (i != 0xFFFFFFFFu) pyr.v[lb + DUST_VQUEUE_HEADER_WORDS + i] = slot;
+    }
+}
+void dust_leaf_emit_o(uvec2 pyr, uint cslot, uint rec, uint seed, uint level, uint levelValve, bool large) {
+    uint base = dust_lqueue_base_o(pyr);
+    uint slot = dust_lqueue_append_o(pyr, base, 64u);
+    if (slot == 0xFFFFFFFFu) {
+        slot = dust_lqueue_append_o(pyr, dust_lspill_base_o(pyr), 64u);
+        if (slot == 0xFFFFFFFFu) { atomicAdd(DustUintBuffer(pyr).v[base + DUST_LQUEUE_LOST], 1u); return; }
+        slot |= DUST_LQUEUE_SPILL_BIT;
+    }
+    base = dust_leaf_slot_base_o(pyr, slot);
+    DUST_LQUEUE_PUT(DustUintBuffer(pyr), base, dust_lqueue_capacity_o(pyr, base), slot & ~DUST_LQUEUE_SPILL_BIT, rec, seed, level | (large ? DUST_LQUEUE_SPILL_BIT : 0u), levelValve, cslot)
+    if (large) {
+        uint lb = dust_blist_base_o(pyr);
+        uint i = dust_lqueue_append_o(pyr, lb, 1u);
+        // (the list holds as many entries as the queue and the spill hold records: never full)
+        if (i != 0xFFFFFFFFu) DustUintBuffer(pyr).v[lb + DUST_VQUEUE_HEADER_WORDS + i] = slot;
+    }
+}
+
+// ── The candidate leaves (round 9 step Z2: the walk stage's output, the sequencer's input) ───
+// The walk stage (dust_split.comp) draws nothing and seeds nothing: every leaf its walk reaches —
+// a volumetric packet or an EWA leaf still unprojected — is written as a candidate, the record's
+// candidates contiguous in the walk's order (the walk's counting pass sizes the record, the
+// cluster's prefix places it, lane 0 reserves the cluster's run with one atomicAdd; the record's
+// run in its words 45-46). The sequencer blob (dust_split.comp -DDUST_SPLIT_SEQ, dispatched like
+// the splitter after it) walks every record's run in order through today's leaf path — the
+// projection, the band and its rows, the seed (dust_next_packet_seed: its counting pass and the
+// prefix are the sequencer's, so every seed is the per-cluster thread's) — and emits to the
+// volume queue (dust_volume_emit) or the leaf queue (dust_leaf_emit). A cluster the buffer
+// cannot hold whole is refused whole and counted (word 5, DUST_CQUEUE_LOST: the host logs it and
+// sizes the chunk; the sequencer sees a run of 0). Header as the leaf queue's (word 3 the raw
+// reservation counter, 4 a capacity override), then DUST_CQUEUE_RECORD_WORDS-word records
+// as consecutive words, a record per DUST_CQUEUE_RECORD_WORDS (perf9_O: the walk writes through one
+// pointer to the slot, the project stage reads it through one; the capacity no longer strides the
+// words, it only bounds the slots). The buffer lies where word 6 of the leaf queue's
+// header says (host-written per frame, words from the EWA queue base).
+const uint DUST_LQUEUE_CQUEUE_OFFSET = 6u;
+const uint DUST_CQUEUE_LOST = 5u;
+const uint DUST_CQUEUE_RECORD_WORDS = 17u;
+const uint DUST_CQUEUE_CAPACITY = 262144u;
+// sub-packet record words 45-46: the record's run of candidates (its first, its count)
+const uint DUST_SQUEUE_CAND_BASE = 45u;
+const uint DUST_SQUEUE_CAND_COUNT = 46u;
+uint dust_cqueue_base(DustUintBuffer pyr) { uint b = dust_queue_base(pyr); return b + pyr.v[dust_lqueue_base(pyr) + DUST_LQUEUE_CQUEUE_OFFSET]; }
+uint dust_cqueue_base_o(uvec2 pyr) { uint b = dust_queue_base_o(pyr); return b + DustUintBuffer(pyr).v[dust_lqueue_base_o(pyr) + DUST_LQUEUE_CQUEUE_OFFSET]; }
+uint dust_cqueue_capacity(DustUintBuffer pyr, uint base) {
+    uint c = pyr.v[base + 4u];
+    return c == 0u ? DUST_CQUEUE_CAPACITY : min(c, DUST_CQUEUE_CAPACITY);
+}
+uint dust_cqueue_capacity_o(uvec2 pyr, uint base) {
+    uint c = DustUintBuffer(pyr).v[base + 4u];
+    return c == 0u ? DUST_CQUEUE_CAPACITY : min(c, DUST_CQUEUE_CAPACITY);
+}
+// a run of n candidates, or ~0u (counted lost) when the buffer cannot hold it
+uint dust_cqueue_reserve(DustUintBuffer pyr, uint base, uint n) {
+    if (n == 0u) return 0u;
+    uint r = atomicAdd(pyr.v[base + 3u], n);
+    if (r + n > dust_cqueue_capacity(pyr, base)) { atomicAdd(pyr.v[base + DUST_CQUEUE_LOST], n); return 0xFFFFFFFFu; }
+    // (word 0: the project stage's indirect dispatch, a lane per candidate)
+    atomicMax(pyr.v[base], (r + n + 63u) / 64u);
+    return r;
+}
+uint dust_cqueue_reserve_o(uvec2 pyr, uint base, uint n) {
+    if (n == 0u) return 0u;
+    uint r = atomicAdd(DustUintBuffer(pyr).v[base + 3u], n);
+    if (r + n > dust_cqueue_capacity_o(pyr, base)) { atomicAdd(DustUintBuffer(pyr).v[base + DUST_CQUEUE_LOST], n); return 0xFFFFFFFFu; }
+    // (word 0: the project stage's indirect dispatch, a lane per candidate)
+    atomicMax(DustUintBuffer(pyr).v[base], (r + n + 63u) / 64u);
+    return r;
+}
+// words: 0-2 mean, 3-8 S, 9-11 seg, 12 flux, 13-14 rho, 15 open ends (bit 0 start, 1 end) and
+// bit 2 a volumetric packet, 16 the sub-packet record (recs + r)
+#define DUST_CQUEUE_PUT(pyr, base, cap, r, q, volume, rec) { \
+    uint b_ = (base) + DUST_VQUEUE_HEADER_WORDS + (r) * DUST_CQUEUE_RECORD_WORDS; const uint c_ = 1u; \
+    pyr.v[b_ + 0u * c_] = floatBitsToUint((q).mean.x); pyr.v[b_ + 1u * c_] = floatBitsToUint((q).mean.y); pyr.v[b_ + 2u * c_] = floatBitsToUint((q).mean.z); \
+    pyr.v[b_ + 3u * c_] = floatBitsToUint((q).S[0]); pyr.v[b_ + 4u * c_] = floatBitsToUint((q).S[1]); pyr.v[b_ + 5u * c_] = floatBitsToUint((q).S[2]); \
+    pyr.v[b_ + 6u * c_] = floatBitsToUint((q).S[3]); pyr.v[b_ + 7u * c_] = floatBitsToUint((q).S[4]); pyr.v[b_ + 8u * c_] = floatBitsToUint((q).S[5]); \
+    pyr.v[b_ + 9u * c_] = floatBitsToUint((q).seg.x); pyr.v[b_ + 10u * c_] = floatBitsToUint((q).seg.y); pyr.v[b_ + 11u * c_] = floatBitsToUint((q).seg.z); \
+    pyr.v[b_ + 12u * c_] = floatBitsToUint((q).flux); \
+    pyr.v[b_ + 13u * c_] = floatBitsToUint((q).rho.x); pyr.v[b_ + 14u * c_] = floatBitsToUint((q).rho.y); \
+    pyr.v[b_ + 15u * c_] = ((q).openStart ? 1u : 0u) | ((q).openEnd ? 2u : 0u) | ((volume) ? 4u : 0u); \
+    pyr.v[b_ + 16u * c_] = (rec); \
+}
+#define DUST_CQUEUE_GET(pyr, base, cap, r, q, volume, rec) { \
+    uint b_ = (base) + DUST_VQUEUE_HEADER_WORDS + (r) * DUST_CQUEUE_RECORD_WORDS; const uint c_ = 1u; \
+    (q).mean = vec3(uintBitsToFloat(pyr.v[b_ + 0u * c_]), uintBitsToFloat(pyr.v[b_ + 1u * c_]), uintBitsToFloat(pyr.v[b_ + 2u * c_])); \
+    (q).S[0] = uintBitsToFloat(pyr.v[b_ + 3u * c_]); (q).S[1] = uintBitsToFloat(pyr.v[b_ + 4u * c_]); (q).S[2] = uintBitsToFloat(pyr.v[b_ + 5u * c_]); \
+    (q).S[3] = uintBitsToFloat(pyr.v[b_ + 6u * c_]); (q).S[4] = uintBitsToFloat(pyr.v[b_ + 7u * c_]); (q).S[5] = uintBitsToFloat(pyr.v[b_ + 8u * c_]); \
+    (q).seg = vec3(uintBitsToFloat(pyr.v[b_ + 9u * c_]), uintBitsToFloat(pyr.v[b_ + 10u * c_]), uintBitsToFloat(pyr.v[b_ + 11u * c_])); \
+    (q).flux = uintBitsToFloat(pyr.v[b_ + 12u * c_]); \
+    (q).rho = vec2(uintBitsToFloat(pyr.v[b_ + 13u * c_]), uintBitsToFloat(pyr.v[b_ + 14u * c_])); \
+    (q).openStart = (pyr.v[b_ + 15u * c_] & 1u) != 0u; (q).openEnd = (pyr.v[b_ + 15u * c_] & 2u) != 0u; \
+    (q).segT = vec3(0.0); \
+    volume = (pyr.v[b_ + 15u * c_] & 4u) != 0u; \
+    rec = pyr.v[b_ + 16u * c_]; \
+}
+
+// ── The screen packets (round 9 step Z3: the project stage's output, a slot per candidate) ───
+// dust_project_leaf.comp (a lane per candidate, indirect from the candidate header) projects every
+// EWA candidate (dust_project_packet) and writes its screen packet here, at the candidate's slot
+// (consecutive words, DUST_PQUEUE_RECORD_WORDS a slot); the sequencer reads its fields at each use (never
+// the packet whole), writes back the five the widening changes and the closed open ends, and
+// dust_draw_leaf.comp draws from it, a pass of the segment at a time. Words: 0-1 mu, 2-4 cov, 5-6
+// seg, 7 amp, 8 sigmaMin, 9 det, 10 depthAu, 11 open ends (bit 0 start, 1 end) and bit 2 on
+// screen, 12-13 rho, 14-16 mean, 17-19 kx, 20-22 ky, 23-25 sun, 26 rhAu, 27-30 eye, 31 albedo, 32
+// wMean; (perf9_O) 33-42 the leaf consumer's walk words (dust_draw_leaf.comp writes and reads them,
+// nothing else does): 33 the record, 34 the seed, 35 the level's pyramid offset, 36 its width, 37 the
+// lane walk's carry, 38 its drawn flag, 39 the level, 40-41 the open row's columns x0, x1, 42 the
+// last row y1; (round 4) 43-46 the lane walk's staged texel (dust_l_t1/t2/t3, dust_l_ph_weight /
+// _deposit; each texel in passes, its carried state here): 43 tau, 44 a, 45 b / a, 46 i0.
+// Lies where word 7 of the leaf queue's header says (host-written, words from the EWA
+// queue base); no header of its own.
+const uint DUST_LQUEUE_PQUEUE_OFFSET = 7u;
+const uint DUST_PQUEUE_RECORD_WORDS = 47u;
+uint dust_pqueue_base(DustUintBuffer pyr) { uint b = dust_queue_base(pyr); return b + pyr.v[dust_lqueue_base(pyr) + DUST_LQUEUE_PQUEUE_OFFSET]; }
+uint dust_pqueue_base_o(uvec2 pyr) { uint b = dust_queue_base_o(pyr); return b + DustUintBuffer(pyr).v[dust_lqueue_base_o(pyr) + DUST_LQUEUE_PQUEUE_OFFSET]; }
+// (records are consecutive words — not structure-of-arrays at a run-time stride: Mali builds one
+// 64-bit address per word of such a record and keeps them all live, 92 B of spill in the consumer;
+// consecutive words are offsets from one address)
+float dust_pq_f(DustUintBuffer pyr, uint base, uint cap, uint slot, uint k) { return uintBitsToFloat(pyr.v[base + slot * DUST_PQUEUE_RECORD_WORDS + k]); }
+uint dust_pq_u(DustUintBuffer pyr, uint base, uint cap, uint slot, uint k) { return pyr.v[base + slot * DUST_PQUEUE_RECORD_WORDS + k]; }
+uint dust_pq_u_o(uvec2 pyr, uint base, uint cap, uint slot, uint k) { return DustUintBuffer(pyr).v[base + slot * DUST_PQUEUE_RECORD_WORDS + k]; }
+#define DUST_PQ_SET(pyr, base, cap, slot, k, f) pyr.v[(base) + (slot) * DUST_PQUEUE_RECORD_WORDS + (k)] = floatBitsToUint(f);
+#define DUST_PQUEUE_PUT(pyr, base, cap, slot, P, on) { \
+    DUST_PQ_SET(pyr, base, cap, slot, 0u, (P).mu.x) DUST_PQ_SET(pyr, base, cap, slot, 1u, (P).mu.y) \
+    DUST_PQ_SET(pyr, base, cap, slot, 2u, (P).cov.x) DUST_PQ_SET(pyr, base, cap, slot, 3u, (P).cov.y) DUST_PQ_SET(pyr, base, cap, slot, 4u, (P).cov.z) \
+    DUST_PQ_SET(pyr, base, cap, slot, 5u, (P).seg.x) DUST_PQ_SET(pyr, base, cap, slot, 6u, (P).seg.y) \
+    DUST_PQ_SET(pyr, base, cap, slot, 7u, (P).amp) DUST_PQ_SET(pyr, base, cap, slot, 8u, (P).sigmaMin) DUST_PQ_SET(pyr, base, cap, slot, 9u, (P).det) DUST_PQ_SET(pyr, base, cap, slot, 10u, (P).depthAu) \
+    pyr.v[(base) + (slot) * DUST_PQUEUE_RECORD_WORDS + 11u] = ((P).openStart ? 1u : 0u) | ((P).openEnd ? 2u : 0u) | ((on) ? 4u : 0u); \
+    DUST_PQ_SET(pyr, base, cap, slot, 12u, (P).rho.x) DUST_PQ_SET(pyr, base, cap, slot, 13u, (P).rho.y) \
+    DUST_PQ_SET(pyr, base, cap, slot, 14u, (P).mean.x) DUST_PQ_SET(pyr, base, cap, slot, 15u, (P).mean.y) DUST_PQ_SET(pyr, base, cap, slot, 16u, (P).mean.z) \
+    DUST_PQ_SET(pyr, base, cap, slot, 17u, (P).kx.x) DUST_PQ_SET(pyr, base, cap, slot, 18u, (P).kx.y) DUST_PQ_SET(pyr, base, cap, slot, 19u, (P).kx.z) \
+    DUST_PQ_SET(pyr, base, cap, slot, 20u, (P).ky.x) DUST_PQ_SET(pyr, base, cap, slot, 21u, (P).ky.y) DUST_PQ_SET(pyr, base, cap, slot, 22u, (P).ky.z) \
+    DUST_PQ_SET(pyr, base, cap, slot, 23u, (P).sun.x) DUST_PQ_SET(pyr, base, cap, slot, 24u, (P).sun.y) DUST_PQ_SET(pyr, base, cap, slot, 25u, (P).sun.z) \
+    DUST_PQ_SET(pyr, base, cap, slot, 26u, (P).rhAu) \
+    DUST_PQ_SET(pyr, base, cap, slot, 27u, (P).eye.x) DUST_PQ_SET(pyr, base, cap, slot, 28u, (P).eye.y) DUST_PQ_SET(pyr, base, cap, slot, 29u, (P).eye.z) DUST_PQ_SET(pyr, base, cap, slot, 30u, (P).eye.w) \
+    DUST_PQ_SET(pyr, base, cap, slot, 31u, (P).albedo) DUST_PQ_SET(pyr, base, cap, slot, 32u, (P).wMean) \
+}
+// the five words the widening changes (dust_widen_screen_packet)
+#define DUST_PQUEUE_PUT_WIDEN(pyr, base, cap, slot, P) { \
+    DUST_PQ_SET(pyr, base, cap, slot, 2u, (P).cov.x) DUST_PQ_SET(pyr, base, cap, slot, 4u, (P).cov.z) \
+    DUST_PQ_SET(pyr, base, cap, slot, 7u, (P).amp) DUST_PQ_SET(pyr, base, cap, slot, 8u, (P).sigmaMin) DUST_PQ_SET(pyr, base, cap, slot, 9u, (P).det) \
+}
+// the packet whole (a use reads the fields it needs: the rest are dead loads)
+DustScreenPacket dust_pq_get(DustUintBuffer pyr, uint base, uint cap, uint slot) {
+    DustScreenPacket P;
+    P.mu = vec2(dust_pq_f(pyr, base, cap, slot, 0u), dust_pq_f(pyr, base, cap, slot, 1u));
+    P.cov = vec3(dust_pq_f(pyr, base, cap, slot, 2u), dust_pq_f(pyr, base, cap, slot, 3u), dust_pq_f(pyr, base, cap, slot, 4u));
+    P.seg = vec2(dust_pq_f(pyr, base, cap, slot, 5u), dust_pq_f(pyr, base, cap, slot, 6u));
+    P.amp = dust_pq_f(pyr, base, cap, slot, 7u);
+    P.sigmaMin = dust_pq_f(pyr, base, cap, slot, 8u);
+    P.det = dust_pq_f(pyr, base, cap, slot, 9u);
+    P.depthAu = dust_pq_f(pyr, base, cap, slot, 10u);
+    uint open = dust_pq_u_o(uvec2(pyr), base, cap, slot, 11u);
+    P.openStart = (open & 1u) != 0u;
+    P.openEnd = (open & 2u) != 0u;
+    P.rho = vec2(dust_pq_f(pyr, base, cap, slot, 12u), dust_pq_f(pyr, base, cap, slot, 13u));
+    P.mean = vec3(dust_pq_f(pyr, base, cap, slot, 14u), dust_pq_f(pyr, base, cap, slot, 15u), dust_pq_f(pyr, base, cap, slot, 16u));
+    P.kx = vec3(dust_pq_f(pyr, base, cap, slot, 17u), dust_pq_f(pyr, base, cap, slot, 18u), dust_pq_f(pyr, base, cap, slot, 19u));
+    P.ky = vec3(dust_pq_f(pyr, base, cap, slot, 20u), dust_pq_f(pyr, base, cap, slot, 21u), dust_pq_f(pyr, base, cap, slot, 22u));
+    P.sun = vec3(dust_pq_f(pyr, base, cap, slot, 23u), dust_pq_f(pyr, base, cap, slot, 24u), dust_pq_f(pyr, base, cap, slot, 25u));
+    P.rhAu = dust_pq_f(pyr, base, cap, slot, 26u);
+    P.eye = vec4(dust_pq_f(pyr, base, cap, slot, 27u), dust_pq_f(pyr, base, cap, slot, 28u), dust_pq_f(pyr, base, cap, slot, 29u), dust_pq_f(pyr, base, cap, slot, 30u));
+    P.albedo = dust_pq_f(pyr, base, cap, slot, 31u);
+    P.wMean = dust_pq_f(pyr, base, cap, slot, 32u);
+    return P;
+}
+bool dust_pq_on(DustUintBuffer pyr, uint base, uint cap, uint slot) { return (dust_pq_u(pyr, base, cap, slot, 11u) & 4u) != 0u; }
+bool dust_pq_on_o(uvec2 pyr, uint base, uint cap, uint slot) { return (dust_pq_u_o(pyr, base, cap, slot, 11u) & 4u) != 0u; }
+
+#ifdef DUST_DRAW_LEAF
+// (perf9_O) The leaf consumer (dust_draw_leaf.comp, which defines DUST_DRAW_LEAF): a leaf's texels
+// drawn as one flat walk, dust_scatter_segment's texel arithmetic in its order (capsule x area x
+// invUnit, x the weight when lit, the rounding with the carry, the colour words, the depth
+// minimum) on the texels of dust_scatter_rows in its order (rows y0..y1, texels x0..x1, the carry
+// re-seeded at each segment's first texel x0 + j * DUST_SEGMENT_TEXELS). Mali-G52 holds a loop's
+// live-through values over its whole body: the walk keeps in registers only its position (ty, tx
+// for a lane; nothing for the workgroup's lanes), every other value of the leaf is in its slot's
+// walk words (DUST_PQUEUE_RECORD_WORDS) or in shared words and read where it is used.
+//
+// The leaf's screen packet through one per-lane pointer to its slot's word 0, the fields at
+// constant offsets (one address, not one per field)
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer DustLRow { uint v[]; };
+uvec2 dust_l_slot;
+uvec2 dust_l_addr(DustUintBuffer pyr, uint word) { uvec2 a = uvec2(pyr); uint o = word * 4u; uint lo = a.x + o; return uvec2(lo, a.y + (lo < o ? 1u : 0u)); }
+uvec2 dust_l_addr_o(uvec2 pyr, uint word) { uvec2 a = uvec2(pyr); uint o = word * 4u; uint lo = a.x + o; return uvec2(lo, a.y + (lo < o ? 1u : 0u)); }
+#define LQF(k) uintBitsToFloat(DustLRow(dust_l_slot).v[k])
+DustScreenPacket dust_l_get() {
+    DustScreenPacket P;
+    P.mu = vec2(LQF(0u), LQF(1u));
+    P.cov = vec3(LQF(2u), LQF(3u), LQF(4u));
+    P.seg = vec2(LQF(5u), LQF(6u));
+    P.amp = LQF(7u);
+    P.sigmaMin = LQF(8u);
+    P.det = LQF(9u);
+    P.depthAu = LQF(10u);
+    uint open = DustLRow(dust_l_slot).v[11u];
+    P.openStart = (open & 1u) != 0u;
+    P.openEnd = (open & 2u) != 0u;
+    P.rho = vec2(LQF(12u), LQF(13u));
+    P.mean = vec3(LQF(14u), LQF(15u), LQF(16u));
+    P.kx = vec3(LQF(17u), LQF(18u), LQF(19u));
+    P.ky = vec3(LQF(20u), LQF(21u), LQF(22u));
+    P.sun = vec3(LQF(23u), LQF(24u), LQF(25u));
+    P.rhAu = LQF(26u);
+    P.eye = vec4(LQF(27u), LQF(28u), LQF(29u), LQF(30u));
+    P.albedo = LQF(31u);
+    P.wMean = LQF(32u);
+    return P;
+}
+// The volatile view of the slot: a field read inside the walk is re-read at its use (the same
+// bits), never hoisted and held across the walk. Its loads and stores go through functions: a
+// buffer-reference access inside dust_capsule_tau's precise cone otherwise spreads NoContraction
+// to every buffer-reference store of the shader (glslang's precise propagation)
+layout(buffer_reference, std430, buffer_reference_align = 4) volatile buffer DustLRowV { uint v[]; };
+uint dust_lv(uint k) { return DustLRowV(dust_l_slot).v[k]; }
+void dust_lv_set(uint k, uint v) { DustLRowV(dust_l_slot).v[k] = v; }
+// (every call site has the push-constant buffer's address as `pyr`, a uvec2)
+// (perf9_O fix 3) through a function: a store to DustUintBuffer(pyr) in the caller has no symbol
+// root, so glslang's precise propagation gave every such store of the shader one object and
+// spread NoContraction over the whole lane walk (the tree's set is dust_capsule_tau's cone only)
+void dust_lv_store(uvec2 pyr_, uint k_, uint v_) { DustUintBuffer(pyr_).v[((dust_l_slot.x - pyr_.x) >> 2u) + k_] = v_; }
+#define dust_lv_set(k_, v_) dust_lv_store(uvec2(pyr), (k_), (v_))
+#define DUST_O_COL(n_) DustUintBuffer(pyr).v[DUST_LS(33u) + (n_) * DUST_SQUEUE_CAPACITY]
+#define LQV(k) uintBitsToFloat(dust_lv(k))
+#define DUST_LS(k) dust_lv(k)
+DustScreenPacket dust_l_getv() {
+    DustScreenPacket P;
+    P.mu = vec2(LQV(0u), LQV(1u));
+    P.cov = vec3(LQV(2u), LQV(3u), LQV(4u));
+    P.seg = vec2(LQV(5u), LQV(6u));
+    P.amp = LQV(7u);
+    P.sigmaMin = LQV(8u);
+    P.det = LQV(9u);
+    P.depthAu = LQV(10u);
+    uint open = dust_lv(11u);
+    P.openStart = (open & 1u) != 0u;
+    P.openEnd = (open & 2u) != 0u;
+    P.rho = vec2(LQV(12u), LQV(13u));
+    P.mean = vec3(LQV(14u), LQV(15u), LQV(16u));
+    P.kx = vec3(LQV(17u), LQV(18u), LQV(19u));
+    P.ky = vec3(LQV(20u), LQV(21u), LQV(22u));
+    P.sun = vec3(LQV(23u), LQV(24u), LQV(25u));
+    P.rhAu = LQV(26u);
+    P.eye = vec4(LQV(27u), LQV(28u), LQV(29u), LQV(30u));
+    P.albedo = LQV(31u);
+    P.wMean = LQV(32u);
+    return P;
+}
+// dust_capsule_tau and dust_texel_weight with each field read from the slot where the expression
+// uses it (the same expressions on the same bits; dust_common.glsl's text with P.<field> replaced
+// by the field's read): only the values the expression is computing are live
+float dust_capsule_tau_l(vec2 x) {
+#define d vec2(LQV(5u), LQV(6u))
+    float det = LQV(9u);
+    if (!(det > 0.0)) return 0.0;
+    float m00 = LQV(4u) / det, m01 = -LQV(3u) / det, m11 = LQV(2u) / det;
+    vec2 e = x - vec2(LQV(0u), LQV(1u));
+    float c = m00 * e.x * e.x + 2.0 * m01 * e.x * e.y + m11 * e.y * e.y;
+    float a = m00 * d.x * d.x + 2.0 * m01 * d.x * d.y + m11 * d.y * d.y;
+    if (!(a > 1e-6)) return LQV(7u) * exp(-0.5 * c);
+    float b = m00 * d.x * e.x + m01 * (d.x * e.y + d.y * e.x) + m11 * d.y * e.y;
+    float sa = sqrt(a);
+    float u0 = b / a;
+    // an open end continues into the neighbouring bin: no Gaussian cap there
+    float phiEnd = ((dust_lv(11u) & 2u) != 0u) ? 1.0 : 0.5 * (1.0 + dust_erf((1.0 - u0) * sa * 0.70710678));
+    float phiStart = ((dust_lv(11u) & 1u) != 0u) ? 0.0 : 0.5 * (1.0 + dust_erf(-u0 * sa * 0.70710678));
+    float span = phiEnd - phiStart;
+    // the squared distance to the line from the residual e - u0 d, not c - b^2/a (catastrophic
+    // cancellation for a chord whose start is far off screen; dust::capsule_tau)
+    precise vec2 r = e - u0 * d;
+    precise float q = max(m00 * r.x * r.x + 2.0 * m01 * r.x * r.y + m11 * r.y * r.y, 0.0);
+    // a linear density along the segment (dust::capsule_tau): the integral of u exp(-a(u-u0)^2/2)
+    // over it is u0 I0 + (E_start - E_end)/a with the Gaussian's values at the closed ends
+    float i0 = sqrt(2.0 * DUST_PI_F32 / a) * span;
+    float weight;
+    if (LQV(13u) == LQV(12u)) {
+        weight = LQV(12u) * i0;
+    } else {
+        float i1;
+        if (!((dust_lv(11u) & 1u) != 0u) && !((dust_lv(11u) & 2u) != 0u)) {
+            // both ends closed: the Gaussians' difference from expm1 where they are close (the
+            // cancellation at a << 1), the plain difference otherwise (dust::capsule_tau)
+            float z1 = -0.5 * a * u0 * u0;
+            float z2 = -0.5 * a * (1.0 - u0) * (1.0 - u0);
+            float dz = z2 - z1;
+            float diff = abs(dz) < 1.0 ? -exp(z1) * dust_expm1(dz) : exp(z1) - exp(z2);
+            i1 = u0 * i0 + diff / a;
+        } else {
+            float eStart = ((dust_lv(11u) & 1u) != 0u) ? 0.0 : exp(-0.5 * a * u0 * u0);
+            float eEnd = ((dust_lv(11u) & 2u) != 0u) ? 0.0 : exp(-0.5 * a * (1.0 - u0) * (1.0 - u0));
+            i1 = u0 * i0 + (eStart - eEnd) / a;
+        }
+        weight = max(LQV(12u) * i0 + (LQV(13u) - LQV(12u)) * i1, 0.0);
+    }
+    return LQV(7u) * exp(-0.5 * q) * weight;
+}
+#undef d
+float dust_texel_weight_l(vec2 x) {
+    vec2 dxy = x - vec2(LQV(0u), LQV(1u));
+    vec3 d = vec3(LQV(17u), LQV(18u), LQV(19u)) * dxy.x + vec3(LQV(20u), LQV(21u), LQV(22u)) * dxy.y;
+    vec3 pos = vec3(LQV(14u), LQV(15u), LQV(16u)) + d;
+    vec3 rVec = vec3(LQV(23u), LQV(24u), LQV(25u)) * (-LQV(26u) * DUST_AU_M) + d;
+    float rn = max(length(rVec), 1.0);
+    return dust_radiance_weight_o(uvec2(dust_phot_lut), LQV(31u), rVec * (-1.0 / rn), vec4(LQV(27u), LQV(28u), LQV(29u), LQV(30u)).xyz - vec4(LQV(27u), LQV(28u), LQV(29u), LQV(30u)).w * pos, rn / DUST_AU_M);
+}
+// One texel of the walk: dust_scatter_segment's tau, weight and deposit on texel (tx, ty), the
+// carry, the record, the level's offset and width and the drawn flag in the slot's walk words
+bool dust_l_texel(uvec2 pyr, float invUnit, float s, int ty, int tx) {
+    float yc = (float(ty) + 0.5) * s;
+    float area = s * s;
+    vec2 x = vec2((float(tx) + 0.5) * s, yc);
+    float tau = dust_capsule_tau_l(x) * area * invUnit;
+    if (LQF(31u) > 0.0) tau *= dust_texel_weight_l(x);
+    if (!(tau >= 0.0) || isinf(tau)) return false;
+    float tauC = min(tau, DUST_COUNT_MAX_PER_ADD) + uintBitsToFloat(DUST_LS(37u));
+    uint counts = uint(tauC + 0.5);
+    dust_lv_set(37u, floatBitsToUint(tauC - float(counts)));
+    if (counts == 0u) return false;
+    uint i = DUST_LS(35u) + (uint(ty) * DUST_LS(36u) + uint(tx)) * DUST_PYRAMID_TEXEL_WORDS;
+    dust_atomic_add_sat_o(pyr, i, counts);
+    // the colour words component by component (uvec3(float(counts) * color * DUST_COLOR_SCALE + hf)
+    // is component-wise: the same three expressions), each colour word read where it is used
+    float hf = float(dust_hash32(i) >> 8u) * (1.0 / 16777216.0);
+    dust_atomic_add_sat_o(pyr, i + 1u, uint(float(counts) * uintBitsToFloat(DUST_O_COL(20u)) * DUST_COLOR_SCALE + hf));
+    dust_atomic_add_sat_o(pyr, i + 2u, uint(float(counts) * uintBitsToFloat(DUST_O_COL(21u)) * DUST_COLOR_SCALE + hf));
+    dust_atomic_add_sat_o(pyr, i + 3u, uint(float(counts) * uintBitsToFloat(DUST_O_COL(22u)) * DUST_COLOR_SCALE + hf));
+    uint depthBits = floatBitsToUint(max(LQV(10u), 0.0));
+    uint cur = DustUintBuffer(pyr).v[i + 4u];
+    if (cur == 0u || depthBits < cur) {
+        uint seen = atomicCompSwap(DustUintBuffer(pyr).v[i + 4u], 0u, depthBits);
+        if (seen != 0u) atomicMin(DustUintBuffer(pyr).v[i + 4u], depthBits);
+    }
+    dust_lv_set(38u, 1u);
+    return true;
+}
+#ifndef DUST_LEAF_WG
+shared uint dust_l_lw[64];
+#define DUST_O_LRL() { memoryBarrierShared(); dust_l_slot = dust_l_addr_o(pyr, dust_l_lw[gl_LocalInvocationID.x]); }
+#define DUST_O_LRL_SET(w_) dust_l_lw[gl_LocalInvocationID.x] = (w_);
+#else
+#define DUST_O_LRL()
+#define DUST_O_LRL_SET(w_)
+#endif
+// T1: 0 = tau final (word 43, the point-like or empty case), 1 = go on to T2
+uint dust_l_t1(uvec2 pyr, float invUnit, float s, int ty, int tx) {
+    float area = s * s;
+    vec2 x = vec2((float(tx) + 0.5) * s, (float(ty) + 0.5) * s);
+    vec2 d = vec2(LQV(5u), LQV(6u));
+    float det = LQV(9u);
+    if (!(det > 0.0)) { dust_lv_set(43u, floatBitsToUint(0.0 * area * invUnit)); return 0u; }
+    float m00 = LQV(4u) / det, m01 = -LQV(3u) / det, m11 = LQV(2u) / det;
+    vec2 e = x - vec2(LQV(0u), LQV(1u));
+    float c = m00 * e.x * e.x + 2.0 * m01 * e.x * e.y + m11 * e.y * e.y;
+    // (a and b precise: dust_capsule_tau's cone, u0 = b / a feeding r)
+    precise float a = m00 * d.x * d.x + 2.0 * m01 * d.x * d.y + m11 * d.y * d.y;
+    if (!(a > 1e-6)) { dust_lv_set(43u, floatBitsToUint(LQV(7u) * exp(-0.5 * c) * area * invUnit)); return 0u; }
+    precise float b = m00 * d.x * e.x + m01 * (d.x * e.y + d.y * e.x) + m11 * d.y * e.y;
+    dust_lv_set(44u, floatBitsToUint(a));
+    dust_lv_set(45u, floatBitsToUint(b / a));
+    return 1u;
+}
+void dust_l_t2(uvec2 pyr) {
+    float a = uintBitsToFloat(dust_lv(44u)), u0 = uintBitsToFloat(dust_lv(45u));
+    float sa = sqrt(a);
+    float phiEnd = ((dust_lv(11u) & 2u) != 0u) ? 1.0 : 0.5 * (1.0 + dust_erf((1.0 - u0) * sa * 0.70710678));
+    float phiStart = ((dust_lv(11u) & 1u) != 0u) ? 0.0 : 0.5 * (1.0 + dust_erf(-u0 * sa * 0.70710678));
+    float span = phiEnd - phiStart;
+    dust_lv_set(46u, floatBitsToUint(sqrt(2.0 * DUST_PI_F32 / a) * span));
+}
+void dust_l_t3(uvec2 pyr, float invUnit, float s, int ty, int tx) {
+    float area = s * s;
+    vec2 x = vec2((float(tx) + 0.5) * s, (float(ty) + 0.5) * s);
+    vec2 d = vec2(LQV(5u), LQV(6u));
+    float det = LQV(9u);
+    float m00 = LQV(4u) / det, m01 = -LQV(3u) / det, m11 = LQV(2u) / det;
+    vec2 e = x - vec2(LQV(0u), LQV(1u));
+    float a = uintBitsToFloat(dust_lv(44u)), u0 = uintBitsToFloat(dust_lv(45u)), i0 = uintBitsToFloat(dust_lv(46u));
+    precise vec2 r = e - u0 * d;
+    precise float q = max(m00 * r.x * r.x + 2.0 * m01 * r.x * r.y + m11 * r.y * r.y, 0.0);
+    float weight;
+    if (LQV(13u) == LQV(12u)) {
+        weight = LQV(12u) * i0;
+    } else {
+        float i1;
+        if (!((dust_lv(11u) & 1u) != 0u) && !((dust_lv(11u) & 2u) != 0u)) {
+            float z1 = -0.5 * a * u0 * u0;
+            float z2 = -0.5 * a * (1.0 - u0) * (1.0 - u0);
+            float dz = z2 - z1;
+            float diff = abs(dz) < 1.0 ? -exp(z1) * dust_expm1(dz) : exp(z1) - exp(z2);
+            i1 = u0 * i0 + diff / a;
+        } else {
+            float eStart = ((dust_lv(11u) & 1u) != 0u) ? 0.0 : exp(-0.5 * a * u0 * u0);
+            float eEnd = ((dust_lv(11u) & 2u) != 0u) ? 0.0 : exp(-0.5 * a * (1.0 - u0) * (1.0 - u0));
+            i1 = u0 * i0 + (eStart - eEnd) / a;
+        }
+        weight = max(LQV(12u) * i0 + (LQV(13u) - LQV(12u)) * i1, 0.0);
+    }
+    dust_lv_set(43u, floatBitsToUint(LQV(7u) * exp(-0.5 * q) * weight * area * invUnit));
+}
+uint dust_l_ph_tau(uvec2 pyr, float invUnit, float s, int ty, int tx) {
+    float yc = (float(ty) + 0.5) * s;
+    float area = s * s;
+    vec2 x = vec2((float(tx) + 0.5) * s, yc);
+    float tau = dust_capsule_tau_l(x) * area * invUnit;
+    dust_lv_set(43u, floatBitsToUint(tau));
+    return LQF(31u) > 0.0 ? 1u : 2u;
+}
+void dust_l_ph_weight(uvec2 pyr, float s, int ty, int tx) {
+    float yc = (float(ty) + 0.5) * s;
+    vec2 x = vec2((float(tx) + 0.5) * s, yc);
+    float tau = uintBitsToFloat(dust_lv(43u));
+    tau *= dust_texel_weight_l(x);
+    dust_lv_set(43u, floatBitsToUint(tau));
+}
+bool dust_l_ph_deposit(uvec2 pyr, int ty, int tx) {
+    float tau = uintBitsToFloat(dust_lv(43u));
+    if (!(tau >= 0.0) || isinf(tau)) return false;
+    float tauC = min(tau, DUST_COUNT_MAX_PER_ADD) + uintBitsToFloat(DUST_LS(37u));
+    uint counts = uint(tauC + 0.5);
+    dust_lv_set(37u, floatBitsToUint(tauC - float(counts)));
+    if (counts == 0u) return false;
+    uint i = DUST_LS(35u) + (uint(ty) * DUST_LS(36u) + uint(tx)) * DUST_PYRAMID_TEXEL_WORDS;
+    dust_atomic_add_sat_o(pyr, i, counts);
+    // the colour words component by component (uvec3(float(counts) * color * DUST_COLOR_SCALE + hf)
+    // is component-wise: the same three expressions), each colour word read where it is used
+    float hf = float(dust_hash32(i) >> 8u) * (1.0 / 16777216.0);
+    dust_atomic_add_sat_o(pyr, i + 1u, uint(float(counts) * uintBitsToFloat(DUST_O_COL(20u)) * DUST_COLOR_SCALE + hf));
+    dust_atomic_add_sat_o(pyr, i + 2u, uint(float(counts) * uintBitsToFloat(DUST_O_COL(21u)) * DUST_COLOR_SCALE + hf));
+    dust_atomic_add_sat_o(pyr, i + 3u, uint(float(counts) * uintBitsToFloat(DUST_O_COL(22u)) * DUST_COLOR_SCALE + hf));
+    uint depthBits = floatBitsToUint(max(LQV(10u), 0.0));
+    uint cur = DustUintBuffer(pyr).v[i + 4u];
+    if (cur == 0u || depthBits < cur) {
+        uint seen = atomicCompSwap(DustUintBuffer(pyr).v[i + 4u], 0u, depthBits);
+        if (seen != 0u) atomicMin(DustUintBuffer(pyr).v[i + 4u], depthBits);
+    }
+    dust_lv_set(38u, 1u);
+    return true;
+}
+// dust_scatter_rows over the leaf's packet as one flat walk: each step opens the next row (its
+// columns into the walk words) or draws the next texel
+bool dust_scatter_rows_pq(uvec2 pyr, float invUnit, uint pbase, uint pcap, uint slot, uint rec, float s,
+                          uint off, uint w, uint h, uint seed, int rowA, int rowB) {
+    dust_l_slot = dust_l_addr_o(pyr, pbase + slot * DUST_PQUEUE_RECORD_WORDS);
+    int y0, y1;
+    if (!dust_band_rows(dust_band_new(dust_l_get()), s, h, y0, y1)) return false;
+    y0 = max(y0, rowA);
+    y1 = min(y1, rowB);
+    dust_lv_set(33u, rec); dust_lv_set(34u, seed); dust_lv_set(35u, off); dust_lv_set(36u, w); dust_lv_set(38u, 0u);
+    dust_lv_set(40u, 0u); dust_lv_set(41u, 0u); dust_lv_set(42u, uint(y1));
+    DUST_O_LRL_SET((dust_l_slot.x - uvec2(pyr).x) >> 2u)
+    int ty = y0 - 1, tx = 1;
+    uint ph = 0u;
+    while (true) {
+        DUST_O_LRL()
+        if (ph == 0u) {
+            if (tx > int(DUST_LS(41u))) {
+                ++ty;
+                if (ty > int(DUST_LS(42u))) break;
+                int c0, c1;
+                float s = float(1u << DUST_LS(39u));
+                if (!dust_band_columns(dust_band_new(dust_l_getv()), (float(ty) + 0.5) * s, s, DUST_LS(36u), c0, c1)) continue;
+                dust_lv_set(40u, uint(c0)); dust_lv_set(41u, uint(c1)); tx = c0;
+            }
+            if (uint(tx - int(DUST_LS(40u))) % DUST_SEGMENT_TEXELS == 0u) dust_lv_set(37u, floatBitsToUint(dust_segment_carry(DUST_LS(34u), (uint(ty) << 16u) | uint(tx))));
+            ph = dust_l_t1(pyr, invUnit, float(1u << DUST_LS(39u)), ty, tx) != 0u ? 5u : (LQF(31u) > 0.0 ? 1u : 2u);
+        } else if (ph == 5u) {
+            dust_l_t2(pyr);
+            ph = 6u;
+        } else if (ph == 6u) {
+            dust_l_t3(pyr, invUnit, float(1u << DUST_LS(39u)), ty, tx);
+            ph = LQF(31u) > 0.0 ? 1u : 2u;
+        } else if (ph == 1u) {
+            dust_l_ph_weight(pyr, float(1u << DUST_LS(39u)), ty, tx);
+            ph = 2u;
+        } else {
+            dust_l_ph_deposit(pyr, ty, tx);
+            ph = 0u;
+            ++tx;
+        }
+    }
+    return DUST_LS(38u) != 0u;
+}
+#ifdef DUST_QUEUE_WORKGROUP
+// (perf9_O) the workgroup's carries and flags, a word per lane (the texel step reads and writes them
+// where it uses them: no carry is held over the texel's tau)
+shared float dust_l_carry[64];
+shared uint dust_l_anyf[64];
+shared uint dust_l_total;
+shared uint dust_l_k[64];
+shared uint dust_l_rt[64];
+shared int dust_l_yc0;
+bool dust_l_texel_wg(uvec2 pyr, float invUnit, float s, int ty, int tx) {
+    float yc = (float(ty) + 0.5) * s;
+    float area = s * s;
+    vec2 x = vec2((float(tx) + 0.5) * s, yc);
+    float tau = dust_capsule_tau_l(x) * area * invUnit;
+    if (LQF(31u) > 0.0) tau *= dust_texel_weight_l(x);
+    if (!(tau >= 0.0) || isinf(tau)) return false;
+    float tauC = min(tau, DUST_COUNT_MAX_PER_ADD) + dust_l_carry[gl_LocalInvocationID.x];
+    uint counts = uint(tauC + 0.5);
+    dust_l_carry[gl_LocalInvocationID.x] = tauC - float(counts);
+    if (counts == 0u) return false;
+    uint i = DUST_LS(35u) + (uint(ty) * DUST_LS(36u) + uint(tx)) * DUST_PYRAMID_TEXEL_WORDS;
+    dust_atomic_add_sat_o(pyr, i, counts);
+    // the colour words component by component (uvec3(float(counts) * color * DUST_COLOR_SCALE + hf)
+    // is component-wise: the same three expressions), each colour word read where it is used
+    float hf = float(dust_hash32(i) >> 8u) * (1.0 / 16777216.0);
+    dust_atomic_add_sat_o(pyr, i + 1u, uint(float(counts) * uintBitsToFloat(DUST_O_COL(20u)) * DUST_COLOR_SCALE + hf));
+    dust_atomic_add_sat_o(pyr, i + 2u, uint(float(counts) * uintBitsToFloat(DUST_O_COL(21u)) * DUST_COLOR_SCALE + hf));
+    dust_atomic_add_sat_o(pyr, i + 3u, uint(float(counts) * uintBitsToFloat(DUST_O_COL(22u)) * DUST_COLOR_SCALE + hf));
+    uint depthBits = floatBitsToUint(max(LQV(10u), 0.0));
+    uint cur = DustUintBuffer(pyr).v[i + 4u];
+    if (cur == 0u || depthBits < cur) {
+        uint seen = atomicCompSwap(DustUintBuffer(pyr).v[i + 4u], 0u, depthBits);
+        if (seen != 0u) atomicMin(DustUintBuffer(pyr).v[i + 4u], depthBits);
+    }
+    dust_l_anyf[gl_LocalInvocationID.x] = 1u;
+    return true;
+}
+// dust_scatter_rows_wg over a slot's screen packet (the same chunks, prefix and segments; a lane's
+// segments k = lane, lane + lanes, ... drawn as one flat walk over their texels in order, the carry
+// re-seeded at each segment's first texel). The leaf's words (record, seed, level, the level's
+// offset and width) are lane 0's stores into the slot's walk words, read at their uses
+bool dust_scatter_rows_wg_pq(uvec2 pyr, float invUnit, uint pbase, uint pcap, uint slot, uint rec, float s,
+                             uint off, uint w, uint h, uint seed, int rowA, int rowB, uint lanes, uint lane) {
+    dust_l_slot = dust_l_addr_o(pyr, pbase + slot * DUST_PQUEUE_RECORD_WORDS);
+    int y0, y1;
+    if (!dust_band_rows(dust_band_new(dust_l_get()), s, h, y0, y1)) return false;
+    y0 = max(y0, rowA);
+    y1 = min(y1, rowB);
+    if (lane == 0u) { dust_lv_set(33u, rec); dust_lv_set(34u, seed); dust_lv_set(35u, off); dust_lv_set(36u, w); dust_lv_set(42u, uint(y1)); }
+    dust_l_anyf[lane] = 0u;
+    memoryBarrierBuffer();
+    barrier();
+    for (int yc0 = y0; yc0 <= int(DUST_LS(42u)); yc0 += int(DUST_QUEUE_ROW_CHUNK)) {
+        int n = min(int(DUST_QUEUE_ROW_CHUNK), int(DUST_LS(42u)) - yc0 + 1);
+        for (int r = int(lane); r < n; r += int(lanes)) {
+            int x0, x1;
+            float sr = float(1u << DUST_LS(39u));
+            bool ok = dust_band_columns(dust_band_new(dust_l_getv()), (float(yc0 + r) + 0.5) * sr, sr, DUST_LS(36u), x0, x1);
+            dust_q_x0[r] = x0;
+            dust_q_x1[r] = x1;
+            dust_q_seg[r] = ok ? uint(x1 - x0) / DUST_SEGMENT_TEXELS + 1u : 0u;
+        }
+        barrier();
+        if (lane == 0u) {
+            uint acc = 0u;
+            for (int r = 0; r < n; ++r) {
+                uint c = dust_q_seg[r];
+                dust_q_seg[r] = acc;
+                acc += c;
+            }
+            dust_q_seg[n] = acc;
+            dust_l_total = acc;
+            dust_l_yc0 = yc0;
+        }
+        barrier();
+        // the lane's walk position in shared words: k (its segment), r (its row) << 16 | tx - x0[r]
+        if (lane < dust_l_total) {
+            int r = 0;
+            while (dust_q_seg[r + 1] <= lane) r++;
+            int tx = dust_q_x0[r] + int((lane - dust_q_seg[r]) * DUST_SEGMENT_TEXELS);
+            dust_l_k[lane] = lane;
+            dust_l_rt[lane] = (uint(r) << 16u) | uint(tx - dust_q_x0[r]);
+            dust_l_carry[lane] = dust_segment_carry(DUST_LS(34u), (uint(yc0 + r) << 16u) | uint(tx));
+            while (true) {
+                {
+                    int rr = int(dust_l_rt[gl_LocalInvocationID.x] >> 16u);
+                    dust_l_texel_wg(pyr, invUnit, float(1u << DUST_LS(39u)), dust_l_yc0 + rr, dust_q_x0[rr] + int(dust_l_rt[gl_LocalInvocationID.x] & 0xFFFFu));
+                }
+                // (a fence: the walk's shared words below are re-read, not the values read before the texel)
+                memoryBarrierShared();
+                uint kk = dust_l_k[gl_LocalInvocationID.x];
+                int r2 = int(dust_l_rt[gl_LocalInvocationID.x] >> 16u);
+                int t2 = dust_q_x0[r2] + int(dust_l_rt[gl_LocalInvocationID.x] & 0xFFFFu) + 1;
+                int xa = dust_q_x0[r2] + int((kk - dust_q_seg[r2]) * DUST_SEGMENT_TEXELS);
+                if (t2 > min(xa + int(DUST_SEGMENT_TEXELS) - 1, dust_q_x1[r2])) {
+                    kk += lanes;
+                    if (kk >= dust_l_total) break;
+                    while (dust_q_seg[r2 + 1] <= kk) r2++;
+                    t2 = dust_q_x0[r2] + int((kk - dust_q_seg[r2]) * DUST_SEGMENT_TEXELS);
+                    dust_l_k[gl_LocalInvocationID.x] = kk;
+                    dust_l_carry[gl_LocalInvocationID.x] = dust_segment_carry(DUST_LS(34u), (uint(dust_l_yc0 + r2) << 16u) | uint(t2));
+                }
+                dust_l_rt[gl_LocalInvocationID.x] = (uint(r2) << 16u) | uint(t2 - dust_q_x0[r2]);
+            }
+        }
+        barrier();
+    }
+    return dust_l_anyf[lane] != 0u;
+}
+#endif
+#endif // DUST_DRAW_LEAF

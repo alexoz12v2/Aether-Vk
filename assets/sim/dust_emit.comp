@@ -2,22 +2,84 @@
 //
 // Dust v3 emission: one thread per cluster of the batch. Writes immutable `DustCluster` records
 // into the ring at slot (first_index + j) & ring_mask. Mirror of `dust::emit_cluster`.
+// Round 9 step O: the comet's Kepler solve (dust_kepler_coef from the batch's r0, v0 over the
+// cluster's dt_in, mu = GM_sun) through dust_kepler_coef_lr (dust_kepler_lr.glsl): its df64 state
+// in the cluster's own fresh record (24 words: the stash in words 0..21, dt in 22..23) instead of
+// registers; then the coefficients applied component by component, the record's fields made again
+// from the batch (the same expressions: emit_fields) and the whole record written over the stash.
 #version 450 core
 #extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_control_flow_attributes : require
 #include "dust_common.glsl"
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer DustBatchAlias { DustBatch b; };
 layout(push_constant, std430) uniform PushConstants {
     DustClusterBuffer clusters;
     DustBatchRef      batch;
 } pc;
+uint g_slot;
 
-void main() {
-    uint j = gl_GlobalInvocationID.x;
-    DustBatch B = pc.batch.b;
-    if (j >= B.count) return;
 
+#define B pc.batch.b
+// DUST_EMIT_PASS 7 in two blobs (EMIT_P7_PART 1: the words of t0, beta, s_ref, mass, eject; 2: misc;
+// 3 and 4 split part 1 further: t0, beta, s_ref, mass / eject): the whole stage 2 with the batch
+// local was 15 full vec4 on Adreno 619 (12 waves)
+#if defined(EMIT_P7_PART) && (EMIT_P7_PART == 2 || EMIT_P7_PART == 4)
+#define EMIT_ST2A false
+#else
+#define EMIT_ST2A st == 2u
+#endif
+#if defined(EMIT_P7_PART) && (EMIT_P7_PART == 2 || EMIT_P7_PART == 3)
+#define EMIT_ST2E false
+#else
+#define EMIT_ST2E st == 2u
+#endif
+#if defined(EMIT_P7_PART) && EMIT_P7_PART != 2
+#define EMIT_ST2B false
+#else
+#define EMIT_ST2B st == 2u
+#endif
+// the solve's stash: the cluster's record (fresh: nothing reads it before this thread writes it)
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer DustClusterWords { float w[24]; };
+uvec2 g_rec;
+const uint EMIT_DT = 22u;
+const uint EMIT_J = 21u;     // j, after the solve    // dt_in (hi, lo), the solve's dt, after the stash's KP_WORDS words
+void kp_fence() { groupMemoryBarrier(); }
+void kp_put(uint w, float x) { DustClusterWords(g_rec).w[w] = x; }
+float kp_get(uint w) { kp_fence(); return DustClusterWords(g_rec).w[w]; }
+// the batch read through a writable alias (never written): its loads are not reorderable across the
+// reload fences, so no compiler keeps a batch value (or a product of one) live across the solve
+#define BA DustBatchAlias(uvec2(pc.batch)).b
+vec2 kp_r0c(uint k) { kp_fence(); return vec2(BA.comet_r_t_hi[k], BA.comet_r_t_lo[k]); }
+vec2 kp_v0c(uint k) { kp_fence(); return vec2(BA.comet_v_dur_hi[k], BA.comet_v_dur_lo[k]); }
+vec2 kp_mu() { return DF_SUN_MU; }
+vec2 kp_dt() { return vec2(kp_get(EMIT_DT), kp_get(EMIT_DT + 1u)); }
+#include "dust_kepler_lr.glsl"
+
+// the cluster's fields (dust::emit_cluster; the original statements, made twice: before the solve
+// for dt_in only, after it for the record)
+void emit_fields(uint j, uint st, out vec2 t0, out vec2 dt_in, out vec3 dOff, out vec3 dV, out vec3 eject,
+                 out float beta, out float mass_g, out vec4 misc, out float s_ref) {
+#undef B
+#define B BA
+    kp_fence();
+#if defined(DUST_EMIT_PASS)
+    // the tree's batch access form, the batch copied once into a local after the fence (Adreno 619:
+    // the batch read per access, `#define B pc.batch.b`, returns -13 even in the tree's emit)
+    DustBatch Bl = pc.batch.b;
+#undef B
+#define B Bl
+#endif
+#if defined(DUST_EMIT_PASS) && (DUST_EMIT_PASS == 5 || (DUST_EMIT_PASS == 7 && defined(EMIT_P7_PART) && EMIT_P7_PART != 2))
+    // the local made again from the alias after a fence before each group of statements: each
+    // group's batch words loaded where used (passes 5, 7.1 and 7.1's parts 3, 4: the one copy loaded
+    // every word at the top and the 1070 kept them live, 40 registers; the other passes keep it)
+#define EMIT_RC() kp_fence(); Bl = BA;
+#else
+#define EMIT_RC()
+#endif
     uint global = B.first_index + j;
     // randomness from the in-batch index (seed unique per emission window): a window always
     // produces the same clusters whatever ring slots it lands on (deterministic seek)
@@ -44,20 +106,18 @@ void main() {
     vec2 t_start = vec2(B.comet_r_t_hi.w, B.comet_r_t_lo.w);
     vec2 dur = vec2(B.comet_v_dur_hi.w, B.comet_v_dur_lo.w);
     // lit time only: dark phases of the jet site get no clusters (full df64 when always lit)
-    vec2 dt_in = B.lit.w == DUST_LIT_MODE_PERIODIC
+    dt_in = B.lit.w == DUST_LIT_MODE_PERIODIC
         ? vec2(dust_lit_time_map(u_t, B.lit, B.spin.w, dur.x + dur.y), 0.0)
         : df_mul_f(dur, u_t);
-    vec2 t0 = df_add(t_start, dt_in);
+    t0 = df_add(t_start, dt_in);
+    if (EMIT_ST2A) { kp_put(3u, t0.x); kp_put(7u, t0.y); }
 
     // the window-start site position in free fall over the sub-interval (the site's turn is added
     // below)
-    Df3 rc0, vc0, rcStart, vc;
-    rc0.hi = B.comet_r_t_hi.xyz;   rc0.lo = B.comet_r_t_lo.xyz;
-    vc0.hi = B.comet_v_dur_hi.xyz; vc0.lo = B.comet_v_dur_lo.xyz;
-    dust_kepler(rc0, vc0, DF_SUN_MU, dt_in, rcStart, vc);
 
     // direction: the stream's cone cell (polar stratum in solid angle, golden-ratio azimuth turned
     // by the key), jittered, rotated with the attitude at t0
+    EMIT_RC()
     float aperture = B.jet_dir_aperture.w;
     precise float pol = float(s) + 0.5 + DUST_STREAM_DIR_JITTER * (dust_u01(h2) - 0.5);
     float u_pol = pol / float(n);
@@ -65,29 +125,35 @@ void main() {
     precise float az = az0 + DUST_STREAM_DIR_JITTER * (dust_u01(h1) - 0.5);
     vec3 dir_ps = dust_sample_cone(az - floor(az), u_pol, B.jet_dir_aperture.xyz, aperture);
     // exact nucleus spin from the window start
+    EMIT_RC()
     vec4 rot = dust_qmul(dust_qaxis_angle(B.spin.xyz, B.spin.w * (dt_in.x + dt_in.y)), B.rot_start);
     vec3 dir = dust_qrot(rot, dir_ps);
 
     // the site turns with the nucleus: its offset at t0 instead of the window start, with the
     // surface velocity omega x offset (dust::emit_cluster)
+    EMIT_RC()
     vec3 oStart = dust_qrot(B.rot_start, B.site_offset.xyz);
     vec3 oT0 = dust_qrot(rot, B.site_offset.xyz);
-    Df3 rc = df3_add(rcStart, df3_from_f32(oT0 - oStart));
+    dOff = oT0 - oStart;
     vec3 vSite = cross(B.spin.xyz * B.spin.w, oT0);
 
     // the reference grain: the batch's s_ref; the cluster carries every size of the distribution
     // (beta ~ 1/s), the renderer spreads it along the syndyne
+    EMIT_RC()
     float s_min = B.size_params.x;
     float s_max = B.size_params.y;
-    float s_ref = B.vel_params.z;
-    float beta = B.vel_params.w / s_ref;
+    s_ref = B.vel_params.z;
+    beta = B.vel_params.w / s_ref;
+    if (EMIT_ST2A) { kp_put(11u, beta); kp_put(23u, s_ref); }
 
     // the stream's share of the time sample's mass: all sizes, 1/S of the sample
-    float mass_g = B.mass_params.x * share / float(n);
+    mass_g = B.mass_params.x * share / float(n);
+    if (EMIT_ST2A) kp_put(15u, mass_g);
 
     // ejection speed: the mean speed of the reference grain, no draw (the speed spread is the
     // packet's radial dispersion sigma_rad: the S streams of a cell sum to one smooth cone of
     // every speed instead of S speed shells)
+    EMIT_RC()
     float v_ref = B.vel_params.x;
     float v_ej = max(v_ref, 0.0);
     // lateral dispersion of the stream: DUST_STREAM_SIGMA_CELLS of its cone cell, at least
@@ -96,10 +162,14 @@ void main() {
     // radial dispersion: the whole speed distribution of the jet
     float sigma_rad = v_ej * max(B.vel_params.y, 0.0);
 
-    vec3 eject = dir * v_ej;
-    Df3 v0 = df3_add(vc, df3_from_f32(eject + vSite));
+    eject = dir * v_ej;
+    if (EMIT_ST2E) { kp_put(20u, eject.x); kp_put(21u, eject.y); kp_put(22u, eject.z); }
+    dV = eject + vSite;
+    if (st == 1u) { kp_put(0u, dOff.x); kp_put(1u, dOff.y); kp_put(2u, dOff.z); }
+    if (st == 3u) { kp_put(8u, dV.x); kp_put(9u, dV.y); kp_put(10u, dV.z); }
 
     // mean cross-section per gram of the size distribution (dust::size_mean_inv_s_um)
+    EMIT_RC()
     float rho_g_m3 = B.mass_params.y * 1.0e6;
     float xsec_per_g = 3.0 / (4.0 * rho_g_m3 * dust_size_mean_inv_s_um(B.size_params) * 1.0e-6);
     // the half log-size range; low mantissa bits: the child-pattern id, hashed from (seed, j)
@@ -108,13 +178,157 @@ void main() {
     uint db = (floatBitsToUint(dbeta) & ~DUST_CHILD_ID_MASK) | (dust_pcg(h0 ^ 0x2C1B3C6Du) & DUST_CHILD_ID_MASK);
     if (dust_stream_breaks_before(B, j)) db |= DUST_STREAM_BREAK_BIT;
     dbeta = uintBitsToFloat(db);
+    misc = vec4(sigma_lat, sigma_rad, xsec_per_g, dbeta);
+    if (EMIT_ST2B) { kp_put(16u, misc.x); kp_put(17u, misc.y); kp_put(18u, misc.z); kp_put(19u, misc.w); }
 
-    DustCluster C;
-    C.r0_t0_hi   = vec4(rc.hi, t0.x);
-    C.r0_t0_lo   = vec4(rc.lo, t0.y);
-    C.v0_hi_beta = vec4(v0.hi, beta);
-    C.v0_lo_mass = vec4(v0.lo, mass_g);
-    C.misc       = vec4(sigma_lat, sigma_rad, xsec_per_g, dbeta);
-    C.eject      = vec4(eject, s_ref);
-    pc.clusters.c[global & B.ring_mask] = C;
 }
+
+// component k of rc = rcStart + dOff / v0 = vc + dV into the record, dOff_k / dV_k read from the
+// record word the result's hi part replaces (emit_fields(.., 1u, ..) put them there)
+#undef B
+#if defined(DUST_EMIT_PASS)
+#define B Bm
+#define EMIT_MAIN_B DustBatch Bm = pc.batch.b;
+#else
+#define B pc.batch.b
+#define EMIT_MAIN_B
+#endif
+void emit_put_r(uint k, bool moving) {
+    vec2 r = df_add(moving ? kp_apply(k, KP_FF, KP_GG) : kp_r0c(k), vec2(kp_get(k), 0.0));
+    kp_put(k, r.x); kp_put(4u + k, r.y);
+}
+void emit_put_v(uint k, bool moving) {
+    vec2 v = df_add(moving ? kp_apply(k, KP_FD, KP_GD) : kp_v0c(k), vec2(kp_get(8u + k), 0.0));
+    kp_put(8u + k, v.x); kp_put(12u + k, v.y);
+}
+
+// DUST_EMIT_PASS (round 9 step O, Adreno 619: the emission in passes over the cluster's record,
+// each at most 13 full vec4 registers): 1 dt_in and kp_solve_prep; 2 a df iteration's Stumpff
+// values; 3 its residual and Laguerre step; 6 the final Stumpff values; 4 the rest of
+// kp_solve_final; 5 r, v and the words of stages 1, 3, in two blobs (EMIT_P5_PART 1 r, 2 v); 7 the
+// record's other words (stage 2), in two blobs (EMIT_P7_PART 1, 2). The host records
+// 1, (2, 3) x DUST_KEPLER_ITERS_DF_LR, 6, 4, 5r, 5v, 7.1, 7.2,
+// a barrier between passes. Moving is re-derived from the stash (kp_moving); the df loop's end is
+// word 19 (KP_F, dead between the passes: 0 running, 1 over; pass 1 writes 0). Undefined: one pass
+// (the plain blob; Adreno 619 rejects it: 32 full vec4 in the tree's form, -13 in the alias form).
+const uint EMIT_DFDONE = 19u;
+#if defined(DUST_EMIT_PASS) && DUST_EMIT_PASS == 7
+// the record's other words (the monolith's last emit_fields: j's word is the same j)
+void main() {
+    uint j = gl_GlobalInvocationID.x;
+    EMIT_MAIN_B
+    if (j >= B.count) return;
+    g_rec = uvec2(pc.clusters);
+    {
+        uint carry;
+        uint slot = (B.first_index + j) & B.ring_mask;
+        g_slot = slot;
+        g_rec.x = uaddCarry(g_rec.x, slot * 96u, carry);
+        g_rec.y += carry;
+    }
+    vec2 t0, dt_in; vec3 dOff, dV, eject; float beta, mass_g, s_ref; vec4 misc;
+    emit_fields(j, 2u, t0, dt_in, dOff, dV, eject, beta, mass_g, misc, s_ref);
+}
+#elif defined(DUST_EMIT_PASS) && DUST_EMIT_PASS != 1 && DUST_EMIT_PASS != 5
+void main() {
+    uint j = gl_GlobalInvocationID.x;
+    EMIT_MAIN_B
+    if (j >= B.count) return;
+    g_rec = uvec2(pc.clusters);
+    {
+        uint carry;
+        uint slot = (B.first_index + j) & B.ring_mask;
+        g_slot = slot;
+        g_rec.x = uaddCarry(g_rec.x, slot * 96u, carry);
+        g_rec.y += carry;
+    }
+    if (!kp_moving()) return;
+#if DUST_EMIT_PASS == 2 || DUST_EMIT_PASS == 3
+    if (floatBitsToUint(kp_get(EMIT_DFDONE)) != 0u) return;
+#endif
+#if DUST_EMIT_PASS == 2 || DUST_EMIT_PASS == 6
+    kp_stumpff_put();
+#elif DUST_EMIT_PASS == 3
+    kp_put(EMIT_DFDONE, uintBitsToFloat(kp_solve_df_step() ? 1u : 0u));
+#else
+    kp_solve_final_rest();
+#endif
+}
+#else
+void main() {
+    uint j = gl_GlobalInvocationID.x;
+    EMIT_MAIN_B
+    if (j >= B.count) return;
+    g_rec = uvec2(pc.clusters) ;
+    {
+        uint carry;
+        uint slot = (B.first_index + j) & B.ring_mask;
+        g_slot = slot;
+        g_rec.x = uaddCarry(g_rec.x, slot * 96u, carry);
+        g_rec.y += carry;
+    }
+    // dt_in into the record, then the solve (its state in the record's words 0..21)
+#if !defined(DUST_EMIT_PASS) || DUST_EMIT_PASS == 1
+    {
+        vec2 t0, dt_in; vec3 dOff, dV, eject; float beta, mass_g, s_ref; vec4 misc;
+        emit_fields(j, 0u, t0, dt_in, dOff, dV, eject, beta, mass_g, misc, s_ref);
+        kp_put(EMIT_DT, dt_in.x); kp_put(EMIT_DT + 1u, dt_in.y);
+    }
+#endif
+#if defined(DUST_EMIT_PASS) && DUST_EMIT_PASS == 1
+    if (kp_solve_prep()) kp_put(EMIT_DFDONE, uintBitsToFloat(0u));
+#else
+#if defined(DUST_EMIT_PASS)
+    bool moving = kp_moving();
+#else
+    bool moving = dust_kepler_coef_lr();
+#endif
+    // j through the record (word 21, eject.y: free once the coefficients are made, written last):
+    // each later emit_fields starts from a reload, so no compiler merges it with an earlier one and
+    // keeps that one's values live across the solve or the record writes
+    kp_put(EMIT_J, uintBitsToFloat(j));
+    // rc = rcStart + dOff, v0 = vc + dV (df3_add(., df3_from_f32(.)) component by component;
+    // still: rcStart = rc0, vc = vc0), each component written as soon as it is made: r over the
+    // record words 0-2 / 4-6, v over 8-10 / 12-14, none of them a coefficient's (KP_FF 19-20, KP_GG
+    // 11-12, read by r only, KP_FD 15-16, KP_GD 17-18)
+    uint slot = (B.first_index + j) & B.ring_mask;
+#define EMIT_JGET floatBitsToUint(kp_get(EMIT_J))
+#if defined(EMIT_P5_PART)
+    // pass 5 in two blobs (EMIT_P5_PART 1: dOff and r, words 0-2 / 4-6; 2: dV and v, words 8-10 /
+    // 12-14; 1 before 2: 2 overwrites word 13, which kp_moving reads)
+#if EMIT_P5_PART == 1
+    {
+        vec2 t0, dt_in; vec3 dOff, dV, eject; float beta, mass_g, s_ref; vec4 misc;
+        emit_fields(EMIT_JGET, 1u, t0, dt_in, dOff, dV, eject, beta, mass_g, misc, s_ref);
+    }
+    KP_LOOP for (uint k = 0u; k < 3u; k++) emit_put_r(k, moving);
+#else
+    {
+        vec2 t0, dt_in; vec3 dOff, dV, eject; float beta, mass_g, s_ref; vec4 misc;
+        emit_fields(EMIT_JGET, 3u, t0, dt_in, dOff, dV, eject, beta, mass_g, misc, s_ref);
+    }
+    KP_LOOP for (uint k = 0u; k < 3u; k++) emit_put_v(k, moving);
+#endif
+#else
+    {
+        vec2 t0, dt_in; vec3 dOff, dV, eject; float beta, mass_g, s_ref; vec4 misc;
+        emit_fields(EMIT_JGET, 1u, t0, dt_in, dOff, dV, eject, beta, mass_g, misc, s_ref);
+    }
+    {
+        vec2 t0, dt_in; vec3 dOff, dV, eject; float beta, mass_g, s_ref; vec4 misc;
+        emit_fields(EMIT_JGET, 3u, t0, dt_in, dOff, dV, eject, beta, mass_g, misc, s_ref);
+    }
+    KP_LOOP for (uint k = 0u; k < 3u; k++) emit_put_r(k, moving);
+    KP_LOOP for (uint k = 0u; k < 3u; k++) emit_put_v(k, moving);
+#endif
+    // the record's other words, each written by emit_fields as soon as it is made (the fields made a
+    // third time; the stash is no longer read; j's word 21 is read first, then written: eject.y)
+#ifndef DUST_EMIT_PASS
+    {
+        vec2 t0, dt_in; vec3 dOff, dV, eject; float beta, mass_g, s_ref; vec4 misc;
+        emit_fields(EMIT_JGET, 2u, t0, dt_in, dOff, dV, eject, beta, mass_g, misc, s_ref);
+    }
+#endif
+#endif  // DUST_EMIT_PASS != 1
+}
+#endif

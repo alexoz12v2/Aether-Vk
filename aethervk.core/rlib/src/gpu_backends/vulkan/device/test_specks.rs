@@ -144,7 +144,14 @@ fn gpu_dust_specks_match_reference() {
     .with_device(handle, |dyn_device| {
       let device: &Device = dyn_device.as_any().downcast_ref().unwrap();
       device.create_particle_system(id)?;
-      run_specks_parity(device, id);
+      // (perf9_K) in both split families: the pre-split splitter, then the staged leaf path (each
+      // run emits the batch again and discards its view at the end)
+      for split in [false, true] {
+        device.dust_set_split_staged(Some(split));
+        std::println!("[specks gpu] split family {}", if split { "staged" } else { "mono" });
+        run_specks_parity(device, id);
+      }
+      device.dust_set_split_staged(None);
       unsafe { device.device.device_wait_idle() }.unwrap();
       device.discard_particle_system(id, 0, 0)?;
       GpuResult::Ok(())
@@ -270,8 +277,11 @@ fn run_specks_parity(device: &Device, id: u64) {
             device.cmd_dust_propagate(cmd, id, 0, capacity, first_slot, batch.count, &frame)?;
           device.cmd_dust_pre_splat_barrier(cmd);
           // the specks before the splat: their walk mask decides the splat's hand-over
-          device.cmd_dust_specks(cmd, pe, id, 0, first_slot, capacity, render, moments, speck_pc)?;
-          device.cmd_dust_pre_splat_barrier(cmd);
+          // (`DUST_SPECKS_SKIP=1`: diagnostics, no specks pass at all: the splat alone on this scene)
+          if std::env::var("DUST_SPECKS_SKIP").map_or(true, |v| v.trim() != "1") {
+            device.cmd_dust_specks(cmd, pe, id, 0, first_slot, capacity, render, moments, speck_pc)?;
+            device.cmd_dust_pre_splat_barrier(cmd);
+          }
           device.cmd_dust_splat(cmd, pe, id, 0, first_slot, capacity, render, moments, splat_pc)?;
           device.cmd_dust_post_splat_barrier(cmd);
           device.cmd_dust_frame_end(cmd, pe)?;
@@ -282,6 +292,17 @@ fn run_specks_parity(device: &Device, id: u64) {
       cmds.cleanup(&device.device);
     }
     let g = device.download_dust_pyramid(pe).unwrap();
+    {
+      // diagnostics: the GPU volume queue (drawn, overflow, chunk), its spill (drawn, lost), the
+      // enumerator's queue (records, overflowed), the split's words
+      let vq = device.dust_vqueue_counts(pe).unwrap();
+      let vs = device.dust_vqueue_spill_counts(pe).unwrap();
+      let sq = device.dust_squeue_counts(pe).unwrap();
+      std::println!(
+        "[specks gpu] queues: vqueue {vq:?} vspill {vs:?} squeue {sq:?} evals {} dropped_flux {} children {} flags {:#x}",
+        g[dust::PYR_VOLUME_EVALS as usize], g[dust::PYR_SPLIT_DROPPED_FLUX as usize], g[dust::PYR_SPLIT_CHILDREN as usize], g[dust::PYR_FLAGS as usize]
+      );
+    }
     std::println!(
       "[specks gpu] shell {d_max:.3} m: GPU nodes {} of the frame budget {} (per walk ≤ {}), drawn {}, overflow {}",
       g[specks::PYR_SPECKS_NODES as usize],
@@ -311,11 +332,208 @@ fn run_specks_parity(device: &Device, id: u64) {
   ] {
     cpu[word as usize] = gpu[word as usize];
   }
-  assert_eq!(f32::from_bits(gpu[specks::PYR_SPECKS_DMAX as usize]), d_max);
+  if std::env::var("DUST_SPECKS_SKIP").map_or(true, |v| v.trim() != "1") {
+    assert_eq!(f32::from_bits(gpu[specks::PYR_SPECKS_DMAX as usize]), d_max);
+  }
   dust::splat_tier(&moments, &render, &splat_pc, &flow, 0, &layout, &mut cpu);
   let splat_only = cpu.clone();
+  let masks_gpu: alloc::vec::Vec<u32> = moments.iter().map(|m| m.specks_mask()).collect();
   let stats = specks::specks_tier(&mut moments, &render, &speck_pc, &flow, &layout, &mut cpu);
+  {
+    let masks_cpu: alloc::vec::Vec<u32> = moments.iter().map(|m| m.specks_mask()).collect();
+    let bits = |v: &[u32]| v.iter().map(|m| m.count_ones()).sum::<u32>();
+    let differ = masks_gpu.iter().zip(&masks_cpu).filter(|(a, b)| a != b).count();
+    let only_gpu = masks_gpu.iter().zip(&masks_cpu).map(|(a, b)| (a & !b).count_ones()).sum::<u32>();
+    let only_cpu = masks_gpu.iter().zip(&masks_cpu).map(|(a, b)| (b & !a).count_ones()).sum::<u32>();
+    std::println!("[specks gpu] walk masks: GPU gate bits {} (clusters {}) vs CPU gate bits {} (clusters {}); clusters differing {differ}, bits only GPU {only_gpu}, only CPU {only_cpu}",
+      bits(&masks_gpu), masks_gpu.iter().filter(|m| **m != 0).count(), bits(&masks_cpu), masks_cpu.iter().filter(|m| **m != 0).count());
+  }
   let word = |p: &[u32], k: u32| p[k as usize];
+  {
+    // the breadth-first walk's region after the passes (round 9 step O): its counts against the
+    // capacities, the walks truncated by a cap, the frontier per step
+    let h = device.download_dust_spill_header(pe).unwrap();
+    let r = device.download_dust_walk_region_header(pe).unwrap();
+    let fronts: alloc::vec::Vec<u32> =
+      (0..dust::DUST_WR_STEPS as usize).map(|s| r[8 + 4 * s]).take_while(|&n| n > 0).collect();
+    std::println!(
+      "[specks gpu] walk region: records {} of {}, many-speck leaves {} of {}, single leaves {} of {}, frontier cap {}, truncated walks {}, frontiers per step {:?}",
+      r[3], h[10], r[4], h[11], r[dust::DUST_WR_LEAF1 as usize], h[13], h[12], word(&gpu, specks::PYR_SPECKS_TRUNCATED), fronts
+    );
+    if std::env::var("DUST_WALK_DUMP").is_ok() {
+      // frontier 0 (intact with AETHERVK_DUST_WALK_STEPS=0 or 1): the start nodes
+      let f0 = h[9] + dust::DUST_WR_REGION_HEADER + h[10] * dust::DUST_WR_WORDS + (h[11] + h[13]) * dust::DUST_WR_LEAF_WORDS;
+      let n = r[8].min(h[12]);
+      let w = device.download_dust_words(pe, f0, n * dust::DUST_WR_LEAF_WORDS).unwrap();
+      let (mut mant0, mut inside, mut exp, mut levels) = (0u32, 0u32, 0u32, [0u32; 64]);
+      for e in w.chunks_exact(dust::DUST_WR_LEAF_WORDS as usize) {
+        mant0 += (e[4] == 0) as u32;
+        inside += ((e[6] >> 8) & 1) as u32;
+        exp += ((e[6] >> 16) & 0xFF != 0) as u32;
+        levels[(e[6] & 0xFF).min(63) as usize] += 1;
+      }
+      std::println!("[specks gpu] frontier 0: {n} nodes, mant 0 {mant0}, inside {inside}, exp>0 {exp}, levels {:?}", levels.iter().enumerate().filter(|(_, c)| **c > 0).collect::<alloc::vec::Vec<_>>());
+      for e in w.chunks_exact(dust::DUST_WR_LEAF_WORDS as usize).take(12) {
+        std::println!("  rec {} lo {:08x} {:08x} {:08x} mant {} hash {:08x} level {} inside {} exp {}", e[0], e[1], e[2], e[3], e[4], e[5], e[6] & 0xFF, (e[6] >> 8) & 1, (e[6] >> 16) & 0xFF);
+      }
+      let rec = device.download_dust_words(pe, h[9] + dust::DUST_WR_REGION_HEADER, dust::DUST_WR_WORDS).unwrap();
+      std::println!("  record 0 words: {:?}", rec);
+      // the CPU mirror's class of every GPU start node (the record's ID words give (mi, b)), and
+      // the first records' terms against the CPU cluster's
+      let view = specks::SpeckView::new(&speck_pc, &layout);
+      let plane = (view.fwd.iter().any(|c| *c != 0.0)).then_some(view.fwd);
+      let mut by_rec: std::collections::HashMap<u32, specks::SpeckCluster> = std::collections::HashMap::new();
+      let (mut cls, mut shown) = ([0u32; 3], 0u32);
+      let f = |x: u32| f32::from_bits(x);
+      for e in w.chunks_exact(dust::DUST_WR_LEAF_WORDS as usize) {
+        let rec_i = e[0];
+        if !by_rec.contains_key(&rec_i) {
+          let rw = device.download_dust_words(pe, h[9] + dust::DUST_WR_REGION_HEADER + rec_i * dust::DUST_WR_WORDS, dust::DUST_WR_WORDS).unwrap();
+          // the record's mi is the GPU slot; the test's arrays are in compact ring order
+          let (mi, b) = (((rw[71] - first_slot) & (capacity - 1)) as usize, rw[72] as usize);
+          let m = &moments[mi];
+          let pred = dust::streak_pred(&render, mi).map(|p| &moments[p]);
+          let slot = dust::render_slot(render[mi].age_id_dbeta_flux[1]);
+          let seg = specks::bin_time_segment(m, pred, b);
+          let sc = specks::SpeckCluster::new(m, b, seg, slot, s_ref, q, ttl, 0.0);
+          if shown < 3 {
+            shown += 1;
+            let me_df = sc.mean_rel(eye);
+            let me = [me_df[0].hi + me_df[0].lo, me_df[1].hi + me_df[1].lo, me_df[2].hi + me_df[2].lo];
+            let (y_eye, sigma_lo) = sc.eye_in_xi(me);
+            std::println!("  record {rec_i} (mi {mi} b {b}) GPU: C0 {:?} C1 {:?} C2 {:?} coln {:?} kappa {} rho {:?} me {:?} yeye {:?} siglo {} rown {:?} nstart {} fwd {:?}",
+              [f(rw[0]), f(rw[1]), f(rw[2])], [f(rw[3]), f(rw[4]), f(rw[5])], [f(rw[6]), f(rw[7]), f(rw[8])], [f(rw[9]), f(rw[10]), f(rw[11])], f(rw[12]), [f(rw[13]), f(rw[14])],
+              [f(rw[15]) + f(rw[16]), f(rw[17]) + f(rw[18]), f(rw[19]) + f(rw[20])], [f(rw[21]), f(rw[22]), f(rw[23])], f(rw[24]), [f(rw[25]), f(rw[26]), f(rw[27])], rw[40], [f(rw[53]), f(rw[54]), f(rw[55])]);
+            std::println!("  record {rec_i} CPU: chol {:?} coln {:?} kappa {} rho {:?} me {:?} yeye {:?} siglo {} minv {:?} mant {} exp {} root_hash {:#010x} fwd {:?}",
+              sc.chol, sc.col_norm, sc.kappa, sc.rho, me, y_eye, sigma_lo, sc.minv, sc.mant, sc.exp, sc.root_hash, view.fwd);
+            std::println!("  record {rec_i} GPU words 40..80: {:?}", &rw[40..80]);
+          }
+          by_rec.insert(rec_i, sc);
+        }
+        let sc = &by_rec[&rec_i];
+        let level = e[6] & 0xFF;
+        let (mut lo, mut width) = ([0f32; 3], [0f32; 3]);
+        for k in 0..3 {
+          let mm = (level + 2 - k as u32) / 3;
+          lo[k] = e[1 + k] as f32 * (1.0 / 4_294_967_296.0);
+          width[k] = f32::from_bits(((127 - mm as i32) as u32) << 23);
+        }
+        let a = sc.coords(lo);
+        let bb = sc.coords([lo[0] + width[0], lo[1] + width[1], lo[2] + width[2]]);
+        let me_df = sc.mean_rel(eye);
+        let me = [me_df[0].hi + me_df[0].lo, me_df[1].hi + me_df[1].lo, me_df[2].hi + me_df[2].lo];
+        let (y_eye, sigma_lo) = sc.eye_in_xi(me);
+        let c = sc.node_class(a, bb, me, y_eye, sigma_lo, d_max, plane);
+        cls[match c { specks::NodeClass::Outside => 0, specks::NodeClass::Meets => 1, specks::NodeClass::Contained => 2 }] += 1;
+      }
+      std::println!("[specks gpu] CPU class of the GPU start nodes: outside {} meets {} contained {} (records {})", cls[0], cls[1], cls[2], by_rec.len());
+      // per record: the GPU's start count / level / node total / dead flag against the CPU walk's
+      let nrec = r[3].min(h[10]);
+      let mut dead = 0u32;
+      for rec_i in 0..nrec {
+        let rw = device.download_dust_words(pe, h[9] + dust::DUST_WR_REGION_HEADER + rec_i * dust::DUST_WR_WORDS, dust::DUST_WR_WORDS).unwrap();
+        dead += (rw[73] != 0) as u32;
+        if rec_i % (nrec / 8).max(1) != 0 { continue; }
+        let (mi, b) = (((rw[71] - first_slot) & (capacity - 1)) as usize, rw[72] as usize);
+        let m = &moments[mi];
+        let pred = dust::streak_pred(&render, mi).map(|p| &moments[p]);
+        let slot = dust::render_slot(render[mi].age_id_dbeta_flux[1]);
+        let sc = specks::SpeckCluster::new(m, b, specks::bin_time_segment(m, pred, b), slot, s_ref, q, ttl, 0.0);
+        let st = sc.walk(eye, d_max, view.fwd, specks::DUST_SPECKS_MAX_NODES, None, &mut |_| true);
+        let glv: alloc::vec::Vec<u32> = (0..rw[40].min(16)).map(|k| rw[74 + 6 * k as usize + 5] & 0xFF).collect();
+        let gm: alloc::vec::Vec<u32> = (0..rw[40].min(16)).map(|k| rw[74 + 6 * k as usize + 3]).collect();
+        std::println!("  rec {rec_i} (mi {mi} b {b}): GPU starts {} levels {:?} mants {:?} nodes {} trunc {} dead {} box level {} first {:?} count {:?} | CPU starts {} level {} nodes {} specks {} trunc {}",
+          rw[40], glv, gm, rw[56], rw[57], rw[73], rw[64], &rw[65..68], &rw[68..71], st.starts, st.start_level, st.nodes, st.specks, st.truncated);
+        if rec_i < 3 * (nrec / 8).max(1) {
+          let g: alloc::vec::Vec<(u32, [u32; 3], u32, u32, u32)> = (0..rw[40].min(16) as usize).map(|k| { let o = 74 + 6 * k; (rw[o + 5] & 0xFF, [rw[o], rw[o + 1], rw[o + 2]], rw[o + 3], (rw[o + 5] >> 16) & 0xFF, rw[o + 4]) }).collect();
+          std::println!("    GPU starts {:x?}", g);
+          std::println!("    CPU starts {:x?}", sc.debug_start_nodes(eye, d_max));
+        }
+      }
+      // DUST_WALK_STEP_CHECK=s (run with AETHERVK_DUST_WALK_STEPS=s+1, so frontiers s and s+1 are
+      // intact): step s replayed on the CPU from the GPU's frontier s (class, leaf, children as
+      // dust_specks.comp's STEP writes them) against the GPU's frontier s+1
+      if let Ok(sv) = std::env::var("DUST_WALK_STEP_CHECK") {
+        let st: u32 = sv.parse().unwrap();
+        let lw = dust::DUST_WR_LEAF_WORDS;
+        let front = |s: u32, n: u32| device.download_dust_words(pe, f0 + (s & 1) * h[12] * lw, n * lw).unwrap();
+        let (n_in, n_out) = (r[8 + 4 * st as usize].min(h[12]), r[8 + 4 * (st + 1) as usize].min(h[12]));
+        let (fi, fo) = (front(st, n_in), front(st + 1, n_out));
+        let mut cluster_of = |rec_i: u32| -> specks::SpeckCluster {
+          let rw = device.download_dust_words(pe, h[9] + dust::DUST_WR_REGION_HEADER + rec_i * dust::DUST_WR_WORDS, dust::DUST_WR_WORDS).unwrap();
+          let (mi, b) = (((rw[71] - first_slot) & (capacity - 1)) as usize, rw[72] as usize);
+          let m = &moments[mi];
+          let pred = dust::streak_pred(&render, mi).map(|p| &moments[p]);
+          let slot = dust::render_slot(render[mi].age_id_dbeta_flux[1]);
+          specks::SpeckCluster::new(m, b, specks::bin_time_segment(m, pred, b), slot, s_ref, q, ttl, 0.0)
+        };
+        let mut recs: std::collections::HashMap<u32, specks::SpeckCluster> = std::collections::HashMap::new();
+        let mut expect: std::collections::HashMap<[u32; 7], u32> = std::collections::HashMap::new();
+        let (mut leaves1, mut leaves, mut outside, mut popped0) = (0u32, 0u32, 0u32, 0u32);
+        for e in fi.chunks_exact(lw as usize) {
+          let (rec_i, mant) = (e[0], e[4]);
+          let (level, inside, ex) = (e[6] & 0xFF, (e[6] >> 8) & 1 != 0, (e[6] >> 16) & 0xFF);
+          if mant == 0 { popped0 += 1; continue; }
+          if !recs.contains_key(&rec_i) { let c = cluster_of(rec_i); recs.insert(rec_i, c); }
+          let sc = &recs[&rec_i];
+          let mut contained = inside;
+          if !inside {
+            let (mut lo, mut width) = ([0f32; 3], [0f32; 3]);
+            for k in 0..3 {
+              let mm = (level + 2 - k as u32) / 3;
+              lo[k] = e[1 + k] as f32 * (1.0 / 4_294_967_296.0);
+              width[k] = f32::from_bits(((127 - mm as i32) as u32) << 23);
+            }
+            let a = sc.coords(lo);
+            let bb = sc.coords([lo[0] + width[0], lo[1] + width[1], lo[2] + width[2]]);
+            let me_df = sc.mean_rel(eye);
+            let me = [me_df[0].hi + me_df[0].lo, me_df[1].hi + me_df[1].lo, me_df[2].hi + me_df[2].lo];
+            let (y_eye, sigma_lo) = sc.eye_in_xi(me);
+            match sc.node_class(a, bb, me, y_eye, sigma_lo, d_max, plane) {
+              specks::NodeClass::Outside => { outside += 1; continue; }
+              specks::NodeClass::Meets => {}
+              specks::NodeClass::Contained => contained = true,
+            }
+          }
+          let leaf = (mant == 1 && ex == 0) || level >= specks::DUST_SPECKS_MAX_LEVEL;
+          if leaf { if ex == 0 && mant <= 1 { leaves1 += 1 } else { leaves += 1 } continue; }
+          let (ml, mr, exc) = if ex > 0 { let (m2, e2) = specks::normalise_count((mant, ex - 1)); (m2, m2, e2) } else { let ml = specks::child_count(mant, e[5]); (ml, mant - ml, 0) };
+          let w6c = ((level + 1) & 0xFF) | if contained { 1 << 8 } else { 0 } | ((exc & 0xFF) << 16);
+          let dim = (level % 3) as usize;
+          let mm = (level + 2 - dim as u32) / 3;
+          let half = if mm + 1 >= 32 { 0u32 } else { 1u32 << (31 - mm) };
+          let mut lo_r = [e[1], e[2], e[3]];
+          lo_r[dim] = lo_r[dim].wrapping_add(half);
+          *expect.entry([rec_i, lo_r[0], lo_r[1], lo_r[2], mr, dust::splat::dust_hash32(e[5] ^ 0x6C8E9CF5), w6c]).or_insert(0) += 1;
+          *expect.entry([rec_i, e[1], e[2], e[3], ml, dust::splat::dust_hash32(e[5] ^ 0x2545F491), w6c]).or_insert(0) += 1;
+        }
+        let n_expect: u32 = expect.values().sum();
+        let mut got: std::collections::HashMap<[u32; 7], u32> = std::collections::HashMap::new();
+        for e in fo.chunks_exact(lw as usize) { *got.entry([e[0], e[1], e[2], e[3], e[4], e[5], e[6]]).or_insert(0) += 1; }
+        let mut missing = alloc::vec::Vec::new();
+        let mut extra = alloc::vec::Vec::new();
+        for (k, c) in &expect { let g = got.get(k).copied().unwrap_or(0); if g < *c { missing.push((*k, *c, g)); } }
+        for (k, c) in &got { let x = expect.get(k).copied().unwrap_or(0); if *c > x { extra.push((*k, *c, x)); } }
+        std::println!("[specks gpu] step {st}: frontier in {n_in} (mant0 {popped0}, CPU outside {outside}, leaves {leaves} single {leaves1}), CPU children {n_expect} vs GPU frontier {} (words {} / {}); missing {} extra {}; GPU leaf queues many {} single {}",
+          n_out, r[8 + 4 * (st + 1) as usize], h[12], missing.len(), extra.len(), r[4], r[dust::DUST_WR_LEAF1 as usize]);
+        missing.sort(); extra.sort();
+        for (k, c, g) in missing.iter().take(8) { std::println!("  missing rec {} lo {:08x} {:08x} {:08x} mant {} hash {:08x} level {} inside {} exp {} (expected {c} got {g})", k[0], k[1], k[2], k[3], k[4], k[5], k[6] & 0xFF, (k[6] >> 8) & 1, k[6] >> 16); }
+        for (k, c, x) in extra.iter().take(8) { std::println!("  extra   rec {} lo {:08x} {:08x} {:08x} mant {} hash {:08x} level {} inside {} exp {} (got {c} expected {x})", k[0], k[1], k[2], k[3], k[4], k[5], k[6] & 0xFF, (k[6] >> 8) & 1, k[6] >> 16); }
+        // the records of the missing children: their GPU node count / trunc / dead
+        let mut mrecs: alloc::vec::Vec<u32> = missing.iter().map(|m| m.0[0]).collect(); mrecs.sort(); mrecs.dedup();
+        for rec_i in mrecs.iter().take(4) {
+          let rw = device.download_dust_words(pe, h[9] + dust::DUST_WR_REGION_HEADER + rec_i * dust::DUST_WR_WORDS, dust::DUST_WR_WORDS).unwrap();
+          std::println!("  rec {rec_i}: nodes {} trunc {} dead {} nstart {}", rw[56], rw[57], rw[73], rw[40]);
+        }
+      }
+      let mut walks = 0u32;
+      for (mi, m) in moments.iter().enumerate() {
+        if !(m.flux() > 0.0) { continue; }
+        for b in 0..dust::SIZE_BINS as usize { if m.specks_walked(b) { walks += 1; } let _ = mi; }
+      }
+      std::println!("[specks gpu] records {nrec} (dead {dead}) vs CPU walked (cluster, bin) pairs {walks}");
+    }
+  }
   let (dg, dc) = (
     word(&gpu, specks::PYR_SPECKS),
     word(&cpu, specks::PYR_SPECKS),
@@ -344,6 +562,18 @@ fn run_specks_parity(device: &Device, id: u64) {
     word(&cpu, specks::PYR_SPECKS_OVERFLOW),
     l0_cpu - l0_splat
   );
+  let total = |p: &[u32]| -> u64 {
+    layout.levels.iter().map(|&(off, lw, lh)| (0..(lw * lh) as usize).map(|t| p[off as usize + t * dust::PYRAMID_TEXEL_WORDS as usize] as u64).sum::<u64>()).sum()
+  };
+  let (sg, sc) = (total(&gpu), total(&cpu));
+  {
+    // diagnostics: the count sum per level, GPU vs CPU vs the CPU splat alone
+    let per = |p: &[u32], &(off, lw, lh): &(u32, u32, u32)| -> u64 {
+      (0..(lw * lh) as usize).map(|t| p[off as usize + t * dust::PYRAMID_TEXEL_WORDS as usize] as u64).sum()
+    };
+    for (l, lv) in layout.levels.iter().enumerate() {
+      std::println!("[specks gpu] level {l} ({}x{}): counts gpu {} cpu {} splat_only {}", lv.1, lv.2, per(&gpu, lv), per(&cpu, lv), per(&splat_only, lv));
+    }
   assert!(dc >= 1000, "only {dc} specks drawn on the CPU");
   assert_eq!(word(&gpu, specks::PYR_SPECKS_OVERFLOW), 0, "GPU overflow");
   assert_eq!(word(&cpu, specks::PYR_SPECKS_OVERFLOW), 0, "CPU overflow");
@@ -361,19 +591,8 @@ fn run_specks_parity(device: &Device, id: u64) {
   );
   assert!((eg / ec - 1.0).abs() < 1e-3, "n_eye gpu {eg} cpu {ec}");
   assert!(l0_cpu > l0_splat, "the specks must deposit on level 0");
-  // the whole pyramid's counts (the splat's own parity rule) and the level-0 texels
-  let total = |p: &[u32]| -> u64 {
-    layout
-      .levels
-      .iter()
-      .map(|&(off, lw, lh)| {
-        (0..(lw * lh) as usize)
-          .map(|t| p[off as usize + t * dust::PYRAMID_TEXEL_WORDS as usize] as u64)
-          .sum::<u64>()
-      })
-      .sum()
-  };
-  let (sg, sc) = (total(&gpu), total(&cpu));
+    std::println!("[specks gpu] Σ counts gpu {sg} cpu {sc} splat_only {}", total(&splat_only));
+  }
   assert!(
     (sg as f64 / sc as f64 - 1.0).abs() < 1e-3,
     "Σ counts gpu {sg} cpu {sc}"
@@ -638,56 +857,18 @@ fn run_specks_parity(device: &Device, id: u64) {
   }
   device.dust_set_specks_trace(pe, false);
   let records = device.download_dust_specks_trace_records(pe).unwrap();
-  // the walk's stack spill (no scene of the suite fills the 256-node stack): the same traced
-  // frame with the stack held to SPILL_TEST_LIMIT nodes must spill, within the view's slots,
-  // and draw the same specks word for word (the same nodes visited; the trace's order is the
-  // atomics' and differs). Both traces under the capacity, else the subset is order-dependent.
+  // the breadth-first walk (round 9 step O) keeps no stack and claims no spill slot: the spill
+  // header carries the walk region (words 9-13) and the trace stays under its capacity
   {
-    const SPILL_TEST_LIMIT: u32 = 128;
-    let header0 = device.download_dust_spill_header(pe).unwrap();
-    device.dust_set_specks_trace(pe, true);
-    device.dust_set_specks_stack_limit(pe, SPILL_TEST_LIMIT);
-    {
-      let mut cmds = device
-        .run_transient_commands(|cmd| {
-          device.cmd_dust_pre_propagate_barrier(cmd);
-          let view = device.cmd_dust_frame_begin(cmd, pe, [w, h], flags, flow)?;
-          splat_pc.inv_unit = 1.0 / view.unit;
-          speck_pc.inv_unit = 1.0 / view.unit;
-          device.cmd_dust_system_begin(id, flags, flow)?;
-          let (render, moments) =
-            device.cmd_dust_propagate(cmd, id, 0, capacity, first_slot, batch.count, &frame)?;
-          device.cmd_dust_pre_splat_barrier(cmd);
-          device.cmd_dust_specks(cmd, pe, id, 0, first_slot, capacity, render, moments, speck_pc)?;
-          device.cmd_dust_pre_splat_barrier(cmd);
-          device.cmd_dust_splat(cmd, pe, id, 0, first_slot, capacity, render, moments, splat_pc)?;
-          device.cmd_dust_post_splat_barrier(cmd);
-          device.cmd_dust_frame_end(cmd, pe)?;
-          device.cmd_dust_system_end(id)?;
-          Ok(())
-        })
-        .unwrap();
-      cmds.cleanup(&device.device);
-    }
-    device.dust_set_specks_stack_limit(pe, 0);
-    device.dust_set_specks_trace(pe, false);
-    let header1 = device.download_dust_spill_header(pe).unwrap();
-    let mut spilled = device.download_dust_specks_trace_records(pe).unwrap();
-    let mut plain = records.clone();
+    let header = device.download_dust_spill_header(pe).unwrap();
     std::println!(
-      "[specks gpu] forced spill (stack {SPILL_TEST_LIMIT}): {} of {} slots claimed (unforced {}), {} specks traced (unforced {})",
-      header1[0], header1[1], header0[0], spilled.len(), plain.len()
+      "[specks gpu] walk region at word {} (records {}, leaves {}, frontier {}, single leaves {}), {} specks traced",
+      header[9], header[10], header[11], header[12], header[13], records.len()
     );
-    assert!(header0[3] <= header0[2] && header1[3] <= header1[2], "the trace overflowed its capacity: {header0:?} {header1:?}");
-    assert!(header1[0] > 0, "the stack limit of {SPILL_TEST_LIMIT} nodes forced no spill");
-    assert!(header1[0] <= header1[1], "the forced spill ran out of slots ({} claimed of {}): lower the walks or raise the limit", header1[0], header1[1]);
-    assert_eq!(header1[8], SPILL_TEST_LIMIT, "the header's stack limit word");
-    spilled.sort_unstable();
-    plain.sort_unstable();
-    assert_eq!(spilled.len(), plain.len(), "the spilled walk drew {} specks, the unforced {}", spilled.len(), plain.len());
-    if let Some(i) = (0..plain.len()).find(|&i| spilled[i] != plain[i]) {
-      panic!("the spilled walk's specks differ from the unforced walk's: first at sorted #{i}: {:?} vs {:?}", spilled[i], plain[i]);
-    }
+    assert!(header[3] <= header[2], "the trace overflowed its capacity: {header:?}");
+    assert_eq!(header[0], 0, "the breadth-first walk claimed a spill slot: {header:?}");
+    assert!(header[9] > 0 && header[10] >= 64 && header[11] >= 64 && header[12] >= 64 && header[13] >= 64, "{header:?}");
+    assert_eq!(header[12] & 1, 0, "the frontier capacity is even: {header:?}");
   }
   let fb = |w: u32| f32::from_bits(w);
   let trace: alloc::vec::Vec<(u32, [f32; 3])> =

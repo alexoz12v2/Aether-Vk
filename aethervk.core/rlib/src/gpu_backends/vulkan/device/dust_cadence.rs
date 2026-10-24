@@ -110,6 +110,30 @@ pub const CADM_MARK_CHUNK: u32 = 3;
 pub const CADM_CHUNK: u32 = 4;
 pub const CADM_CLEAR: u32 = 5;
 pub const CADM_DEBUG: u32 = 6;
+/// perf9_O: dust_classify.comp's stage modes (`DUST_CAD_STAGES`): the slot's evaluation, each stage
+/// its own dispatch writing the slot's row (`CadenceSysLayout::rows0`, dust_cadence.glsl's
+/// `DUST_CADR_*`), a barrier between, in the order PREP (CLASSIFY) or PREP_DEBUG (DEBUG), LAM, SHELL,
+/// EXTENT, NEAR, JAC, STEP, RATE, FOOT; then CLASSIFY or DEBUG reads the row. CHUNK_FOOT before
+/// CHUNK (the footprint rule into the chunk's draw-list words)
+pub const CADM_PREP: u32 = 7;
+pub const CADM_PREP_DEBUG: u32 = 8;
+pub const CADM_LAM: u32 = 9;
+pub const CADM_SHELL: u32 = 10;
+pub const CADM_EXTENT: u32 = 11;
+pub const CADM_NEAR: u32 = 12;
+pub const CADM_JAC: u32 = 13;
+pub const CADM_STEP: u32 = 14;
+pub const CADM_RATE: u32 = 15;
+pub const CADM_FOOT: u32 = 16;
+pub const CADM_CHUNK_FOOT: u32 = 17;
+/// the stages after PREP / PREP_DEBUG, in dispatch order
+pub const CAD_EVAL_STAGES: [u32; 8] = [CADM_LAM, CADM_SHELL, CADM_EXTENT, CADM_NEAR, CADM_JAC, CADM_STEP, CADM_RATE, CADM_FOOT];
+/// words of a slot's row (dust_cadence.glsl's `DUST_CADR_WORDS`)
+pub const CADR_WORDS: u32 = 12;
+/// `pc` with its mode byte (`tier_mode` bits 8-15) replaced by `mode`
+fn cad_pc_mode(pc: &DustClassifyPushConstants, mode: u32) -> DustClassifyPushConstants {
+  DustClassifyPushConstants { tier_mode: (pc.tier_mode & !0xFF00) | mode << 8, ..*pc }
+}
 /// words per debug record (class, δ0, δ1, δ2, g, flags: 1 live and lit, 2 shell-capable, 4
 /// enclosing, slot, 0)
 pub const CAD_DEBUG_WORDS: usize = 8;
@@ -184,8 +208,13 @@ impl CadenceSysLayout {
   pub fn incoming0(&self) -> u32 {
     self.blocks0() + 6 * self.nc * self.np * (self.ring / CMP_BLOCK + CAD_MAX_TIERS as u32)
   }
-  pub fn words(&self) -> u32 {
+  /// perf9_O: the classify stages' rows (`dust_cad_rows0`: `CADR_WORDS` words per ring index,
+  /// rewritten by PREP / PREP_DEBUG each classify; never cleared, never read back)
+  pub fn rows0(&self) -> u32 {
     self.incoming0() + self.ring / 4
+  }
+  pub fn words(&self) -> u32 {
+    self.rows0() + self.ring * CADR_WORDS
   }
 }
 
@@ -1374,6 +1403,12 @@ impl Device {
       ring_mask: th.capacity.wrapping_sub(1),
       tier_mode: th.t as u32 | CADM_CLASSIFY << 8,
     };
+    // perf9_O: the slot's evaluation into its row (the stage modes, a barrier after each), then
+    // CLASSIFY reads the row
+    self.cad_classify_dispatch(cmd, &cad_pc_mode(&pc, CADM_PREP), th.live_count);
+    for mode in CAD_EVAL_STAGES {
+      self.cad_classify_dispatch(cmd, &cad_pc_mode(&pc, mode), th.live_count);
+    }
     self.cad_classify_dispatch(cmd, &pc, th.live_count);
     self.cad_compact_tier(cmd, sys, params, &th, 1);
     // the readback of this frame names its classified lists
@@ -1431,6 +1466,8 @@ impl Device {
           ring_mask: th.capacity.wrapping_sub(1),
           tier_mode: th.t as u32 | CADM_CHUNK << 8 | (k as u32 | (p as u32) << 4) << 16,
         };
+        // perf9_O: the footprint rule into the draw-list words first (CHUNK reads them)
+        self.cad_classify_dispatch(cmd, &cad_pc_mode(&pc, CADM_CHUNK_FOOT), su);
         self.cad_classify_dispatch(cmd, &pc, su);
       }
     }
@@ -1488,7 +1525,8 @@ impl Device {
     let state: alloc::vec::Vec<u32> = pod_vec(&self.dust_download_bytes(state_buf, 0, (CADS_WORDS * 4) as u64)?);
     let mut out = CadenceGpuSnapshot { state, tiers: alloc::vec::Vec::new() };
     for t in ts {
-      let all: alloc::vec::Vec<u32> = pod_vec(&self.dust_download_bytes(t.buffer, 0, t.layout.words() as u64 * 4)?);
+      // (up to the classify rows: scratch, not state)
+      let all: alloc::vec::Vec<u32> = pod_vec(&self.dust_download_bytes(t.buffer, 0, t.layout.rows0() as u64 * 4)?);
       let bytes: &[u8] = bytemuck::cast_slice(&all[..(t.layout.ring / 4) as usize]);
       let owner = bytes[t.rb as usize..(t.rb + t.cap) as usize].to_vec();
       let i0 = t.layout.incoming0() as usize;
@@ -1539,7 +1577,7 @@ impl Device {
     inp: &crate::scene::dust::cadence::RateInputs,
     d_max: f32,
   ) -> GpuResult<alloc::vec::Vec<[u32; CAD_DEBUG_WORDS]>> {
-    let (params, dbg) = {
+    let (params, dbg, sys) = {
       let res = self.res.read();
       let allocator = res.allocator.allocator.as_allocator_view();
       let (params, _) = self.dust_create_buffer(&allocator, CADP_WORDS as u64 * 4, DustMem::Device, false, vk::BufferUsageFlags::TRANSFER_DST, "DustCadenceDebugParams")?;
@@ -1551,7 +1589,11 @@ impl Device {
         vk::BufferUsageFlags::TRANSFER_DST,
         "DustCadenceDebug",
       )?;
-      (params, dbg)
+      // perf9_O: the stage modes' rows (a scratch system buffer: PREP_DEBUG reads no owner byte)
+      let nc = classes.len().min(DUST_CADENCE_MAX_CLASSES) as u32;
+      let sys_words = CadenceSysLayout { ring: capacity, nc, np: 1 }.words();
+      let (sys, _) = self.dust_create_buffer(&allocator, sys_words as u64 * 4, DustMem::Device, false, vk::BufferUsageFlags::TRANSFER_DST, "DustCadenceDebugSys")?;
+      (params, dbg, sys)
     };
     let mut prm = alloc::vec![0u32; CADP_WORDS];
     prm[CADP_DT] = inp.dt_s.to_bits();
@@ -1578,10 +1620,12 @@ impl Device {
     prm[CADP_TIER0 + 1] = capacity;
     prm[CADP_TIER0 + 2] = live_count;
     prm[CADP_TIER0 + 3] = first_slot;
+    // the system ring R of the rows (dust_cad_rows0; the scratch's layout ring)
+    prm[CADP_TIER0 + 4] = capacity;
     let pc = DustClassifyPushConstants {
       moments,
       render,
-      sys: 0,
+      sys: sys.address,
       params: params.address,
       mvp,
       eye_local,
@@ -1592,8 +1636,16 @@ impl Device {
     };
     let mut cmds = self.run_transient_commands(|cmd| {
       self.cmd_dust_pre_propagate_barrier(cmd);
-      unsafe { self.device.cmd_update_buffer(cmd, params.buffer, 0, bytemuck::cast_slice(&prm)) };
+      unsafe {
+        self.device.cmd_update_buffer(cmd, params.buffer, 0, bytemuck::cast_slice(&prm));
+        self.device.cmd_fill_buffer(cmd, sys.buffer, 0, vk::WHOLE_SIZE, 0);
+      }
       self.cmd_dust_pre_splat_barrier(cmd);
+      // perf9_O: the stage modes into the rows, then DEBUG reads them
+      self.cad_classify_dispatch(cmd, &cad_pc_mode(&pc, CADM_PREP_DEBUG), live_count);
+      for mode in CAD_EVAL_STAGES {
+        self.cad_classify_dispatch(cmd, &cad_pc_mode(&pc, mode), live_count);
+      }
       self.cad_classify_dispatch(cmd, &pc, live_count);
       Ok(())
     })?;
@@ -1601,7 +1653,7 @@ impl Device {
     let words: alloc::vec::Vec<u32> = pod_vec(&self.dust_download_bytes(dbg.buffer, 0, (live_count.max(1) as usize * CAD_DEBUG_WORDS * 4) as u64)?);
     let res = self.res.read();
     let allocator = res.allocator.allocator.as_allocator_view();
-    for b in [params, dbg] {
+    for b in [params, dbg, sys] {
       let mut a = b.alloc;
       unsafe { allocator.destroy_buffer(b.buffer, &mut a) };
     }
@@ -1890,6 +1942,15 @@ impl Device {
     let pipeline = match self.kernels.pipelines.dust_draw_queue_prof {
       Some(p) if crate::gpu_backends::vulkan::physics::dust_profile_requested() => p,
       _ => self.kernels.pipelines.dust_draw_queue,
+    };
+    // (perf9_K) the mono draw family's queue draw (the pre-perf9_O blob; the same dispatch)
+    let pipeline = if self.dust_draw_staged() {
+      pipeline
+    } else {
+      match self.kernels.pipelines.dust_draw_queue_mono_prof {
+        Some(p) if crate::gpu_backends::vulkan::physics::dust_profile_requested() => p,
+        _ => self.kernels.pipelines.dust_draw_queue_mono,
+      }
     };
     self.kernels.pipelines.assert_pc_size(pipeline, core::mem::size_of_val(&qpc));
     let to_queue = vk::MemoryBarrier2::default()

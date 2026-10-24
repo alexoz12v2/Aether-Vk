@@ -24,7 +24,18 @@
 #include "dust_common.glsl"
 #include "dust_cadence.glsl"
 
-layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+// 64 texels per workgroup as before (the host's dispatch is unchanged), four lanes per texel: lane
+// L = 64 k + t is texel t's channel k (count words 0..3; channel 0 also keeps the depth word). Each
+// lane runs the texel's whole image / tap walk with the same expressions and accumulates its own
+// channel only, in the same order (images, then taps): the sums are the serial thread's, operand
+// for operand; a channel never needed the others.
+// DUST_RPT_CH = 1 (64-fiber wave mode on Adreno): 64 lanes, a lane per texel walking its four channels
+// one after the other (channel 0 first, the same calls: the same sums, the same stores, the same
+// 64-texel light flush; the host's dispatch is unchanged)
+#ifndef DUST_RPT_CH
+#define DUST_RPT_CH 4
+#endif
+layout(local_size_x = 64 * DUST_RPT_CH, local_size_y = 1, local_size_z = 1) in;
 
 layout(push_constant, std430) uniform PushConstants {
     DustUintBuffer frame;   // 0: the frame pyramid (header + levels)
@@ -45,11 +56,11 @@ const uint DUST_RPT_ENTRY_WORDS = 16u;
 // valid, bit 1 the existence is the state word +5), +5 the state word, +6..+14 H row-major (f32)
 const uint DUST_RPT_SEED0 = 0xC4DE5EEDu;
 
-bool dust_rpt_uses(DustUintBuffer tb, DustUintBuffer st, uint e) {
+bool dust_rpt_uses(uvec2 tb, uvec2 st, uint e) {
     uint at = DUST_RPT_ENTRY0 + DUST_RPT_ENTRY_WORDS * e;
-    uint fl = tb.v[at + 4u];
+    uint fl = DustUintBuffer(tb).v[at + 4u];
     if ((fl & 1u) == 0u) return false;
-    if ((fl & 2u) != 0u && st.v[tb.v[at + 5u]] == 0u) return false;
+    if ((fl & 2u) != 0u && DustUintBuffer(st).v[DustUintBuffer(tb).v[at + 5u]] == 0u) return false;
     return true;
 }
 
@@ -66,9 +77,12 @@ uint dust_rpt_dither(float v, uint seed, uint key) {
 
 // the workgroup's light (counts · 4^ℓ), summed once into the state's (lo, hi) counter
 shared float s_light[64];
-void dust_rpt_light_flush(DustUintBuffer st, uint w, float mine) {
+// the texel's depth word, gathered by its channel-0 lane: min over the taps' non-zero depths d of
+// d - 1 (exact for every d != 0; 0xFFFFFFFF = none), by shared atomicMin (no register for it)
+shared uint s_depth[64];
+void dust_rpt_light_flush(uvec2 st, uint w, float mine) {
     uint lane = gl_LocalInvocationID.x;
-    s_light[lane] = mine;
+    if (lane < 64u) s_light[lane] = mine;   // channel 0's lanes: texel order as before
     barrier();
     if (lane == 0u) {
         float t = 0.0;
@@ -77,22 +91,30 @@ void dust_rpt_light_flush(DustUintBuffer st, uint w, float mine) {
     }
 }
 
-// one frame texel's reprojection (the stores); the light it wrote (count · 4^ℓ, the telemetry)
-float dust_rpt_texel(DustUintBuffer tb, DustUintBuffer st, uint n, uint gid) {
+// the cadence state's address, re-read from the table at each use (nothing table-wide is kept live)
+uvec2 dust_rpt_state(uvec2 tb) {
+    return uvec2(DustUintBuffer(tb).v[DUST_RPT_STATE], DustUintBuffer(tb).v[DUST_RPT_STATE + 1u]);
+}
+
+// one frame texel's reprojection (the stores); the light it wrote (count · 4^ℓ, the telemetry).
+// Live across the image loop: the texel's (level, tx, ty), the four sums, the depth and the hit
+// only; the centre and the scale are recomputed per image from (l, tx, ty) (same expressions), the
+// seed is folded after the loop (it depends on the table only) and the frame offsets are re-read.
+float dust_rpt_texel(uvec2 tb, uint n, uint gid, uint ch) {
     // the header folds (once): the existing images' τ_max by maximum, level masks by or
-    if (gid == 0u) {
+    if (gid == 0u && ch == 0u) {
         for (uint e = 0u; e < n; ++e) {
-            if (!dust_rpt_uses(tb, st, e)) continue;
+            if (!dust_rpt_uses(tb, dust_rpt_state(tb), e)) continue;
             uint at = DUST_RPT_ENTRY0 + DUST_RPT_ENTRY_WORDS * e;
-            DustUintBuffer im = DustUintBuffer(uvec2(tb.v[at], tb.v[at + 1u]));
-            atomicMax(pc.frame.v[DUST_PYR_TAU_MAX], im.v[DUST_PYR_TAU_MAX]);
-            atomicOr(pc.frame.v[DUST_PYR_LEVEL_MASK], im.v[DUST_PYR_LEVEL_MASK]);
+            uvec2 im = uvec2(DustUintBuffer(tb).v[at], DustUintBuffer(tb).v[at + 1u]);
+            atomicMax(pc.frame.v[DUST_PYR_TAU_MAX], DustUintBuffer(im).v[DUST_PYR_TAU_MAX]);
+            atomicOr(pc.frame.v[DUST_PYR_LEVEL_MASK], DustUintBuffer(im).v[DUST_PYR_LEVEL_MASK]);
         }
     }
     if (gid >= pc.texels) return 0.0;
     // the frame texel: its level and position
     uint levels = pc.frame.v[DUST_PYR_LEVELS];
-    uint idx = gid, l = 0u, fw = 0u, fh = 0u, foff = 0u;
+    uint idx = gid, l = 0u, fw = 0u, fh = 0u;
     for (; l < levels; ++l) {
         fw = pc.frame.v[DUST_PYR_TABLE + 3u * l + 1u];
         fh = pc.frame.v[DUST_PYR_TABLE + 3u * l + 2u];
@@ -100,40 +122,34 @@ float dust_rpt_texel(DustUintBuffer tb, DustUintBuffer st, uint n, uint gid) {
         idx -= fw * fh;
     }
     if (l >= levels) return 0.0;
-    foff = pc.frame.v[DUST_PYR_TABLE + 3u * l];
     uint tx = idx % fw, ty = idx / fw;
-    precise float s = float(1u << l);
-    precise float cx = (float(tx) + 0.5) * s;
-    precise float cy = (float(ty) + 0.5) * s;
-    // the seed: the CPU's fold of the existing images' generations
-    uint seed = DUST_RPT_SEED0;
-    for (uint e = 0u; e < n; ++e) {
-        if (dust_rpt_uses(tb, st, e)) seed ^= dust_hash32(tb.v[DUST_RPT_ENTRY0 + DUST_RPT_ENTRY_WORDS * e + 3u]);
-    }
-    seed = dust_hash32(seed);
-    precise float v0 = 0.0, v1 = 0.0, v2 = 0.0, v3 = 0.0;
-    uint depth = 0u;
+    precise float v0 = 0.0;   // this lane's channel ch
+    uint t64 = gl_LocalInvocationID.x & 63u;
+    if (ch == 0u) s_depth[t64] = 0xFFFFFFFFu;
     bool hit = false;
     for (uint e = 0u; e < n; ++e) {
-        if (!dust_rpt_uses(tb, st, e)) continue;
+        if (!dust_rpt_uses(tb, dust_rpt_state(tb), e)) continue;
         uint at = DUST_RPT_ENTRY0 + DUST_RPT_ENTRY_WORDS * e;
-        DustUintBuffer im = DustUintBuffer(uvec2(tb.v[at], tb.v[at + 1u]));
-        float ratio = uintBitsToFloat(tb.v[at + 2u]);
-        uint mask = im.v[DUST_PYR_LEVEL_MASK];
+        uvec2 im = uvec2(DustUintBuffer(tb).v[at], DustUintBuffer(tb).v[at + 1u]);
+        float ratio = uintBitsToFloat(DustUintBuffer(tb).v[at + 2u]);
+        uint mask = DustUintBuffer(im).v[DUST_PYR_LEVEL_MASK];
         if (((mask >> l) & 1u) == 0u || !(ratio > 0.0)) continue;
-        if (l >= im.v[DUST_PYR_LEVELS]) continue;
-        float h0 = uintBitsToFloat(tb.v[at + 6u]), h1 = uintBitsToFloat(tb.v[at + 7u]), h2 = uintBitsToFloat(tb.v[at + 8u]);
-        float h3 = uintBitsToFloat(tb.v[at + 9u]), h4 = uintBitsToFloat(tb.v[at + 10u]), h5 = uintBitsToFloat(tb.v[at + 11u]);
-        float h6 = uintBitsToFloat(tb.v[at + 12u]), h7 = uintBitsToFloat(tb.v[at + 13u]), h8 = uintBitsToFloat(tb.v[at + 14u]);
+        if (l >= DustUintBuffer(im).v[DUST_PYR_LEVELS]) continue;
+        precise float s = float(1u << l);
+        precise float cx = (float(tx) + 0.5) * s;
+        precise float cy = (float(ty) + 0.5) * s;
+        float h0 = uintBitsToFloat(DustUintBuffer(tb).v[at + 6u]), h1 = uintBitsToFloat(DustUintBuffer(tb).v[at + 7u]), h2 = uintBitsToFloat(DustUintBuffer(tb).v[at + 8u]);
+        float h3 = uintBitsToFloat(DustUintBuffer(tb).v[at + 9u]), h4 = uintBitsToFloat(DustUintBuffer(tb).v[at + 10u]), h5 = uintBitsToFloat(DustUintBuffer(tb).v[at + 11u]);
+        float h6 = uintBitsToFloat(DustUintBuffer(tb).v[at + 12u]), h7 = uintBitsToFloat(DustUintBuffer(tb).v[at + 13u]), h8 = uintBitsToFloat(DustUintBuffer(tb).v[at + 14u]);
         precise float hx = h0 * cx + h1 * cy + h2;
         precise float hy = h3 * cx + h4 * cy + h5;
         precise float hz = h6 * cx + h7 * cy + h8;
         if (!(hz > 0.0)) continue;
         precise float xs = hx / hz;
         precise float ys = hy / hz;
-        uint ioff = im.v[DUST_PYR_TABLE + 3u * l];
-        uint iw = im.v[DUST_PYR_TABLE + 3u * l + 1u];
-        uint ih = im.v[DUST_PYR_TABLE + 3u * l + 2u];
+        uint ioff = DustUintBuffer(im).v[DUST_PYR_TABLE + 3u * l];
+        uint iw = DustUintBuffer(im).v[DUST_PYR_TABLE + 3u * l + 1u];
+        uint ih = DustUintBuffer(im).v[DUST_PYR_TABLE + 3u * l + 2u];
         // only inside the image level's grid; inside it the taps clamp as the composite's
         precise float gw = float(iw) * s;
         precise float gh = float(ih) * s;
@@ -153,40 +169,45 @@ float dust_rpt_texel(DustUintBuffer tb, DustUintBuffer st, uint n, uint gid) {
             uint sx = uint(clamp(ix + dx, 0, int(iw) - 1));
             uint sy = uint(clamp(iy + dy, 0, int(ih) - 1));
             uint i = ioff + (sy * iw + sx) * DUST_PYRAMID_TEXEL_WORDS;
-            uint c = im.v[i];
+            uint c = DustUintBuffer(im).v[i];
             if (c == 0u) continue;
             hit = true;
             precise float wk = wgt * ratio;
-            v0 += wk * float(c);
-            v1 += wk * float(im.v[i + 1u]);
-            v2 += wk * float(im.v[i + 2u]);
-            v3 += wk * float(im.v[i + 3u]);
-            uint d = im.v[i + 4u];
-            if (d != 0u && (depth == 0u || d < depth)) depth = d;
+            v0 += wk * float(DustUintBuffer(im).v[i + ch]);
+            if (ch == 0u) {
+                uint d = DustUintBuffer(im).v[i + 4u];
+                if (d != 0u) atomicMin(s_depth[t64], d - 1u);
+            }
         }
     }
     if (!hit) return 0.0;
-    uint fi = foff + (ty * fw + tx) * DUST_PYRAMID_TEXEL_WORDS;
-    pc.frame.v[fi] = dust_rpt_dither(v0, seed, fi);
-    pc.frame.v[fi + 1u] = dust_rpt_dither(v1, seed, fi + 1u);
-    pc.frame.v[fi + 2u] = dust_rpt_dither(v2, seed, fi + 2u);
-    pc.frame.v[fi + 3u] = dust_rpt_dither(v3, seed, fi + 3u);
-    pc.frame.v[fi + 4u] = depth;
+    // the seed: the CPU's fold of the existing images' generations
+    uint seed = DUST_RPT_SEED0;
+    for (uint e = 0u; e < n; ++e) {
+        if (dust_rpt_uses(tb, dust_rpt_state(tb), e)) seed ^= dust_hash32(DustUintBuffer(tb).v[DUST_RPT_ENTRY0 + DUST_RPT_ENTRY_WORDS * e + 3u]);
+    }
+    seed = dust_hash32(seed);
+    uint fi = pc.frame.v[DUST_PYR_TABLE + 3u * l] + (ty * pc.frame.v[DUST_PYR_TABLE + 3u * l + 1u] + tx) * DUST_PYRAMID_TEXEL_WORDS;
+    pc.frame.v[fi + ch] = dust_rpt_dither(v0, seed, fi + ch);
+    if (ch != 0u) return 0.0;
+    uint dm = s_depth[t64];
+    pc.frame.v[fi + 4u] = dm == 0xFFFFFFFFu ? 0u : dm + 1u;
     // (round 14: a level's light is Σ its counts — a count is τ · area / unit already)
     return float(pc.frame.v[fi]);
 }
 
 void main() {
-    DustUintBuffer tb = pc.table;
-    uint n = tb.v[DUST_RPT_N];
-    float unitNow = uintBitsToFloat(tb.v[DUST_RPT_UNIT_NOW]);
-    DustUintBuffer st = DustUintBuffer(uvec2(tb.v[DUST_RPT_STATE], tb.v[DUST_RPT_STATE + 1u]));
-    bool stats = uvec2(tb.v[DUST_RPT_STATE], tb.v[DUST_RPT_STATE + 1u]) != uvec2(0u);
-    uint gid = gl_WorkGroupID.y * pc.groupsX * 64u + gl_GlobalInvocationID.x;
+    uvec2 tb = uvec2(uvec2(pc.table));
+    uint n = DustUintBuffer(tb).v[DUST_RPT_N];
+    float unitNow = uintBitsToFloat(DustUintBuffer(tb).v[DUST_RPT_UNIT_NOW]);
+    uvec2 st = uvec2(DustUintBuffer(tb).v[DUST_RPT_STATE], DustUintBuffer(tb).v[DUST_RPT_STATE + 1u]);
+    bool stats = uvec2(DustUintBuffer(tb).v[DUST_RPT_STATE], DustUintBuffer(tb).v[DUST_RPT_STATE + 1u]) != uvec2(0u);
+    uint ch = gl_LocalInvocationID.x >> 6u;
+    uint gid = gl_WorkGroupID.y * pc.groupsX * 64u + gl_WorkGroupID.x * 64u + (gl_LocalInvocationID.x & 63u);
     if (pc.mode == 1u) {
         // the frame's light: every texel's count · 4^ℓ (the frame finished)
         float mine = 0.0;
-        if (gid < pc.texels) {
+        if (gid < pc.texels && ch == 0u) {
             uint lv = pc.frame.v[DUST_PYR_LEVELS], ix = gid;
             for (uint l = 0u; l < lv; ++l) {
                 uint w = pc.frame.v[DUST_PYR_TABLE + 3u * l + 1u], h = pc.frame.v[DUST_PYR_TABLE + 3u * l + 2u];
@@ -203,6 +224,15 @@ void main() {
         return;
     }
     if (n == 0u || !(unitNow > 0.0)) return;
-    float wrote = dust_rpt_texel(tb, st, n, gid);
+#if DUST_RPT_CH == 1
+    // (written out: any loop over the channels costs Mali 25 registers, and so does a constant
+    // channel: the index is the host's pad word, 0 at both dispatches, plus the channel)
+    float wrote = dust_rpt_texel(tb, n, gid, pc.pad);
+    dust_rpt_texel(tb, n, gid, pc.pad + 1u);
+    dust_rpt_texel(tb, n, gid, pc.pad + 2u);
+    dust_rpt_texel(tb, n, gid, pc.pad + 3u);
+#else
+    float wrote = dust_rpt_texel(tb, n, gid, ch);
+#endif
     if (stats) dust_rpt_light_flush(st, DUST_CADS_SHOWN_LIGHT, wrote);
 }

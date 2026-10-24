@@ -1158,17 +1158,33 @@ pub struct DustPropagatePushConstants {
   pub moments: u64,
   pub first_slot: u32,
   pub live_count: u32,
-  pub ring_mask: u32,
+  /// the solve rows' address, low word (round 9 step O: a chunk of [`DUST_PROP_ROW_WORDS`]-word
+  /// rows, one per lane, `Device::propagate`); the ring mask the shader rebuilds from `skip[0]`
+  /// bits 3–7 (log2 of the ring capacity)
+  pub rows_lo: u32,
   /// the host's propagate generation: the stamp written to the moments' `edges[12].w` (bits)
   pub generation: u32,
   /// `[0]` bit 0: 1 = leave a slot already stamped with `generation` as it is; bits 1–2 the
-  /// size-polyline edge stride's log2 ([`propagate_stride_bits`], the trajectory detail);
+  /// size-polyline edge stride's log2 ([`propagate_stride_bits`], the trajectory detail); bits
+  /// 3–7 log2 of the ring capacity; bits 8–31 the solve rows' address bits 32–55;
   /// `[1]` the cadence's propagate bitmask address, low word (std430 pads the `vec4` frame to a
   /// 16-byte boundary)
   pub skip: [u32; 2],
   pub frame: DustFrame,
 }
 const _: () = assert!(core::mem::size_of::<DustPropagatePushConstants>() == 128);
+/// `dust_propagate.comp` (round 9 step O): clusters per 64-lane workgroup (21 lanes each: the
+/// mean, 3 secants, 17 size edges), the solve row of a lane (40 words of the rows buffer) and
+/// the df64 Kepler iterations (`DUST_KEPLER_ITERS_DF` of dust_common.glsl: the staged solve
+/// records passes 2 and 3 that many times)
+pub const DUST_PROP_CLUSTERS: u32 = 3;
+pub const DUST_PROP_ROW_WORDS: u32 = 40;
+pub const DUST_KEPLER_ITERS_DF: u32 = 4;
+/// workgroups per propagate chunk: the rows buffer holds one chunk (`K · 64 · 160` B, 21 MB at
+/// 2 048); a chunk is solved and its moments made before the next chunk reuses the rows
+pub const DUST_PROP_CHUNK_WGS: u32 = 2048;
+/// the rows buffer's address must fit `skip[0]` bits 8–31 (its bits 32–55)
+pub const DUST_PROP_ROWS_ADDR_BITS: u32 = 56;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Streaklines. Mirror of `dust_common.glsl` `dust_streak_*`

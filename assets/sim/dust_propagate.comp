@@ -15,6 +15,7 @@
 // generation is left as it is (the same inputs: the same words).
 #version 450 core
 #extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_control_flow_attributes : require
 #include "dust_common.glsl"
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
@@ -25,11 +26,13 @@ layout(push_constant, std430) uniform PushConstants {
     DustMomentsBuffer moments;   // 16
     uint firstSlot;              // 24
     uint liveCount;              // 28
-    uint ringMask;               // 32
+    uint rowsLo;                 // 32: the solve rows' address, low word (round 9 step O; was ringMask:
+                                 //     the ring mask is (1 << skip.x bits 3-7) - 1)
     uint generation;             // 36: the host's propagate generation (the stamp, edges[12].w)
     uvec2 skip;                  // 40: x bit 0: 1 = skip a slot stamped with `generation`, bits 1-2
                                  //     log2 of the size-polyline edge stride (the trajectory detail,
-                                 //     dust::propagate_stride_bits); y the cadence's propagate
+                                 //     dust::propagate_stride_bits), bits 3-7 log2 of the ring capacity,
+                                 //     bits 8-31 the solve rows' address bits 32-55; y the cadence's propagate
                                  //     bitmask address, low word (0, 0 = every slot)
                                  //     (std430: the vec4 below is 16-aligned)
     vec4 ps_r_t_hi;              // 48: particle-system heliocentric position (m), w = t_now (s); df64 hi
@@ -41,154 +44,429 @@ layout(push_constant, std430) uniform PushConstants {
     uint maskHi;                 // 124: the bitmask address, high word
 } pc;                            // 128 bytes
 
-// K(r0, v0 + dv, mu, dt) - r, rotated into the particle-system frame
-vec3 secant_v(Df3 r0, Df3 v0, vec3 dv, vec2 mu, vec2 dt, Df3 r) {
-    Df3 v = df3_add(v0, df3_from_f32(dv));
-    Df3 rr, vv;
-    dust_kepler(r0, v, mu, dt, rr, vv);
-    return dust_qrot(pc.rot_inv, df3_to_f32(df3_sub(rr, r)));
+// Round 9 step O: a cluster is 21 lanes (task = lane - 21 c): lane 0 the mean, 1..3 the secants,
+// 4..20 the size edges 0..16, each one Kepler solve, all through ONE call of dust_kepler_coef_lr
+// (dust_kepler_lr.glsl). The solve's df64 state (dust_kepler_coef's r0n, eta, alpha, zeta, t, sd,
+// the Stumpff values, the coefficients) and its per-task inputs (mu, v0 + dv) live in the lane's
+// solve row (DUST_PROP_ROW_WORDS words of a chunk-sized buffer, pc.rowsLo / skip.x bits 8-31,
+// row = workgroup-in-dispatch * 64 + lane), written once and re-read where used: ~24 registers
+// for the solve instead of 60+. Three clusters a workgroup, lane 63 idle. Two stages, two blobs
+// of this file over the same workgroups:
+//   the solve stage (plain): the solve, then each lane writes its results as soon as they are made
+//     (the render record, the mean's velocity, its moments edge) and its exchange words (its
+//     position) into its row;
+//   the moments stage (-DDUST_PROP_MOMENTS=1, dust_propagate.comp.moments.spv): the secants'
+//     displacements and the covariance, the w lanes by the mean's lane, the skipped edges from their
+//     solved neighbours' rows.
+// No shared memory, no barrier in either: Mali-G52 kept the solve at 64 registers in any shader
+// with a barrier between it and later work (and with shared memory exchanged across one). Every
+// word of the render and moments records is written by exactly one lane with the serial
+// expression, so the records equal the serial thread's bit for bit.
+// Dispatch: ceil(liveCount / DUST_PROP_CLUSTERS) workgroups, two-dimensional (x at most
+// DUST_PROP_DISPATCH_X), in chunks of at most K workgroups (the rows buffer holds one chunk):
+// Device::cmd_dust_propagate_cached records per chunk c the solve stage over the sub-range
+// (firstSlot + 3 K c, at most 3 K slots), a barrier, the moments stage over the same sub-range,
+// a barrier (the next chunk's solve stage overwrites the rows).
+const uint DUST_PROP_TASKS      = 21u;
+const uint DUST_PROP_CLUSTERS   = 3u;
+const uint DUST_PROP_DISPATCH_X = 65535u;
+// the solve row: dust_kepler_lr.glsl's stash words 0..KP_WORDS-1, then mu (hi, lo) and v0 + dv
+// (hi xyz, lo xyz)
+const uint DUST_PROP_ROW_MU     = 22u;   // mu (hi, lo)
+const uint DUST_PROP_ROW_V0     = 24u;   // v0 + dv (hi xyz, lo xyz)
+const uint DUST_PROP_ROW_R0     = 30u;   // r0 (hi xyz, lo xyz)
+const uint DUST_PROP_ROW_DT     = 36u;   // dt = t_now - t0 (hi, lo)
+const uint DUST_PROP_ROW_LANE   = 38u;   // the lane index, across the solve
+const uint DUST_PROP_ROW_WORDS  = 40u;   // 160 B
+// the exchange between the two stages: in the lanes' rows, over stash words the solve's results no
+// longer need (alpha, sd, c0, c1, c2: words 2..10): the mean's and the secants' df64 positions (hi xyz,
+// lo xyz), the solved edges' f32 positions (xyz)
+const uint DUST_PROP_ROW_X      = 2u;
+
+// the lane's solve inputs (globals of the invocation, set once in main): the cluster record's and
+// the solve row's addresses (64-bit values as uvec2, not Private buffer_references: Adreno 619)
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer DustClusterOne { DustCluster c; };
+// rows interleaved per workgroup (word-major tile: word w of lane l at tile + (w * 64 + l) * 4; the
+// 64 lanes' reads of one word are contiguous — the GTX 1070 ran the lane-major rows 12x slower)
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer DustPropRow { float w[]; };
+#define ROW_W(w) ((w) * 64u)
+uvec2 g_rec, g_row;
+uint g_slot;
+#define REC pc.clusters.c[g_slot]
+#define ROW DustPropRow(g_row)
+uvec2 prop_addr(uvec2 base, uint offset) {
+    uint carry;
+    uint lo = uaddCarry(base.x, offset, carry);
+    return uvec2(lo, base.y + carry);
+}
+// a workgroup-scope fence before each reload: the compilers must not merge the reloads of a
+// record or row word into one long-lived register (that is the state this design drops)
+#ifdef DUST_PROP_NOFENCE
+void kp_fence() { }
+#else
+void kp_fence() { groupMemoryBarrier(); }
+#endif
+void kp_put(uint w, float x) { ROW.w[ROW_W(w)] = x; }
+float kp_get(uint w) { kp_fence(); return ROW.w[ROW_W(w)]; }
+vec2 kp_r0c(uint k) { return vec2(kp_get(DUST_PROP_ROW_R0 + k), kp_get(DUST_PROP_ROW_R0 + 3u + k)); }
+vec2 kp_v0c(uint k) { return vec2(kp_get(DUST_PROP_ROW_V0 + k), kp_get(DUST_PROP_ROW_V0 + 3u + k)); }
+vec2 kp_mu() { return vec2(kp_get(DUST_PROP_ROW_MU), kp_get(DUST_PROP_ROW_MU + 1u)); }
+vec2 kp_dt() { return vec2(kp_get(DUST_PROP_ROW_DT), kp_get(DUST_PROP_ROW_DT + 1u)); }
+// the edge's sqrt(beta_k) and speed factor (the serial loop's expressions)
+float prop_edge_sb(uint k) {
+    float beta = REC.v0_hi_beta.w;
+    float range = dust_size_range_factor(REC);
+    return dust_size_edge_sqrt_beta(beta, range, k);
+}
+float prop_edge_factor(uint k) {
+    float sqrtBeta = sqrt(max(REC.v0_hi_beta.w, 0.0));
+    float sb = prop_edge_sb(k);
+    return sqrtBeta > 0.0 ? sb / sqrtBeta : 1.0;
+}
+#include "dust_kepler_lr.glsl"
+// the row of lane l of this workgroup
+uvec2 prop_row(uint l) {
+    uint wg = gl_WorkGroupID.y * DUST_PROP_DISPATCH_X + gl_WorkGroupID.x;
+    return prop_addr(uvec2(pc.rowsLo, pc.skip.x >> 8u), wg * (64u * DUST_PROP_ROW_WORDS * 4u) + l * 4u);
+}
+// the exchange's word m of lane l (a fenced reload, as kp_get)
+float prop_x(uvec2 row, uint m) { kp_fence(); return DustPropRow(row).w[ROW_W(DUST_PROP_ROW_X + m)]; }
+// the f32 xyz / df64 (hi xyz, lo xyz) exchange words of the row
+vec3 prop_x3(uvec2 row) { return vec3(prop_x(row, 0u), prop_x(row, 1u), prop_x(row, 2u)); }
+Df3 prop_xd(uvec2 row) {
+    Df3 r;
+    r.hi = vec3(prop_x(row, 0u), prop_x(row, 1u), prop_x(row, 2u)); r.lo = vec3(prop_x(row, 3u), prop_x(row, 4u), prop_x(row, 5u));
+    return r;
 }
 
-void main() {
-    uint i = gl_GlobalInvocationID.x;
-    if (i >= pc.liveCount) return;
-    uint slot = (pc.firstSlot + i) & pc.ringMask;
-    // the cadence's propagate set (dust_classify.comp's marks: fresh, the build chunks, their
-    // predecessors): an unmarked slot keeps its moments
-    uvec2 maskAddr = uvec2(pc.skip.y, pc.maskHi);
-    if (maskAddr != uvec2(0u) && (DustUintBuffer(maskAddr).v[slot >> 5u] & (1u << (slot & 31u))) == 0u) return;
-    bool hasMoments = uvec2(pc.moments) != uvec2(0u);
-    // already at this generation's time (a paused frame): the record and moments stand
-    // bit 0 only: bits 1-2 carry the edge stride (until 2026-10-22 `!= 0u` skipped at every detail < 17)
-    if ((pc.skip.x & 1u) != 0u && hasMoments && floatBitsToUint(pc.moments.m[slot].edges[12].w) == pc.generation) return;
-    DustCluster C = pc.clusters.c[slot];
+// the solve's inputs into the row: mu = GM_sun (1 - beta) (the edge's beta for the edges) and
+// v0 + dv (dust_kepler's v0: the mean as loaded; df3_add(v0, df3_from_f32(dv)) component by
+// component for the secants (the dispersion) and the edges (the speed change))
+void prop_inputs(uint task) {
+    float b;
+    if (task <= 3u) {
+        b = REC.v0_hi_beta.w;
+    } else {
+        float sb = prop_edge_sb(task - 4u);
+        b = sb * sb;
+    }
+    kp_put2(DUST_PROP_ROW_MU, df_mul(DF_SUN_MU, df_two_sum(1.0, -b)));
+    vec3 dv = vec3(0.0);
+    if (task >= 1u && task <= 3u) {
+        // velocity dispersion: sigma_lat across the ejection axis, sigma_rad along it
+        vec3 e1, e2, e3;
+        dust_dispersion_frame(REC.eject.xyz, e1, e2, e3);
+        float sigmaLat = max(REC.misc.x, 0.0), sigmaRad = max(REC.misc.y, 0.0);
+        dv = task == 1u ? e1 * sigmaLat : (task == 2u ? e2 * sigmaLat : e3 * sigmaRad);
+    } else if (task >= 4u) {
+        dv = REC.eject.xyz * (prop_edge_factor(task - 4u) - 1.0);
+    }
+    for (uint k = 0u; k < 3u; k++) {
+        vec2 v = vec2(REC.v0_hi_beta[k], REC.v0_lo_mass[k]);
+        // dv's component k by selection (a dynamic index into a private vector is private memory on Adreno)
+        float dvk = k == 0u ? dv.x : (k == 1u ? dv.y : dv.z);
+        if (task != 0u) v = df_add(v, vec2(dvk, 0.0));
+        kp_put(DUST_PROP_ROW_V0 + k, v.x);
+        kp_put(DUST_PROP_ROW_V0 + 3u + k, v.y);
+        kp_put(DUST_PROP_ROW_R0 + k, REC.r0_t0_hi[k]);
+        kp_put(DUST_PROP_ROW_R0 + 3u + k, REC.r0_t0_lo[k]);
+    }
+    kp_put2(DUST_PROP_ROW_DT, df_sub(vec2(pc.ps_r_t_hi.w, pc.ps_r_t_lo.w), vec2(REC.r0_t0_hi.w, REC.r0_t0_lo.w)));
+}
 
-    DustRenderCluster R;
-    R.pos_size = vec4(0.0);
-    R.age_id_dbeta_flux = vec4(0.0, uintBitsToFloat(slot), 0.0, 0.0);
+// the slot's age band and flux (the serial thread's expressions; recomputed where needed instead
+// of kept)
+void prop_band(out float age_f, out bool inBand, out float flux) {
     vec2 t_now = vec2(pc.ps_r_t_hi.w, pc.ps_r_t_lo.w);
-    vec2 age = df_sub(t_now, vec2(C.r0_t0_hi.w, C.r0_t0_lo.w));
-    float age_f = age.x + age.y;
+    vec2 age = df_sub(t_now, vec2(REC.r0_t0_hi.w, REC.r0_t0_lo.w));
+    age_f = age.x + age.y;
     float ttl = pc.ttl.x;
     // age band of this tier (dust::DustSystemState): neighbouring tiers overlap in emission time,
     // each draws only its own ages
-    bool inBand = age_f >= pc.ttl.y && age_f >= 0.0 && age_f <= ttl;
-    // (the moments below need these past the render record: declared here)
-    float beta = C.v0_hi_beta.w;
-    vec2 mu;
-    Df3 r0, v0, r, v, ps;
-    vec3 local;
-    float flux = 0.0;
+    inBand = age_f >= pc.ttl.y && age_f >= 0.0 && age_f <= ttl;
+    flux = 0.0;
     if (inBand) {
-        mu = df_mul(DF_SUN_MU, df_two_sum(1.0, -beta));
-        r0.hi = C.r0_t0_hi.xyz;   r0.lo = C.r0_t0_lo.xyz;
-        v0.hi = C.v0_hi_beta.xyz; v0.lo = C.v0_lo_mass.xyz;
-        dust_kepler(r0, v0, mu, age, r, v);
-        ps.hi = pc.ps_r_t_hi.xyz; ps.lo = pc.ps_r_t_lo.xyz;
-        local = dust_qrot(pc.rot_inv, df3_to_f32(df3_sub(r, ps)));
         // fade the last 10% of the lifetime (oldest tier only)
         float fade = pc.ttl.z > 0.5 ? 1.0 : clamp((1.0 - age_f / ttl) * 10.0, 0.0, 1.0);
-        flux = C.v0_lo_mass.w * C.misc.z * fade;
-        R.pos_size = vec4(local, C.misc.x * age_f);
-        // z: the beta half-spread with the child-pattern id in its low bits, copied bit for bit
-        // y: slot, the tier's stream shift and the live bit (dust::render_word): streak predecessors
-        // and log2 of the ring capacity (bitCount of the mask): readers derive the mask from it
-        R.age_id_dbeta_flux = vec4(age_f, uintBitsToFloat(dust_render_word(slot, uint(pc.ttl.w), bitCount(pc.ringMask))), C.misc.w, flux);
+        flux = REC.v0_lo_mass.w * REC.misc.z * fade;
     }
-    // the render record first: nothing of it stays live across the edge solves below
-    // member-wise: Adreno 619 drivers fail to link a whole-struct store through this pointer
-    pc.render.c[slot].pos_size = R.pos_size;
-    pc.render.c[slot].age_id_dbeta_flux = R.age_id_dbeta_flux;
+}
+// position component k of the solve (still: r0 as it is)
+vec2 prop_r(uint k, bool moving) { return moving ? kp_apply(k, KP_FF, KP_GG) : kp_r0c(k); }
+// df3_to_f32(df3_sub(r, ps)) component k
+float prop_rel(uint k, bool moving) {
+    vec2 x = df_sub(prop_r(k, moving), vec2(pc.ps_r_t_hi[k], pc.ps_r_t_lo[k]));
+    return x.x + x.y;
+}
 
-    // the moments in a private record, stored whole at the end: buffer stores inside the edge
-    // loop were 7 % (Mali-G52) to 14 % (Adreno 619) slower, neutral on the GTX 1070
-    // (perf8_prop_h1). Everything that needs the mean (r, v) or the secants before the edge
-    // loop, so only the loop's own inputs stay live across it
-    DustMoments M;
-    if (inBand && flux > 0.0 && hasMoments) {
-        // velocity dispersion: sigma_lat across the ejection axis, sigma_rad along it, secants
-        // over the real spreads
-        vec3 e1, e2, e3;
-        dust_dispersion_frame(C.eject.xyz, e1, e2, e3);
-        float sigmaLat = max(C.misc.x, 0.0), sigmaRad = max(C.misc.y, 0.0);
-        vec3 a0 = secant_v(r0, v0, e1 * sigmaLat, mu, age, r);
-        vec3 a1 = secant_v(r0, v0, e2 * sigmaLat, mu, age, r);
-        vec3 a2 = secant_v(r0, v0, e3 * sigmaRad, mu, age, r);
-        M.mean_flux = vec4(local, flux);
-        M.cov_a = vec4(a0.x * a0.x + a1.x * a1.x + a2.x * a2.x,
-                       a0.x * a0.y + a1.x * a1.y + a2.x * a2.y,
-                       a0.x * a0.z + a1.x * a1.z + a2.x * a2.z,
-                       a0.y * a0.y + a1.y * a1.y + a2.y * a2.y);
-        M.cov_b_age_id = vec4(a0.y * a0.z + a1.y * a1.z + a2.y * a2.z,
-                              a0.z * a0.z + a1.z * a1.z + a2.z * a2.z,
-                              age_f, uintBitsToFloat(dust_child_id(C.misc.w)));
-        // the w lanes of edges 1..12 and 15 (the edge loop leaves them alone; edges 0, 13, 14
-        // and 16 keep their speed factors, which are linear in k: dust_edge_factor).
+// the three components, x and y through the row's exchange words (free until the lane's own
+// exchange words are written; GCN: two df64 results kept live took the results pass to 25 VGPRs)
+vec3 prop_rel3(bool moving) {
+    kp_put(DUST_PROP_ROW_X, prop_rel(0u, moving));
+    kp_put(DUST_PROP_ROW_X + 1u, prop_rel(1u, moving));
+    float z = prop_rel(2u, moving);
+    return vec3(kp_get(DUST_PROP_ROW_X), kp_get(DUST_PROP_ROW_X + 1u), z);
+}
+// component k of df3_to_f32(df3_sub(a, b)), a and b the df64 exchange words of rows ra and rb
+float prop_dk(uvec2 ra, uvec2 rb, uint k) {
+    vec2 x = df_sub(vec2(prop_x(ra, k), prop_x(ra, 3u + k)), vec2(prop_x(rb, k), prop_x(rb, 3u + k)));
+    precise float r = x.x + x.y;
+    return r;
+}
+// the secant j's displacement a_j = R(rr_j - r) (r: the mean's position, rr_j: the secant's, both
+// from their rows)
+vec3 prop_aj(uint lm, uint j) {
+    // df3_to_f32(df3_sub(rr_j, r)) one component at a time (df3_sub and df3_to_f32 are per component)
+    uvec2 rj = prop_row(lm + j), rm = prop_row(lm);
+    return dust_qrot(pc.rot_inv, vec3(prop_dk(rj, rm, 0u), prop_dk(rj, rm, 1u), prop_dk(rj, rm, 2u)));
+}
+// the lane's indices and flags, from its row (re-derived after the solve: nothing of the lane is kept
+// across it; the solve is at the 32-register edge on Mali-G52)
+#define PROP_RING_MASK ((1u << ((pc.skip.x >> 3u) & 31u)) - 1u)
+#define PROP_LANE_WORD floatBitsToUint(kp_get(DUST_PROP_ROW_LANE))
+#define PROP_IDS \
+    uint lane = PROP_LANE_WORD; \
+    bool act = (lane & 0x100u) != 0u, momLive = (lane & 0x200u) != 0u, solves = (lane & 0x400u) != 0u; \
+    lane &= 0xffu; \
+    uint c = lane / DUST_PROP_TASKS; \
+    uint task = lane - c * DUST_PROP_TASKS; \
+    uint ringMask = PROP_RING_MASK; \
+    uint slot = (pc.firstSlot + ((gl_WorkGroupID.y * DUST_PROP_DISPATCH_X + gl_WorkGroupID.x) * DUST_PROP_CLUSTERS + c)) & ringMask; \
+    bool hasMoments = uvec2(pc.moments) != uvec2(0u); \
+    uint stride = 1u << ((pc.skip.x >> 1u) & 3u); \
+    bool solved = task >= 4u && ((task - 4u) & (stride - 1u)) == 0u; \
+    g_rec = prop_addr(uvec2(pc.clusters), slot * 96u); g_slot = slot;
+
+#ifndef DUST_PROP_MOMENTS
+// DUST_PROP_PASS (round 9 step O, Adreno 619: the solve stage in passes over the row, each at most
+// 13 full vec4 registers, 14 waves): 1 the inputs and kp_solve_prep; 2 a df iteration's Stumpff
+// values; 3 its residual and Laguerre step; 6 the final Stumpff values; 4 the rest of
+// kp_solve_final; 5 the results, in two blobs: DUST_PROP_P5=1 the moving lanes, DUST_PROP_P5=2 the
+// others (Adreno 619's compiler crashed on the render record's branch on the loaded moving flag:
+// here the flag only picks the early return and moving is a constant). The host records
+// 1, (2, 3) x DUST_KEPLER_ITERS_DF_LR, 6, 4, 5 (P5=1), 5 (P5=2), then the moments stage, over the
+// same workgroups, a barrier between passes (none needed between the two pass-5 blobs: disjoint
+// lanes, disjoint words). The lane's flags in the row's lane word: 0x400 solves, 0x800 moving
+// (prep true), 0x1000 the df iteration is over (dust_kepler_coef's break). Undefined: one pass
+// (the plain blob; Adreno 619 rejects it).
+const uint DUST_PROP_MOVING = 0x800u, DUST_PROP_DFDONE = 0x1000u;
+#if defined(DUST_PROP_PASS) && DUST_PROP_PASS != 1 && DUST_PROP_PASS != 5
+void main() {
+    g_row = prop_row(gl_LocalInvocationID.x);
+    uint fl = floatBitsToUint(kp_get(DUST_PROP_ROW_LANE));
+    if ((fl & DUST_PROP_MOVING) == 0u) return;   // not solving, or still
+#if DUST_PROP_PASS == 2 || DUST_PROP_PASS == 3
+    if ((fl & DUST_PROP_DFDONE) != 0u) return;
+#endif
+#if DUST_PROP_PASS == 2 || DUST_PROP_PASS == 6
+    kp_stumpff_put();
+#elif DUST_PROP_PASS == 3
+    bool over = kp_solve_df_step();
+    if (over) kp_put(DUST_PROP_ROW_LANE, uintBitsToFloat(floatBitsToUint(kp_get(DUST_PROP_ROW_LANE)) | DUST_PROP_DFDONE));
+#else
+    kp_solve_final_rest();
+#endif
+}
+#else
+void main() {
+    bool moving;
+#if !defined(DUST_PROP_PASS) || DUST_PROP_PASS == 1
+    {
+        bool act, momLive, solves;
+        uint lane = gl_LocalInvocationID.x;
+        uint c = lane / DUST_PROP_TASKS;
+        uint task = lane - c * DUST_PROP_TASKS;
+        uint wg = gl_WorkGroupID.y * DUST_PROP_DISPATCH_X + gl_WorkGroupID.x;
+        uint i = wg * DUST_PROP_CLUSTERS + c;
+        uint ringMask = (1u << ((pc.skip.x >> 3u) & 31u)) - 1u;
+        act = c < DUST_PROP_CLUSTERS && i < pc.liveCount;
+        uint slot = (pc.firstSlot + i) & ringMask;
+        // the cadence's propagate set (dust_classify.comp's marks: fresh, the build chunks, their
+        // predecessors): an unmarked slot keeps its moments
+        uvec2 maskAddr = uvec2(pc.skip.y, pc.maskHi);
+        if (act && maskAddr != uvec2(0u) && (DustUintBuffer(maskAddr).v[slot >> 5u] & (1u << (slot & 31u))) == 0u) act = false;
+        bool hasMoments = uvec2(pc.moments) != uvec2(0u);
+        // already at this generation's time (a paused frame): the record and moments stand
+        // bit 0 only: bits 1-2 carry the edge stride (until 2026-10-22 `!= 0u` skipped at every detail < 17)
+        if (act && (pc.skip.x & 1u) != 0u && hasMoments && floatBitsToUint(pc.moments.m[slot].edges[12].w) == pc.generation) act = false;
+        g_rec = prop_addr(uvec2(pc.clusters), slot * 96u); g_slot = slot;
+        g_row = prop_addr(uvec2(pc.rowsLo, pc.skip.x >> 8u), wg * (64u * DUST_PROP_ROW_WORDS * 4u) + lane * 4u);
+        uint stride = 1u << ((pc.skip.x >> 1u) & 3u);
+        // the trajectory detail (round 8 step D, dust::propagate_edge_stride; pc.skip.x bits 1-2):
+        // every stride-th edge solved, the others placed linearly between their solved neighbours
+        // in the moments stage; the speed factors exact for every edge (linear in k anyway)
+        bool solved = task >= 4u && ((task - 4u) & (stride - 1u)) == 0u;
+        float age_f, flux;
+        bool inBand;
+        prop_band(age_f, inBand, flux);
+        momLive = act && hasMoments && inBand && flux > 0.0;
+        solves = task == 0u ? act && inBand : (task <= 3u ? momLive : momLive && solved);
+        if (solves) prop_inputs(task);
+        // the lane's index and flags across the solve: in the row, not in registers (the solve is at
+        // the 32-register edge on Mali-G52: one more live value took it to 64)
+        kp_put(DUST_PROP_ROW_LANE, uintBitsToFloat(lane | (act ? 0x100u : 0u) | (momLive ? 0x200u : 0u) | (solves ? 0x400u : 0u)));
+    }
+#endif
+#if defined(DUST_PROP_PASS) && DUST_PROP_PASS == 1
+    // kp_solve_prep; moving into the lane word (the later passes' gate)
+    if ((PROP_LANE_WORD & 0x400u) != 0u && kp_solve_prep())
+        kp_put(DUST_PROP_ROW_LANE, uintBitsToFloat(floatBitsToUint(kp_get(DUST_PROP_ROW_LANE)) | DUST_PROP_MOVING));
+    return;
+#elif defined(DUST_PROP_PASS)
+    g_row = prop_row(gl_LocalInvocationID.x);
+#if defined(DUST_PROP_P5) && DUST_PROP_P5 == 1
+    // pass 5 for the moving lanes (the flag's one use: the early return; moving a constant below:
+    // the flag is set only on a solving lane, so moving && solves is moving)
+    if ((PROP_LANE_WORD & DUST_PROP_MOVING) == 0u) return;
+    moving = true;
+#elif defined(DUST_PROP_P5) && DUST_PROP_P5 == 2
+    // pass 5 for every other lane (still, not solving, inactive)
+    if ((PROP_LANE_WORD & DUST_PROP_MOVING) != 0u) return;
+    moving = false;
+#else
+    moving = (PROP_LANE_WORD & DUST_PROP_MOVING) != 0u;
+#endif
+#else
+    // ── phase 1: the solve (one per lane, the task only picks the inputs: all of them in the row) ──
+    moving = false;
+    if ((PROP_LANE_WORD & 0x400u) != 0u) moving = dust_kepler_coef_lr();
+#endif
+    {
+    PROP_IDS
+#if !(defined(DUST_PROP_P5) && DUST_PROP_P5 == 1)
+    moving = moving && solves;
+#endif
+    // ── each solve's results, written where they belong ──
+    if (solves) {
+        if (task == 0u) {
+            // the mean's heliocentric velocity (m/s, particle-system axes): df3_to_f32 per
+            // component of dust_kepler_apply's v (still: v0)
+            if (momLive) {
+                // vx, vy through the row's exchange words (free until the X words below; GCN: the
+                // three df64 applications kept two results live at 25 VGPRs)
+                {
+                    vec2 x = moving ? kp_apply(0u, KP_FD, KP_GD) : kp_v0c(0u);
+                    precise float vx = x.x + x.y;
+                    kp_put(DUST_PROP_ROW_X, vx);
+                }
+                {
+                    vec2 x = moving ? kp_apply(1u, KP_FD, KP_GD) : kp_v0c(1u);
+                    precise float vy = x.x + x.y;
+                    kp_put(DUST_PROP_ROW_X + 1u, vy);
+                }
+                vec2 x = moving ? kp_apply(2u, KP_FD, KP_GD) : kp_v0c(2u);
+                precise float vz = x.x + x.y;
+                vec3 vel = dust_qrot(pc.rot_inv, vec3(kp_get(DUST_PROP_ROW_X), kp_get(DUST_PROP_ROW_X + 1u), vz));
+                pc.moments.m[slot].edges[9].w = vel.x;
+                pc.moments.m[slot].edges[10].w = vel.y;
+                pc.moments.m[slot].edges[11].w = vel.z;
+            }
+            // the render record (inBand: the lane solves only then)
+            float age_f, flux;
+            bool inBand;
+            prop_band(age_f, inBand, flux);
+            vec3 local = dust_qrot(pc.rot_inv, prop_rel3(moving));
+            pc.render.c[slot].pos_size = vec4(local, REC.misc.x * age_f);
+            // z: the beta half-spread with the child-pattern id in its low bits, copied bit for bit
+            // y: slot, the tier's stream shift and the live bit (dust::render_word): streak predecessors
+            // and log2 of the ring capacity (bitCount of the mask): readers derive the mask from it
+            pc.render.c[slot].age_id_dbeta_flux = vec4(age_f, uintBitsToFloat(dust_render_word(slot, uint(pc.ttl.w), bitCount(ringMask))), REC.misc.w, flux);
+        }
+        if (task <= 3u) {
+            // the mean's and the secants' df64 positions for the exchange
+            if (momLive) {
+                for (uint k = 0u; k < 3u; k++) {
+                    vec2 x = prop_r(k, moving);
+                    kp_put(DUST_PROP_ROW_X + k, x.x); kp_put(DUST_PROP_ROW_X + 3u + k, x.y);
+                }
+            }
+        } else {
+            // the size polyline: every bin edge at its own beta and speed (v ~ s^-1/2)
+            uint k = task - 4u;
+            vec3 e = dust_qrot(pc.rot_inv, prop_rel3(moving));
+            pc.moments.m[slot].edges[k].xyz = e;
+            if (k == 0u || k == 13u || k == 14u || k == 16u) pc.moments.m[slot].edges[k].w = prop_edge_factor(k);
+            kp_put(DUST_PROP_ROW_X, e.x); kp_put(DUST_PROP_ROW_X + 1u, e.y); kp_put(DUST_PROP_ROW_X + 2u, e.z);
+        }
+    }
+    if (act && task == 0u && !solves) {
+        // outside the age band: the render record's zero position
+        pc.render.c[slot].pos_size = vec4(0.0);
+        pc.render.c[slot].age_id_dbeta_flux = vec4(0.0, uintBitsToFloat(slot), 0.0, 0.0);
+    }
+    if (act && hasMoments && !momLive) {
+        // outside the age band or no flux: the record's zero words (the edges by their lanes)
+        if (task == 0u) {
+            pc.moments.m[slot].mean_flux = vec4(0.0);
+            pc.moments.m[slot].cov_a = vec4(0.0);
+            pc.moments.m[slot].cov_b_age_id = vec4(0.0);
+        } else if (task >= 4u) {
+            pc.moments.m[slot].edges[task - 4u] = vec4(0.0);
+        }
+    }
+    }
+}
+#endif
+#else
+// DUST_PROP_MOMENTS: the moments stage (the same workgroups over the same chunk, after the solve
+// stage's dispatch): the assembly by the mean's lane (the secants' displacements from their rows,
+// the covariance, the w lanes), the skipped edges from their solved neighbours' rows. No solve, no
+// barrier: everything it reads was written by the solve stage
+void main() {
+    g_row = prop_row(gl_LocalInvocationID.x);
+    PROP_IDS
+    // the assembly (the mean's lane)
+    if (task == 0u && momLive) {
+        uint lm = c * DUST_PROP_TASKS;
+        float age_f, flux;
+        bool inBand;
+        // the secants' displacements a_j = R(rr_j - r) (the serial thread's a0, a1, a2) and their
+        // covariance, the serial expressions
+        // a0, a1, a2 into the mean lane's row (words 11..19: the solve's coefficients, dead in this
+        // stage; no other lane reads them) and each covariance term from reloads (GCN: the nine
+        // components kept live took this stage to 28 VGPRs)
+        { vec3 a = prop_aj(lm, 1u); kp_put(11u, a.x); kp_put(12u, a.y); kp_put(13u, a.z); }
+        { vec3 a = prop_aj(lm, 2u); kp_put(14u, a.x); kp_put(15u, a.y); kp_put(16u, a.z); }
+        { vec3 a = prop_aj(lm, 3u); kp_put(17u, a.x); kp_put(18u, a.y); kp_put(19u, a.z); }
+        // the age band and flux after the displacements (not live across them)
+        prop_band(age_f, inBand, flux);
+#define PROP_A(j, c) kp_get(11u + 3u * (j) + (c))
+#define PROP_COV(p, q) (PROP_A(0u, p) * PROP_A(0u, q) + PROP_A(1u, p) * PROP_A(1u, q) + PROP_A(2u, p) * PROP_A(2u, q))
+        pc.moments.m[slot].cov_a = vec4(PROP_COV(0u, 0u), PROP_COV(0u, 1u), PROP_COV(0u, 2u), PROP_COV(1u, 1u));
+        pc.moments.m[slot].cov_b_age_id = vec4(PROP_COV(1u, 2u), PROP_COV(2u, 2u),
+                                               age_f, uintBitsToFloat(dust_child_id(REC.misc.w)));
+        // the mean (the render record's position, as written above)
+        pc.moments.m[slot].mean_flux = vec4(pc.render.c[slot].pos_size.xyz, flux);
+        // the w lanes of edges 1..12 and 15 (edges 0, 13, 14 and 16 keep their speed factors,
+        // which are linear in k: dust_edge_factor; 9..11 the velocity, written above).
         // The nucleus spin
         float omega = length(pc.spin.xyz);
         vec3 axis = omega > 0.0 ? pc.spin.xyz / omega : vec3(0.0, 0.0, 1.0);
-        M.edges[1].w = omega;
-        M.edges[2].w = axis.x;
-        M.edges[3].w = axis.y;
-        M.edges[4].w = axis.z;
+        pc.moments.m[slot].edges[1].w = omega;
+        pc.moments.m[slot].edges[2].w = axis.x;
+        pc.moments.m[slot].edges[3].w = axis.y;
+        pc.moments.m[slot].edges[4].w = axis.z;
         // the heliocentric distance and the Sun direction of the mean (dust::packet_moments)
-        vec3 rM = df3_to_f32(r);
+        vec3 rM = df3_to_f32(prop_xd(prop_row(lm)));
         float rN = max(length(rM), 1.0);
         vec3 sun = dust_qrot(pc.rot_inv, rM * (-1.0 / rN));
-        M.edges[5].w = rN / DUST_AU_M;
-        M.edges[6].w = sun.x;
-        M.edges[7].w = sun.y;
-        M.edges[8].w = sun.z;
-        // the mean's heliocentric velocity (m/s, particle-system axes) and the generation stamp
-        vec3 vel = dust_qrot(pc.rot_inv, df3_to_f32(v));
-        M.edges[9].w = vel.x;
-        M.edges[10].w = vel.y;
-        M.edges[11].w = vel.z;
-        M.edges[12].w = uintBitsToFloat(pc.generation);
+        pc.moments.m[slot].edges[5].w = rN / DUST_AU_M;
+        pc.moments.m[slot].edges[6].w = sun.x;
+        pc.moments.m[slot].edges[7].w = sun.y;
+        pc.moments.m[slot].edges[8].w = sun.z;
+        // the generation stamp
+        pc.moments.m[slot].edges[12].w = uintBitsToFloat(pc.generation);
         // the speck pass's walk mask lane (dust_specks_mask): nothing walked until it runs
-        M.edges[15].w = 0.0;
-        // the size polyline: every bin edge at its own beta and speed (v ~ s^-1/2). The
-        // trajectory detail (round 8 step D, dust::propagate_edge_stride; pc.skip.x bits 1-2):
-        // every stride-th edge solved, the others placed linearly between their solved
-        // neighbours below; the speed factors exact for every edge (linear in k anyway).
-        // The stride is uniform
-        float sqrtBeta = sqrt(max(beta, 0.0));
-        float range = dust_size_range_factor(C);
-        uint stride = 1u << ((pc.skip.x >> 1u) & 3u);
-        for (uint k = 0u; k < DUST_SIZE_EDGES; ++k) {
-            float sb = dust_size_edge_sqrt_beta(beta, range, k);
-            float factor = sqrtBeta > 0.0 ? sb / sqrtBeta : 1.0;
-            vec3 e = vec3(0.0);
-            if ((k & (stride - 1u)) == 0u) {
-                float betaK = sb * sb;
-                Df3 vK = df3_add(v0, df3_from_f32(C.eject.xyz * (factor - 1.0)));
-                Df3 rK, vvK;
-                dust_kepler(r0, vK, df_mul(DF_SUN_MU, df_two_sum(1.0, -betaK)), age, rK, vvK);
-                e = dust_qrot(pc.rot_inv, df3_to_f32(df3_sub(rK, ps)));
-            }
-            M.edges[k].xyz = e;
-            if (k == 0u || k == 13u || k == 14u || k == 16u) M.edges[k].w = factor;
-        }
-        // the skipped edges from their solved neighbours
-        if (stride == 2u) {
-            for (uint k = 1u; k < DUST_SIZE_BINS; k += 2u) {
-                vec3 e0 = M.edges[k - 1u].xyz, e1 = M.edges[k + 1u].xyz;
-                M.edges[k].xyz = e0 + (e1 - e0) * 0.5;
-            }
-        } else if (stride == 4u) {
-            for (uint k0 = 0u; k0 < DUST_SIZE_BINS; k0 += 4u) {
-                vec3 e0 = M.edges[k0].xyz, e1 = M.edges[k0 + 4u].xyz;
-                M.edges[k0 + 1u].xyz = e0 + (e1 - e0) * 0.25;
-                M.edges[k0 + 2u].xyz = e0 + (e1 - e0) * 0.5;
-                M.edges[k0 + 3u].xyz = e0 + (e1 - e0) * 0.75;
-            }
-        }
-    } else {
-        // outside the age band or no flux: the record's zero words
-        M.mean_flux = vec4(0.0);
-        M.cov_a = vec4(0.0);
-        M.cov_b_age_id = vec4(0.0);
-        for (uint k = 0u; k < DUST_SIZE_EDGES; ++k) M.edges[k] = vec4(0.0);
+        pc.moments.m[slot].edges[15].w = 0.0;
+    } else if (task >= 4u && momLive && !solved) {
+        uint k = task - 4u;
+        uint k0 = k & ~(stride - 1u);
+        uint d = k - k0;
+        uint l0 = c * DUST_PROP_TASKS + 4u + k0;
+        vec3 e0 = prop_x3(prop_row(l0)), e1 = prop_x3(prop_row(l0 + stride));
+        float frac = stride == 2u ? 0.5 : (d == 1u ? 0.25 : (d == 2u ? 0.5 : 0.75));
+        pc.moments.m[slot].edges[k].xyz = e0 + (e1 - e0) * frac;
+        if (k == 13u || k == 14u) pc.moments.m[slot].edges[k].w = prop_edge_factor(k);
     }
-    if (hasMoments) pc.moments.m[slot] = M;
 }
+#endif

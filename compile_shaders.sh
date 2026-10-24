@@ -210,11 +210,58 @@ for file in assets/*.comp assets/sim/*.comp; do
             # Single-variant (specialization-constant or always-single-thread)
             compile_one "$file" comp "$(opt_flags "$base") $vmm_flag" "${file%.comp}.comp${vmm_infix}.spv"
             compile_one "$file" comp "-DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp${vmm_infix}.d.spv"
+            # the splitter family (perf9 steps Z / O): the stage blobs of dust_split.comp
+            # (`.prep` the cone words, `.seq` the order stage, `.seqd` the draw stage, `.hard` the
+            # hard-axis diagnostic walk), dust_project_leaf.comp's three passes, dust_draw_leaf.comp's
+            # workgroup blob; each with its `.prof` (before the stage infix, as `.prof.stN`) and
+            # `.d` forms
+            case "$base" in
+                dust_split.comp|dust_project_leaf.comp|dust_draw_leaf.comp)
+                    case "$base" in
+                        dust_split.comp) variants=("prep:-DDUST_SPLIT_PREP=1" "seq:-DDUST_SPLIT_SEQ=1" "seqd:-DDUST_SPLIT_SEQ=1 -DDUST_SEQ_DRAW=1" "hard:-DDUST_HARD_AXIS=1") ;;
+                        dust_project_leaf.comp) variants=("proj1:-DDUST_PROJ_PASS=1" "proj2:-DDUST_PROJ_PASS=2" "proj3:-DDUST_PROJ_PASS=3") ;;
+                        dust_draw_leaf.comp) variants=("wg:-DDUST_LEAF_WG=1")
+                            compile_one "$file" comp "-DDUST_PROFILE=1 $vmm_flag" "${file%.comp}.comp.prof${vmm_infix}.spv"
+                            compile_one "$file" comp "-DDUST_PROFILE=1 -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.prof${vmm_infix}.d.spv"
+                            ;;
+                    esac
+                    for v in "${variants[@]}"; do
+                        sfx="${v%%:*}"
+                        defs="${v#*:}"
+                        compile_one "$file" comp "$defs $(opt_flags "$base") $vmm_flag" "${file%.comp}.comp.${sfx}${vmm_infix}.spv"
+                        compile_one "$file" comp "$defs -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.${sfx}${vmm_infix}.d.spv"
+                        compile_one "$file" comp "$defs -DDUST_PROFILE=1 $vmm_flag" "${file%.comp}.comp.prof.${sfx}${vmm_infix}.spv"
+                        compile_one "$file" comp "$defs -DDUST_PROFILE=1 -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.prof.${sfx}${vmm_infix}.d.spv"
+                    done
+                    ;;
+            esac
             # The dust profiler variants (assets/sim/dust_profile.glsl; loaded only with
             # AETHERVK_DUST_PROFILE=1 on a device with VK_KHR_shader_clock): `.prof` before the
             # vmm infix, as PhysicsPipelines' mk!() rewrites the name.
             case "$base" in
-                dust_splat.comp|dust_draw_queue.comp|dust_split.comp|dust_draw_small_edge.comp)
+                # the enumerator as a stage chain (round 9 step O): a blob per stage
+                # (`-DDUST_SPLAT_STAGE=N`; the shader's constant_id 0 is the same switch, the
+                # Adreno 619 was gated with the -D blobs), the `.prof` profiler variants likewise
+                dust_splat.comp)
+                    for st in 0 1 2 3 4 5 6 7 8 9 10 11; do
+                        compile_one "$file" comp "-DDUST_SPLAT_STAGE=${st}u $(opt_flags "$base") $vmm_flag" "${file%.comp}.comp.st${st}${vmm_infix}.spv"
+                        compile_one "$file" comp "-DDUST_SPLAT_STAGE=${st}u -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.st${st}${vmm_infix}.d.spv"
+                        compile_one "$file" comp "-DDUST_SPLAT_STAGE=${st}u -DDUST_PROFILE=1 $vmm_flag" "${file%.comp}.comp.prof.st${st}${vmm_infix}.spv"
+                        compile_one "$file" comp "-DDUST_SPLAT_STAGE=${st}u -DDUST_PROFILE=1 -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.prof.st${st}${vmm_infix}.d.spv"
+                    done
+                    ;;
+                # the monolithic enumerator (perf9_K, the splat path knob): its `.prof` blobs
+                dust_splat_mono.comp)
+                    compile_one "$file" comp "-DDUST_PROFILE=1 $vmm_flag" "${file%.comp}.comp.prof${vmm_infix}.spv"
+                    compile_one "$file" comp "-DDUST_PROFILE=1 -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.prof${vmm_infix}.d.spv"
+                    ;;
+                # (perf9_K) the pre-split splitter (AETHERVK_DUST_SPLIT_STAGED=0, the GTX 1070
+                # default): its `.prof` blobs
+                dust_split_mono.comp)
+                    compile_one "$file" comp "-DDUST_PROFILE=1 $vmm_flag" "${file%.comp}.comp.prof${vmm_infix}.spv"
+                    compile_one "$file" comp "-DDUST_PROFILE=1 -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.prof${vmm_infix}.d.spv"
+                    ;;
+                dust_draw_queue.comp|dust_split.comp|dust_draw_small_edge.comp)
                     compile_one "$file" comp "-DDUST_PROFILE=1 $vmm_flag" "${file%.comp}.comp.prof${vmm_infix}.spv"
                     compile_one "$file" comp "-DDUST_PROFILE=1 -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.prof${vmm_infix}.d.spv"
                     ;;
@@ -226,12 +273,81 @@ for file in assets/*.comp assets/sim/*.comp; do
                     compile_one "$file" comp "-DDUST_SUBGROUP=1 -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.sg${vmm_infix}.d.spv"
                     compile_one "$file" comp "-DDUST_SUBGROUP=1 -DDUST_PROFILE=1 $vmm_flag" "${file%.comp}.comp.prof${vmm_infix}.spv"
                     compile_one "$file" comp "-DDUST_SUBGROUP=1 -DDUST_PROFILE=1 -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.prof${vmm_infix}.d.spv"
+                    # the staged consumer (perf9_O, the Adreno 619: one blob per stage, dispatched
+                    # s1 s2 s3a s3b s4a s4b s5 with a scratch row per record between them; plain and
+                    # `.sg`, as the single-dispatch blob; no `.prof`). The stage before the vmm infix.
+                    for st in "s1:-DDUST_VW_STAGE=1" "s2:-DDUST_VW_STAGE=2" \
+                              "s3a:-DDUST_VW_STAGE=3 -DDUST_VW_PART=1" "s3b:-DDUST_VW_STAGE=3 -DDUST_VW_PART=2" \
+                              "s4a:-DDUST_VW_STAGE=4 -DDUST_VW_PART=1" "s4b:-DDUST_VW_STAGE=4 -DDUST_VW_PART=2" \
+                              "s5:-DDUST_VW_STAGE=5"; do
+                        sn="${st%%:*}"; sf="${st#*:}"
+                        compile_one "$file" comp "$sf $(opt_flags "$base") $vmm_flag" "${file%.comp}.comp.$sn${vmm_infix}.spv"
+                        compile_one "$file" comp "$sf -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.$sn${vmm_infix}.d.spv"
+                        compile_one "$file" comp "$sf -DDUST_SUBGROUP=1 $(opt_flags "$base") $vmm_flag" "${file%.comp}.comp.$sn.sg${vmm_infix}.spv"
+                        compile_one "$file" comp "$sf -DDUST_SUBGROUP=1 -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.$sn.sg${vmm_infix}.d.spv"
+                    done
                     ;;
-                # the speck walk pass (a workgroup of 32 lanes per walked bin; the plain blob is
-                # the gate pass): `.walk` before the vmm infix, as mk!() rewrites the name
+                # (perf9_K) the mono draw family (AETHERVK_DUST_DRAW_STAGED=0, the GTX 1070 default):
+                # the pre-perf9_O queue draw, edge pass and volume consumer, their pre-perf9_O blob sets
+                dust_draw_queue_mono.comp|dust_draw_small_edge_mono.comp)
+                    compile_one "$file" comp "-DDUST_PROFILE=1 $vmm_flag" "${file%.comp}.comp.prof${vmm_infix}.spv"
+                    compile_one "$file" comp "-DDUST_PROFILE=1 -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.prof${vmm_infix}.d.spv"
+                    ;;
+                dust_draw_volume_mono.comp)
+                    compile_one "$file" comp "-DDUST_SUBGROUP=1 $(opt_flags "$base") $vmm_flag" "${file%.comp}.comp.sg${vmm_infix}.spv"
+                    compile_one "$file" comp "-DDUST_SUBGROUP=1 -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.sg${vmm_infix}.d.spv"
+                    compile_one "$file" comp "-DDUST_SUBGROUP=1 -DDUST_PROFILE=1 $vmm_flag" "${file%.comp}.comp.prof${vmm_infix}.spv"
+                    compile_one "$file" comp "-DDUST_SUBGROUP=1 -DDUST_PROFILE=1 -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.prof${vmm_infix}.d.spv"
+                    ;;
+                # the speck walk (round 9 step O: breadth-first; the plain blob is the gate pass):
+                # `.walk` the step pass (8 lanes per node), `.setup1`, `.setup2a`, `.setup2b`, `.setup3`..
+                # `.setup5` the walk prologue (setup1 a thread per marked (cluster, bin), 2..5 a thread
+                # per walk record),
+                # `.leaves` the many-speck leaves (a workgroup each), `.leaves1` the single-speck leaves
+                # (a lane each), `.trace` the trace fill (test hook);
+                # the suffix before the vmm infix, as mk!() rewrites the name
                 dust_specks.comp)
                     compile_one "$file" comp "-DDUST_SPECKS_WALK=1 $vmm_flag" "${file%.comp}.comp.walk${vmm_infix}.spv"
                     compile_one "$file" comp "-DDUST_SPECKS_WALK=1 -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.walk${vmm_infix}.d.spv"
+                    for p in 1 3 4 5; do
+                        compile_one "$file" comp "-DDUST_SPECKS_WALK=1 -DDUST_SPECKS_SETUP=$p $vmm_flag" "${file%.comp}.comp.setup$p${vmm_infix}.spv"
+                        compile_one "$file" comp "-DDUST_SPECKS_WALK=1 -DDUST_SPECKS_SETUP=$p -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.setup$p${vmm_infix}.d.spv"
+                    done
+                    # setup 2 in two blobs on every device (`.setup2a` phase 0, `.setup2b` phases 1..4;
+                    # the host records both, same record and push constants; no `.setup2` blob)
+                    for m in a:0x1 b:0x1E; do
+                        compile_one "$file" comp "-DDUST_SPECKS_WALK=1 -DDUST_SPECKS_SETUP=2 -DDUST_SPECKS_SETUP_MASK=${m#*:} $vmm_flag" "${file%.comp}.comp.setup2${m%%:*}${vmm_infix}.spv"
+                        compile_one "$file" comp "-DDUST_SPECKS_WALK=1 -DDUST_SPECKS_SETUP=2 -DDUST_SPECKS_SETUP_MASK=${m#*:} -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.setup2${m%%:*}${vmm_infix}.d.spv"
+                    done
+                    compile_one "$file" comp "-DDUST_SPECKS_WALK=1 -DDUST_SPECKS_LEAVES=1 $vmm_flag" "${file%.comp}.comp.leaves${vmm_infix}.spv"
+                    compile_one "$file" comp "-DDUST_SPECKS_WALK=1 -DDUST_SPECKS_LEAVES=1 -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.leaves${vmm_infix}.d.spv"
+                    compile_one "$file" comp "-DDUST_SPECKS_WALK=1 -DDUST_SPECKS_LEAVES=3 $vmm_flag" "${file%.comp}.comp.leaves1${vmm_infix}.spv"
+                    compile_one "$file" comp "-DDUST_SPECKS_WALK=1 -DDUST_SPECKS_LEAVES=3 -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.leaves1${vmm_infix}.d.spv"
+                    compile_one "$file" comp "-DDUST_SPECKS_WALK=1 -DDUST_SPECKS_LEAVES=2 $vmm_flag" "${file%.comp}.comp.trace${vmm_infix}.spv"
+                    compile_one "$file" comp "-DDUST_SPECKS_WALK=1 -DDUST_SPECKS_LEAVES=2 -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.trace${vmm_infix}.d.spv"
+                    ;;
+                # (perf9_K) dust_propagate_mono.comp / dust_emit_mono.comp (AETHERVK_DUST_PROP_STAGED=0,
+                # the GTX 1070 default): the pre-package monoliths, plain / `.d` / `.vmm` from the
+                # generic single-variant lines above only (no `.moments`, `.pass*` or `.prof`)
+                # the propagate's moments stage (round 9 step O; the plain blob is the solve stage)
+                dust_propagate.comp)
+                    compile_one "$file" comp "-DDUST_PROP_MOMENTS=1 $(opt_flags "$base") $vmm_flag" "${file%.comp}.comp.moments${vmm_infix}.spv"
+                    compile_one "$file" comp "-DDUST_PROP_MOMENTS=1 -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.moments${vmm_infix}.d.spv"
+                    # the staged solve (Adreno 619): `.pass1` .. `.pass6`, `.pass5m` / `.pass5s` (the results
+                    # of the moving / still lanes); host order 1, (2, 3) x iters, 6, 4, 5m, 5s, then moments
+                    for p in 1:1 2:2 3:3 6:6 4:4 5m:"5 -DDUST_PROP_P5=1" 5s:"5 -DDUST_PROP_P5=2"; do
+                        compile_one "$file" comp "-DDUST_PROP_PASS=${p#*:} $(opt_flags "$base") $vmm_flag" "${file%.comp}.comp.pass${p%%:*}${vmm_infix}.spv"
+                        compile_one "$file" comp "-DDUST_PROP_PASS=${p#*:} -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.pass${p%%:*}${vmm_infix}.d.spv"
+                    done
+                    ;;
+                # the staged emission (Adreno 619): `.pass1` .. `.pass6`, `.pass5r` / `.pass5v` (pass 5 in
+                # halves: r, v), `.pass71` / `.pass72` (pass 7 in halves); host order 1, (2, 3) x iters,
+                # 6, 4, 5r, 5v, 71, 72 (the plain blob the monolith)
+                dust_emit.comp)
+                    for p in 1:1 2:2 3:3 6:6 4:4 5r:"5 -DEMIT_P5_PART=1" 5v:"5 -DEMIT_P5_PART=2" 71:"7 -DEMIT_P7_PART=1" 72:"7 -DEMIT_P7_PART=2"; do
+                        compile_one "$file" comp "-DDUST_EMIT_PASS=${p#*:} $(opt_flags "$base") $vmm_flag" "${file%.comp}.comp.pass${p%%:*}${vmm_infix}.spv"
+                        compile_one "$file" comp "-DDUST_EMIT_PASS=${p#*:} -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.pass${p%%:*}${vmm_infix}.d.spv"
+                    done
                     ;;
             esac
         fi

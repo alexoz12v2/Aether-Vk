@@ -14,6 +14,7 @@
 // draws every piece in place, the same drawing.
 #version 450 core
 #extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_control_flow_attributes : require
 #ifdef DUST_PROFILE
 #extension GL_ARB_shader_clock : require
 #extension GL_KHR_shader_subgroup_basic : require
@@ -21,8 +22,47 @@
 #endif
 #include "dust_common.glsl"
 #include "dust_scatter.glsl"
+#include "dust_draw_texel.glsl"
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+#ifdef DUST_PROFILE
+// the profile's sums in shared memory, the workgroup's (a lane's own counters, held in registers
+// through every stage, cost Mali-G52 its 32-register mode): vsmfast, vsmedge, vsmall, vdeposit
+// (cycles), the small pieces by path, the texels; flushed by lane 0's share (dust_e_prof_flush)
+shared uint dust_e_prof[7];
+const uint DUST_E_PROF_vsmfast = 0u, DUST_E_PROF_vsmedge = 1u, DUST_E_PROF_vsmall = 2u, DUST_E_PROF_vdeposit = 3u,
+           DUST_E_PROF_small_fast = 4u, DUST_E_PROF_small_edge = 5u, DUST_E_PROF_volume_texels = 6u;
+#undef DUST_PROF_END
+#define DUST_PROF_END(s) if (!dust_counting) atomicAdd(dust_e_prof[DUST_E_PROF_##s], clock2x32ARB().x - dust_prof_t0_##s);
+#undef DUST_PROF_COUNT
+#define DUST_PROF_COUNT(c, n) if (!dust_counting) atomicAdd(dust_e_prof[DUST_E_PROF_##c], uint(n));
+// a stage's start time in a free shared word (the demotion stage: held in a register through it,
+// it cost Mali-G52 its 32-register mode)
+#define DUST_E_PROF_BEGIN_SH(w) w = clock2x32ARB().x;
+#define DUST_E_PROF_END_SH(s, w) if (!dust_counting) atomicAdd(dust_e_prof[DUST_E_PROF_##s], clock2x32ARB().x - w);
+// dust_prof_flush_edge's words from the workgroup's sums, lane 0's plain atomics (dust_prof_add64's
+// 64-bit add: the low word, its carry into the high word; no subgroup operation: GCN's reductions
+// keep two linear VGPRs live through the whole pass)
+void dust_e_prof_add64(uvec2 pyr, uint w, uint v) {
+    uint old = atomicAdd(DustUintBuffer(pyr).v[w], v);
+    if (old > 0xFFFFFFFFu - v) atomicAdd(DustUintBuffer(pyr).v[w + 1u], 1u);
+}
+void dust_e_prof_flush(uvec2 pyr, uint base) {
+    dust_e_prof_add64(pyr, base + DUST_PROF_CTEXELS, dust_e_prof[DUST_E_PROF_volume_texels]);
+    dust_e_prof_add64(pyr, base + DUST_PROF_K1C0 + 4u, dust_e_prof[DUST_E_PROF_vsmall]);
+    dust_e_prof_add64(pyr, base + DUST_PROF_K1C0 + 12u, dust_e_prof[DUST_E_PROF_vsmfast]);
+    dust_e_prof_add64(pyr, base + DUST_PROF_K1C0 + 14u, dust_e_prof[DUST_E_PROF_vsmedge]);
+    dust_e_prof_add64(pyr, base + DUST_PROF_K1C0 + 22u, dust_e_prof[DUST_E_PROF_vdeposit]);
+    if (dust_e_prof[DUST_E_PROF_small_fast] > 0u)
+        atomicAdd(DustUintBuffer(pyr).v[base + DUST_PROF_SMALL_PATHS + 0u], dust_e_prof[DUST_E_PROF_small_fast]);
+    if (dust_e_prof[DUST_E_PROF_small_edge] > 0u)
+        atomicAdd(DustUintBuffer(pyr).v[base + DUST_PROF_SMALL_PATHS + 1u], dust_e_prof[DUST_E_PROF_small_edge]);
+}
+#else
+#define DUST_E_PROF_BEGIN_SH(w)
+#define DUST_E_PROF_END_SH(s, w)
+#endif
 
 layout(push_constant, std430) uniform PushConstants {
     DustMomentsBuffer moments;  // 0
@@ -38,72 +78,652 @@ layout(push_constant, std430) uniform PushConstants {
     vec4  eyeLocal;             // 112
 } pc;                           // 128 bytes
 
-// t9a2e: the workgroup's demoted pieces, added once to the region's DUST_VEDGE_DEMOTED (one global
-// atomic a workgroup)
-shared uint dust_edge_demoted;
+// perf9_O: the pass in rounds of DUST_E_ROUND pieces (DESIGN.md), each in two phases. Phase A,
+// four lanes a piece (lane = 4 p + k), stages between barriers: the slices' fast projections
+// (dust_volume_small_fast, lane k < 3 slice k: its mass; the demotion gate), the slices' demotion
+// terms and errors (dust_small_demote_slice, lane k < 3 slice (k + 2) mod 3; the corrected point's
+// sums into the slice's point slot), the piece's decision (lane k == 0, the terms combined in slice
+// order: the in-lane prefix's expressions), the demoted pieces' corrected points (the lane's own
+// sums), then unless demoted the slices' edge points (dust_volume_small_edge) one slice a pass:
+// lane k the slice's sigma point k (its J3 and position, the loop body's arithmetic), lanes k < 3
+// two of the moments' six chains in sigma-point order, lane k == slice the finish. The points live
+// in shared memory (dust_e_pt: point q of piece p at 18 p + 6 q, DUST_E_PT; another lane reads them
+// after a barrier); the piece's record (its 24 words) is never written. Slice 0's lane then finds the piece's covered range
+// (dust_volume_small_range). Phase B, a lane per texel: the round's pieces' row segments four at a
+// time (lane 0 takes them in piece order, each piece's rows and segments in
+// dust_volume_segment_small's order), the texel's tau (the five rectangle integrals, the points
+// read from the record at use), the segment's carry walk (dust_volume_deposit's rounding from the
+// piece's seed), the deposits. The deposits, the peak (a maximum) and the level mask (an OR) are
+// order-free, so the pyramid and the frame words are the in-lane drawing's.
+const uint DUST_E_ROUND = DUST_T_LANES / 4u;
+// the region's base and capacity, from shared memory at every use (a value derived from the
+// header's words once and held across the stages' barriers cost Mali-G52 its 32-register mode)
+#define DUST_E_A(i) (dust_e_ctl[9] + (i) * DUST_VEDGE_RECORD_WORDS)
+// a record's words, plain pc.pyramid.v reads at the shared base word's offsets (pointer-free: the
+// Adreno 619 compiler crashed on every buffer reference built from a computed address in this pass,
+// rebuilt at each use or held one a stage, records or points alike; ad_probe/e1. The plain reads
+// cost GCN 8 VGPRs over a record reference: noted, not a gate; DESIGN.md)
+#define DUST_E_REC(i, w) pc.pyramid.v[DUST_E_A(i) + (w)]
+#define DUST_E_IN(w) uintBitsToFloat(DUST_E_REC(pr, w))
+// the frame's size, loaded again at every use: the index goes through the opaque shared zero
+// (dust_e_ctl[11]), so no load is hoisted across a stage's barriers (a held size or a product of it
+// cost Mali-G52 its 32-register mode; the size in shared words cost GCN 4 VGPRs)
+#define DUST_E_W float(pc.pyramid.v[DUST_PYR_WIDTH + dust_e_ctl[11]])
+#define DUST_E_H float(pc.pyramid.v[DUST_PYR_HEIGHT + dust_e_ctl[11]])
+#define DUST_E_MEAN vec3(DUST_E_IN(0u), DUST_E_IN(1u), DUST_E_IN(2u))
+#define DUST_E_G vec3(DUST_E_IN(3u), DUST_E_IN(4u), DUST_E_IN(5u))
+// the pieces' points in shared memory (point q's mx my ix iy rho m of piece p at 18 p + 6 q + c),
+// the pass's own scratch: workgroup memory, so a lane's write is visible to another lane's read
+// after barrier() (OpControlBarrier Workgroup/Workgroup, AcquireRelease | WorkgroupMemory) with no
+// coherent block and no buffer memory barrier (pyramid points read atomically, the pointer-free
+// buffer form, cost Mali-G52 its 32-register mode; 1152 B: GCN's waves bounded by the LDS, noted)
+#define DUST_E_PT(i, q, c) dust_e_pt[(i) * 18u + 6u * (q) + (c)]
+#define DUST_E_PTW(i, q, c, val) (dust_e_pt[(i) * 18u + 6u * (q) + (c)] = (val))
+shared uint dust_e_pt[DUST_E_ROUND * 18u];  // the pieces' points: piece p point q word c at 18 p + 6 q + c
+shared uint dust_e_sx[DUST_T_LANES];          // phase A: the slices' demotion errors (dust_t_row: masses, gate)
+shared uint dust_e_rs[DUST_T_LANES];          // phase A: the sigma points' screen y; then piece p's range at 2p,
+                                              // 2p + 1: x0 | x1 << 16, y0 | y1 << 16
+shared uint dust_t_key[DUST_T_SEGS];          // the group's segments: row << 16 | first column
+shared uint dust_t_n[DUST_T_SEGS];            // their texel counts (0: none)
+shared uint dust_t_p[DUST_T_SEGS];            // their pieces (the workgroup's)
+// 0 the demoted pieces, 1 the level mask, 2 the peak (float bits), 3 the cursor's piece, 4 its
+// row, 5 its next column, 6 the group's segment count (0: done), 7 the workgroup's pieces,
+// 8 the sigma points (4), 9 the records' base, 10 the region's base,
+// 11 zero (an opaque offset: dust_e_edge_pass)
+shared uint dust_e_ctl[12];
+// the workgroup's pieces' decisions (1: demoted), a word a piece: no atomic (a shared atomic at a
+// uniform address becomes a subgroup reduction on GCN, its two linear VGPRs live through phase A)
+shared uint dust_e_dm[DUST_E_ROUND];
+// phase B: the group's segments' peaks (float bits, 0: none) and level masks, folded into the
+// workgroup's (dust_e_ctl[2], [1]) by lane 0 at the next take: no atomic at a uniform address
+// (the subgroup reduction's linear VGPRs live through the whole pass on GCN)
+shared uint dust_e_pk[DUST_T_SEGS];
+shared uint dust_e_lv[DUST_T_SEGS];
 
-// record i of the region at ebase (0: none, 1: drawn by the sigma points, 2: drawn demoted). Lane 0
-// counts the region's held pieces and its refusals into the region's frame words (DUST_VEDGE_DRAWN /
-// _LOST)
-uint dust_draw_small_edge_record(uint i, uint ebase) {
-    uint raw = pc.pyramid.v[ebase + 3u];
-    uint cap = dust_vqueue_capacity(pc.pyramid, ebase);
-    uint n = min(raw, cap);
-    if (i == 0u) {
-        atomicAdd(pc.pyramid.v[ebase + DUST_VEDGE_DRAWN], n);
-        atomicAdd(pc.pyramid.v[ebase + DUST_VEDGE_LOST], raw - n);
+// point q of the workgroup's piece i (dust_e_pt)
+DustSmallPoint dust_e_point(uint i, uint q) {
+    DustSmallPoint p;
+    p.mx = uintBitsToFloat(DUST_E_PT(i, q, 0u));
+    p.my = uintBitsToFloat(DUST_E_PT(i, q, 1u));
+    p.ix = uintBitsToFloat(DUST_E_PT(i, q, 2u));
+    p.iy = uintBitsToFloat(DUST_E_PT(i, q, 3u));
+    p.rho = uintBitsToFloat(DUST_E_PT(i, q, 4u));
+    p.m = uintBitsToFloat(DUST_E_PT(i, q, 5u));
+    return p;
+}
+
+// dust_small_demote_terms without its early returns (every value computed, the result's flag
+// selected at the end; the terms of a predicted slice are its operations on its operands)
+// (the piece's inputs read from its record pr at use, DUST_E_IN: as arguments they were all loaded
+// before the stage's arithmetic and held through it)
+bool dust_e_demote_terms(uint q, bool five, uint pr, vec3 r0, vec3 r1, vec3 r3, vec3 t, out DustSmallTerms k) {
+    vec3 xq = DUST_E_MEAN + DUST_E_G * dust_small_node(q, five).x;
+    float w = dot(r3, xq) + t.z;
+    bool ok = w > 0.0;
+    float iw = 1.0 / (ok ? w : 1.0);
+    float k1 = DUST_E_IN(10u) * iw, k2 = DUST_E_IN(11u) * iw;
+    ok = ok && DUST_UT2_NODE * max(abs(k1), abs(k2)) < DUST_SMALL_DEMOTE_KAPPA;
+    float ndx = (dot(r0, xq) + t.x) * iw;
+    float ndy = (dot(r1, xq) + t.y) * iw;
+    vec3 c = cross(r0 - r3 * ndx, r1 - r3 * ndy);
+    float cn2 = dot(c, c);
+    ok = ok && cn2 > 0.0;
+    float icn = 1.0 / (ok ? cn2 : 1.0);
+    float al1 = (DUST_E_IN(6u) - ndx * DUST_E_IN(10u)) * iw, al2 = (DUST_E_IN(7u) - ndx * DUST_E_IN(11u)) * iw;
+    float be1 = (DUST_E_IN(8u) - ndy * DUST_E_IN(10u)) * iw, be2 = (DUST_E_IN(9u) - ndy * DUST_E_IN(11u)) * iw;
+    vec3 cxv = cross(r1, r3), cyv = cross(r3, r0);
+    vec3 v1 = cxv * al1 + cyv * be1;
+    vec3 v2 = cxv * al2 + cyv * be2;
+    float g1 = dot(c, v1) * icn, g2 = dot(c, v2) * icn;
+    float n1 = max(dot(v1, v1) * icn - g1 * g1, 0.0);
+    float n2 = max(dot(v2, v2) * icn - g2 * g2, 0.0);
+    float mu = (3.0 * k1 * k1 - 3.0 * k1 * g1 + 0.5 * n1) + (3.0 * k2 * k2 - 3.0 * k2 * g2 + 0.5 * n2);
+    float h1 = g1 - 3.0 * k1, h2 = g2 - 3.0 * k2;
+    float W = DUST_E_W, H = DUST_E_H;
+    float a1 = 0.5 * W * al1, a2 = 0.5 * W * al2;
+    float b1 = 0.5 * H * be1, b2 = 0.5 * H * be2;
+    float dx = a1 * h1 + a2 * h2;
+    float dy = b1 * h1 + b2 * h2;
+    float f1 = 20.0 * k1 * k1 - 10.0 * k1 * g1 + n1;
+    float f2 = 20.0 * k2 * k2 - 10.0 * k2 * g2 + n2;
+    float cxx = max(a1 * a1 + a2 * a2, 1e-6);
+    float cyy = max(b1 * b1 + b2 * b2, 1e-6);
+    float cxy = a1 * b1 + a2 * b2;
+    float dcxx = a1 * a1 * f1 + a2 * a2 * f2 - mu * cxx - dx * dx;
+    float dcyy = b1 * b1 * f1 + b2 * b2 * f2 - mu * cyy - dy * dy;
+    float dcxy = a1 * b1 * f1 + a2 * b2 * f2 - mu * cxy - dx * dy;
+    k.mu = mu; k.dx = dx; k.dy = dy;
+    k.cxx = cxx; k.cyy = cyy; k.cxy = cxy;
+    k.dcxx = dcxx; k.dcyy = dcyy; k.dcxy = dcxy;
+    k.mx = (ndx * 0.5 + 0.5) * W;
+    k.my = (ndy * 0.5 + 0.5) * H;
+    return ok;
+}
+
+// dust_volume_small_fast, the piece's inputs read from its record pr at use (DUST_E_IN; every
+// operation and operand as there)
+DustSmallPoint dust_e_fast(uint q, uint pr, vec3 r0, vec3 r1, vec3 r3, vec3 t) {
+    vec2 nw = dust_small_node(q, false);
+    vec3 xq = DUST_E_MEAN + DUST_E_G * nw.x;
+    float w = dot(r3, xq) + t.z;
+    bool ok = w > 0.0;
+    float iw = 1.0 / (ok ? w : 1.0);
+    float ndx = (dot(r0, xq) + t.x) * iw;
+    float ndy = (dot(r1, xq) + t.y) * iw;
+    vec3 c = cross(r0 - r3 * ndx, r1 - r3 * ndy);
+    float W = DUST_E_W, H = DUST_E_H;
+    float sj = 0.25 * W * H * sqrt(dot(c, c)) * (iw * iw);
+    float kx = 0.5 * W * iw, ky = 0.5 * H * iw;
+    float a1 = kx * (DUST_E_IN(6u) - ndx * DUST_E_IN(10u)), a2 = kx * (DUST_E_IN(7u) - ndx * DUST_E_IN(11u));
+    float b1 = ky * (DUST_E_IN(8u) - ndy * DUST_E_IN(10u)), b2 = ky * (DUST_E_IN(9u) - ndy * DUST_E_IN(11u));
+    float mx = (ndx * 0.5 + 0.5) * W;
+    float my = (ndy * 0.5 + 0.5) * H;
+    float cxx = max(a1 * a1 + a2 * a2, 1e-6);
+    float cyy = max(b1 * b1 + b2 * b2, 1e-6);
+    float rhoRaw = (a1 * b1 + a2 * b2) * inversesqrt(cxx * cyy);
+    return dust_small_finish(ok, nw.y, DUST_E_IN(12u), DUST_E_IN(13u + q), sj, mx, my, cxx, cyy, rhoRaw);
+}
+
+// dust_small_demote_gate without its early returns (3.4e38 selected where it returned it)
+float dust_e_demote_gate(DustSmallPoint c, uint pr, vec3 r3, float t3) {
+    float W = DUST_E_W, H = DUST_E_H;
+    float w0 = dot(r3, DUST_E_MEAN) + t3;
+    bool ok = w0 > 0.0;
+    float iw = 1.0 / (ok ? w0 : 1.0);
+    float kap = DUST_UT2_NODE * max(abs(DUST_E_IN(10u) * iw), abs(DUST_E_IN(11u) * iw));
+    ok = ok && kap < DUST_SMALL_DEMOTE_KAPPA;
+    float isx = c.ix * DUST_SQRT_2, isy = c.iy * DUST_SQRT_2;
+    float ax = min(c.mx, W - c.mx) * isx;
+    float ay = min(c.my, H - c.my) * isy;
+    float ex = exp(-0.5 * ax * ax);
+    float ey = exp(-0.5 * ay * ay);
+    float pxu = ax < -1.0 ? DUST_SMALL_INV_SQRT_2PI * ex / -ax : 1.0;
+    float pyu = ay < -1.0 ? DUST_SMALL_INV_SQRT_2PI * ey / -ay : 1.0;
+    float r = kap * DUST_SMALL_INV_SQRT_2PI * (ex * pyu + pxu * ey);
+    return ok ? r : 3.4e38;
+}
+
+// dust_small_demote_fix_of without its early return (none selected where it returned it), from its
+// sums (k.cxx + k.dcxx, k.cyy + k.dcyy, k.cxy + k.dcxy, 1.0 + k.mu, k.mx + k.dx, k.my + k.dy:
+// evaluated where the terms are, stored and read back exactly)
+DustSmallPoint dust_e_demote_fix_sums(float sxx, float syy, float sxy, float smu, float mx, float my, float mq) {
+    float cxx = max(sxx, 1e-6);
+    float cyy = max(syy, 1e-6);
+    float rhoRaw = sxy * inversesqrt(cxx * cyy);
+    float rho = (isnan(rhoRaw) || isinf(rhoRaw)) ? 0.0 : clamp(rhoRaw, -DUST_SMALL_RHO_MAX, DUST_SMALL_RHO_MAX);
+    float m = mq * smu;
+    bool keep = m > 0.0 && !isinf(m);
+    float ix = inversesqrt(cxx) * DUST_SMALL_INV_SQRT2;
+    float iy = inversesqrt(cyy) * DUST_SMALL_INV_SQRT2;
+    DustSmallPoint o;
+    o.mx = keep ? mx : 0.0;
+    o.my = keep ? my : 0.0;
+    o.ix = keep ? ix : 0.0;
+    o.iy = keep ? iy : 0.0;
+    o.rho = keep ? rho : 0.0;
+    o.m = keep ? m : 0.0;
+    return o;
+}
+
+// dust_small_demote_edge with its selects' operands computed before the selects
+void dust_e_demote_edge(float tv, float u, float al, out float dP, out float dG, out float ea, out float pu) {
+    float dt = u + abs(tv) * al;
+    float a = max(abs(tv) - dt, 0.0);
+    ea = exp(-0.5 * a * a);
+    dP = DUST_SMALL_INV_SQRT_2PI * dt * ea;
+    float sl = a * ea;
+    dG = dt * (a >= 1.0 ? sl : DUST_SMALL_DEMOTE_SLOPE_MAX);
+    float pv = DUST_SMALL_INV_SQRT_2PI * ea / -tv;
+    pu = tv < -1.0 ? pv : 1.0;
+}
+
+// dust_small_finish with its selects' operands computed before the selects
+DustSmallPoint dust_e_finish(bool ok, float wq, float massW, float wr, float sj, float mx, float my,
+                             float cxx, float cyy, float rhoRaw) {
+    float rho = (isnan(rhoRaw) || isinf(rhoRaw)) ? 0.0 : clamp(rhoRaw, -DUST_SMALL_RHO_MAX, DUST_SMALL_RHO_MAX);
+    float wgt = wq * massW * sj;
+    wgt *= wr;
+    bool keep = ok && wgt > 0.0 && !isinf(wgt);
+    float ix = inversesqrt(cxx) * DUST_SMALL_INV_SQRT2;
+    float iy = inversesqrt(cyy) * DUST_SMALL_INV_SQRT2;
+    DustSmallPoint o;
+    o.mx = keep ? mx : 0.0;
+    o.my = keep ? my : 0.0;
+    o.ix = keep ? ix : 0.0;
+    o.iy = keep ? iy : 0.0;
+    o.rho = keep ? rho : 0.0;
+    o.m = keep ? wgt : 0.0;
+    return o;
+}
+
+// dust_small_demote_err_of, its statements reordered so each axis' four edges are combined before
+// the next axis' are evaluated (every operation and operand as there: no value changes)
+float dust_e_demote_err_of(DustSmallTerms k) {
+    float mu = k.mu, dx = k.dx, dy = k.dy, cxx = k.cxx, cyy = k.cyy, cxy = k.cxy;
+    float dcxx = k.dcxx, dcyy = k.dcyy, dcxy = k.dcxy, mx = k.mx, my = k.my;
+    float lx = dcxx / (2.0 * cxx);
+    float ly = dcyy / (2.0 * cyy);
+    float sx = sqrt(cxx);
+    float sy = sqrt(cyy);
+    float isc = 1.0 / sqrt(cxx * cyy);
+    float rho = cxy * isc;
+    float drho = dcxy * isc - rho * (lx + ly);
+    float s = DUST_SMALL_DEMOTE_SAFETY;
+    float adr = s * abs(drho), amu = s * abs(mu);
+    float arho = min(abs(rho), DUST_SMALL_RHO_MAX);
+    float dpx, dgx, gx, pxu;
+    {
+        float tl = mx / sx, tr = (DUST_E_W - mx) / sx;
+        float ux = s * abs(dx) / sx;
+        float alx = s * abs(lx);
+        float dPl, dGl, eal, pul, dPr, dGr, ear, pur;
+        dust_e_demote_edge(tl, ux, alx, dPl, dGl, eal, pul);
+        dust_e_demote_edge(tr, ux, alx, dPr, dGr, ear, pur);
+        dpx = dPl + dPr;
+        dgx = dGl + dGr;
+        gx = max(eal, ear);
+        pxu = min(min(1.0, pul), pur);
     }
-    if (i >= n) return 0u;
-    DustSmallEdge ed;
-    ivec4 r;
-    uint lev, depthBits, seed;
-    vec3 color;
-    dust_small_edge_get(pc.pyramid, ebase, cap, i, ed, r, lev, color, depthBits, seed);
-    dust_pyr_split_word = pc.pyramid.v[DUST_PYR_SPLIT_DEPTH];
-    float W = float(pc.pyramid.v[DUST_PYR_WIDTH]);
-    float H = float(pc.pyramid.v[DUST_PYR_HEIGHT]);
+    float dpy, dgy, gy, pyu;
+    {
+        float tb = my / sy, tt = (DUST_E_H - my) / sy;
+        float uy = s * abs(dy) / sy;
+        float aly = s * abs(ly);
+        float dPb, dGb, eab, pub, dPt, dGt, eat, put;
+        dust_e_demote_edge(tb, uy, aly, dPb, dGb, eab, pub);
+        dust_e_demote_edge(tt, uy, aly, dPt, dGt, eat, put);
+        dpy = dPb + dPt;
+        dgy = dGb + dGt;
+        gy = max(eab, eat);
+        pyu = min(min(1.0, pub), put);
+    }
+    return amu * (pxu * pyu + arho * DUST_INV_2PI * gx * gy)
+         + (1.0 + amu) * (dpx * (pyu + dpy) + pxu * dpy
+                          + (arho + adr) * DUST_INV_2PI * (dgx * (gy + dgy) + gx * dgy)
+                          + adr * DUST_INV_2PI * gx * gy);
+}
+
+// one pass of the edge points (slice q, a constant at each call: a loop over the slices around
+// the passes' barriers cost Mali-G52 its 32-register mode)
+void dust_e_edge_pass(uint q, uint lane, uint k, uint pb, uint pl, uint pr, bool live, vec3 r0, vec3 r1, vec3 r3,
+                      vec3 tv) {
+    barrier();
+    {
+        float j3 = -1.0, sxp = 0.0, syp = 0.0;
+        float W = DUST_E_W, H = DUST_E_H;
+        DUST_PROF_BEGIN(vsmedge)
+        vec2 nw = dust_small_node(q, false);
+        vec3 xq = DUST_E_MEAN + DUST_E_G * nw.x;
+        float bx = dot(r0, xq) + tv.x, by = dot(r1, xq) + tv.y, bw = dot(r3, xq) + tv.z;
+        // (the sigma point's index from shared memory at each pass: its words' offsets and its sign,
+        // derived from k alone, were common subexpressions GCN held from pass to pass)
+        uint j = k + dust_e_ctl[11];
+        float sg = (j & 1u) == 0u ? -DUST_UT2_NODE : DUST_UT2_NODE;
+        uint ax = j < 2u ? 0u : 1u;
+        float w = bw + sg * DUST_E_IN(10u + ax);
+        float iw = 1.0 / (w > 0.0 ? w : 1.0);
+        float ndx = (bx + sg * DUST_E_IN(6u + ax)) * iw;
+        float ndy = (by + sg * DUST_E_IN(8u + ax)) * iw;
+        vec3 c = cross(r0 - r3 * ndx, r1 - r3 * ndy);
+        float j3v = 0.25 * (0.25 * W * H * sqrt(dot(c, c)) * (iw * iw));
+        float sxv = (ndx * 0.5 + 0.5) * W;
+        float syv = (ndy * 0.5 + 0.5) * H;
+        j3 = w > 0.0 ? j3v : j3;
+        sxp = w > 0.0 ? sxv : sxp;
+        syp = w > 0.0 ? syv : syp;
+        DUST_PROF_END(vsmedge)
+        dust_t_row[lane] = floatBitsToUint(j3);
+        dust_e_sx[lane] = floatBitsToUint(sxp);
+        dust_e_rs[lane] = floatBitsToUint(syp);
+    }
+    barrier();
+    // the moments in sigma-point order, two of the six chains a lane (lane k < 3: chains 2k and
+    // 2k + 1 of tj sx sy sxx syy sxy, each its loop's expression in its order), into the
+    // piece's destination slot (free until its point: a demoted piece's is skipped)
+    {
+        float ox = 0.0, oy = 0.0;
+        bool haveO = false;
+        float ca = 0.0, cb = 0.0;
+        [[dont_unroll]] for (uint j = 0u; j < dust_e_ctl[8]; ++j) {
+            float j3 = uintBitsToFloat(dust_t_row[pb + j]);
+            bool v = j3 != -1.0;
+            float sxp = uintBitsToFloat(dust_e_sx[pb + j]), syp = uintBitsToFloat(dust_e_rs[pb + j]);
+            ox = v && !haveO ? sxp : ox;
+            oy = v && !haveO ? syp : oy;
+            haveO = haveO || v;
+            float px = sxp - ox, py = syp - oy;
+            float na = k == 0u ? ca + j3 : (k == 1u ? ca + j3 * py : ca + j3 * py * py);
+            float nb = k == 0u ? cb + j3 * px : (k == 1u ? cb + j3 * px * px : cb + j3 * px * py);
+            ca = v ? na : ca;
+            cb = v ? nb : cb;
+        }
+        if (k < 3u && live && dust_e_dm[lane / 4u] == 0u) {
+            DUST_E_PTW(pl, q, 2u * k, floatBitsToUint(ca));
+            DUST_E_PTW(pl, q, 2u * k + 1u, floatBitsToUint(cb));
+        }
+    }
+    barrier();
+    // lane k == slice: the finish (its origin found again from the points), the point over the
+    // moments
+    if (k == q && live && dust_e_dm[lane / 4u] == 0u) {
+        float ox = 0.0, oy = 0.0;
+        bool haveO = false;
+        [[dont_unroll]] for (uint j = 0u; j < dust_e_ctl[8]; ++j) {
+            bool v = uintBitsToFloat(dust_t_row[pb + j]) != -1.0;
+            ox = v && !haveO ? uintBitsToFloat(dust_e_sx[pb + j]) : ox;
+            oy = v && !haveO ? uintBitsToFloat(dust_e_rs[pb + j]) : oy;
+            haveO = haveO || v;
+        }
+        float tj = uintBitsToFloat(DUST_E_PT(pl, q, 0u)), sx = uintBitsToFloat(DUST_E_PT(pl, q, 1u));
+        float sy = uintBitsToFloat(DUST_E_PT(pl, q, 2u)), sxx = uintBitsToFloat(DUST_E_PT(pl, q, 3u));
+        float syy = uintBitsToFloat(DUST_E_PT(pl, q, 4u)), sxy = uintBitsToFloat(DUST_E_PT(pl, q, 5u));
+        bool ok = tj > 0.0;
+        float itj = 1.0 / (ok ? tj : 1.0);
+        float dx = sx * itj, dy = sy * itj;
+        float cxx = max(sxx * itj - dx * dx, 1e-6);
+        float cyy = max(syy * itj - dy * dy, 1e-6);
+        float rhoRaw = (sxy * itj - dx * dy) * inversesqrt(cxx * cyy);
+        DustSmallPoint s = dust_e_finish(ok, dust_small_node(q, false).y, DUST_E_IN(12u), DUST_E_IN(13u + q), tj, ox + dx,
+                                         oy + dy, cxx, cyy, rhoRaw);
+        DUST_E_PTW(pl, q, 0u, floatBitsToUint(s.mx)); DUST_E_PTW(pl, q, 1u, floatBitsToUint(s.my));
+        DUST_E_PTW(pl, q, 2u, floatBitsToUint(s.ix)); DUST_E_PTW(pl, q, 3u, floatBitsToUint(s.iy));
+        DUST_E_PTW(pl, q, 4u, floatBitsToUint(s.rho)); DUST_E_PTW(pl, q, 5u, floatBitsToUint(s.m));
+    }
+}
+
+// phase A of the round from piece rb (the workgroup's)
+void dust_draw_small_edge_points(uint lane) {
+    uint rb = 0u;
+    uint np = dust_e_ctl[7];
     vec3 r0 = vec3(pc.mvp[0][0], pc.mvp[1][0], pc.mvp[2][0]);
     vec3 r1 = vec3(pc.mvp[0][1], pc.mvp[1][1], pc.mvp[2][1]);
     vec3 r3 = vec3(pc.mvp[0][3], pc.mvp[1][3], pc.mvp[2][3]);
     vec3 tv = vec3(pc.mvp[3][0], pc.mvp[3][1], pc.mvp[3][3]);
-    DustSmallPoint s0, s1, s2, s3, s4;
-    DUST_PROF_BEGIN(vsmallpts)
-    bool demoted = dust_volume_small_edge_points(ed, r0, r1, r3, tv, W, H, s0, s1, s2, s3, s4);
-    DUST_PROF_END(vsmallpts)
-    uint off = pc.pyramid.v[DUST_PYR_TABLE + 3u * lev];
-    uint lw = pc.pyramid.v[DUST_PYR_TABLE + 3u * lev + 1u];
-    float sz = float(1u << lev);
-    // only the texels its points cover within its range (dust::volume_scatter), row segments of
-    // DUST_SEGMENT_TEXELS as the consumer's DUST_VOLUME_ROWS
-    ivec4 rs = dust_volume_small_range(s0, s1, s2, s3, s4, r, sz);
-    float peak = 0.0;
-    bool any_ = false;
-    for (int ty = rs.z; ty <= rs.w; ++ty) {
-        for (int xa = rs.x; xa <= rs.y; xa += int(DUST_SEGMENT_TEXELS)) {
-            int xb = min(xa + int(DUST_SEGMENT_TEXELS) - 1, rs.y);
-            DUST_PROF_COUNT(volume_texels, xb - xa + 1)
-            any_ = dust_volume_segment_small(pc.pyramid, pc.invUnit, W, H, sz, color, depthBits, off, lw, seed, ty, xa,
-                                             xb, s0, s1, s2, s3, s4, peak)
-                || any_;
-        }
+    uint pl = rb + lane / 4u, k = lane % 4u;
+    // the record a lane reads (a lane past the workgroup's pieces reads its last: the heavy stages
+    // run in every lane, unbranched, and their results are kept only where they belong; Mali-G52
+    // allocates a branched stage beside the others, 64 registers)
+    uint pr = min(pl, np - 1u);
+    uint ks = min(k, 2u);
+    bool live = pl < np;
+    bool act = live && k < 3u;
+    // the frame's size: read again in each stage (DUST_E_W, DUST_E_H: through the opaque zero), so that no product
+    // of it is a common subexpression the compiler holds from stage to stage (Mali-G52: 64 registers)
+    // the fast projections: the masses and (slice 0's lane) the gate
+    {
+        DUST_PROF_BEGIN(vsmfast)
+        DustSmallPoint f = dust_e_fast(ks, pr, r0, r1, r3, tv);
+        bool gate = DUST_SMALL_DEMOTE_EPS > 0.0 && f.m > 0.0
+                 && dust_e_demote_gate(f, pr, r3, tv.z)
+                        < DUST_SMALL_DEMOTE_GATE * DUST_SMALL_DEMOTE_EPS;
+        DUST_PROF_END(vsmfast)
+        if (k == 0u) dust_t_row[lane + 3u] = act && gate ? 1u : 0u;
+        if (k < 3u) dust_t_row[lane] = floatBitsToUint(act ? f.m : 0.0);
     }
-    if (peak > 0.0) atomicMax(pc.pyramid.v[DUST_PYR_TAU_MAX], floatBitsToUint(peak));
-    if (any_) atomicOr(pc.pyramid.v[DUST_PYR_LEVEL_MASK], 1u << lev);
-    return demoted ? 2u : 1u;
+    barrier();
+    // (lane & 60u, not lane & ~3u: the same slot, and the latter costs Mali-G52 thirty registers)
+    uint pb = lane & (DUST_T_LANES - 4u);
+    uint qt = k == 0u ? 2u : k - 1u;
+    // the piece's points in shared memory (DUST_E_PT), never over its record: the inputs stay intact,
+    // so no lane waits on another's reads before writing and no point is held in registers across a
+    // barrier (either cost Mali-G52 its 32-register mode)
+    // the demotion terms (dust_small_demote_slice: lane k < 3 slice (k + 2) mod 3, the slices'
+    // stages rotated so that no two stages' projections of one slice are common subexpressions the
+    // compiler keeps live across the heavy stages), its corrected point into the piece's slot
+    // (none when not predicted; the edge points overwrite it unless the piece is demoted) and its
+    // error into the slice's
+    {
+        DustSmallTerms kt;
+        bool pred = dust_e_demote_terms(qt, false, pr, r0, r1, r3, tv, kt);
+        // the corrected point's sums (dust_small_demote_fix_of's: its covariances, its mass factor, its
+        // centre), into the slice's point slot, the lane's own until the fix reads them
+        if (act) {
+            DUST_E_PTW(pl, qt, 0u, floatBitsToUint(kt.cxx + kt.dcxx));
+            DUST_E_PTW(pl, qt, 1u, floatBitsToUint(kt.cyy + kt.dcyy));
+            DUST_E_PTW(pl, qt, 2u, floatBitsToUint(kt.cxy + kt.dcxy));
+            DUST_E_PTW(pl, qt, 3u, floatBitsToUint(1.0 + kt.mu));
+            DUST_E_PTW(pl, qt, 4u, floatBitsToUint(kt.mx + kt.dx));
+            DUST_E_PTW(pl, qt, 5u, floatBitsToUint(kt.my + kt.dy));
+        }
+        // (the profile times the error only: a timer over the terms, wherever its clock reads went,
+        // cost the profiled build Mali-G52's 32-register mode; DESIGN.md)
+        DUST_E_PROF_BEGIN_SH(dust_e_rs[lane])
+        float ev = dust_e_demote_err_of(kt);
+        float e = pred ? ev : -1.0;
+        DUST_E_PROF_END_SH(vsmedge, dust_e_rs[lane])
+        if (k < 3u) dust_e_sx[pb + qt] = floatBitsToUint(e);
+    }
+    barrier();
+    // the decision, slice 0's lane (the in-order prefix of passing tests, unbranched: each step's sum
+    // and test computed, a step past a failed one computed and discarded, as the branch skipped it),
+    // to the piece's word (read back at the next stage's start: the decision in every lane, or the
+    // word read after the sigma points, cost Mali-G52 its 32-register mode)
+    if (k == 0u) {
+        bool tryD = dust_t_row[pb + 3u] != 0u && uintBitsToFloat(dust_t_row[pb]) > 0.0
+                 && uintBitsToFloat(dust_t_row[pb + 1u]) > 0.0 && uintBitsToFloat(dust_t_row[pb + 2u]) > 0.0;
+        float m0 = uintBitsToFloat(dust_t_row[pb]), m1 = uintBitsToFloat(dust_t_row[pb + 1u]);
+        float m2 = uintBitsToFloat(dust_t_row[pb + 2u]);
+        float ms = m0 + m1 + m2;
+        float e0 = uintBitsToFloat(dust_e_sx[pb]);
+        float acc = m0 * e0;
+        bool go = e0 >= 0.0 && acc / ms < DUST_SMALL_DEMOTE_EPS;
+        float e1 = uintBitsToFloat(dust_e_sx[pb + 1u]);
+        acc += m1 * e1;
+        go = go && e1 >= 0.0 && acc / ms < DUST_SMALL_DEMOTE_EPS;
+        float e2 = uintBitsToFloat(dust_e_sx[pb + 2u]);
+        acc += m2 * e2;
+        go = go && e2 >= 0.0 && acc / ms < DUST_SMALL_DEMOTE_EPS;
+        bool demote = tryD && go;
+        if (live) {
+            if (demote) {
+                atomicAdd(dust_e_ctl[0], 1u);
+                DUST_PROF_COUNT(small_fast, 1u)
+            } else {
+                DUST_PROF_COUNT(small_edge, 1u)
+            }
+        }
+        dust_e_dm[lane / 4u] = demote ? 1u : 0u;
+    }
+    barrier();
+    // a demoted piece's points (dust_small_demote_slice's corrected points: lane k < 3 slice
+    // (k + 1) mod 3, its terms again, none when not predicted) into its slots
+    // (a demoted piece's slices were all predicted: its three errors >= 0, an unpredicted slice's -1)
+    if (act && dust_e_dm[lane / 4u] != 0u) {
+        DustSmallPoint sd = dust_e_demote_fix_sums(uintBitsToFloat(DUST_E_PT(pl, qt, 0u)), uintBitsToFloat(DUST_E_PT(pl, qt, 1u)),
+                                                   uintBitsToFloat(DUST_E_PT(pl, qt, 2u)), uintBitsToFloat(DUST_E_PT(pl, qt, 3u)),
+                                                   uintBitsToFloat(DUST_E_PT(pl, qt, 4u)), uintBitsToFloat(DUST_E_PT(pl, qt, 5u)),
+                                                   uintBitsToFloat(dust_t_row[pb + qt]));
+        DUST_E_PTW(pl, qt, 0u, floatBitsToUint(sd.mx)); DUST_E_PTW(pl, qt, 1u, floatBitsToUint(sd.my));
+        DUST_E_PTW(pl, qt, 2u, floatBitsToUint(sd.ix)); DUST_E_PTW(pl, qt, 3u, floatBitsToUint(sd.iy));
+        DUST_E_PTW(pl, qt, 4u, floatBitsToUint(sd.rho)); DUST_E_PTW(pl, qt, 5u, floatBitsToUint(sd.m));
+    }
+    // the edge points of a piece not demoted, a slice a pass (dust_volume_small_edge): lane k the
+    // slice's sigma point k (its J3 into dust_t_row, its screen x into dust_e_sx, its y into
+    // dust_e_rs), then every lane their moments in sigma-point order (the loop's accumulation and
+    // finish), lane k == slice the point into the piece's slot
+    // (the slots' earlier writes, the demotion's sums and the demoted points, ordered before the
+    // passes' writes of the same words by other lanes by the first pass's barrier)
+    dust_e_edge_pass(0u, lane, k, pb, pl, pr, live, r0, r1, r3, tv);
+    dust_e_edge_pass(1u, lane, k, pb, pl, pr, live, r0, r1, r3, tv);
+    dust_e_edge_pass(2u, lane, k, pb, pl, pr, live, r0, r1, r3, tv);
+    barrier();
+    // the piece's covered range (dust_volume_small_range: its none points s3, s4 skipped as there),
+    // slice 0's lane over the points in slice order
+    if (k == 0u) {
+        float lx = 3.4e38, hx = -3.4e38, ly = 3.4e38, hy = -3.4e38;
+        [[dont_unroll]] for (uint q = 0u; q < 3u; ++q) {
+            DustSmallPoint p = dust_e_point(pr, q);  // (pr: a lane past the pieces reads a held record)
+            bool v = p.m > 0.0;
+            float ex = DUST_SMALL_COVER / (p.ix * DUST_SQRT_2), ey = DUST_SMALL_COVER / (p.iy * DUST_SQRT_2);
+            lx = v ? min(lx, p.mx - ex) : lx;
+            hx = v ? max(hx, p.mx + ex) : hx;
+            ly = v ? min(ly, p.my - ey) : ly;
+            hy = v ? max(hy, p.my + ey) : hy;
+        }
+        uint rxy = DUST_E_REC(pr, 16u), rzw = DUST_E_REC(pr, 17u);
+        ivec4 r = ivec4(int(rxy & 0xFFFFu), int(rxy >> 16u), int(rzw & 0xFFFFu), int(rzw >> 16u));
+        float sz = float(1u << DUST_E_REC(pr, 18u));
+        ivec4 rs = ivec4(int(max(floor(lx / sz), float(r.x))), int(min(floor(hx / sz), float(r.y))),
+                         int(max(floor(ly / sz), float(r.z))), int(min(floor(hy / sz), float(r.w))));
+        bool any = live && lx <= hx && ly <= hy && rs.x <= rs.y && rs.z <= rs.w;
+        uint rp = 2u * (lane / 4u);
+        dust_e_rs[rp] = any ? uint(rs.x) | (uint(rs.y) << 16u) : 0u;
+        dust_e_rs[rp + 1u] = any ? uint(rs.z) | (uint(rs.w) << 16u) : 1u;  // rows 1 .. 0: none
+    }
+}
+
+// lane 0, phase B: the next up-to-DUST_T_SEGS segments from the cursor (piece, row, column)
+void dust_e_take_segments() {
+    // the last group's peaks and levels (a maximum and an OR: order-free)
+    for (uint c = 0u; c < DUST_T_SEGS; ++c) {
+        dust_e_ctl[2] = max(dust_e_ctl[2], dust_e_pk[c]);
+        dust_e_ctl[1] |= dust_e_lv[c];
+        dust_e_pk[c] = 0u;
+        dust_e_lv[c] = 0u;
+    }
+    uint cnt = 0u;
+    uint p = dust_e_ctl[3];
+    int y = int(dust_e_ctl[4]);
+    int xa = int(dust_e_ctl[5]);
+    uint pe = dust_e_ctl[7];
+    while (cnt < DUST_T_SEGS && p < pe) {
+        uint rxy = dust_e_rs[2u * p], rzw = dust_e_rs[2u * p + 1u];
+        int x0 = int(rxy & 0xFFFFu), x1 = int(rxy >> 16u), y1 = int(rzw >> 16u);
+        if (y < 0) { y = int(rzw & 0xFFFFu); xa = x0; }
+        if (y > y1) { ++p; y = -1; continue; }
+        int xb = min(xa + int(DUST_SEGMENT_TEXELS) - 1, x1);
+        dust_t_key[cnt] = (uint(y) << 16u) | uint(xa);
+        dust_t_n[cnt] = uint(xb - xa + 1);
+#ifdef DUST_PROFILE
+        // the texels, counted where the segments are taken (lane 0: a lane's atomic of its count
+        // became a subgroup reduction on GCN)
+        if (!dust_counting) dust_e_prof[DUST_E_PROF_volume_texels] += uint(xb - xa + 1);
+#endif
+        dust_t_p[cnt] = p;
+        ++cnt;
+        xa += int(DUST_SEGMENT_TEXELS);
+        if (xa > x1) { xa = x0; ++y; }
+    }
+    dust_e_ctl[6] = cnt;
+    for (uint c = cnt; c < DUST_T_SEGS; ++c) dust_t_n[c] = 0u;
+    dust_e_ctl[3] = p;
+    dust_e_ctl[4] = uint(y);
+    dust_e_ctl[5] = uint(xa);
 }
 
 void main() {
-    uint i = gl_GlobalInvocationID.x;
-    uint ebase = dust_vedge_base(pc.pyramid, (pc.flags & DUST_VIEW_EDGE_ODD) != 0u);
-    if (gl_LocalInvocationIndex == 0u) dust_edge_demoted = 0u;
-    barrier();
-    uint ran = dust_draw_small_edge_record(i, ebase);
-    if (ran == 2u) atomicAdd(dust_edge_demoted, 1u);
-    barrier();
-    if (gl_LocalInvocationIndex == 0u && dust_edge_demoted > 0u)
-        atomicAdd(pc.pyramid.v[ebase + DUST_VEDGE_DEMOTED], dust_edge_demoted);
+    uint lane = gl_LocalInvocationID.x;
+    if (lane == 0u) {
+        uint i0 = gl_WorkGroupID.x * DUST_E_ROUND;
+        dust_e_ctl[0] = 0u; dust_e_ctl[1] = 0u; dust_e_ctl[2] = 0u;
+        // dust_vedge_base and dust_vqueue_capacity, their reads inline (pc.pyramid.v)
+        uint vbase = pc.pyramid.v[DUST_PYR_QUEUE_BASE] + DUST_QUEUE_WORDS;
+        uint nv = pc.pyramid.v[vbase + DUST_VQUEUE_RECORDS];
+        nv = nv == 0u ? DUST_VQUEUE_CAPACITY : min(nv, DUST_VQUEUE_CAPACITY);
+        uint e0 = vbase + pc.pyramid.v[vbase + DUST_VQUEUE_SPILL_OFFSET] + DUST_VQUEUE_HEADER_WORDS
+                + dust_vspill_records_of(nv) * DUST_VQUEUE_RECORD_WORDS;
+        uint ebase = (pc.flags & DUST_VIEW_EDGE_ODD) != 0u
+                   ? e0 + DUST_VQUEUE_HEADER_WORDS + dust_vedge_records_of(nv) * DUST_VEDGE_RECORD_WORDS : e0;
+        uint raw = pc.pyramid.v[ebase + 3u];
+        uint cap = pc.pyramid.v[ebase + 4u];
+        cap = cap == 0u ? DUST_VQUEUE_CAPACITY : min(cap, DUST_VQUEUE_CAPACITY);
+        uint n = min(raw, cap);
+        if (gl_WorkGroupID.x == 0u) {
+            atomicAdd(pc.pyramid.v[ebase + DUST_VEDGE_DRAWN], n);
+            atomicAdd(pc.pyramid.v[ebase + DUST_VEDGE_LOST], raw - n);
+        }
+        dust_e_ctl[7] = n > i0 ? min(n - i0, DUST_E_ROUND) : 0u;
+        dust_e_ctl[9] = ebase + DUST_VQUEUE_HEADER_WORDS + i0 * DUST_VEDGE_RECORD_WORDS;
+        dust_e_ctl[10] = ebase;
+        dust_e_ctl[3] = 0u; dust_e_ctl[4] = 0xFFFFFFFFu; dust_e_ctl[5] = 0u;
+        dust_e_ctl[8] = 4u; dust_e_ctl[11] = 0u;
+        for (uint c = 0u; c < DUST_T_SEGS; ++c) { dust_e_pk[c] = 0u; dust_e_lv[c] = 0u; }
 #ifdef DUST_PROFILE
-    // every lane reaches this (none returns early from main): the subgroup reductions need them all
-    DUST_PROF_FLUSH_EDGE(pc.pyramid, dust_queue_base(pc.pyramid))
+        for (uint c = 0u; c < 7u; ++c) dust_e_prof[c] = 0u;
+#endif
+    }
+    barrier();
+    // (a workgroup past the region's pieces leaves whole: a uniform return)
+    if (dust_e_ctl[7] == 0u) return;
+    {
+        dust_draw_small_edge_points(lane);
+        for (;;) {
+            barrier();
+            if (lane == 0u) dust_e_take_segments();
+            barrier();
+            if (dust_e_ctl[6] == 0u) break;
+            // the texel's tau (dust_volume_segment_small's rectangle integrals, in its order); a
+            // texel outside the frame or past its segment's end is NaN, skipped by the walk
+            {
+                uint sg = lane / DUST_SEGMENT_TEXELS;
+                // (perf9_O fix) a lane of a segment not taken (dust_t_n[sg] == 0: its key and piece are
+                // stale or never written) holds 0, no deposit (the walk visits taken segments only)
+                float tauPx = uintBitsToFloat(dust_t_n[sg] != 0u ? 0x7FC00000u : 0u);
+                if (lane % DUST_SEGMENT_TEXELS < dust_t_n[sg]) {
+                    uint i = dust_t_p[sg];
+                    uint key = dust_t_key[sg];
+                    int ty = int(key >> 16u), tx = int(key & 0xFFFFu) + int(lane % DUST_SEGMENT_TEXELS);
+                    float W = float(pc.pyramid.v[DUST_PYR_WIDTH]);
+                    float H = float(pc.pyramid.v[DUST_PYR_HEIGHT]);
+                    float sz = float(1u << DUST_E_REC(i, 18u));
+                    float ya = max(float(ty) * sz, 0.0);
+                    float yb = min(float(ty + 1) * sz, H);
+                    float xa_ = max(float(tx) * sz, 0.0);
+                    float xb_ = min(float(tx + 1) * sz, W);
+                    if (xb_ > xa_ && yb > ya) {
+                        DUST_PROF_BEGIN(vsmall)
+                        DustSmallPoint none = dust_small_none();
+                        float acc = dust_small_rect(dust_e_point(i, 0u), xa_, xb_, ya, yb) + dust_small_rect(dust_e_point(i, 1u), xa_, xb_, ya, yb)
+                                  + dust_small_rect(dust_e_point(i, 2u), xa_, xb_, ya, yb) + dust_small_rect(none, xa_, xb_, ya, yb)
+                                  + dust_small_rect(none, xa_, xb_, ya, yb);
+                        tauPx = max(acc, 0.0) / ((xb_ - xa_) * (yb - ya));
+                        DUST_PROF_END(vsmall)
+                    }
+                }
+                dust_t_row[lane] = floatBitsToUint(tauPx);
+            }
+            barrier();
+            // the segment's carry walk (dust_volume_deposit's rounding from the piece's seed), a
+            // lane a segment; its peak into the workgroup's
+            if (lane < DUST_T_SEGS && dust_t_n[lane] != 0u) {
+                uint i = dust_t_p[lane];
+                float sz = float(1u << DUST_E_REC(i, 18u));
+                float peak = 0.0;
+                uint split = pc.pyramid.v[DUST_PYR_SPLIT_DEPTH];
+                dust_t_vwalk(lane * DUST_SEGMENT_TEXELS, DUST_SEGMENT_TEXELS, dust_segment_carry(DUST_E_REC(i, 23u), dust_t_key[lane]),
+                             sz * sz, pc.invUnit, ((split >> 30u) & 3u) == 2u, peak);
+                if (peak > 0.0) dust_e_pk[lane] = floatBitsToUint(peak);
+            }
+            barrier();
+            // the deposits
+            {
+                float counts = uintBitsToFloat(dust_t_row[lane]);
+                if (counts != 0.0) {
+                    DUST_PROF_BEGIN(vdeposit)
+                    uint sg = lane / DUST_SEGMENT_TEXELS;
+                    uint i = dust_t_p[sg];
+                    uint key = dust_t_key[sg];
+                    uint lev = DUST_E_REC(i, 18u);
+                    uint ti = pc.pyramid.v[DUST_PYR_TABLE + 3u * lev]
+                            + ((key >> 16u) * pc.pyramid.v[DUST_PYR_TABLE + 3u * lev + 1u] + (key & 0xFFFFu) + lane % DUST_SEGMENT_TEXELS) * DUST_PYRAMID_TEXEL_WORDS;
+                    dust_t_vdeposit(uvec2(pc.pyramid), ti, counts,
+                                    vec3(uintBitsToFloat(DUST_E_REC(i, 19u)), uintBitsToFloat(DUST_E_REC(i, 20u)), uintBitsToFloat(DUST_E_REC(i, 21u))),
+                                    DUST_E_REC(i, 22u));
+                    atomicOr(dust_e_lv[sg], 1u << lev);
+                    DUST_PROF_END(vdeposit)
+                }
+            }
+        }
+        barrier();
+    }
+    if (lane == 0u) {
+        if (dust_e_ctl[2] != 0u) atomicMax(pc.pyramid.v[DUST_PYR_TAU_MAX], dust_e_ctl[2]);
+        if (dust_e_ctl[1] != 0u) atomicOr(pc.pyramid.v[DUST_PYR_LEVEL_MASK], dust_e_ctl[1]);
+        if (dust_e_ctl[0] > 0u) atomicAdd(pc.pyramid.v[dust_e_ctl[10] + DUST_VEDGE_DEMOTED], dust_e_ctl[0]);
+    }
+#ifdef DUST_PROFILE
+    // the workgroup's sums complete, lane 0 adds them
+    barrier();
+    if (lane == 0u) dust_e_prof_flush(uvec2(pc.pyramid), pc.pyramid.v[DUST_PYR_QUEUE_BASE]);
 #endif
 }

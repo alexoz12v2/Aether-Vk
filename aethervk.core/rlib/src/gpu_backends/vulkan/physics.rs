@@ -60,6 +60,51 @@ pub struct PhysicsPipelineConfig {
   pub hardware_subgroup_size: u32,
 }
 
+/// Round 9 step O: the devices whose shader compiler rejects the dust monoliths (Qualcomm's
+/// Adreno 619 driver: the propagate / emit solves and the speck walk as one program) load the
+/// staged blob sets instead (`dust_propagate.comp.pass*`, `dust_emit.comp.pass*`); the others
+/// keep the monoliths. `AETHERVK_DUST_STAGED=1` / `0` overrides the vendor rule (the 1070's
+/// byte gate runs both).
+pub fn dust_staged_passes(vendor_id: u32) -> bool {
+  match aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_STAGED").as_deref().map(str::trim) {
+    Some("1") => true,
+    Some("0") => false,
+    _ => vendor_id == 0x5143,
+  }
+}
+
+/// The staged volume consumer (`dust_draw_volume_stages`, perf9_O C2 v5): built on the Qualcomm
+/// devices (vendor 0x5143, the devices it was gated on) or with `AETHERVK_DUST_VOLUME_STAGES=1`;
+/// `AETHERVK_DUST_VOLUME_STAGES=0` turns it off everywhere
+pub fn dust_volume_stages_wanted(vendor_id: u32) -> bool {
+  match aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_VOLUME_STAGES").as_deref().map(str::trim) {
+    Some("1") => true,
+    Some("0") => false,
+    _ => vendor_id == 0x5143,
+  }
+}
+
+/// perf9_K: the splat's path. The round-9 stage chain (`dust_splat.comp.stN`, the zero-spill
+/// design of the phones) on Qualcomm (0x5143) and ARM / Mali (0x13B5); the monolithic enumerator
+/// (`dust_splat_mono.comp`, the pre-step-O blob: 233 vs 300 ms on the GTX 1070, its byte
+/// reference) everywhere else. `AETHERVK_DUST_SPLAT_STAGED=1` / `0` overrides the vendor rule;
+/// `Device::dust_set_splat_staged` overrides both (the parity tests)
+pub fn dust_splat_staged_default(vendor_id: u32) -> bool {
+  match aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_SPLAT_STAGED").as_deref().map(str::trim) {
+    Some("1") => true,
+    Some("0") => false,
+    _ => matches!(vendor_id, 0x5143 | 0x13B5),
+  }
+}
+
+/// perf9_K: whether the monolithic enumerator's pipeline is built: not on the devices whose
+/// compiler rejects the dust monoliths (`staged_dust`, [`dust_staged_passes`]) unless
+/// `AETHERVK_DUST_SPLAT_STAGED=0` asks for it; without it the splat runs the chain
+pub fn dust_splat_mono_wanted(staged_dust: bool) -> bool {
+  !staged_dust
+    || aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_SPLAT_STAGED").as_deref().map(str::trim) == Some("0")
+}
+
 /// Struct holding all [`ash::vk::Pipeline`] handles to pipelines to simulate particles on Vulkan
 /// device. Note that all of them share the same [`ash::vk::PipelineLayout`] because it declares no
 /// descriptor sets and permits usage of the max allowed by minimum requirements, 128 Bytes, for
@@ -73,8 +118,21 @@ pub struct PhysicsPipelines {
   pub dust_emit: vk::Pipeline,
   /// per-frame closed-form Kepler evaluation of the live ring range (`dust_propagate.comp`, wg 64)
   pub dust_propagate: vk::Pipeline,
-  /// per-frame analytic splat of one tier into the view's pyramid (`dust_splat.comp`, wg 64)
+  /// per-frame analytic splat of one tier into the view's pyramid (`dust_splat.comp`, wg 64):
+  /// round 9 step O, a chain of stage pipelines (`dust_splat.comp.stN.spv`, stage ids and lanes
+  /// in `scene::dust::DUST_SPLAT_STAGE_*`); `dust_splat` aliases stage 0 (the push-constant size
+  /// assert, the statistics)
   pub dust_splat: vk::Pipeline,
+  pub dust_splat_stages: [vk::Pipeline; crate::scene::dust::DUST_SPLAT_STAGES],
+  pub dust_splat_prof_stages: Option<[vk::Pipeline; crate::scene::dust::DUST_SPLAT_STAGES]>,
+  /// perf9_K: the monolithic enumerator (`dust_splat_mono.comp`, wg 64, `DUST_SPLAT_LANES` lanes
+  /// per cluster) and its profiler variant; `None` where it is not built ([`dust_splat_mono_wanted`])
+  pub dust_splat_mono: Option<vk::Pipeline>,
+  pub dust_splat_mono_prof: Option<vk::Pipeline>,
+  /// perf9_K: the splat path's override (0 the rule [`dust_splat_staged_default`], 1 the chain,
+  /// 2 the monolith: `Device::dust_set_splat_staged`) and the path last logged (0 none, 1, 2)
+  pub dust_splat_mode: core::sync::atomic::AtomicU8,
+  pub dust_splat_logged: core::sync::atomic::AtomicU8,
   /// per-frame white-point measurement grid from the finished pyramid (`dust_measure.comp`, wg 64)
   pub dust_measure: vk::Pipeline,
   /// per-frame packet queue: a workgroup per queued large packet (`dust_draw_queue.comp`, wg 64,
@@ -83,9 +141,37 @@ pub struct PhysicsPipelines {
   /// per-frame physical specks of one tier into the view's pyramid (`dust_specks.comp`, wg 64,
   /// one thread per cluster × size bin: the gate pass, the density at the eye and the walk mask)
   pub dust_specks: vk::Pipeline,
-  /// the walk pass (`dust_specks.comp.walk.spv`, `-DDUST_SPECKS_WALK=1`): a workgroup of 32 lanes
-  /// per (cluster, size bin) the gate pass marked, walking the bin's tree from a shared stack
+  /// the walk's step pass (`dust_specks.comp.walk.spv`, `-DDUST_SPECKS_WALK=1`; round 9 step O:
+  /// breadth first): 8 lanes per frontier node, once per tree level, dispatched indirectly from
+  /// the walk region's per-step args (push word 24 = the step)
   pub dust_specks_walk: vk::Pipeline,
+  /// the walk's prologue: setup1 (a thread per marked (cluster, bin): the record), setup2a / 2b /
+  /// 3 / 4 / 5 (a thread per record, indirect: the map, the class, the start nodes, frontier 0)
+  pub dust_specks_setup: [vk::Pipeline; 6],
+  /// the many-speck leaves (a workgroup per leaf), the single-speck leaves (a lane per leaf),
+  /// the trace fill (the test hook)
+  pub dust_specks_leaves: vk::Pipeline,
+  pub dust_specks_leaves1: vk::Pipeline,
+  pub dust_specks_trace: vk::Pipeline,
+  /// the propagate's moments stage (`dust_propagate.comp.moments.spv`): after the solve stage,
+  /// the same workgroups over the same chunk
+  pub dust_propagate_moments: vk::Pipeline,
+  /// the staged solves ([`dust_staged_passes`]): propagate passes 1, 2, 3, 6, 4, 5m, 5s (recorded
+  /// 1, (2, 3) × `DUST_KEPLER_ITERS_DF`, 6, 4, 5m, 5s) and emit passes 1, 2, 3, 6, 4, 5r, 5v, 71,
+  /// 72 (1, (2, 3) × iters, 6, 4, 5r, 5v, 71, 72); `None` = the monoliths `dust_propagate` /
+  /// `dust_emit` (which then alias pass 1 for the size asserts)
+  pub dust_propagate_passes: Option<[vk::Pipeline; 7]>,
+  pub dust_emit_passes: Option<[vk::Pipeline; 9]>,
+  /// perf9_K: the pre-package propagate and emission (`dust_propagate_mono.comp`,
+  /// `dust_emit_mono.comp`: one thread per cluster, the df64 solve in registers), dispatched when
+  /// `Device::dust_prop_staged` is false (the GTX 1070 default); `None` where the monoliths are not
+  /// loaded ([`dust_staged_passes`])
+  pub dust_propagate_mono: Option<vk::Pipeline>,
+  pub dust_emit_mono: Option<vk::Pipeline>,
+  /// perf9_K: the propagate / emit family's mode (`Device::dust_prop_staged` /
+  /// `dust_set_prop_staged`): 0 not resolved yet, 1 mono / 2 package (the test hook's), 3 mono /
+  /// 4 package (the vendor rule's)
+  pub dust_prop_mode: core::sync::atomic::AtomicU8,
   /// the shader-clock profiler variants of the splat and the queue draw (`dust_profile.glsl`;
   /// `None` without `VK_KHR_shader_clock` or the request, [`dust_profile_requested`])
   pub dust_splat_prof: Option<vk::Pipeline>,
@@ -97,15 +183,69 @@ pub struct PhysicsPipelines {
   /// the plain blob while the `.sg` one is in use (round 8 step F2; the baseline devices' path,
   /// `Device::dust_set_volume_plain` runs it on a device that has both: the test)
   pub dust_draw_volume_plain: Option<vk::Pipeline>,
+  /// perf9_O C2 v5: the staged consumer's seven stages in dispatch order s1, s2, s3a, s3b, s4a, s4b,
+  /// s5 (`dust_draw_volume.comp.s<k>[.sg][.vmm].spv`; each stage a main drain then a spill drain,
+  /// `Device::cmd_dust_splat`); `None` unless [`dust_volume_stages_wanted`] (and never with a profiler)
+  pub dust_draw_volume_stages: Option<[vk::Pipeline; 7]>,
   /// track 9A (t9a2d), the edge pass: a lane per small piece the consumer deferred (its centre
   /// slice's 3σ crosses the frame; `dust_draw_small_edge.comp`, wg 64, dispatched indirectly beside
   /// the next chunk's producer): the demotion or the sigma points, then its texels
   pub dust_draw_small_edge: vk::Pipeline,
   pub dust_draw_small_edge_prof: Option<vk::Pipeline>,
+  /// perf9_K: the mono draw family, the pre-perf9_O blobs (`dust_draw_volume_mono.comp`: `.sg` as
+  /// `dust_draw_volume`, `_plain` the plain blob beside it, `.prof`; `dust_draw_small_edge_mono.comp`
+  /// and `dust_draw_queue_mono.comp` with their `.prof`), dispatched when `Device::dust_draw_staged`
+  /// is false (the GTX 1070 default); always built, as before perf9_O
+  pub dust_draw_volume_mono: vk::Pipeline,
+  pub dust_draw_volume_mono_prof: Option<vk::Pipeline>,
+  pub dust_draw_volume_mono_plain: Option<vk::Pipeline>,
+  pub dust_draw_small_edge_mono: vk::Pipeline,
+  pub dust_draw_small_edge_mono_prof: Option<vk::Pipeline>,
+  pub dust_draw_queue_mono: vk::Pipeline,
+  pub dust_draw_queue_mono_prof: Option<vk::Pipeline>,
+  /// perf9_K: the draw family's mode (`Device::dust_draw_staged` / `dust_set_draw_staged`): 0 not
+  /// resolved yet, 1 mono / 2 staged (the test hook's), 3 mono / 4 staged (the vendor rule's)
+  pub dust_draw_mode: core::sync::atomic::AtomicU8,
   /// per-chunk sub-packet queue splitter: a workgroup per cluster over its records
   /// (`dust_split.comp`, wg 64; the leaf path of the former per-cluster splat thread)
   pub dust_split: vk::Pipeline,
   pub dust_split_prof: Option<vk::Pipeline>,
+  /// perf9_K: the pre-split splitter (`dust_split_mono.comp`: the old dust_split.comp and
+  /// dust_leaf.glsl, one dispatch per chunk, a workgroup per cluster) and its profiler variant,
+  /// dispatched when `Device::dust_split_staged` is false (the GTX 1070 default); always built,
+  /// as `dust_split` was before the split family
+  pub dust_split_mono: vk::Pipeline,
+  pub dust_split_mono_prof: Option<vk::Pipeline>,
+  /// perf9_K: the split family's mode (`Device::dust_split_staged` / `dust_set_split_staged`): 0
+  /// not resolved yet, 1 mono / 2 staged (the test hook's), 3 mono / 4 staged (the vendor rule's)
+  pub dust_split_mode: core::sync::atomic::AtomicU8,
+  /// the splitter family (perf9 steps Z / O; `dust_split.comp` stage blobs, the same push
+  /// constants): the prep stage (`.prep`: a lane per record, the cone words), the hard-axis
+  /// diagnostic walk (`.hard`, in place of the walk under `AETHERVK_DUST_HARD_AXIS`), the SEQ
+  /// order stage (`.seq`: a workgroup per cluster, the candidates' ordinals) and the SEQ draw stage
+  /// (`.seqd`: a lane per candidate, indirect from the candidate header)
+  pub dust_split_prep: vk::Pipeline,
+  pub dust_split_prep_prof: Option<vk::Pipeline>,
+  pub dust_split_hard: vk::Pipeline,
+  pub dust_split_hard_prof: Option<vk::Pipeline>,
+  pub dust_split_seq: vk::Pipeline,
+  pub dust_split_seq_prof: Option<vk::Pipeline>,
+  pub dust_split_seq_draw: vk::Pipeline,
+  pub dust_split_seq_draw_prof: Option<vk::Pipeline>,
+  /// the project stage in three passes (`dust_project_leaf.comp.proj1/2/3`: a lane per candidate,
+  /// indirect from the candidate header; phase A, phase B to kx/ky, the rest of B and F)
+  pub dust_project_leaf_p1: vk::Pipeline,
+  pub dust_project_leaf_p2: vk::Pipeline,
+  pub dust_project_leaf_p3: vk::Pipeline,
+  pub dust_project_leaf_p1_prof: Option<vk::Pipeline>,
+  pub dust_project_leaf_p2_prof: Option<vk::Pipeline>,
+  pub dust_project_leaf_p3_prof: Option<vk::Pipeline>,
+  /// the leaf consumers (`dust_draw_leaf.comp`): a lane per leaf record (the leaf queue, then the
+  /// leaf spill), a workgroup per large leaf (`.wg`, the list)
+  pub dust_draw_leaf: vk::Pipeline,
+  pub dust_draw_leaf_prof: Option<vk::Pipeline>,
+  pub dust_draw_leaf_wg: vk::Pipeline,
+  pub dust_draw_leaf_wg_prof: Option<vk::Pipeline>,
   /// the cadence's per-slot passes (`dust_classify.comp`: classify, transitions, marks, chunks)
   pub dust_classify: vk::Pipeline,
   /// the cadence's list compaction and control pass (`dust_compact.comp`)
@@ -140,6 +280,8 @@ impl PhysicsPipelines {
     has_shader_clock: bool,
     capture_statistics: bool,
     has_subgroup_arithmetic: bool,
+    staged_dust: bool,
+    volume_stages: bool,
   ) -> GpuResult<Self> {
     if has_native_float16 {
       aethervk_oshal_rlib::log!(
@@ -546,21 +688,123 @@ impl PhysicsPipelines {
     }
 
     let res: GpuResult<Self> = (|| {
+      // round 9 step O: the staged blob sets where the monoliths do not compile
+      // (`dust_staged_passes`); the monoliths are never loaded there
+      let dust_propagate_passes = if staged_dust {
+        Some([
+          mk!("dust_propagate.comp.pass1.spv"),
+          mk!("dust_propagate.comp.pass2.spv"),
+          mk!("dust_propagate.comp.pass3.spv"),
+          mk!("dust_propagate.comp.pass6.spv"),
+          mk!("dust_propagate.comp.pass4.spv"),
+          mk!("dust_propagate.comp.pass5m.spv"),
+          mk!("dust_propagate.comp.pass5s.spv"),
+        ])
+      } else {
+        None
+      };
+      let dust_emit_passes = if staged_dust {
+        Some([
+          mk!("dust_emit.comp.pass1.spv"),
+          mk!("dust_emit.comp.pass2.spv"),
+          mk!("dust_emit.comp.pass3.spv"),
+          mk!("dust_emit.comp.pass6.spv"),
+          mk!("dust_emit.comp.pass4.spv"),
+          mk!("dust_emit.comp.pass5r.spv"),
+          mk!("dust_emit.comp.pass5v.spv"),
+          mk!("dust_emit.comp.pass71.spv"),
+          mk!("dust_emit.comp.pass72.spv"),
+        ])
+      } else {
+        None
+      };
+      let dust_emit = match dust_emit_passes {
+        Some(p) => p[0],
+        None => mk!("dust_emit.comp.spv"),
+      };
+      let dust_propagate = match dust_propagate_passes {
+        Some(p) => p[0],
+        None => mk!("dust_propagate.comp.spv"),
+      };
+      // the splat's stage chain (round 9 step O): a blob per stage, the profiler variants too
+      let dust_splat_stages = [
+        mk!("dust_splat.comp.st0.spv"),
+        mk!("dust_splat.comp.st1.spv"),
+        mk!("dust_splat.comp.st2.spv"),
+        mk!("dust_splat.comp.st3.spv"),
+        mk!("dust_splat.comp.st4.spv"),
+        mk!("dust_splat.comp.st5.spv"),
+        mk!("dust_splat.comp.st6.spv"),
+        mk!("dust_splat.comp.st7.spv"),
+        mk!("dust_splat.comp.st8.spv"),
+        mk!("dust_splat.comp.st9.spv"),
+        mk!("dust_splat.comp.st10.spv"),
+        mk!("dust_splat.comp.st11.spv"),
+      ];
+      let dust_splat_prof_stages = if has_shader_clock && dust_profile_requested() {
+        Some([
+          mk!("dust_splat.comp.prof.st0.spv"),
+          mk!("dust_splat.comp.prof.st1.spv"),
+          mk!("dust_splat.comp.prof.st2.spv"),
+          mk!("dust_splat.comp.prof.st3.spv"),
+          mk!("dust_splat.comp.prof.st4.spv"),
+          mk!("dust_splat.comp.prof.st5.spv"),
+          mk!("dust_splat.comp.prof.st6.spv"),
+          mk!("dust_splat.comp.prof.st7.spv"),
+          mk!("dust_splat.comp.prof.st8.spv"),
+          mk!("dust_splat.comp.prof.st9.spv"),
+          mk!("dust_splat.comp.prof.st10.spv"),
+          mk!("dust_splat.comp.prof.st11.spv"),
+        ])
+      } else {
+        None
+      };
+      // perf9_K: the monolithic enumerator ([`dust_splat_mono_wanted`]) and its profiler variant
+      let dust_splat_mono = if dust_splat_mono_wanted(staged_dust) {
+        Some(mk!("dust_splat_mono.comp.spv"))
+      } else {
+        None
+      };
+      let dust_splat_mono_prof = if dust_splat_mono.is_some() && has_shader_clock && dust_profile_requested() {
+        Some(mk!("dust_splat_mono.comp.prof.spv"))
+      } else {
+        None
+      };
       Ok(Self {
         pipeline_layout,
         // ── Dust v3 ──────────────────────────────────────────────────────────────
-        dust_emit: mk!("dust_emit.comp.spv"),
-        dust_propagate: mk!("dust_propagate.comp.spv"),
-        dust_splat: mk!("dust_splat.comp.spv"),
+        dust_emit,
+        dust_propagate,
+        dust_propagate_passes,
+        dust_emit_passes,
+        dust_propagate_moments: mk!("dust_propagate.comp.moments.spv"),
+        // (perf9_K) the pre-package monoliths, where monoliths load
+        dust_propagate_mono: if staged_dust { None } else { Some(mk!("dust_propagate_mono.comp.spv")) },
+        dust_emit_mono: if staged_dust { None } else { Some(mk!("dust_emit_mono.comp.spv")) },
+        dust_prop_mode: core::sync::atomic::AtomicU8::new(0),
+        dust_splat: dust_splat_stages[0],
+        dust_splat_stages,
+        dust_splat_prof_stages,
+        dust_splat_mono,
+        dust_splat_mono_prof,
+        dust_splat_mode: core::sync::atomic::AtomicU8::new(0),
+        dust_splat_logged: core::sync::atomic::AtomicU8::new(0),
         dust_measure: mk!("dust_measure.comp.spv"),
         dust_draw_queue: mk!("dust_draw_queue.comp.spv"),
         dust_specks: mk!("dust_specks.comp.spv"),
         dust_specks_walk: mk!("dust_specks.comp.walk.spv"),
-        dust_splat_prof: if has_shader_clock && dust_profile_requested() {
-          Some(mk!("dust_splat.comp.prof.spv"))
-        } else {
-          None
-        },
+        dust_specks_setup: [
+          mk!("dust_specks.comp.setup1.spv"),
+          mk!("dust_specks.comp.setup2a.spv"),
+          mk!("dust_specks.comp.setup2b.spv"),
+          mk!("dust_specks.comp.setup3.spv"),
+          mk!("dust_specks.comp.setup4.spv"),
+          mk!("dust_specks.comp.setup5.spv"),
+        ],
+        dust_specks_leaves: mk!("dust_specks.comp.leaves.spv"),
+        dust_specks_leaves1: mk!("dust_specks.comp.leaves1.spv"),
+        dust_specks_trace: mk!("dust_specks.comp.trace.spv"),
+        dust_splat_prof: dust_splat_prof_stages.map(|p| p[0]),
         dust_draw_queue_prof: if has_shader_clock && dust_profile_requested() {
           Some(mk!("dust_draw_queue.comp.prof.spv"))
         } else {
@@ -583,18 +827,135 @@ impl PhysicsPipelines {
         } else {
           None
         },
+        // (perf9_O C2 v5) the staged consumer: seven stage blobs, `.sg` as dust_draw_volume
+        dust_draw_volume_stages: if volume_stages {
+          Some(if has_subgroup_arithmetic {
+            [
+              mk!("dust_draw_volume.comp.s1.sg.spv"),
+              mk!("dust_draw_volume.comp.s2.sg.spv"),
+              mk!("dust_draw_volume.comp.s3a.sg.spv"),
+              mk!("dust_draw_volume.comp.s3b.sg.spv"),
+              mk!("dust_draw_volume.comp.s4a.sg.spv"),
+              mk!("dust_draw_volume.comp.s4b.sg.spv"),
+              mk!("dust_draw_volume.comp.s5.sg.spv"),
+            ]
+          } else {
+            [
+              mk!("dust_draw_volume.comp.s1.spv"),
+              mk!("dust_draw_volume.comp.s2.spv"),
+              mk!("dust_draw_volume.comp.s3a.spv"),
+              mk!("dust_draw_volume.comp.s3b.spv"),
+              mk!("dust_draw_volume.comp.s4a.spv"),
+              mk!("dust_draw_volume.comp.s4b.spv"),
+              mk!("dust_draw_volume.comp.s5.spv"),
+            ]
+          })
+        } else {
+          None
+        },
         dust_draw_small_edge: mk!("dust_draw_small_edge.comp.spv"),
+        // (perf9_K) the mono draw family: the pre-perf9_O blobs, chosen as the originals were
+        dust_draw_volume_mono: if has_subgroup_arithmetic {
+          mk!("dust_draw_volume_mono.comp.sg.spv")
+        } else {
+          mk!("dust_draw_volume_mono.comp.spv")
+        },
+        dust_draw_volume_mono_prof: if has_shader_clock && dust_profile_requested() {
+          Some(mk!("dust_draw_volume_mono.comp.prof.spv"))
+        } else {
+          None
+        },
+        dust_draw_volume_mono_plain: if has_subgroup_arithmetic {
+          Some(mk!("dust_draw_volume_mono.comp.spv"))
+        } else {
+          None
+        },
+        dust_draw_small_edge_mono: mk!("dust_draw_small_edge_mono.comp.spv"),
+        dust_draw_small_edge_mono_prof: if has_shader_clock && dust_profile_requested() {
+          Some(mk!("dust_draw_small_edge_mono.comp.prof.spv"))
+        } else {
+          None
+        },
+        dust_draw_queue_mono: mk!("dust_draw_queue_mono.comp.spv"),
+        dust_draw_queue_mono_prof: if has_shader_clock && dust_profile_requested() {
+          Some(mk!("dust_draw_queue_mono.comp.prof.spv"))
+        } else {
+          None
+        },
+        dust_draw_mode: core::sync::atomic::AtomicU8::new(0),
         dust_draw_small_edge_prof: if has_shader_clock && dust_profile_requested() {
           Some(mk!("dust_draw_small_edge.comp.prof.spv"))
         } else {
           None
         },
         dust_split: mk!("dust_split.comp.spv"),
+        // (perf9_K) the pre-split splitter
+        dust_split_mono: mk!("dust_split_mono.comp.spv"),
+        dust_split_mono_prof: if has_shader_clock && dust_profile_requested() {
+          Some(mk!("dust_split_mono.comp.prof.spv"))
+        } else {
+          None
+        },
+        dust_split_mode: core::sync::atomic::AtomicU8::new(0),
         dust_classify: mk!("dust_classify.comp.spv"),
         dust_compact: mk!("dust_compact.comp.spv"),
         dust_reproject: mk!("dust_reproject.comp.spv"),
         dust_split_prof: if has_shader_clock && dust_profile_requested() {
           Some(mk!("dust_split.comp.prof.spv"))
+        } else {
+          None
+        },
+        dust_split_prep: mk!("dust_split.comp.prep.spv"),
+        dust_split_prep_prof: if has_shader_clock && dust_profile_requested() {
+          Some(mk!("dust_split.comp.prof.prep.spv"))
+        } else {
+          None
+        },
+        dust_split_hard: mk!("dust_split.comp.hard.spv"),
+        dust_split_hard_prof: if has_shader_clock && dust_profile_requested() {
+          Some(mk!("dust_split.comp.prof.hard.spv"))
+        } else {
+          None
+        },
+        dust_split_seq: mk!("dust_split.comp.seq.spv"),
+        dust_split_seq_prof: if has_shader_clock && dust_profile_requested() {
+          Some(mk!("dust_split.comp.prof.seq.spv"))
+        } else {
+          None
+        },
+        dust_split_seq_draw: mk!("dust_split.comp.seqd.spv"),
+        dust_split_seq_draw_prof: if has_shader_clock && dust_profile_requested() {
+          Some(mk!("dust_split.comp.prof.seqd.spv"))
+        } else {
+          None
+        },
+        dust_project_leaf_p1: mk!("dust_project_leaf.comp.proj1.spv"),
+        dust_project_leaf_p2: mk!("dust_project_leaf.comp.proj2.spv"),
+        dust_project_leaf_p3: mk!("dust_project_leaf.comp.proj3.spv"),
+        dust_project_leaf_p1_prof: if has_shader_clock && dust_profile_requested() {
+          Some(mk!("dust_project_leaf.comp.prof.proj1.spv"))
+        } else {
+          None
+        },
+        dust_project_leaf_p2_prof: if has_shader_clock && dust_profile_requested() {
+          Some(mk!("dust_project_leaf.comp.prof.proj2.spv"))
+        } else {
+          None
+        },
+        dust_project_leaf_p3_prof: if has_shader_clock && dust_profile_requested() {
+          Some(mk!("dust_project_leaf.comp.prof.proj3.spv"))
+        } else {
+          None
+        },
+        dust_draw_leaf: mk!("dust_draw_leaf.comp.spv"),
+        dust_draw_leaf_prof: if has_shader_clock && dust_profile_requested() {
+          Some(mk!("dust_draw_leaf.comp.prof.spv"))
+        } else {
+          None
+        },
+        dust_draw_leaf_wg: mk!("dust_draw_leaf.comp.wg.spv"),
+        dust_draw_leaf_wg_prof: if has_shader_clock && dust_profile_requested() {
+          Some(mk!("dust_draw_leaf.comp.prof.wg.spv"))
         } else {
           None
         },
@@ -633,16 +994,53 @@ impl PhysicsPipelines {
   }
 
   pub fn discard(&mut self, discard_pool: &resources::DiscardPool, timeline: u64) {
-    discard_pool.discard_pipeline(self.dust_emit, timeline);
-    discard_pool.discard_pipeline(self.dust_propagate, timeline);
-    discard_pool.discard_pipeline(self.dust_splat, timeline);
+    // (emit and propagate: discarded below, as the staged passes or the monoliths)
+    // (perf9_K: the monolithic enumerator and its profiler variant, when built)
+    for p in [self.dust_splat_mono, self.dust_splat_mono_prof].into_iter().flatten() {
+      discard_pool.discard_pipeline(p, timeline);
+    }
+    // (`dust_splat` / `dust_splat_prof` alias stage 0)
+    for p in self.dust_splat_stages {
+      discard_pool.discard_pipeline(p, timeline);
+    }
+    if let Some(ps) = self.dust_splat_prof_stages {
+      for p in ps {
+        discard_pool.discard_pipeline(p, timeline);
+      }
+    }
     discard_pool.discard_pipeline(self.dust_measure, timeline);
     discard_pool.discard_pipeline(self.dust_draw_queue, timeline);
     discard_pool.discard_pipeline(self.dust_specks, timeline);
     discard_pool.discard_pipeline(self.dust_specks_walk, timeline);
-    if let Some(p) = self.dust_splat_prof {
+    for p in self.dust_specks_setup {
       discard_pool.discard_pipeline(p, timeline);
     }
+    discard_pool.discard_pipeline(self.dust_specks_leaves, timeline);
+    discard_pool.discard_pipeline(self.dust_specks_leaves1, timeline);
+    discard_pool.discard_pipeline(self.dust_specks_trace, timeline);
+    discard_pool.discard_pipeline(self.dust_propagate_moments, timeline);
+    // (perf9_K) the pre-package monoliths
+    for p in [self.dust_propagate_mono, self.dust_emit_mono].into_iter().flatten() {
+      discard_pool.discard_pipeline(p, timeline);
+    }
+    // the monoliths alias pass 1 when staged: discard the passes, else the monoliths
+    match self.dust_propagate_passes {
+      Some(ps) => {
+        for p in ps {
+          discard_pool.discard_pipeline(p, timeline);
+        }
+      }
+      None => discard_pool.discard_pipeline(self.dust_propagate, timeline),
+    }
+    match self.dust_emit_passes {
+      Some(ps) => {
+        for p in ps {
+          discard_pool.discard_pipeline(p, timeline);
+        }
+      }
+      None => discard_pool.discard_pipeline(self.dust_emit, timeline),
+    }
+    // (dust_splat_prof: the stages above)
     if let Some(p) = self.dust_draw_queue_prof {
       discard_pool.discard_pipeline(p, timeline);
     }
@@ -653,15 +1051,70 @@ impl PhysicsPipelines {
     if let Some(p) = self.dust_draw_volume_plain {
       discard_pool.discard_pipeline(p, timeline);
     }
+    if let Some(stages) = self.dust_draw_volume_stages {
+      for p in stages {
+        discard_pool.discard_pipeline(p, timeline);
+      }
+    }
     discard_pool.discard_pipeline(self.dust_draw_small_edge, timeline);
+    // (perf9_K) the mono draw family
+    for p in [self.dust_draw_volume_mono, self.dust_draw_small_edge_mono, self.dust_draw_queue_mono] {
+      discard_pool.discard_pipeline(p, timeline);
+    }
+    for p in [
+      self.dust_draw_volume_mono_prof,
+      self.dust_draw_volume_mono_plain,
+      self.dust_draw_small_edge_mono_prof,
+      self.dust_draw_queue_mono_prof,
+    ]
+    .into_iter()
+    .flatten()
+    {
+      discard_pool.discard_pipeline(p, timeline);
+    }
     if let Some(p) = self.dust_draw_small_edge_prof {
       discard_pool.discard_pipeline(p, timeline);
     }
     discard_pool.discard_pipeline(self.dust_split, timeline);
+    // (perf9_K) the pre-split splitter
+    discard_pool.discard_pipeline(self.dust_split_mono, timeline);
+    if let Some(p) = self.dust_split_mono_prof {
+      discard_pool.discard_pipeline(p, timeline);
+    }
     discard_pool.discard_pipeline(self.dust_classify, timeline);
     discard_pool.discard_pipeline(self.dust_compact, timeline);
     discard_pool.discard_pipeline(self.dust_reproject, timeline);
     if let Some(p) = self.dust_split_prof {
+      discard_pool.discard_pipeline(p, timeline);
+    }
+    // the splitter family (perf9 steps Z / O)
+    for p in [
+      self.dust_split_prep,
+      self.dust_split_hard,
+      self.dust_split_seq,
+      self.dust_split_seq_draw,
+      self.dust_project_leaf_p1,
+      self.dust_project_leaf_p2,
+      self.dust_project_leaf_p3,
+      self.dust_draw_leaf,
+      self.dust_draw_leaf_wg,
+    ] {
+      discard_pool.discard_pipeline(p, timeline);
+    }
+    for p in [
+      self.dust_split_prep_prof,
+      self.dust_split_hard_prof,
+      self.dust_split_seq_prof,
+      self.dust_split_seq_draw_prof,
+      self.dust_project_leaf_p1_prof,
+      self.dust_project_leaf_p2_prof,
+      self.dust_project_leaf_p3_prof,
+      self.dust_draw_leaf_prof,
+      self.dust_draw_leaf_wg_prof,
+    ]
+    .into_iter()
+    .flatten()
+    {
       discard_pool.discard_pipeline(p, timeline);
     }
 
@@ -676,7 +1129,7 @@ impl PhysicsPipelines {
   pub fn log_pipeline_statistics(&self, instance: &ash::Instance, device: &ash::Device) {
     let ext = ash::khr::pipeline_executable_properties::Device::new(instance, device);
     let dir = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_PROFILE_DIR");
-    let named: [(&str, Option<vk::Pipeline>); 19] = [
+    let mut named: alloc::vec::Vec<(alloc::string::String, Option<vk::Pipeline>)> = alloc::vec![
       ("dust_reproject", Some(self.dust_reproject)),
       ("dust_classify", Some(self.dust_classify)),
       ("dust_compact", Some(self.dust_compact)),
@@ -684,19 +1137,89 @@ impl PhysicsPipelines {
       ("dust_splat_prof", self.dust_splat_prof),
       ("dust_split", Some(self.dust_split)),
       ("dust_split_prof", self.dust_split_prof),
+      ("dust_split_mono", Some(self.dust_split_mono)),
+      ("dust_split_mono_prof", self.dust_split_mono_prof),
       ("dust_draw_queue", Some(self.dust_draw_queue)),
       ("dust_draw_queue_prof", self.dust_draw_queue_prof),
       ("dust_draw_volume", Some(self.dust_draw_volume)),
       ("dust_draw_volume_prof", self.dust_draw_volume_prof),
       ("dust_draw_volume_plain", self.dust_draw_volume_plain),
+      ("dust_draw_volume_s1", self.dust_draw_volume_stages.map(|s| s[0])),
+      ("dust_draw_volume_s2", self.dust_draw_volume_stages.map(|s| s[1])),
+      ("dust_draw_volume_s3a", self.dust_draw_volume_stages.map(|s| s[2])),
+      ("dust_draw_volume_s3b", self.dust_draw_volume_stages.map(|s| s[3])),
+      ("dust_draw_volume_s4a", self.dust_draw_volume_stages.map(|s| s[4])),
+      ("dust_draw_volume_s4b", self.dust_draw_volume_stages.map(|s| s[5])),
+      ("dust_draw_volume_s5", self.dust_draw_volume_stages.map(|s| s[6])),
       ("dust_draw_small_edge", Some(self.dust_draw_small_edge)),
       ("dust_draw_small_edge_prof", self.dust_draw_small_edge_prof),
+      ("dust_draw_volume_mono", Some(self.dust_draw_volume_mono)),
+      ("dust_draw_volume_mono_prof", self.dust_draw_volume_mono_prof),
+      ("dust_draw_volume_mono_plain", self.dust_draw_volume_mono_plain),
+      ("dust_draw_small_edge_mono", Some(self.dust_draw_small_edge_mono)),
+      ("dust_draw_small_edge_mono_prof", self.dust_draw_small_edge_mono_prof),
+      ("dust_draw_queue_mono", Some(self.dust_draw_queue_mono)),
+      ("dust_draw_queue_mono_prof", self.dust_draw_queue_mono_prof),
       ("dust_specks", Some(self.dust_specks)),
       ("dust_specks_walk", Some(self.dust_specks_walk)),
       ("dust_propagate", Some(self.dust_propagate)),
       ("dust_emit", Some(self.dust_emit)),
       ("dust_measure", Some(self.dust_measure)),
-    ];
+      ("dust_propagate_moments", Some(self.dust_propagate_moments)),
+      ("dust_propagate_mono", self.dust_propagate_mono),
+      ("dust_emit_mono", self.dust_emit_mono),
+      ("dust_specks_setup1", Some(self.dust_specks_setup[0])),
+      ("dust_specks_setup2a", Some(self.dust_specks_setup[1])),
+      ("dust_specks_setup2b", Some(self.dust_specks_setup[2])),
+      ("dust_specks_setup3", Some(self.dust_specks_setup[3])),
+      ("dust_specks_setup4", Some(self.dust_specks_setup[4])),
+      ("dust_specks_setup5", Some(self.dust_specks_setup[5])),
+      ("dust_specks_leaves", Some(self.dust_specks_leaves)),
+      ("dust_specks_leaves1", Some(self.dust_specks_leaves1)),
+      ("dust_specks_trace", Some(self.dust_specks_trace)),
+    ]
+    .into_iter()
+    .map(|(n, p)| (alloc::string::String::from(n), p))
+    .collect();
+    named.push((alloc::string::String::from("dust_splat_mono"), self.dust_splat_mono));
+    named.push((alloc::string::String::from("dust_splat_mono_prof"), self.dust_splat_mono_prof));
+    for (k, p) in self.dust_splat_stages.iter().enumerate() {
+      named.push((alloc::format!("dust_splat_st{k}"), Some(*p)));
+    }
+    if let Some(ps) = &self.dust_splat_prof_stages {
+      for (k, p) in ps.iter().enumerate() {
+        named.push((alloc::format!("dust_splat_prof_st{k}"), Some(*p)));
+      }
+    }
+    // the splitter family (perf9 steps Z / O) after the list
+    let named: alloc::vec::Vec<(alloc::string::String, Option<vk::Pipeline>)> = named
+      .into_iter()
+      .map(|(n, p)| (alloc::string::String::from(n), p))
+      .chain(
+        [
+          ("dust_split_prep", Some(self.dust_split_prep)),
+          ("dust_split_prep_prof", self.dust_split_prep_prof),
+          ("dust_split_hard", Some(self.dust_split_hard)),
+          ("dust_split_hard_prof", self.dust_split_hard_prof),
+          ("dust_split_seq", Some(self.dust_split_seq)),
+          ("dust_split_seq_prof", self.dust_split_seq_prof),
+          ("dust_split_seq_draw", Some(self.dust_split_seq_draw)),
+          ("dust_split_seq_draw_prof", self.dust_split_seq_draw_prof),
+          ("dust_project_leaf_p1", Some(self.dust_project_leaf_p1)),
+          ("dust_project_leaf_p2", Some(self.dust_project_leaf_p2)),
+          ("dust_project_leaf_p3", Some(self.dust_project_leaf_p3)),
+          ("dust_project_leaf_p1_prof", self.dust_project_leaf_p1_prof),
+          ("dust_project_leaf_p2_prof", self.dust_project_leaf_p2_prof),
+          ("dust_project_leaf_p3_prof", self.dust_project_leaf_p3_prof),
+          ("dust_draw_leaf", Some(self.dust_draw_leaf)),
+          ("dust_draw_leaf_prof", self.dust_draw_leaf_prof),
+          ("dust_draw_leaf_wg", Some(self.dust_draw_leaf_wg)),
+          ("dust_draw_leaf_wg_prof", self.dust_draw_leaf_wg_prof),
+        ]
+        .into_iter()
+        .map(|(n, p)| (alloc::string::String::from(n), p)),
+      )
+      .collect();
     let cstr = |a: &[core::ffi::c_char]| -> alloc::string::String {
       unsafe { core::ffi::CStr::from_ptr(a.as_ptr()) }.to_string_lossy().into_owned()
     };
@@ -819,6 +1342,8 @@ impl VulkanComputeKernels {
     has_shader_clock: bool,
     capture_statistics: bool,
     has_subgroup_arithmetic: bool,
+    staged_dust: bool,
+    volume_stages: bool,
   ) -> GpuResult<Self> {
     let pipelines = PhysicsPipelines::new(
       device,
@@ -830,6 +1355,8 @@ impl VulkanComputeKernels {
       has_shader_clock,
       capture_statistics,
       has_subgroup_arithmetic,
+      staged_dust,
+      volume_stages,
     )?;
 
     let mut timeline_info = vk::SemaphoreTypeCreateInfo::default()

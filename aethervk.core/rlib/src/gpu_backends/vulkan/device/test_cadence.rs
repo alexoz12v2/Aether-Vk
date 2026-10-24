@@ -2366,3 +2366,415 @@ fn cads_work_members_reads_the_cursors() {
   // a tier slot or class beyond the counts is not read
   assert_eq!(cads_work_members(&st, 1, 2, 2), ([120, 0, 0], [1500, 0, 0]));
 }
+
+// ── temporal reuse step 5, B2 (brief 07; records/budget-loop.md "Unfinished" 1): the GPU tests of
+// the budget loop's host wiring — the frame kind restores the full-draw biases, the target probe
+// splits the counters, the gate counters route through the frame, the loop moves its knobs in the
+// ladder's order on real timings. Every frame is recorded in `frame.rs`'s order
+// (`prepare_dust`): the loop's cadence knobs, the cadence begin with the salted fingerprint, the
+// frame kind, the cadence propagate, classify, chunks, the builds class by class each followed by
+// its target probe, the reprojection, the fresh splat, the timestamps the loop reads.
+
+/// The scene of one budget-test view: a tier `[first, first + live)` of system `id`, its frame,
+/// the viewport and the view flags (0: `DUST_VIEW_FLOW` would turn the cadence off)
+struct BudgetScene {
+  id: u64,
+  capacity: u32,
+  first: u32,
+  live: u32,
+  frame: DustFrame,
+  w: u32,
+  h: u32,
+}
+
+/// the view's host under its lock (`None` without the view); never held across a device call
+fn with_view_host<R>(device: &Device, pe: crate::gpu::PresentationEngineHandle, f: impl FnOnce(&mut crate::gpu_backends::vulkan::device::dust::DustViewHost) -> R) -> Option<R> {
+  let res = device.res.read();
+  let view = res.dust_manager.as_ref()?.views.get(&pe)?;
+  let mut host = view.host.lock();
+  Some(f(&mut host))
+}
+
+/// One cadenced frame of `sc` seen by `view`, recorded as `frame.rs` does. `after_begin` runs after
+/// the frame begin (the view exists then) and before the cadence's begin and the frame kind (the
+/// tests' hooks into the host: the loop, a forced full-draw regime). Returns the plan.
+fn budget_frame(
+  device: &Device,
+  pe: crate::gpu::PresentationEngineHandle,
+  sc: &BudgetScene,
+  view: cad::CadenceView,
+  fingerprint: u64,
+  after_begin: &dyn Fn(),
+) -> CadenceGpuPlan {
+  use crate::gpu_backends::vulkan::device::dust::{DUST_TS_BUILDS, DUST_TS_CADENCE, DUST_TS_CHUNKED, DUST_TS_PROPAGATED, DUST_TS_REPROJECTED, DUST_TS_SPLATS_DONE, DUST_TS_SPLATTED, PROBE_CLASSES};
+  let flow = dust::DustFlowUniform { t_hi: 1.0e8, t_lo: 0.0, speed: 1.0 };
+  let (id, capacity, first, live) = (sc.id, sc.capacity, sc.first, sc.live);
+  let mvp = view.mvp([0.0; 3]);
+  let e = view.eye_local([0.0; 3]);
+  let tier = CadenceTierInput { key: 0, system: id, ring_base: 0, first_slot: first, capacity, live_count: live, emitted: 1, rewritten_from: live, anchor_m: [0.0; 3] };
+  let mut plan = CadenceGpuPlan::default();
+  let mut cmds = device
+    .run_transient_commands(|cmd| {
+      device.cmd_dust_pre_propagate_barrier(cmd);
+      let v = device.cmd_dust_frame_begin(cmd, pe, [sc.w, sc.h], 0, flow)?;
+      after_begin();
+      device.cmd_dust_system_begin(id, 0, flow)?;
+      let salt = device.dust_budget_apply_cadence(pe);
+      let fm = cad::FrameMeta {
+        view,
+        t_now_s: sc.frame.t_now_s(),
+        speed: 0.0,
+        nucleus_m: [0.0; 3],
+        flags: 0,
+        fingerprint: fingerprint ^ salt.wrapping_mul(0x9E37_79B9_7F4A_7C15),
+        reused: false,
+        unit_now: v.unit,
+      };
+      plan = device.cmd_dust_cadence_begin(cmd, pe, &fm, &[tier], v.d_max_m)?;
+      let full = plan.reset.is_some() || plan.mode != Some(cad::CadenceMode::Run);
+      device.dust_budget_frame_kind(cmd, pe, full);
+      device.cmd_dust_timestamp(cmd, pe, DUST_TS_CADENCE);
+      let (render, moments) = device.cmd_dust_cadence_propagate(cmd, pe, id, 0, capacity, first, live, &sc.frame, 1)?;
+      device.cmd_dust_timestamp(cmd, pe, DUST_TS_PROPAGATED);
+      device.cmd_dust_pre_splat_barrier(cmd);
+      let pc = dust::DustSplatPushConstants {
+        moments: 0,
+        render: 0,
+        pyramid: 0,
+        live_count: live,
+        flags: 0,
+        exposure: 1.0,
+        inv_unit: if v.unit > 0.0 { 1.0 / v.unit } else { 0.0 },
+        color: dust::pack_color([1.0, 0.6, 0.2, 1.0]),
+        albedo: 0.04,
+        mvp,
+        eye_local: [e[0], e[1], e[2], 30.0 * 86400.0],
+      };
+      device.cmd_dust_cadence_classify(cmd, pe, 0, render, moments, mvp, pc.eye_local)?;
+      device.cmd_dust_cadence_chunks(cmd, pe, 0, render, moments)?;
+      device.cmd_dust_timestamp(cmd, pe, DUST_TS_CHUNKED);
+      let geom = plan.geom.clone();
+      let mut draws: alloc::vec::Vec<CadenceBuildDraw> = plan
+        .builds
+        .iter()
+        .map(|b| {
+          let mut pcb = pc;
+          pcb.mvp = match geom.as_ref() {
+            Some(g) => b.view.mvp_image([0.0; 3], g),
+            None => b.view.mvp([0.0; 3]),
+          };
+          let be = b.view.eye_local([0.0; 3]);
+          pcb.eye_local = [be[0], be[1], be[2], 30.0 * 86400.0];
+          pcb.inv_unit = if b.unit > 0.0 { 1.0 / b.unit } else { 0.0 };
+          CadenceBuildDraw { k: b.k, p: b.p, key: 0, system: id, ring_base: 0, first_slot: first, capacity, render, moments, pc: pcb }
+        })
+        .collect();
+      draws.sort_by_key(|d| (d.k, d.p));
+      for k in 0..PROBE_CLASSES {
+        let (lo, hi) = (draws.partition_point(|d| d.k < k), draws.partition_point(|d| d.k <= k));
+        device.cmd_dust_cadence_builds(cmd, pe, &draws[lo..hi])?;
+        device.cmd_dust_budget_probe(cmd, pe, k);
+      }
+      device.cmd_dust_timestamp(cmd, pe, DUST_TS_BUILDS);
+      device.cmd_dust_cadence_reproject(cmd, pe)?;
+      device.cmd_dust_timestamp(cmd, pe, DUST_TS_REPROJECTED);
+      device.cmd_dust_pre_splat_barrier(cmd);
+      device.cmd_dust_splat(cmd, pe, id, 0, first, capacity, render, moments, pc)?;
+      device.cmd_dust_timestamp(cmd, pe, DUST_TS_SPLATS_DONE);
+      device.cmd_dust_timestamp(cmd, pe, DUST_TS_SPLATTED);
+      device.cmd_dust_post_splat_barrier(cmd);
+      device.cmd_dust_cadence_end(cmd, pe)?;
+      device.cmd_dust_frame_end(cmd, pe)?;
+      device.cmd_dust_system_end(id)?;
+      Ok(())
+    })
+    .unwrap();
+  cmds.cleanup(&device.device);
+  plan
+}
+
+/// the small parity scene of the telemetry test: 1 024 clusters, the eye three cloud depths above
+/// them stepping laterally `step(f)` metres per frame at 320 × 200
+fn budget_small_scene(device: &Device, id: u64, capacity: u32, moments_buf: vk::Buffer) -> (BudgetScene, [f32; 3], [f64; 16], f64) {
+  let batch = test_batch(1024, 3600.0, 3, capacity, 0xC0FFEE);
+  emit(device, id, &batch, 0);
+  let first = batch.first_index & batch.ring_mask;
+  let live = batch.count;
+  let frame = frame_at(5.0);
+  let mut cmds = device
+    .run_transient_commands(|cmd| {
+      device.cmd_dust_pre_propagate_barrier(cmd);
+      device.cmd_dust_propagate(cmd, id, 0, capacity, first, live, &frame)?;
+      Ok(())
+    })
+    .unwrap();
+  cmds.cleanup(&device.device);
+  let m0: alloc::vec::Vec<dust::DustMoments> = records(device, moments_buf, first, live, capacity);
+  let (eye, _) = eye_above(&m0, 3.0);
+  let (w, h) = (320u32, 200u32);
+  let rel = camera(eye, w, h).1;
+  let mut proj = [0.0f64; 16];
+  for i in 0..16 {
+    proj[i] = rel[i] as f64;
+  }
+  let f_px = 0.5 * h as f32 / 30.0f32.to_radians().tan();
+  let d = eye[2] - eye_above(&m0, 0.0).0[2];
+  let step = (d / (40.0 * f_px)).max(1.0e-3) as f64;
+  (BudgetScene { id, capacity, first, live, frame, w, h }, eye, proj, step)
+}
+
+fn budget_small_view(eye: [f32; 3], proj: [f64; 16], dx: f64, w: u32, h: u32) -> cad::CadenceView {
+  cad::CadenceView {
+    view_rot: [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+    proj,
+    eye_m: [eye[0] as f64 + dx, eye[1] as f64, eye[2] as f64],
+    units_per_m: 1.0,
+    width: w,
+    height: h,
+  }
+}
+
+/// The header word [`dust::PYR_SPLIT_DEPTH`]'s feedback fields: split depth (bits 0–7), volume
+/// bias (8–15), EWA bias (18–21)
+fn budget_bias_bits(w: u32) -> (u32, u32, u32) {
+  (w & 0xFF, (w >> 8) & 0xFF, (w >> 18) & 0xF)
+}
+
+/// A frame the cadence draws in full (a reset) begins with the full-draw regime's biases
+/// (`Device::dust_budget_frame_kind`, brief 07's two regimes): after twelve cadenced frames, the
+/// full regime is set by hand to values distinct from the cadenced regime's (the hook runs after
+/// the frame begin, which wrote the cadenced biases into the header), the next frame changes the
+/// fingerprint (a reset): its header carries the forced full-draw split depth / volume / EWA bias,
+/// and the restore count rises by exactly one; the cadenced frame before it was a `Run` frame that
+/// restored nothing. (With `AETHERVK_DUST_VOLUME_BIAS`, `_EWA_BIAS` or `_SPLIT_DEPTH` set the
+/// pinned fields keep theirs: the test then skips those fields, printed.)
+#[test]
+fn gpu_dust_reset_frame_restores_the_full_draw_biases() {
+  let id = 9040u64;
+  with_device(id, |device, capacity, _render_buf, moments_buf| {
+    let (sc, eye, proj, step) = budget_small_scene(device, id, capacity, moments_buf);
+    let pe = crate::gpu::PresentationEngineHandle(u64::MAX - 40);
+    device.dust_cadence_enable(pe, Some(cad::CadenceConfig::full())).unwrap();
+    let mut last = CadenceGpuPlan::default();
+    for f in 0..12u32 {
+      let before = with_view_host(device, pe, |h| h.restored).unwrap_or(0);
+      last = budget_frame(device, pe, &sc, budget_small_view(eye, proj, f as f64 * step, sc.w, sc.h), 0, &|| {});
+      let after = with_view_host(device, pe, |h| h.restored).unwrap_or(0);
+      std::println!("[budget gpu] restore f{f}: mode {:?} reset {:?}, restored {before} → {after}", last.mode, last.reset);
+    }
+    let restored_before = with_view_host(device, pe, |h| h.restored).unwrap();
+    assert_eq!(last.mode, Some(cad::CadenceMode::Run), "frame 11 must be a cadenced (Run) frame");
+    // the forced full-draw regime: every field distinct from the cadenced regime's
+    let cad_now = with_view_host(device, pe, |h| h.fb_cad.unwrap_or(h.fb_full)).unwrap();
+    let forced = crate::gpu_backends::vulkan::device::dust::FeedbackSet {
+      split_depth: if cad_now.split_depth == dust::DUST_SPLIT_DEPTH_MAX { dust::DUST_SPLIT_DEPTH_MAX - 1 } else { dust::DUST_SPLIT_DEPTH_MAX },
+      volume_bias: (cad_now.volume_bias + 3) % (dust::DUST_VOLUME_BIAS_MAX + 1),
+      ewa_bias: (cad_now.ewa_bias + 2) % (dust::DUST_EWA_BIAS_MAX + 1),
+      ..cad_now
+    };
+    let plan = budget_frame(device, pe, &sc, budget_small_view(eye, proj, 12.0 * step, sc.w, sc.h), 1, &|| {
+      with_view_host(device, pe, |h| h.fb_full = forced);
+    });
+    let restored_after = with_view_host(device, pe, |h| h.restored).unwrap();
+    let pyr = device.download_dust_pyramid(pe).unwrap();
+    let got = budget_bias_bits(pyr[dust::PYR_SPLIT_DEPTH as usize]);
+    let pinned = |k: &str| aethervk_oshal_rlib::os::env::var(k).is_some();
+    std::println!(
+      "[budget gpu] reset frame: reset {:?} mode {:?}; cadenced regime (depth, volume, EWA) ({}, {}, {}), forced full ({}, {}, {}), header ({}, {}, {}); restored {restored_before} → {restored_after}",
+      plan.reset, plan.mode, cad_now.split_depth, cad_now.volume_bias, cad_now.ewa_bias, forced.split_depth, forced.volume_bias, forced.ewa_bias, got.0, got.1, got.2
+    );
+    assert_eq!(plan.reset, Some(cad::CadenceReset::Fingerprint), "the changed fingerprint resets the cadence");
+    if !pinned("AETHERVK_DUST_SPLIT_DEPTH") {
+      assert_eq!(got.0, forced.split_depth, "the reset frame's split depth is the full regime's");
+    }
+    if !pinned("AETHERVK_DUST_VOLUME_BIAS") {
+      assert_eq!(got.1, forced.volume_bias, "the reset frame's volume bias is the full regime's");
+    }
+    if !pinned("AETHERVK_DUST_EWA_BIAS") {
+      assert_eq!(got.2, forced.ewa_bias, "the reset frame's EWA bias is the full regime's");
+    }
+    assert_eq!(restored_after, restored_before + 1, "one restore for the one reset frame");
+    device.dust_cadence_enable(pe, None).unwrap();
+  });
+}
+
+/// The target probe splits a cadenced frame's counters (`cmd_dust_budget_probe`, `TargetCounters`)
+/// and the gate counters run through the frame (the builds' headers routed in and out,
+/// `CAD_ROUTED_WORDS`): over 64 frames of the stepping parity scene (one class of 8 frames in two phases), every readback's class
+/// probes are cumulative (no class's difference wraps, Σ by class = builds), the builds never
+/// exceed the frame's total (fresh = total − builds does not wrap), and at least one cadenced
+/// readback has build work on a counter (non-vacuity: with the builds counting into their own
+/// headers only, the probes would read 0 and fresh would equal the total). Printed per readback:
+/// the regime, builds, fresh, by class.
+#[test]
+fn gpu_dust_budget_probe_splits_the_counters() {
+  let id = 9041u64;
+  with_device(id, |device, capacity, _render_buf, moments_buf| {
+    let (sc, eye, proj, step) = budget_small_scene(device, id, capacity, moments_buf);
+    let pe = crate::gpu::PresentationEngineHandle(u64::MAX - 41);
+    // one class of 8 frames in two phases (perf9_T fix 1): with `full()` a near-still eye folds
+    // every cluster into class 16 / 64, first classified at frame 16..64, and the builds came too late
+    let cfg = cad::CadenceConfig { classes: alloc::vec![8], phases: 2, eps_px: 1.0, margin_frac: 0.2, retain: true, handover: true, light_tol: 0.0 };
+    device.dust_cadence_enable(pe, Some(cfg)).unwrap();
+    let mut with_builds = 0usize;
+    let mut readbacks = 0usize;
+    let mut built_frames = 0usize;
+    for f in 0..64u32 {
+      let plan = budget_frame(device, pe, &sc, budget_small_view(eye, proj, f as f64 * step, sc.w, sc.h), 0, &|| {});
+      built_frames += (!plan.builds.is_empty()) as usize;
+      let (regime, targets) = with_view_host(device, pe, |h| (h.last_regime, h.targets)).unwrap();
+      let Some(t) = targets else { continue };
+      readbacks += 1;
+      std::println!("[budget gpu] probe f{f}: regime {regime}, builds {:?}, fresh {:?}, by class {:?}", t.builds, t.fresh, t.by_class);
+      for i in 0..3 {
+        let sum: u64 = t.by_class.iter().map(|c| c[i] as u64).sum();
+        assert!(t.by_class.iter().all(|c| c[i] < 1 << 31), "f{f} counter {i}: a class probe went backwards (wrapped): {:?}", t.by_class);
+        assert_eq!(sum, t.builds[i] as u64, "f{f} counter {i}: Σ by class ≠ builds");
+        assert!(t.fresh[i] < 1 << 31, "f{f} counter {i}: the builds {} exceed the frame's total (fresh wrapped to {})", t.builds[i], t.fresh[i]);
+      }
+      with_builds += (regime == 1 && t.builds.iter().any(|&b| b > 0)) as usize;
+    }
+    std::println!("[budget gpu] probe: {readbacks} readbacks with a probe, {with_builds} cadenced with build work; {built_frames} frames recorded builds");
+    assert!(built_frames > 0, "the scene never built a class image");
+    assert!(readbacks > 0, "no readback carried the target probe");
+    assert!(with_builds > 0, "no cadenced readback counted build work: the builds' counters did not reach the frame");
+    device.dust_cadence_enable(pe, None).unwrap();
+  });
+}
+
+/// The budget loop on real timings: a full ring (every slot emitted, mixed ages, as
+/// `dust_frame_fits_the_budget`) seen from inside the dust (200 m from the nucleus) at 1280 × 800,
+/// paused (Δt 0), the eye orbiting the nucleus `orbit_deg` per frame; the cadence with the loop (set
+/// on the view's host after its first frame, as `AETHERVK_DUST_CADENCE=1` does, without the env).
+/// Every frame the loop's knobs obey the ladder's order (both ways): lod above its default only
+/// with ε at its ceiling, a budget shift only with lod at its ceiling, the fallback only at the
+/// last budget shift, an N level only under the fallback. Returns the last drawn frame's GPU total
+/// and the telemetry; prints the telemetry's lines every 25 frames.
+fn budget_loop_run(tag: &str, id: u64, pe_off: u64, orbit_deg: f64, frames: u32) -> (f64, crate::gpu_backends::vulkan::device::dust::DustBudgetTelemetry) {
+  use crate::scene::dust::cadence::{BudgetLoop, BudgetPins, DUST_BUDGET_SHIFT_MAX, DUST_CADENCE_EPS_MAX};
+  use crate::scene::dust::{DUST_LOD_PX_DEFAULT, DUST_LOD_PX_MAX};
+  let mut out = (f64::NAN, crate::gpu_backends::vulkan::device::dust::DustBudgetTelemetry::default());
+  with_device(id, |device, capacity, _, _| {
+    if device.query_result.graphics_timestamp_bits == 0 {
+      std::println!("[budget gpu] {tag}: the graphics queue has no timestamps: skipped");
+      return;
+    }
+    let per = 4096u32;
+    let (mut emitted, mut seq) = (0u32, 0u64);
+    while emitted < capacity {
+      let n = per.min(capacity - emitted);
+      let batch = test_batch(n, 3600.0 * (1.0 + (seq % 7) as f64), emitted, capacity, 0xB0D6 ^ seq as u32);
+      emit(device, id, &batch, seq);
+      emitted += n;
+      seq += 1;
+    }
+    let sc = BudgetScene { id, capacity, first: 0, live: capacity, frame: frame_at(5.0), w: 1280, h: 800 };
+    let rel = camera([0.0; 3], sc.w, sc.h).1;
+    let mut proj = [0.0f64; 16];
+    for i in 0..16 {
+      proj[i] = rel[i] as f64;
+    }
+    let d = 200.0f64;
+    let pe = crate::gpu::PresentationEngineHandle(u64::MAX - pe_off);
+    device.dust_cadence_enable(pe, Some(cad::CadenceConfig::full())).unwrap();
+    let budget_ms = crate::scene::dust::cadence::DUST_BUDGET_MS_DEFAULT;
+    let mut moves_seen = 0u32;
+    for f in 0..frames {
+      let th = orbit_deg * f as f64;
+      let (s, c) = th.to_radians().sin_cos();
+      let view = cad::CadenceView { view_rot: yaw4(-th), proj, eye_m: [d * s, 0.0, d * c], units_per_m: 1.0, width: sc.w, height: sc.h };
+      budget_frame(device, pe, &sc, view, 0, &|| {
+        with_view_host(device, pe, |h| {
+          if h.budget.is_none() {
+            h.budget = Some(BudgetLoop::new(budget_ms, BudgetPins::default()));
+          }
+        });
+      });
+      let tel = device.dust_budget_telemetry(pe).expect("the view's telemetry");
+      if let Some(k) = tel.knobs {
+        let at = |what: &str| alloc::format!("{tag} f{f}: {what} out of the ladder's order: {k:?}");
+        assert!(k.lod_px <= DUST_LOD_PX_DEFAULT || k.eps_px >= DUST_CADENCE_EPS_MAX, "{}", at("lod"));
+        assert!(k.budget_shift == 0 || k.lod_px >= DUST_LOD_PX_MAX, "{}", at("budget shift"));
+        assert!(!k.fallback || k.budget_shift == DUST_BUDGET_SHIFT_MAX, "{}", at("fallback"));
+        assert!(k.n_level == 0 || k.fallback, "{}", at("N level"));
+      }
+      if tel.moves != moves_seen || f % 25 == 0 || f + 1 == frames {
+        moves_seen = tel.moves;
+        for l in tel.lines() {
+          std::println!("[budget gpu] {tag} f{f}: {l}");
+        }
+      }
+      out.1 = tel;
+    }
+    let t = device.dust_gpu_timings_drawn(pe).expect("no dust GPU timings");
+    out.0 = t.total_ms;
+    std::println!(
+      "[budget gpu] {tag}: {capacity} clusters at {}x{}, {frames} frames: total {:.2} ms (propagate {:.2}, cadence {:.2}, classify {:.2}, builds {:.2}, reproject {:.2}, fresh splat {:.2}, measure {:.2}) against {budget_ms} ms; loop {} rung {}/{} moves {}, knobs {:?}, K {:?}",
+      sc.w, sc.h, t.total_ms, t.propagate_ms, t.cadence_ms, t.classify_ms, t.builds_ms, t.reproject_ms, t.splat_only_ms, t.measure_ms,
+      out.1.state, out.1.rung, out.1.rungs, out.1.moves, out.1.knobs, out.1.k_target
+    );
+    device.dust_cadence_enable(pe, None).unwrap();
+  });
+  out
+}
+
+/// The budget loop's verdict run (brief 07): paused and orbiting (10°/s at 60 fps), 240 frames
+/// each, the ladder's order asserted every frame (`budget_loop_run`); a frame over the budget at
+/// the end must have moved the loop (moves ≥ 1). The verdict line per case: fits, or over at the
+/// state the loop reached (the "saturated" state is the brief's verdict: the next plan is the
+/// per-packet price, not more knobs).
+#[test]
+fn gpu_dust_budget_loop_keeps_the_ladder_order() {
+  for (tag, id, pe_off, orbit) in [("paused", 9042u64, 42u64, 0.0f64), ("orbit 10°/s", 9043, 43, 10.0 / 60.0)] {
+    let (ms, tel) = budget_loop_run(tag, id, pe_off, orbit, 240);
+    if ms.is_nan() {
+      continue;
+    }
+    let over = ms > tel.budget_ms;
+    std::println!(
+      "[budget gpu] verdict {tag}: {:.2} ms against {} ms: {}",
+      ms,
+      tel.budget_ms,
+      if !over { "fits".into() } else { alloc::format!("over, loop {} after {} moves", tel.state, tel.moves) }
+    );
+    assert!(tel.knobs.is_some(), "{tag}: the budget loop is not running");
+    assert!(!over || tel.moves >= 1, "{tag}: {ms:.2} ms over the budget and the loop never moved");
+  }
+}
+
+/// The dust frame fits `test_dust::DUST_FRAME_BUDGET_MS` with the cadence and the
+/// budget loop, paused and orbiting at 1280 × 800 (brief 07's un-ignored case; 600 frames each:
+/// the ladder's ≤ 36 moves × 7 frames and two cycles of the longest class). Ignored like
+/// `dust_frame_fits_the_budget`: the loop saturates at 172–179 ms (2026-10-19, CP2 budget runs).
+#[test]
+#[ignore = "the cadenced dust frame saturates the budget loop at 172–179 ms against 8 ms (2026-10-19): the per-packet price is the next plan"]
+fn dust_frame_fits_the_budget_with_the_cadence() {
+  for (tag, id, pe_off, orbit) in [("paused", 9044u64, 44u64, 0.0f64), ("orbit 10°/s", 9045, 45, 10.0 / 60.0)] {
+    let (ms, tel) = budget_loop_run(tag, id, pe_off, orbit, 600);
+    if ms.is_nan() {
+      continue;
+    }
+    assert!(ms <= tel.budget_ms, "{tag}: the cadenced dust frame costs {ms:.2} ms, over the {} ms budget (loop {})", tel.budget_ms, tel.state);
+  }
+}
+
+/// The in-frame gates per target (brief 07, decided 2026-10-18 in records/budget-loop.md): the hard
+/// gates read the frame's running counters across both targets because the build draws' headers
+/// route the gate counters frame → image → frame. The routed ranges hold every probed counter
+/// (split children, EWA texels, volume evaluations) and the gate word (`PYR_SPLIT_DEPTH`, its
+/// gates-off bit) and none of the image's own words (geometry, level table, τ_max, level mask,
+/// unit, owner address).
+#[test]
+fn the_gate_counters_route_through_the_frame() {
+  let routed = |w: u32| CAD_ROUTED_WORDS.iter().any(|&(lo, hi)| (lo..hi).contains(&w));
+  for w in crate::gpu_backends::vulkan::device::dust::DUST_PROBE_HEADER_WORDS {
+    assert!(routed(w), "probed counter word {w} is not routed through the frame");
+  }
+  assert!(routed(dust::PYR_SPLIT_DEPTH), "the gate word is not routed");
+  for w in [dust::PYR_TAU_MAX, dust::PYR_LEVEL_MASK, dust::PYR_UNIT, 58] {
+    assert!(!routed(w), "the image's own word {w} is routed");
+  }
+  for w in (0..=2).chain(16..=57) {
+    assert!(!routed(w), "geometry word {w} is routed");
+  }
+}
