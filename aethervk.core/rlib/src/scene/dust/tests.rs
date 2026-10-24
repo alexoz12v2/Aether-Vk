@@ -2559,7 +2559,7 @@ fn volume_detail_clamps_to_powers_of_two_and_round_trips_through_the_flags() {
   }
   assert_eq!(volume_detail_flag_bits(DUST_VOLUME_DETAIL_DEFAULT), 0);
   // the temporal reuse tolerance: 0 stays off, the rest snaps down to a power of two ≤ the max
-  assert_eq!(DUST_REUSE_PX_DEFAULT, 0);
+  assert_eq!(DUST_REUSE_PX_DEFAULT, 16);
   for (v, c) in [(0, 0), (1, 1), (2, 2), (3, 2), (5, 4), (8, 8), (15, 8), (16, 16), (17, 16), (u32::MAX, 16)] {
     assert_eq!(clamp_reuse_px(v), c.min(DUST_REUSE_PX_MAX), "reuse {v}");
   }

@@ -78,8 +78,8 @@ public partial class ParticleRenderingViewModel : ObservableObject
     return p;
   }
 
-  /// <summary>Default reuse tolerance (off: every frame drawn fresh, today's image).</summary>
-  public const int ReuseToleranceDefault = 0;
+  /// <summary>Default reuse tolerance: 16 px (round 9 step R; Off draws every frame fresh).</summary>
+  public const int ReuseToleranceDefault = 16;
   public const int ReuseToleranceMax = 16;
 
   /// <summary>The reuse picker's steps in pixels, off first (more reuse: faster, coarser).</summary>

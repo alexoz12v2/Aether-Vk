@@ -105,26 +105,26 @@ public class ParticleRenderingViewTests
 
     var picker = section.GetLogicalDescendants().OfType<ComboBox>().Single(c => c.Name == "ReuseTolerancePicker");
     Assert.Equal(6, picker.ItemCount);
-    Assert.Equal(0, picker.SelectedIndex);
+    Assert.Equal(5, picker.SelectedIndex); // the default, 16 px
     Assert.Equal("Off", picker.Items[0]);
     Assert.Equal("16 px", picker.Items[5]);
-    Assert.Equal(0, vm.ParticleRendering.ReuseTolerance);
+    Assert.Equal(16, vm.ParticleRendering.ReuseTolerance);
 
     picker.SelectedIndex = 3;
     Dispatcher.UIThread.RunJobs();
     Assert.Equal(4, vm.ParticleRendering.ReuseTolerance);
     Assert.Equal(16, vm.ParticleRendering.VolumeDetail);
 
-    vm.ParticleRendering.ReuseTolerance = 16;
+    vm.ParticleRendering.ReuseTolerance = 8;
     Dispatcher.UIThread.RunJobs();
-    Assert.Equal(5, picker.SelectedIndex);
+    Assert.Equal(4, picker.SelectedIndex);
 
     // a culture change relabels the off item and keeps the selection
     vm.ParticleRendering.ReuseToleranceOffLabel = "Disattivato";
     Dispatcher.UIThread.RunJobs();
     Assert.Equal("Disattivato", picker.Items[0]);
-    Assert.Equal(5, picker.SelectedIndex);
-    Assert.Equal(16, vm.ParticleRendering.ReuseTolerance);
+    Assert.Equal(4, picker.SelectedIndex);
+    Assert.Equal(8, vm.ParticleRendering.ReuseTolerance);
     window.Close();
   }
 }
