@@ -297,16 +297,16 @@ public sealed class ParticleRenderingViewModelTests : IDisposable
       Assert.Equal(px, ParticleRenderingViewModel.ClampReuseTolerance(px));
   }
 
-  /// <summary>No stored value: off (every frame drawn fresh), and building the section sends nothing
-  /// (the app pushes the stored value at startup).</summary>
+  /// <summary>No stored value: the default 16 px (temporal reuse on, round 9), and building the
+  /// section sends nothing (the app pushes the stored value at startup).</summary>
   [Fact]
-  public void ReuseTolerance_DefaultsToOff_AndConstructionSendsNothing()
+  public void ReuseTolerance_DefaultsTo16_AndConstructionSendsNothing()
   {
     var (vm, runtime, prefs) = Build();
     Assert.Equal(ParticleRenderingViewModel.ReuseToleranceDefault, vm.ReuseTolerance);
-    Assert.Equal(0, vm.ReuseTolerance);
-    Assert.Equal(0, vm.ReuseToleranceIndex);
-    Assert.Equal(0, prefs.DustReuseTolerance);
+    Assert.Equal(16, vm.ReuseTolerance);
+    Assert.Equal(5, vm.ReuseToleranceIndex);
+    Assert.Equal(16, prefs.DustReuseTolerance);
     Assert.Equal(new[] { "Off", "1 px", "2 px", "4 px", "8 px", "16 px" }, vm.ReuseToleranceOptions);
     runtime.Verify(r => r.SetDustReuseTolerance(It.IsAny<int>()), Times.Never);
   }
@@ -371,16 +371,17 @@ public sealed class ParticleRenderingViewModelTests : IDisposable
     runtime2.Verify(r => r.SetDustReuseTolerance(It.IsAny<int>()), Times.Never);
   }
 
-  /// <summary>A file without the key (written before the setting) means off; a hand-edited value
-  /// off the steps clamps, a negative one is off.</summary>
+  /// <summary>A file without the key (written before the setting) means the default 16 px; a
+  /// hand-edited value off the steps clamps, a negative one is off.</summary>
   [Fact]
-  public void ReuseTolerance_MissingKeyMeansOff_AndAnOffStepValueClamps()
+  public void ReuseTolerance_MissingKeyMeansTheDefault_AndAnOffStepValueClamps()
   {
     Directory.CreateDirectory(_dir);
     File.WriteAllText(PrefsPath, "{\"format_version\": 1, \"theme\": \"dark\"}");
     var p = LoadPrefs();
     Assert.Equal("loaded", p.LoadOutcome);
-    Assert.Equal(0, p.DustReuseTolerance);
+    Assert.Equal(ParticleRenderingViewModel.ReuseToleranceDefault, p.DustReuseTolerance);
+    Assert.Equal(16, p.DustReuseTolerance);
 
     File.WriteAllText(PrefsPath, "{\"format_version\": 1, \"dust_reuse_px\": 5}");
     var p2 = LoadPrefs();

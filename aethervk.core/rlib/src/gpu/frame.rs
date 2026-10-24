@@ -1586,7 +1586,7 @@ fn dust_cadence_fingerprint(render_scene: &RenderScene, flags: u32) -> u64 {
 /// The cadence's frame begin from the render scene: the view (the first dust layer's camera, the
 /// first call's eye and units: the x, y, w clip rows every layer shares), the nucleus (the scene's,
 /// else the first tier's anchor: the nucleus centre at its tick), the tiers with their rewritten
-/// offsets, the speed 0 (no simulation speed reaches the renderer yet: step 5)
+/// offsets, the scene's simulation speed (`RenderScene::dust_sim_speed`)
 fn dust_cadence_begin(
   device: &crate::gpu_backends::vulkan::device::Device,
   cmd: ash::vk::CommandBuffer,
@@ -1612,7 +1612,7 @@ fn dust_cadence_begin(
   let fm = crate::scene::dust::cadence::FrameMeta {
     view: cv,
     t_now_s: call0.state.frame.t_now_s(),
-    speed: 0.0,
+    speed: render_scene.dust_sim_speed,
     nucleus_m: call0.nucleus_m.unwrap_or(call0.state.anchor_m),
     flags,
     // (the budget loop's salt: 0 unless the fallback changed a class length)
@@ -1835,6 +1835,9 @@ pub struct RenderScene {
   /// dust temporal reuse tolerance of the scene in px (`SceneContext::dust_reuse_px`, 0 = off):
   /// ε > 0 runs the view's cadence with that ε (`Device::dust_cadence_auto`)
   pub dust_reuse_px: u32,
+  /// the simulation speed (`SimSpeed::scale_factor`, 0 paused) the frame is drawn at, for the
+  /// cadence's speed reset (`FrameMeta::speed`, round 9 step R)
+  pub dust_sim_speed: f64,
   /// dust trajectory detail of the scene (`SceneContext::dust_propagate_detail`: 17 / 9 / 5
   /// solved size-polyline edges), stamped on the device before the propagates (`prepare_dust`)
   pub dust_propagate_detail: u32,
@@ -1871,6 +1874,7 @@ impl RenderScene {
       dust_volume_detail: crate::scene::dust::DUST_VOLUME_DETAIL_DEFAULT,
       dust_haze_detail: crate::scene::dust::DUST_HAZE_DETAIL_DEFAULT,
       dust_reuse_px: crate::scene::dust::dust_reuse_px_default(),
+      dust_sim_speed: 0.0,
       dust_propagate_detail: crate::scene::dust::DUST_PROPAGATE_DETAIL_DEFAULT,
       dust_view_flags: 0,
       dust_flow: Default::default(),

@@ -267,10 +267,11 @@ pub fn propagate_stride_from_skip(skip0: u32) -> u32 {
 }
 
 /// Default "temporal reuse tolerance" (Settings › Particle rendering), in px: 0 = off, every
-/// frame drawn fresh (today's image). A value ε > 0 runs the cadence (`dust::cadence`): clusters
-/// whose on-screen motion over their class's window stays within ε px are reused from a class
-/// image instead of drawn again. Faster, with reuse errors up to ε px.
-pub const DUST_REUSE_PX_DEFAULT: u32 = 0;
+/// frame drawn fresh. A value ε > 0 runs the cadence (`dust::cadence`): clusters whose on-screen
+/// motion over their class's window stays within ε px are reused from a class image instead of
+/// drawn again. Faster, with reuse errors up to ε px. On by default at 16 px since round 9 step R
+/// (2026-10-24: exact at 1 d/s, 4–6× faster paused / at 1 min/s near the nucleus, tile L1 ≤ 2e-4).
+pub const DUST_REUSE_PX_DEFAULT: u32 = 16;
 /// Largest accepted temporal reuse tolerance (px); the steps are 0 and the powers of two up to it
 pub const DUST_REUSE_PX_MAX: u32 = 16;
 

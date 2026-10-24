@@ -305,6 +305,7 @@ impl SceneConversionExt2 for Scene {
       dust_haze_detail: crate::scene::dust::DUST_HAZE_DETAIL_DEFAULT,
       dust_propagate_detail: crate::scene::dust::DUST_PROPAGATE_DETAIL_DEFAULT,
       dust_reuse_px: crate::scene::dust::dust_reuse_px_default(),
+      dust_sim_speed: 0.0,
       dust_view_flags: 0,
       dust_flow: Default::default(),
       dust_view: Default::default(),
