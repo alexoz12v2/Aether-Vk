@@ -24,6 +24,8 @@
 // draw lists, blocks), the params of the frame, the view's state (its address in the params).
 #version 450 core
 #extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_control_flow_attributes : require
+#define DUST_CAD_STAGES 1
 #include "dust_common.glsl"
 #include "dust_cadence.glsl"
 
@@ -50,10 +52,463 @@ const uint DUST_CADM_CHUNK = 4u;
 const uint DUST_CADM_CLEAR = 5u;
 const uint DUST_CADM_DEBUG = 6u;
 const uint DUST_CAD_DEBUG_WORDS = 8u;
+// perf9_O: the slot's evaluation in stage dispatches (dust_cadence.glsl's DUST_CADR_* rows), in
+// this order, a barrier between: PREP (CLASSIFY) or PREP_DEBUG (DEBUG), LAM, SHELL, EXTENT, NEAR,
+// JAC, STEP, RATE, FOOT; then CLASSIFY or DEBUG reads the row. CHUNK_FOOT before CHUNK: the
+// footprint rule of the chunk's entries into their draw-list words
+const uint DUST_CADM_PREP = 7u;
+const uint DUST_CADM_PREP_DEBUG = 8u;
+const uint DUST_CADM_LAM = 9u;
+const uint DUST_CADM_SHELL = 10u;
+const uint DUST_CADM_EXTENT = 11u;
+const uint DUST_CADM_NEAR = 12u;
+const uint DUST_CADM_JAC = 13u;
+const uint DUST_CADM_STEP = 14u;
+const uint DUST_CADM_RATE = 15u;
+const uint DUST_CADM_FOOT = 16u;
+const uint DUST_CADM_CHUNK_FOOT = 17u;
+const uint DUST_CADR_F_DEBUG = 1024u;   // PREP_DEBUG's row: the footprint whenever lit
+
+// CLASSIFY's pair filter (cadence::finish F2b): the motion budget, the phase, the membership and
+// the handover (rule b: a member of a faster class taken as incoming, or re-taken as incoming once
+// its faster class let go before the collapse; no owner membership while an incoming one exists)
+bool dust_cad_eligible(uint nb, uint nib, uint k, uint pp, uint s, uint np, uint admit, bool handover, uvec2 prm,
+                       out uint cls, out uint icls, out bool asInc) {
+    cls = nb & DUST_OWN_CLASS_MASK;
+    icls = nib & DUST_OWN_CLASS_MASK;
+    asInc = false;
+    // a class over its motion budget is not classified (cadence::finish F2b)
+    if (((admit >> k) & 1u) == 0u) return false;
+    if (np == 2u && (s & 1u) != pp) return false;
+    asInc = handover && (icls == 0u || icls == k + 1u) && (nib & DUST_OWN_PENDING) == 0u
+          && ((cls != 0u && cls != k + 1u && DustUintBuffer(prm).v[DUST_CADP_N + cls - 1u] < DustUintBuffer(prm).v[DUST_CADP_N + k])
+              || (cls == 0u && icls == k + 1u));
+    if (!asInc && ((cls != 0u && cls != k + 1u) || (nb & DUST_OWN_PENDING) != 0u || (cls == 0u && icls != 0u))) return false;
+    return true;
+}
 
 shared uint s_hist0, s_hist1, s_hist2, s_hist3, s_shell, s_d3, s_unshifted;
 // the telemetry's fresh and SHOWN counts (MARK_FRESH)
 shared uint s_fresh, s_shown0, s_shown1, s_shown2, s_shown3, s_shown4, s_shown5;
+
+// perf9_O: the tier's words, read where a mode uses them (nothing uniform is live across the modes:
+// GCN's register counts are the whole program's maximum), and one function per mode, main an
+// if/else chain over them, so a mode's early returns end its own function (lowered returns nest
+// no later mode under their exec masks)
+#define prm uvec2(uvec2(pc.params))
+#define st (uvec2(pc.params.v[DUST_CADP_STATE], pc.params.v[DUST_CADP_STATE + 1u]))
+#define R (pc.params.v[DUST_CADP_TIER0 + DUST_CADP_TIER_WORDS * (pc.tierMode & 0xFFu) + 4u])
+#define nc (pc.params.v[DUST_CADP_NC])
+#define np (pc.params.v[DUST_CADP_NP])
+#define rb (pc.params.v[DUST_CADP_TIER0 + DUST_CADP_TIER_WORDS * (pc.tierMode & 0xFFu)])
+#define cap (pc.params.v[DUST_CADP_TIER0 + DUST_CADP_TIER_WORDS * (pc.tierMode & 0xFFu) + 1u])
+#define eye (pc.eyeLocal.xyz)
+// the row of live offset o (dust_cadence.glsl's DUST_CADR_*)
+uint dust_cls_rw(uint o) { return dust_cad_rows0(R, nc, np) + (rb + ((pc.firstSlot + o) & pc.ringMask)) * DUST_CADR_WORDS; }
+
+// CLASSIFY: the pairs, the slot's pair-independent values from its row (the stage modes before),
+// its flag word read where a pair needs it, the params at their use
+void dust_cls_classify(uint gid, uint lane, uint t) {
+    if (lane == 0u) { s_hist0 = 0u; s_hist1 = 0u; s_hist2 = 0u; s_hist3 = 0u; s_shell = 0u; s_d3 = 0u; s_unshifted = 0u; }
+    barrier();
+    uint o = gid;
+    if (o < pc.liveCount) {
+        uint s = (pc.firstSlot + o) & pc.ringMask;
+        uint rw = dust_cls_rw(o);
+        uint inc0 = dust_cad_inc0(R, nc, np);
+        uint nb = dust_own_get(uvec2(pc.sys), rb + s);
+        uint nib = dust_inc_get(uvec2(pc.sys), inc0, rb + s);
+        // the lane's counts (the histogram's eligible pairs, the shell, the unshifted, D3: a byte
+        // each, at most 6 pairs) added to the group's after the loop: integer sums, the same totals
+        uint cnt = 0u;
+        for (uint j = 0u; j < DustUintBuffer(prm).v[DUST_CADP_NSWAP]; ++j) {
+            uint code = DustUintBuffer(prm).v[DUST_CADP_SWAP0 + j];
+            uint k = code & 0xFFu, pp = code >> 8u;
+            bool handover = (DustUintBuffer(prm).v[DUST_CADP_FLAGS] & DUST_CADF_HANDOVER) != 0u;
+            uint cls, icls;
+            bool asInc;
+            if (!dust_cad_eligible(nb, nib, k, pp, s, np, DustUintBuffer(prm).v[DUST_CADP_ADMIT], handover, prm, cls, icls, asInc)) continue;
+            uint fl = pc.sys.v[rw + 4u];
+            // (k-independent: the CPU skips the slot in every pair)
+            if ((fl & DUST_CADR_F_OK) == 0u) break;
+            if ((fl & DUST_CADR_F_SHIFTED) == 0u) cnt += 1u << 16u;
+            if ((fl & DUST_CADR_F_SHELL) != 0u) { cnt += 1u << 8u; continue; }
+            int target = int((fl >> 16u) & 0xFu) - 1;
+            // retention (cadence::finish F2b): a member of class k whose target is a slower
+            // class stays in k (per pair: the target is k-independent, the owner is not)
+            int tk = target;
+            if (handover && cls == k + 1u && icls != 0u) {
+                // the handover (rule a): held while the incoming class shows it later than 2N
+                uint jc = icls - 1u;
+                uint sT = DustUintBuffer(prm).v[DUST_CADP_FTS + jc * 2u + (np == 2u ? pp : 0u)]
+                        + ((nib & DUST_OWN_BUILD) != 0u ? 0u : DustUintBuffer(prm).v[DUST_CADP_N + jc]);
+                tk = (target >= int(k) && sT > 2u * DustUintBuffer(prm).v[DUST_CADP_N + k]) ? int(k) : -1;
+            } else if (((DustUintBuffer(prm).v[DUST_CADP_FLAGS] & DUST_CADF_RETAIN) != 0u || handover) && cls == k + 1u && target > int(k)) {
+                tk = int(k);
+            }
+            cnt += 1u;
+            // (the footprint ran when foot and target >= 0; tk == k implies target >= 0)
+            if (DustUintBuffer(prm).v[DUST_CADP_FOOT] != 0u && tk == int(k) && (fl & DUST_CADR_F_INSIDE) == 0u) { cnt += 1u << 24u; continue; }
+            if (tk == int(k)) {
+                if (asInc) nib = dust_own_byte(k, (nib & ~DUST_OWN_CLASS_MASK) | DUST_OWN_PENDING);
+                else nb = dust_own_byte(k, (nb & ~DUST_OWN_CLASS_MASK) | DUST_OWN_PENDING);
+                float g = uintBitsToFloat(pc.sys.v[rw + 11u]);
+                if (dust_cad_finite(g)) atomicMax(DustUintBuffer(st).v[dust_cads_tp(t, k, pp) + 6u], floatBitsToUint(g));
+            }
+        }
+        if ((cnt & 0xFFu) != 0u) {
+            // every eligible pair's histogram bin is the slot's class r (min(r, 3))
+            uint hb = min((pc.sys.v[rw + 4u] >> 12u) & 3u, DUST_CAD_MAX_CLASSES);
+            if (hb == 0u) atomicAdd(s_hist0, cnt & 0xFFu);
+            else if (hb == 1u) atomicAdd(s_hist1, cnt & 0xFFu);
+            else if (hb == 2u) atomicAdd(s_hist2, cnt & 0xFFu);
+            else atomicAdd(s_hist3, cnt & 0xFFu);
+        }
+        if (((cnt >> 8u) & 0xFFu) != 0u) atomicAdd(s_shell, (cnt >> 8u) & 0xFFu);
+        if (((cnt >> 16u) & 0xFFu) != 0u) atomicAdd(s_unshifted, (cnt >> 16u) & 0xFFu);
+        if ((cnt >> 24u) != 0u) atomicAdd(s_d3, cnt >> 24u);
+        // (the bytes before the loop read again: this lane is their only writer)
+        dust_own_set(uvec2(pc.sys), rb + s, dust_own_get(uvec2(pc.sys), rb + s), nb);
+        dust_inc_set(uvec2(pc.sys), inc0, rb + s, dust_inc_get(uvec2(pc.sys), inc0, rb + s), nib);
+    }
+    barrier();
+    if (lane == 0u) {
+        if (s_hist0 != 0u) atomicAdd(DustUintBuffer(st).v[DUST_CADS_HIST], s_hist0);
+        if (s_hist1 != 0u) atomicAdd(DustUintBuffer(st).v[DUST_CADS_HIST + 1u], s_hist1);
+        if (s_hist2 != 0u) atomicAdd(DustUintBuffer(st).v[DUST_CADS_HIST + 2u], s_hist2);
+        if (s_hist3 != 0u) atomicAdd(DustUintBuffer(st).v[DUST_CADS_HIST + 3u], s_hist3);
+        if (s_shell != 0u) atomicAdd(DustUintBuffer(st).v[DUST_CADS_SHELL_FORCED], s_shell);
+        if (s_d3 != 0u) atomicAdd(DustUintBuffer(st).v[dust_cads_tp(t, 0u, 0u) + 10u], s_d3);
+        if (s_unshifted != 0u) atomicAdd(DustUintBuffer(st).v[dust_cads_tp(t, 0u, 0u) + 11u], s_unshifted);
+    }
+}
+
+// PREP / PREP_DEBUG: the filter of CLASSIFY (some pair takes the slot; DEBUG: every live slot),
+// the validity, the shift (CLASSIFY; DEBUG: none), the predecessor at the same stamp
+void dust_cls_prep(uint gid, uint t, bool dbg) {
+    uint o = gid;
+    if (o >= pc.liveCount) return;
+    uint s = (pc.firstSlot + o) & pc.ringMask;
+    uint rw = dust_cls_rw(o);
+    bool any_ = dbg;
+    if (!any_) {
+        uint inc0 = dust_cad_inc0(R, nc, np);
+        bool handover = (DustUintBuffer(prm).v[DUST_CADP_FLAGS] & DUST_CADF_HANDOVER) != 0u;
+        uint nsw = DustUintBuffer(prm).v[DUST_CADP_NSWAP];
+        uint admit = DustUintBuffer(prm).v[DUST_CADP_ADMIT];
+        uint b0 = dust_own_get(uvec2(pc.sys), rb + s), ib0 = dust_inc_get(uvec2(pc.sys), inc0, rb + s);
+        for (uint j = 0u; j < nsw && !any_; ++j) {
+            uint code = DustUintBuffer(prm).v[DUST_CADP_SWAP0 + j];
+            uint cls, icls;
+            bool asInc;
+            any_ = dust_cad_eligible(b0, ib0, code & 0xFFu, code >> 8u, s, np, admit, handover, prm, cls, icls, asInc);
+        }
+    }
+    uint fl = 0u;
+    if (any_ && dust_mom.m[s].mean_flux.w > 0.0 && dust_render_live(pc.render.c[s].age_id_dbeta_flux.y)) {
+        fl = DUST_CADR_F_EVAL | DUST_CADR_F_OK;
+        vec3 sh = vec3(0.0);
+        if (!dbg) {
+            uvec2 an = uvec2(DustUintBuffer(prm).v[DUST_CADP_ANCH], DustUintBuffer(prm).v[DUST_CADP_ANCH + 1u]);
+            // a stale slot's positions shifted to this frame's anchor (rounds 11-12)
+            if (dust_cad_shift(an, t, floatBitsToUint(dust_mom.m[s].edges[12].w), sh)) fl |= DUST_CADR_F_SHIFTED;
+        } else {
+            fl |= DUST_CADR_F_SHIFTED | DUST_CADR_F_RATE | DUST_CADR_F_DEBUG;
+        }
+        // the predecessor only at the same stamp, so the same shift
+        int pred = dust_cad_streak_pred(uvec2(pc.render), s, pc.firstSlot, pc.liveCount);
+        if (pred >= 0 && floatBitsToUint(dust_mom.m[uint(pred)].edges[12].w) != floatBitsToUint(dust_mom.m[s].edges[12].w)) pred = -1;
+        dust_cadr_put3(uvec2(pc.sys), rw, sh);
+        pc.sys.v[rw + 3u] = uint(pred);
+    }
+    pc.sys.v[rw + 4u] = fl;
+}
+
+// the stages after PREP: the slot's row, its flag word (0 for an offset past the live range, a
+// stage that does not run for the slot)
+uint dust_cls_stage_fl(uint gid, uint need) {
+    if (gid >= pc.liveCount) return 0u;
+    uint fl = pc.sys.v[dust_cls_rw(gid) + 4u];
+    return (fl & need) == need ? fl : 0u;
+}
+void dust_cls_lam(uint gid) {
+    if (dust_cls_stage_fl(gid, DUST_CADR_F_OK) == 0u) return;
+    dust_cadr_lam((pc.firstSlot + gid) & pc.ringMask, uvec2(pc.sys), dust_cls_rw(gid));
+}
+void dust_cls_shell(uint gid) {
+    uint fl = dust_cls_stage_fl(gid, DUST_CADR_F_OK);
+    if (fl == 0u) return;
+    uint rw = dust_cls_rw(gid);
+    bool shell = dust_cadr_shell((pc.firstSlot + gid) & pc.ringMask, uvec2(pc.sys), rw, eye, uintBitsToFloat(DustUintBuffer(prm).v[DUST_CADP_DMAX]));
+    pc.sys.v[rw + 4u] = fl | (shell ? DUST_CADR_F_SHELL : DUST_CADR_F_RATE);
+}
+void dust_cls_extent(uint gid) {
+    if (dust_cls_stage_fl(gid, DUST_CADR_F_RATE) == 0u) return;
+    dust_cadr_extent((pc.firstSlot + gid) & pc.ringMask, uvec2(pc.sys), dust_cls_rw(gid), pc.mvp, prm);
+}
+void dust_cls_near(uint gid) {
+    if (dust_cls_stage_fl(gid, DUST_CADR_F_RATE) == 0u) return;
+    dust_cadr_near((pc.firstSlot + gid) & pc.ringMask, uvec2(pc.sys), dust_cls_rw(gid), pc.mvp, eye);
+}
+void dust_cls_jac(uint gid) {
+    if (dust_cls_stage_fl(gid, DUST_CADR_F_RATE) == 0u) return;
+    dust_cadr_jac(uvec2(pc.sys), dust_cls_rw(gid), pc.mvp, prm);
+}
+void dust_cls_step(uint gid) {
+    if (dust_cls_stage_fl(gid, DUST_CADR_F_RATE) == 0u) return;
+    dust_cadr_step((pc.firstSlot + gid) & pc.ringMask, uvec2(pc.sys), dust_cls_rw(gid), pc.mvp, prm);
+}
+// RATE: the class, and the class the candidate goes to (round 14's fold): the largest the motion
+// budget admits among those the rate admits (class index < r)
+void dust_cls_rate(uint gid) {
+    if (dust_cls_stage_fl(gid, DUST_CADR_F_RATE) == 0u) return;
+    uint rw = dust_cls_rw(gid);
+    uint r = dust_cadr_rate((pc.firstSlot + gid) & pc.ringMask, uvec2(pc.sys), rw, eye, prm);
+    uint admit = DustUintBuffer(prm).v[DUST_CADP_ADMIT];
+    int target = -1;
+    for (int kk = int(r) - 1; kk >= 0; --kk) {
+        if (((admit >> uint(kk)) & 1u) != 0u) { target = kk; break; }
+    }
+    pc.sys.v[rw + 4u] = pc.sys.v[rw + 4u] | (r << 12u) | (uint(target + 1) << 16u);
+}
+// FOOT: the classify-time footprint rule (no margin only; an entry its build would reject stays
+// fresh), where CLASSIFY reads it (a target) or DEBUG reports it (every lit slot)
+void dust_cls_foot(uint gid) {
+    uint fl = dust_cls_stage_fl(gid, DUST_CADR_F_OK);
+    if (fl == 0u || DustUintBuffer(prm).v[DUST_CADP_FOOT] == 0u) return;
+    if ((fl & DUST_CADR_F_DEBUG) == 0u && ((fl >> 16u) & 0xFu) == 0u) return;
+    uint rw = dust_cls_rw(gid);
+    if (dust_cadr_footprint((pc.firstSlot + gid) & pc.ringMask, uvec2(pc.sys), rw, dust_cadr_v3(uvec2(pc.sys), rw), int(pc.sys.v[rw + 3u]),
+                            pc.mvp, uintBitsToFloat(DustUintBuffer(prm).v[DUST_CADP_W]), uintBitsToFloat(DustUintBuffer(prm).v[DUST_CADP_H])))
+        pc.sys.v[rw + 4u] = fl | DUST_CADR_F_INSIDE;
+}
+
+void dust_cls_transition(uint gid) {
+    uint o = gid;
+    if (o >= pc.liveCount) return;
+    uint s = (pc.firstSlot + o) & pc.ringMask;
+    uint b = dust_own_get(uvec2(pc.sys), rb + s);
+    uint nb = b;
+    uint inc0 = dust_cad_inc0(R, nc, np);
+    uint ib = dust_inc_get(uvec2(pc.sys), inc0, rb + s);
+    uint nib = ib;
+    // F1: the aborted lists (all pairs, the CPU's k, p order; a byte holds one class; the
+    // incoming byte another)
+    if ((DustUintBuffer(prm).v[DUST_CADP_FLAGS] & DUST_CADF_ABORTS) != 0u) {
+        for (uint k = 0u; k < nc; ++k) {
+            for (uint pp = 0u; pp < np; ++pp) {
+                uint af = DustUintBuffer(st).v[dust_cads_pair(k, pp) + 2u];
+                if (af == 0u || (np == 2u && (s & 1u) != pp)) continue;
+                if ((nb & DUST_OWN_CLASS_MASK) == k + 1u) {
+                    if ((af & 1u) != 0u && (nb & DUST_OWN_BUILD) != 0u)
+                        nb = dust_own_drop_empty(nb & ~(DUST_OWN_BUILD | DUST_OWN_IN_IMAGE));
+                    if ((af & 2u) != 0u && (nb & DUST_OWN_PENDING) != 0u)
+                        nb = dust_own_drop_empty(nb & ~DUST_OWN_PENDING);
+                } else if ((nib & DUST_OWN_CLASS_MASK) == k + 1u) {
+                    if ((af & 1u) != 0u && (nib & DUST_OWN_BUILD) != 0u)
+                        nib = dust_own_drop_empty(nib & ~(DUST_OWN_BUILD | DUST_OWN_IN_IMAGE));
+                    if ((af & 2u) != 0u && (nib & DUST_OWN_PENDING) != 0u)
+                        nib = dust_own_drop_empty(nib & ~DUST_OWN_PENDING);
+                }
+            }
+        }
+    }
+    // the coverage drops (a shown image whose viewport corners left its guarded interior): its
+    // members fresh at once
+    uint cover = DustUintBuffer(prm).v[DUST_CADP_COVER];
+    if ((DustUintBuffer(prm).v[DUST_CADP_FLAGS] & DUST_CADF_COVERAGE) != 0u && cover != 0u) {
+        for (uint k = 0u; k < nc; ++k) {
+            for (uint pp = 0u; pp < np; ++pp) {
+                if (((cover >> (k * 2u + pp)) & 1u) == 0u) continue;
+                if ((nb & DUST_OWN_CLASS_MASK) != k + 1u || (np == 2u && (s & 1u) != pp)) continue;
+                if ((nb & DUST_OWN_SHOWN) != 0u) nb = dust_own_drop_empty(nb & ~DUST_OWN_SHOWN);
+            }
+        }
+    }
+    // F2a: the swaps, in order: old shown out; drawn build entries shown; pending promoted
+    uint nsw = DustUintBuffer(prm).v[DUST_CADP_NSWAP];
+    for (uint j = 0u; j < nsw; ++j) {
+        uint code = DustUintBuffer(prm).v[DUST_CADP_SWAP0 + j];
+        uint k = code & 0xFFu, pp = code >> 8u;
+        if (np == 2u && (s & 1u) != pp) continue;
+        // the handover's collapse (rule c): a valid incoming build entry takes the owner byte
+        // when the faster class's swap (earlier in this loop) emptied it, else it is dropped
+        if ((nib & DUST_OWN_CLASS_MASK) == k + 1u && (nib & DUST_OWN_BUILD) != 0u) {
+            if (nb == 0u) { nb = nib; atomicAdd(DustUintBuffer(st).v[DUST_CADS_HANDOVER], 1u); }
+            else atomicAdd(DustUintBuffer(st).v[DUST_CADS_HANDOVER + 1u], 1u);
+            nib = 0u;
+        }
+        if ((nib & DUST_OWN_CLASS_MASK) == k + 1u) {
+            // an incoming pending entry promoted
+            if ((nib & DUST_OWN_PENDING) != 0u) nib = (nib & ~DUST_OWN_PENDING) | DUST_OWN_BUILD;
+            continue;
+        }
+        if ((nb & DUST_OWN_CLASS_MASK) != k + 1u) continue;
+        if ((nb & DUST_OWN_SHOWN) != 0u) nb = dust_own_drop_empty(nb & ~DUST_OWN_SHOWN);
+        if ((nb & DUST_OWN_BUILD) != 0u) {
+            uint m = nb & ~(DUST_OWN_BUILD | DUST_OWN_IN_IMAGE);
+            if ((nb & DUST_OWN_IN_IMAGE) != 0u) m |= DUST_OWN_SHOWN;
+            nb = dust_own_drop_empty(m);
+        }
+        if ((nb & DUST_OWN_PENDING) != 0u) nb = (nb & ~DUST_OWN_PENDING) | DUST_OWN_BUILD;
+    }
+    dust_own_set(uvec2(pc.sys), rb + s, b, nb);
+    dust_inc_set(uvec2(pc.sys), inc0, rb + s, ib, nib);
+}
+void dust_cls_mark_fresh(uint gid, uint lane) {
+    if (lane == 0u) { s_fresh = 0u; s_shown0 = 0u; s_shown1 = 0u; s_shown2 = 0u; s_shown3 = 0u; s_shown4 = 0u; s_shown5 = 0u; }
+    barrier();
+    uint o = gid;
+    if (o < pc.liveCount) {
+        uint s = (pc.firstSlot + o) & pc.ringMask;
+        uint b = dust_own_get(uvec2(pc.sys), rb + s);
+        if ((b & DUST_OWN_SHOWN) == 0u) {
+            atomicAdd(s_fresh, 1u);
+            dust_cad_mark(uvec2(pc.sys), R, rb + s);
+            int pred = dust_cad_streak_pred(uvec2(pc.render), s, pc.firstSlot, pc.liveCount);
+            if (pred >= 0) dust_cad_mark(uvec2(pc.sys), R, rb + uint(pred));
+        } else {
+            // the pair of a SHOWN slot: its class and (two phases) its parity
+            uint pr = ((b & DUST_OWN_CLASS_MASK) - 1u) * 2u + (np == 2u ? (s & 1u) : 0u);
+            if (pr == 0u) atomicAdd(s_shown0, 1u);
+            else if (pr == 1u) atomicAdd(s_shown1, 1u);
+            else if (pr == 2u) atomicAdd(s_shown2, 1u);
+            else if (pr == 3u) atomicAdd(s_shown3, 1u);
+            else if (pr == 4u) atomicAdd(s_shown4, 1u);
+            else atomicAdd(s_shown5, 1u);
+        }
+    }
+    barrier();
+    if (lane == 0u) {
+        if (s_fresh != 0u) atomicAdd(DustUintBuffer(st).v[DUST_CADS_FRESH], s_fresh);
+        if (s_shown0 != 0u) atomicAdd(DustUintBuffer(st).v[DUST_CADS_SHOWN_PAIR0], s_shown0);
+        if (s_shown1 != 0u) atomicAdd(DustUintBuffer(st).v[DUST_CADS_SHOWN_PAIR0 + 1u], s_shown1);
+        if (s_shown2 != 0u) atomicAdd(DustUintBuffer(st).v[DUST_CADS_SHOWN_PAIR0 + 2u], s_shown2);
+        if (s_shown3 != 0u) atomicAdd(DustUintBuffer(st).v[DUST_CADS_SHOWN_PAIR0 + 3u], s_shown3);
+        if (s_shown4 != 0u) atomicAdd(DustUintBuffer(st).v[DUST_CADS_SHOWN_PAIR0 + 4u], s_shown4);
+        if (s_shown5 != 0u) atomicAdd(DustUintBuffer(st).v[DUST_CADS_SHOWN_PAIR0 + 5u], s_shown5);
+    }
+}
+// MARK_CHUNK, CHUNK_FOOT, CHUNK: the chunk's entry j of pair (k, p): its slot when it is a valid
+// member (on the owner byte, or the handover's incoming byte) inside the live range, else ~0
+uint dust_cls_chunk_entry(uint j, uint t, uint k, uint pp, bool needImage) {
+    uint su = DustUintBuffer(prm).v[DUST_CADP_STEPU + (t * 3u + k) * 2u + pp];
+    if (j >= su) return 0xFFFFFFFEu;
+    uint tp = dust_cads_tp(t, k, pp);
+    uint len = DustUintBuffer(st).v[tp + 1u], cursor = DustUintBuffer(st).v[tp + 3u], step = DustUintBuffer(st).v[tp + 4u];
+    uint idx = cursor + j;
+    uint s = 0xFFFFFFFFu;
+    if (j < step && idx < len) s = pc.sys.v[dust_cad_list(R, nc, np, rb, cap, k, pp, 1u) + idx];
+    if (s == 0xFFFFFFFFu) return s;
+    uint inc0 = dust_cad_inc0(R, nc, np);
+    uint b = dust_own_get(uvec2(pc.sys), rb + s);
+    uint ib = dust_inc_get(uvec2(pc.sys), inc0, rb + s);
+    bool onInc = (ib & DUST_OWN_CLASS_MASK) == k + 1u && (ib & DUST_OWN_BUILD) != 0u;
+    bool valid = (((b & DUST_OWN_CLASS_MASK) == k + 1u && (b & DUST_OWN_BUILD) != 0u) || onInc)
+              && ((s - pc.firstSlot) & pc.ringMask) < pc.liveCount;
+    // (a build without an image draws nothing: cadence::finish F3 skips it)
+    if (needImage && DustUintBuffer(st).v[dust_cads_pair(k, pp) + 1u] == 0u) valid = false;
+    return valid ? s : 0xFFFFFFFFu;
+}
+void dust_cls_mark_chunk(uint gid, uint t, uint pairCode) {
+    uint s = dust_cls_chunk_entry(gid, t, pairCode & 0xFu, (pairCode >> 4u) & 0xFu, false);
+    if (s >= 0xFFFFFFFEu) return;
+    dust_cad_mark(uvec2(pc.sys), R, rb + s);
+    int pred = dust_cad_streak_pred(uvec2(pc.render), s, pc.firstSlot, pc.liveCount);
+    if (pred >= 0) dust_cad_mark(uvec2(pc.sys), R, rb + uint(pred));
+}
+// CHUNK_FOOT (perf9_O, before CHUNK, a barrier between): the footprint rule of a valid, live, lit
+// entry into its draw-list word (1 inside, 0 not; CHUNK reads it and writes the word's final value).
+// D3 only without a margin, at the frozen view's mvp (the push constant's), the predecessor
+// unfiltered, the positions as propagated (cadence::finish F3)
+void dust_cls_chunk_foot(uint gid, uint t, uint pairCode) {
+    uint k = pairCode & 0xFu, pp = (pairCode >> 4u) & 0xFu;
+    uint s = dust_cls_chunk_entry(gid, t, k, pp, true);
+    if (s >= 0xFFFFFFFEu || DustUintBuffer(prm).v[DUST_CADP_FOOT] == 0u) return;
+    if (!dust_render_live(pc.render.c[s].age_id_dbeta_flux.y) || !(dust_mom.m[s].mean_flux.w > 0.0)) return;
+    pc.sys.v[dust_cad_draw(R, nc, np, rb, cap, k, pp) + gid] =
+        dust_cad_footprint(s, vec3(0.0), dust_cad_streak_pred(uvec2(pc.render), s, pc.firstSlot, pc.liveCount), vec3(0.0), pc.mvp,
+                           uintBitsToFloat(DustUintBuffer(prm).v[DUST_CADP_W]), uintBitsToFloat(DustUintBuffer(prm).v[DUST_CADP_H])) ? 1u : 0u;
+}
+// CHUNK (after the propagate and the classify: the post-propagate render, the moments)
+void dust_cls_chunk(uint gid, uint t, uint pairCode) {
+    uint k = pairCode & 0xFu, pp = (pairCode >> 4u) & 0xFu;
+    uint s = dust_cls_chunk_entry(gid, t, k, pp, true);
+    if (s == 0xFFFFFFFEu) return;
+    uint drawAt = dust_cad_draw(R, nc, np, rb, cap, k, pp) + gid;
+    if (s == 0xFFFFFFFFu || !dust_render_live(pc.render.c[s].age_id_dbeta_flux.y) || !(dust_mom.m[s].mean_flux.w > 0.0)) {
+        pc.sys.v[drawAt] = 0xFFFFFFFFu;
+        return;
+    }
+    // the continuum whole: an owned cluster is never walked for specks
+    pc.moments.m[s].edges[15].w = 0.0;
+    uint tp = dust_cads_tp(t, k, pp);
+    // the footprint rule's result (CHUNK_FOOT)
+    if (DustUintBuffer(prm).v[DUST_CADP_FOOT] != 0u && pc.sys.v[drawAt] == 0u) {
+        atomicAdd(DustUintBuffer(st).v[tp + 9u], 1u);
+        atomicAdd(DustUintBuffer(st).v[dust_cads_pair(k, pp) + 5u], 1u);
+        pc.sys.v[drawAt] = 0xFFFFFFFFu;
+        return;
+    }
+    atomicAdd(DustUintBuffer(st).v[tp + 8u], 1u);
+    atomicAdd(DustUintBuffer(st).v[dust_cads_pair(k, pp) + 6u], 1u);
+    uint inc0 = dust_cad_inc0(R, nc, np);
+    uint b = dust_own_get(uvec2(pc.sys), rb + s);
+    uint ib = dust_inc_get(uvec2(pc.sys), inc0, rb + s);
+    // a member on the owner byte, or (the handover) on the incoming byte
+    if ((ib & DUST_OWN_CLASS_MASK) == k + 1u && (ib & DUST_OWN_BUILD) != 0u) dust_inc_set(uvec2(pc.sys), inc0, rb + s, ib, ib | DUST_OWN_IN_IMAGE);
+    else dust_own_set(uvec2(pc.sys), rb + s, b, b | DUST_OWN_IN_IMAGE);
+    pc.sys.v[drawAt] = s;
+}
+void dust_cls_clear(uint gid, uint t) {
+    // up to three ranges (first slot, count) per tier, in order
+    uint cb = DUST_CADP_CLEAR0 + DUST_CADP_CLEAR_WORDS * t;
+    uint i = gid;
+    uint n0 = DustUintBuffer(prm).v[cb + 1u], n1 = DustUintBuffer(prm).v[cb + 3u], n2 = DustUintBuffer(prm).v[cb + 5u];
+    uint s;
+    if (i < n0) s = DustUintBuffer(prm).v[cb] + i;
+    else if (i < n0 + n1) s = DustUintBuffer(prm).v[cb + 2u] + (i - n0);
+    else if (i < n0 + n1 + n2) s = DustUintBuffer(prm).v[cb + 4u] + (i - n0 - n1);
+    else return;
+    s &= pc.ringMask;
+    uint b = dust_own_get(uvec2(pc.sys), rb + s);
+    dust_own_set(uvec2(pc.sys), rb + s, b, 0u);
+    uint inc0 = dust_cad_inc0(R, nc, np);
+    dust_inc_set(uvec2(pc.sys), inc0, rb + s, dust_inc_get(uvec2(pc.sys), inc0, rb + s), 0u);
+}
+// DEBUG (test hook): the stage modes' row (PREP_DEBUG .. FOOT before) into the debug records
+void dust_cls_debug(uint gid) {
+    uint o = gid;
+    if (o >= pc.liveCount) return;
+    uvec2 dbg = uvec2(DustUintBuffer(prm).v[DUST_CADP_DEBUG], DustUintBuffer(prm).v[DUST_CADP_DEBUG + 1u]);
+    uint s = (pc.firstSlot + o) & pc.ringMask;
+    uint at = o * DUST_CAD_DEBUG_WORDS;
+    float INF = uintBitsToFloat(DUST_CAD_INF_BITS);
+    uint rw = dust_cls_rw(o);
+    uint fl = pc.sys.v[rw + 4u];
+    bool ok = (fl & DUST_CADR_F_OK) != 0u;
+    uint flags = ok ? 1u : 0u;
+    uint r = 0u;
+    float g = INF, dl0 = INF, dl1 = INF, dl2 = INF;
+    if (ok) {
+        if ((fl & DUST_CADR_F_SHELL) != 0u) flags |= 2u;
+        r = (fl >> 12u) & 3u;
+        dl0 = uintBitsToFloat(pc.sys.v[rw + 8u]);
+        dl1 = uintBitsToFloat(pc.sys.v[rw + 9u]);
+        dl2 = uintBitsToFloat(pc.sys.v[rw + 10u]);
+        g = uintBitsToFloat(pc.sys.v[rw + 11u]);
+        if ((fl & DUST_CADR_F_INSIDE) != 0u) flags |= 8u;
+        if ((fl & DUST_CADR_F_ENC) != 0u) flags |= 4u;
+    }
+    DustUintBuffer(dbg).v[at] = r;
+    DustUintBuffer(dbg).v[at + 1u] = floatBitsToUint(dl0);
+    DustUintBuffer(dbg).v[at + 2u] = floatBitsToUint(dl1);
+    DustUintBuffer(dbg).v[at + 3u] = floatBitsToUint(dl2);
+    DustUintBuffer(dbg).v[at + 4u] = floatBitsToUint(g);
+    DustUintBuffer(dbg).v[at + 5u] = flags;
+    DustUintBuffer(dbg).v[at + 6u] = s;
+    DustUintBuffer(dbg).v[at + 7u] = 0u;
+}
 
 void main() {
     uint gid = gl_GlobalInvocationID.x;
@@ -61,334 +516,31 @@ void main() {
     uint t = pc.tierMode & 0xFFu;
     uint mode = (pc.tierMode >> 8u) & 0xFFu;
     uint pairCode = pc.tierMode >> 16u;
-    DustUintBuffer prm = pc.params;
-    DustUintBuffer st = DustUintBuffer(uvec2(prm.v[DUST_CADP_STATE], prm.v[DUST_CADP_STATE + 1u]));
-    uint R = prm.v[DUST_CADP_TIER0 + DUST_CADP_TIER_WORDS * (pc.tierMode & 0xFFu) + 4u];
-    uint nc = prm.v[DUST_CADP_NC];
-    uint np = prm.v[DUST_CADP_NP];
-    uint tb = DUST_CADP_TIER0 + DUST_CADP_TIER_WORDS * t;
-    uint rb = prm.v[tb];
-    uint cap = prm.v[tb + 1u];
     dust_mom_addr = uvec2(pc.moments);
-    vec3 eye = pc.eyeLocal.xyz;
-
-    if (mode == DUST_CADM_CLASSIFY) {
-        if (lane == 0u) { s_hist0 = 0u; s_hist1 = 0u; s_hist2 = 0u; s_hist3 = 0u; s_shell = 0u; s_d3 = 0u; s_unshifted = 0u; }
-        barrier();
-        uint o = gid;
-        if (o < pc.liveCount) {
-            uint s = (pc.firstSlot + o) & pc.ringMask;
-            uint b = dust_own_get(pc.sys, rb + s);
-            uint nb = b;
-            uint inc0 = dust_cad_inc0(R, nc, np);
-            uint ib = dust_inc_get(pc.sys, inc0, rb + s);
-            uint nib = ib;
-            bool handover = (prm.v[DUST_CADP_FLAGS] & DUST_CADF_HANDOVER) != 0u;
-            uint nsw = prm.v[DUST_CADP_NSWAP];
-            float dMax = uintBitsToFloat(prm.v[DUST_CADP_DMAX]);
-            bool decided = false, ok = false, shell = false, rated = false, shifted = true, inside = true;
-            uint r = 0u;
-            int target = -1;
-            float g = 0.0, dl0, dl1, dl2;
-            bool enc;
-            vec3 sh = vec3(0.0);
-            uint admit = prm.v[DUST_CADP_ADMIT];
-            bool foot = prm.v[DUST_CADP_FOOT] != 0u;
-            float W = uintBitsToFloat(prm.v[DUST_CADP_W]), H = uintBitsToFloat(prm.v[DUST_CADP_H]);
-            DustUintBuffer an = DustUintBuffer(uvec2(prm.v[DUST_CADP_ANCH], prm.v[DUST_CADP_ANCH + 1u]));
-            for (uint j = 0u; j < nsw; ++j) {
-                uint code = prm.v[DUST_CADP_SWAP0 + j];
-                uint k = code & 0xFFu, pp = code >> 8u;
-                // a class over its motion budget is not classified (cadence::finish F2b)
-                if (((admit >> k) & 1u) == 0u) continue;
-                if (np == 2u && (s & 1u) != pp) continue;
-                uint cls = nb & DUST_OWN_CLASS_MASK;
-                uint icls = nib & DUST_OWN_CLASS_MASK;
-                // the handover (rule b): a member of a faster class taken as incoming, or re-taken
-                // as incoming once its faster class let go before the collapse; no owner
-                // membership while an incoming one exists
-                bool asInc = handover && (icls == 0u || icls == k + 1u) && (nib & DUST_OWN_PENDING) == 0u
-                          && ((cls != 0u && cls != k + 1u && prm.v[DUST_CADP_N + cls - 1u] < prm.v[DUST_CADP_N + k])
-                              || (cls == 0u && icls == k + 1u));
-                if (!asInc && ((cls != 0u && cls != k + 1u) || (nb & DUST_OWN_PENDING) != 0u || (cls == 0u && icls != 0u))) continue;
-                if (!decided) {
-                    decided = true;
-                    ok = dust_mom.m[s].mean_flux.w > 0.0 && dust_render_live(pc.render.c[s].age_id_dbeta_flux.y);
-                    if (ok) {
-                        // a stale slot's positions shifted to this frame's anchor (rounds 11-12)
-                        shifted = dust_cad_shift(an, t, floatBitsToUint(dust_mom.m[s].edges[12].w), sh);
-                        shell = dust_cad_shell_capable(s, sh, eye, dMax);
-                    }
-                }
-                // (k-independent: the CPU skips the slot in every pair)
-                if (!ok) break;
-                if (!shifted) atomicAdd(s_unshifted, 1u);
-                if (shell) { atomicAdd(s_shell, 1u); continue; }
-                if (!rated) {
-                    rated = true;
-                    // the predecessor only at the same stamp, so the same shift
-                    int pred = dust_streak_pred(pc.render, s, pc.firstSlot, pc.liveCount);
-                    if (pred >= 0 && floatBitsToUint(dust_mom.m[uint(pred)].edges[12].w) != floatBitsToUint(dust_mom.m[s].edges[12].w)) pred = -1;
-                    r = dust_cad_rate(s, sh, pred, sh, pc.mvp, eye, prm, dl0, dl1, dl2, g, enc);
-                    // the classify-time footprint rule (no margin only): an entry its build would
-                    // reject stays fresh
-                    // the class the candidate goes to (round 14's fold): the largest the motion
-                    // budget admits among those the rate admits (class index < r)
-                    for (int kk = int(r) - 1; kk >= 0; --kk) {
-                        if (((admit >> uint(kk)) & 1u) != 0u) { target = kk; break; }
-                    }
-                    if (foot && target >= 0) inside = dust_cad_footprint(s, sh, pred, sh, pc.mvp, W, H);
-                }
-                // retention (cadence::finish F2b): a member of class k whose target is a slower
-                // class stays in k (per pair: the target is k-independent, the owner is not)
-                int tk = target;
-                if (handover && cls == k + 1u && icls != 0u) {
-                    // the handover (rule a): held while the incoming class shows it later than 2N
-                    uint jc = icls - 1u;
-                    uint sT = prm.v[DUST_CADP_FTS + jc * 2u + (np == 2u ? pp : 0u)]
-                            + ((nib & DUST_OWN_BUILD) != 0u ? 0u : prm.v[DUST_CADP_N + jc]);
-                    tk = (target >= int(k) && sT > 2u * prm.v[DUST_CADP_N + k]) ? int(k) : -1;
-                } else if (((prm.v[DUST_CADP_FLAGS] & DUST_CADF_RETAIN) != 0u || handover) && cls == k + 1u && target > int(k)) {
-                    tk = int(k);
-                }
-                uint hb = min(r, DUST_CAD_MAX_CLASSES);
-                if (hb == 0u) atomicAdd(s_hist0, 1u);
-                else if (hb == 1u) atomicAdd(s_hist1, 1u);
-                else if (hb == 2u) atomicAdd(s_hist2, 1u);
-                else atomicAdd(s_hist3, 1u);
-                if (foot && tk == int(k) && !inside) { atomicAdd(s_d3, 1u); continue; }
-                if (tk == int(k)) {
-                    if (asInc) nib = dust_own_byte(k, (nib & ~DUST_OWN_CLASS_MASK) | DUST_OWN_PENDING);
-                    else nb = dust_own_byte(k, (nb & ~DUST_OWN_CLASS_MASK) | DUST_OWN_PENDING);
-                    if (dust_cad_finite(g)) atomicMax(st.v[dust_cads_tp(t, k, pp) + 6u], floatBitsToUint(g));
-                }
-            }
-            dust_own_set(pc.sys, rb + s, b, nb);
-            dust_inc_set(pc.sys, inc0, rb + s, ib, nib);
-        }
-        barrier();
-        if (lane == 0u) {
-            if (s_hist0 != 0u) atomicAdd(st.v[DUST_CADS_HIST], s_hist0);
-            if (s_hist1 != 0u) atomicAdd(st.v[DUST_CADS_HIST + 1u], s_hist1);
-            if (s_hist2 != 0u) atomicAdd(st.v[DUST_CADS_HIST + 2u], s_hist2);
-            if (s_hist3 != 0u) atomicAdd(st.v[DUST_CADS_HIST + 3u], s_hist3);
-            if (s_shell != 0u) atomicAdd(st.v[DUST_CADS_SHELL_FORCED], s_shell);
-            if (s_d3 != 0u) atomicAdd(st.v[dust_cads_tp(t, 0u, 0u) + 10u], s_d3);
-            if (s_unshifted != 0u) atomicAdd(st.v[dust_cads_tp(t, 0u, 0u) + 11u], s_unshifted);
-        }
-        return;
-    }
-
-    if (mode == DUST_CADM_TRANSITION) {
-        uint o = gid;
-        if (o >= pc.liveCount) return;
-        uint s = (pc.firstSlot + o) & pc.ringMask;
-        uint b = dust_own_get(pc.sys, rb + s);
-        uint nb = b;
-        uint inc0 = dust_cad_inc0(R, nc, np);
-        uint ib = dust_inc_get(pc.sys, inc0, rb + s);
-        uint nib = ib;
-        // F1: the aborted lists (all pairs, the CPU's k, p order; a byte holds one class; the
-        // incoming byte another)
-        if ((prm.v[DUST_CADP_FLAGS] & DUST_CADF_ABORTS) != 0u) {
-            for (uint k = 0u; k < nc; ++k) {
-                for (uint pp = 0u; pp < np; ++pp) {
-                    uint af = st.v[dust_cads_pair(k, pp) + 2u];
-                    if (af == 0u || (np == 2u && (s & 1u) != pp)) continue;
-                    if ((nb & DUST_OWN_CLASS_MASK) == k + 1u) {
-                        if ((af & 1u) != 0u && (nb & DUST_OWN_BUILD) != 0u)
-                            nb = dust_own_drop_empty(nb & ~(DUST_OWN_BUILD | DUST_OWN_IN_IMAGE));
-                        if ((af & 2u) != 0u && (nb & DUST_OWN_PENDING) != 0u)
-                            nb = dust_own_drop_empty(nb & ~DUST_OWN_PENDING);
-                    } else if ((nib & DUST_OWN_CLASS_MASK) == k + 1u) {
-                        if ((af & 1u) != 0u && (nib & DUST_OWN_BUILD) != 0u)
-                            nib = dust_own_drop_empty(nib & ~(DUST_OWN_BUILD | DUST_OWN_IN_IMAGE));
-                        if ((af & 2u) != 0u && (nib & DUST_OWN_PENDING) != 0u)
-                            nib = dust_own_drop_empty(nib & ~DUST_OWN_PENDING);
-                    }
-                }
-            }
-        }
-        // the coverage drops (a shown image whose viewport corners left its guarded interior): its
-        // members fresh at once
-        uint cover = prm.v[DUST_CADP_COVER];
-        if ((prm.v[DUST_CADP_FLAGS] & DUST_CADF_COVERAGE) != 0u && cover != 0u) {
-            for (uint k = 0u; k < nc; ++k) {
-                for (uint pp = 0u; pp < np; ++pp) {
-                    if (((cover >> (k * 2u + pp)) & 1u) == 0u) continue;
-                    if ((nb & DUST_OWN_CLASS_MASK) != k + 1u || (np == 2u && (s & 1u) != pp)) continue;
-                    if ((nb & DUST_OWN_SHOWN) != 0u) nb = dust_own_drop_empty(nb & ~DUST_OWN_SHOWN);
-                }
-            }
-        }
-        // F2a: the swaps, in order: old shown out; drawn build entries shown; pending promoted
-        uint nsw = prm.v[DUST_CADP_NSWAP];
-        for (uint j = 0u; j < nsw; ++j) {
-            uint code = prm.v[DUST_CADP_SWAP0 + j];
-            uint k = code & 0xFFu, pp = code >> 8u;
-            if (np == 2u && (s & 1u) != pp) continue;
-            // the handover's collapse (rule c): a valid incoming build entry takes the owner byte
-            // when the faster class's swap (earlier in this loop) emptied it, else it is dropped
-            if ((nib & DUST_OWN_CLASS_MASK) == k + 1u && (nib & DUST_OWN_BUILD) != 0u) {
-                if (nb == 0u) { nb = nib; atomicAdd(st.v[DUST_CADS_HANDOVER], 1u); }
-                else atomicAdd(st.v[DUST_CADS_HANDOVER + 1u], 1u);
-                nib = 0u;
-            }
-            if ((nib & DUST_OWN_CLASS_MASK) == k + 1u) {
-                // an incoming pending entry promoted
-                if ((nib & DUST_OWN_PENDING) != 0u) nib = (nib & ~DUST_OWN_PENDING) | DUST_OWN_BUILD;
-                continue;
-            }
-            if ((nb & DUST_OWN_CLASS_MASK) != k + 1u) continue;
-            if ((nb & DUST_OWN_SHOWN) != 0u) nb = dust_own_drop_empty(nb & ~DUST_OWN_SHOWN);
-            if ((nb & DUST_OWN_BUILD) != 0u) {
-                uint m = nb & ~(DUST_OWN_BUILD | DUST_OWN_IN_IMAGE);
-                if ((nb & DUST_OWN_IN_IMAGE) != 0u) m |= DUST_OWN_SHOWN;
-                nb = dust_own_drop_empty(m);
-            }
-            if ((nb & DUST_OWN_PENDING) != 0u) nb = (nb & ~DUST_OWN_PENDING) | DUST_OWN_BUILD;
-        }
-        dust_own_set(pc.sys, rb + s, b, nb);
-        dust_inc_set(pc.sys, inc0, rb + s, ib, nib);
-        return;
-    }
-
-    if (mode == DUST_CADM_MARK_FRESH) {
-        if (lane == 0u) { s_fresh = 0u; s_shown0 = 0u; s_shown1 = 0u; s_shown2 = 0u; s_shown3 = 0u; s_shown4 = 0u; s_shown5 = 0u; }
-        barrier();
-        uint o = gid;
-        if (o < pc.liveCount) {
-            uint s = (pc.firstSlot + o) & pc.ringMask;
-            uint b = dust_own_get(pc.sys, rb + s);
-            if ((b & DUST_OWN_SHOWN) == 0u) {
-                atomicAdd(s_fresh, 1u);
-                dust_cad_mark(pc.sys, R, rb + s);
-                int pred = dust_streak_pred(pc.render, s, pc.firstSlot, pc.liveCount);
-                if (pred >= 0) dust_cad_mark(pc.sys, R, rb + uint(pred));
-            } else {
-                // the pair of a SHOWN slot: its class and (two phases) its parity
-                uint pr = ((b & DUST_OWN_CLASS_MASK) - 1u) * 2u + (np == 2u ? (s & 1u) : 0u);
-                if (pr == 0u) atomicAdd(s_shown0, 1u);
-                else if (pr == 1u) atomicAdd(s_shown1, 1u);
-                else if (pr == 2u) atomicAdd(s_shown2, 1u);
-                else if (pr == 3u) atomicAdd(s_shown3, 1u);
-                else if (pr == 4u) atomicAdd(s_shown4, 1u);
-                else atomicAdd(s_shown5, 1u);
-            }
-        }
-        barrier();
-        if (lane == 0u) {
-            if (s_fresh != 0u) atomicAdd(st.v[DUST_CADS_FRESH], s_fresh);
-            if (s_shown0 != 0u) atomicAdd(st.v[DUST_CADS_SHOWN_PAIR0], s_shown0);
-            if (s_shown1 != 0u) atomicAdd(st.v[DUST_CADS_SHOWN_PAIR0 + 1u], s_shown1);
-            if (s_shown2 != 0u) atomicAdd(st.v[DUST_CADS_SHOWN_PAIR0 + 2u], s_shown2);
-            if (s_shown3 != 0u) atomicAdd(st.v[DUST_CADS_SHOWN_PAIR0 + 3u], s_shown3);
-            if (s_shown4 != 0u) atomicAdd(st.v[DUST_CADS_SHOWN_PAIR0 + 4u], s_shown4);
-            if (s_shown5 != 0u) atomicAdd(st.v[DUST_CADS_SHOWN_PAIR0 + 5u], s_shown5);
-        }
-        return;
-    }
-
-    if (mode == DUST_CADM_MARK_CHUNK || mode == DUST_CADM_CHUNK) {
-        uint k = pairCode & 0xFu, pp = (pairCode >> 4u) & 0xFu;
-        uint j = gid;
-        uint su = prm.v[DUST_CADP_STEPU + (t * 3u + k) * 2u + pp];
-        if (j >= su) return;
-        uint tp = dust_cads_tp(t, k, pp);
-        uint len = st.v[tp + 1u], cursor = st.v[tp + 3u], step = st.v[tp + 4u];
-        uint idx = cursor + j;
-        uint s = 0xFFFFFFFFu;
-        if (j < step && idx < len) s = pc.sys.v[dust_cad_list(R, nc, np, rb, cap, k, pp, 1u) + idx];
-        uint inc0 = dust_cad_inc0(R, nc, np);
-        uint b = s != 0xFFFFFFFFu ? dust_own_get(pc.sys, rb + s) : 0u;
-        uint ib = s != 0xFFFFFFFFu ? dust_inc_get(pc.sys, inc0, rb + s) : 0u;
-        // a member on the owner byte, or (the handover) on the incoming byte
-        bool onInc = (ib & DUST_OWN_CLASS_MASK) == k + 1u && (ib & DUST_OWN_BUILD) != 0u;
-        bool valid = s != 0xFFFFFFFFu && (((b & DUST_OWN_CLASS_MASK) == k + 1u && (b & DUST_OWN_BUILD) != 0u) || onInc)
-                  && ((s - pc.firstSlot) & pc.ringMask) < pc.liveCount;
-        // (a build without an image draws nothing: cadence::finish F3 skips it)
-        if (mode == DUST_CADM_CHUNK && st.v[dust_cads_pair(k, pp) + 1u] == 0u) valid = false;
-        if (mode == DUST_CADM_MARK_CHUNK) {
-            if (!valid) return;
-            dust_cad_mark(pc.sys, R, rb + s);
-            int pred = dust_streak_pred(pc.render, s, pc.firstSlot, pc.liveCount);
-            if (pred >= 0) dust_cad_mark(pc.sys, R, rb + uint(pred));
-            return;
-        }
-        // CHUNK (after the propagate and the classify: the post-propagate render, the moments)
-        uint drawAt = dust_cad_draw(R, nc, np, rb, cap, k, pp) + j;
-        if (!valid || !dust_render_live(pc.render.c[s].age_id_dbeta_flux.y) || !(dust_mom.m[s].mean_flux.w > 0.0)) {
-            pc.sys.v[drawAt] = 0xFFFFFFFFu;
-            return;
-        }
-        // the continuum whole: an owned cluster is never walked for specks
-        pc.moments.m[s].edges[15].w = 0.0;
-        // D3 only without a margin, at the frozen view's mvp (the push constant's), the
-        // predecessor unfiltered, the positions as propagated (cadence::finish F3)
-        bool foot = prm.v[DUST_CADP_FOOT] != 0u;
-        if (foot && !dust_cad_footprint(s, vec3(0.0), dust_streak_pred(pc.render, s, pc.firstSlot, pc.liveCount), vec3(0.0), pc.mvp,
-                                        uintBitsToFloat(prm.v[DUST_CADP_W]), uintBitsToFloat(prm.v[DUST_CADP_H]))) {
-            atomicAdd(st.v[tp + 9u], 1u);
-            atomicAdd(st.v[dust_cads_pair(k, pp) + 5u], 1u);
-            pc.sys.v[drawAt] = 0xFFFFFFFFu;
-            return;
-        }
-        atomicAdd(st.v[tp + 8u], 1u);
-        atomicAdd(st.v[dust_cads_pair(k, pp) + 6u], 1u);
-        if (onInc) dust_inc_set(pc.sys, inc0, rb + s, ib, ib | DUST_OWN_IN_IMAGE);
-        else dust_own_set(pc.sys, rb + s, b, b | DUST_OWN_IN_IMAGE);
-        pc.sys.v[drawAt] = s;
-        return;
-    }
-
-    if (mode == DUST_CADM_CLEAR) {
-        // up to three ranges (first slot, count) per tier, in order
-        uint cb = DUST_CADP_CLEAR0 + DUST_CADP_CLEAR_WORDS * t;
-        uint i = gid;
-        uint n0 = prm.v[cb + 1u], n1 = prm.v[cb + 3u], n2 = prm.v[cb + 5u];
-        uint s;
-        if (i < n0) s = prm.v[cb] + i;
-        else if (i < n0 + n1) s = prm.v[cb + 2u] + (i - n0);
-        else if (i < n0 + n1 + n2) s = prm.v[cb + 4u] + (i - n0 - n1);
-        else return;
-        s &= pc.ringMask;
-        uint b = dust_own_get(pc.sys, rb + s);
-        dust_own_set(pc.sys, rb + s, b, 0u);
-        uint inc0 = dust_cad_inc0(R, nc, np);
-        dust_inc_set(pc.sys, inc0, rb + s, dust_inc_get(pc.sys, inc0, rb + s), 0u);
-        return;
-    }
-
-    if (mode == DUST_CADM_DEBUG) {
-        uint o = gid;
-        if (o >= pc.liveCount) return;
-        DustUintBuffer dbg = DustUintBuffer(uvec2(prm.v[DUST_CADP_DEBUG], prm.v[DUST_CADP_DEBUG + 1u]));
-        uint s = (pc.firstSlot + o) & pc.ringMask;
-        uint at = o * DUST_CAD_DEBUG_WORDS;
-        float INF = uintBitsToFloat(DUST_CAD_INF_BITS);
-        bool ok = dust_mom.m[s].mean_flux.w > 0.0 && dust_render_live(pc.render.c[s].age_id_dbeta_flux.y);
-        uint flags = ok ? 1u : 0u;
-        uint r = 0u;
-        float g = INF, dl0 = INF, dl1 = INF, dl2 = INF;
-        bool enc = false;
-        if (ok) {
-            vec3 sh = vec3(0.0);
-            if (dust_cad_shell_capable(s, sh, eye, uintBitsToFloat(prm.v[DUST_CADP_DMAX]))) flags |= 2u;
-            int pred = dust_streak_pred(pc.render, s, pc.firstSlot, pc.liveCount);
-            if (pred >= 0 && floatBitsToUint(dust_mom.m[uint(pred)].edges[12].w) != floatBitsToUint(dust_mom.m[s].edges[12].w)) pred = -1;
-            r = dust_cad_rate(s, sh, pred, sh, pc.mvp, eye, prm, dl0, dl1, dl2, g, enc);
-            if (prm.v[DUST_CADP_FOOT] != 0u && dust_cad_footprint(s, sh, pred, sh, pc.mvp,
-                                   uintBitsToFloat(prm.v[DUST_CADP_W]), uintBitsToFloat(prm.v[DUST_CADP_H]))) flags |= 8u;
-            if (enc) flags |= 4u;
-        }
-        dbg.v[at] = r;
-        dbg.v[at + 1u] = floatBitsToUint(dl0);
-        dbg.v[at + 2u] = floatBitsToUint(dl1);
-        dbg.v[at + 3u] = floatBitsToUint(dl2);
-        dbg.v[at + 4u] = floatBitsToUint(g);
-        dbg.v[at + 5u] = flags;
-        dbg.v[at + 6u] = s;
-        dbg.v[at + 7u] = 0u;
-        return;
-    }
+    if (mode == DUST_CADM_CLASSIFY) dust_cls_classify(gid, lane, t);
+    else if (mode == DUST_CADM_TRANSITION) dust_cls_transition(gid);
+    else if (mode == DUST_CADM_MARK_FRESH) dust_cls_mark_fresh(gid, lane);
+    else if (mode == DUST_CADM_MARK_CHUNK) dust_cls_mark_chunk(gid, t, pairCode);
+    else if (mode == DUST_CADM_CHUNK) dust_cls_chunk(gid, t, pairCode);
+    else if (mode == DUST_CADM_CLEAR) dust_cls_clear(gid, t);
+    else if (mode == DUST_CADM_DEBUG) dust_cls_debug(gid);
+    else if (mode == DUST_CADM_PREP) dust_cls_prep(gid, t, false);
+    else if (mode == DUST_CADM_PREP_DEBUG) dust_cls_prep(gid, t, true);
+    else if (mode == DUST_CADM_LAM) dust_cls_lam(gid);
+    else if (mode == DUST_CADM_SHELL) dust_cls_shell(gid);
+    else if (mode == DUST_CADM_EXTENT) dust_cls_extent(gid);
+    else if (mode == DUST_CADM_NEAR) dust_cls_near(gid);
+    else if (mode == DUST_CADM_JAC) dust_cls_jac(gid);
+    else if (mode == DUST_CADM_STEP) dust_cls_step(gid);
+    else if (mode == DUST_CADM_RATE) dust_cls_rate(gid);
+    else if (mode == DUST_CADM_FOOT) dust_cls_foot(gid);
+    else if (mode == DUST_CADM_CHUNK_FOOT) dust_cls_chunk_foot(gid, t, pairCode);
 }
+#undef prm
+#undef st
+#undef R
+#undef nc
+#undef np
+#undef rb
+#undef cap
+#undef eye

@@ -242,9 +242,17 @@ vec2 df_add(vec2 a, vec2 b) {
     vec2 s = df_two_sum(a.x, b.x);
     vec2 t = df_two_sum(a.y, b.y);
     precise float e1 = s.y + t.x;
+#ifdef DUST_COMMON_MONO
+    // (perf9_K: the pre-perf9_O body, for dust_propagate_mono.comp / dust_emit_mono.comp: their
+    // blobs equal the pre-package blobs byte for byte; the same arithmetic)
     s = df_quick_two_sum(s.x, e1);
     precise float e2 = s.y + t.y;
     return df_quick_two_sum(s.x, e2);
+#else
+    vec2 s1 = df_quick_two_sum(s.x, e1);  // (a new local: see glslang PropagateNoContraction)
+    precise float e2 = s1.y + t.y;
+    return df_quick_two_sum(s1.x, e2);
+#endif
 }
 vec2 df_sub(vec2 a, vec2 b) { return df_add(a, -b); }
 
@@ -389,6 +397,11 @@ layout(buffer_reference, std430, buffer_reference_align = 16) buffer DustMoments
 // moments by index through it (dust_mom.m[mi]), never a by-value copy of its 80 floats
 // (an address, not a Private buffer_reference: Adreno 619 drivers assert on a pointer global
 // loaded outside main)
+// a loop the includer may keep rolled (perf9_O: the splat defines it as [[dont_unroll]]; the
+// iterations, their order and arithmetic are the same)
+#ifndef DUST_NOUNROLL
+#define DUST_NOUNROLL
+#endif
 uvec2 dust_mom_addr;
 #define dust_mom DustMomentsBuffer(dust_mom_addr)
 // speed factor sqrt(beta_j/beta) of edge j (dust::DustMoments::edge_factor)
@@ -663,6 +676,14 @@ float dust_phase_function(DustUintBuffer pyr, float alphaRad) {
     float b = uintBitsToFloat(pyr.v[DUST_PYR_PHASE_LUT + i + 1u]);
     return a + (b - a) * f;
 }
+float dust_phase_function_o(uvec2 pyr, float alphaRad) {
+    float deg = clamp(alphaRad * (180.0 / DUST_PI_F32), 0.0, 180.0);
+    uint i = min(uint(deg), 179u);
+    float f = deg - float(i);
+    float a = uintBitsToFloat(DustUintBuffer(pyr).v[DUST_PYR_PHASE_LUT + i]);
+    float b = uintBitsToFloat(DustUintBuffer(pyr).v[DUST_PYR_PHASE_LUT + i + 1u]);
+    return a + (b - a) * f;
+}
 // PHASE-LUT-END
 // The radiance weight of a packet, p * Phi(alpha) / r_h^2 (dust::radiance_weight): sunDir the unit
 // direction to the Sun, toEye the vector to the eye (any length, zero = alpha 0), r_h in AU
@@ -672,6 +693,13 @@ float dust_radiance_weight(DustUintBuffer pyr, float albedo, vec3 sunDir, vec3 t
     float alpha = acos(clamp(cosA, -1.0, 1.0));
     float r = max(rhAu, 1e-6);
     return albedo * dust_phase_function(pyr, alpha) / (r * r);
+}
+float dust_radiance_weight_o(uvec2 pyr, float albedo, vec3 sunDir, vec3 toEye, float rhAu) {
+    float n = dot(toEye, toEye);
+    float cosA = n > 0.0 ? dot(sunDir, toEye) / sqrt(n) : 1.0;
+    float alpha = acos(clamp(cosA, -1.0, 1.0));
+    float r = max(rhAu, 1e-6);
+    return albedo * dust_phase_function_o(pyr, alpha) / (r * r);
 }
 
 // ─── Flow (mirror of dust::flow_*): brightness marks on synchrones (dust of one emission instant),
@@ -847,6 +875,12 @@ void dust_atomic_add_sat(DustUintBuffer buf, uint i, uint b) {
     uint old = atomicAdd(buf.v[i], b);
     if (((dust_pyr_split_word >> 30u) & 3u) == 1u) return;
     if (old + b < old) atomicMax(buf.v[i], 0xFFFFFFFFu);
+}
+void dust_atomic_add_sat_o(uvec2 buf, uint i, uint b) {
+    if (b == 0u) return;
+    uint old = atomicAdd(DustUintBuffer(buf).v[i], b);
+    if (((dust_pyr_split_word >> 30u) & 3u) == 1u) return;
+    if (old + b < old) atomicMax(DustUintBuffer(buf).v[i], 0xFFFFFFFFu);
 }
 
 // A screen packet (dust::ScreenPacket)
@@ -1325,6 +1359,69 @@ int dust_split_step(DustPacket p, bool clipped, uint level, uint depthMax, vec3 
     return DUST_SPLIT_KEEP;
 }
 
+// dust_split_step with the chosen child built in place (round 9 step C1: one packet live on the
+// split walk instead of p, a and b — 1 112 B of spill per lane on Mali): p becomes a (or b, the
+// second child, when `second`) on DUST_SPLIT_CLIP / DUST_SPLIT_SPLIT, and is untouched otherwise;
+// the same tests and arithmetic as dust_split_step, in the same order
+int dust_split_step_one(inout DustPacket p, bool clipped, uint level, uint depthMax, vec3 eye, vec3 fwd, bool perspective, bool force, bool keepClip, bool second) {
+    if (!(dot(fwd, fwd) > 0.0)) return DUST_SPLIT_KEEP;
+    float depth = dot(p.mean - eye, fwd);
+    float sigmaV = sqrt(max(dust_var_along(p.S, fwd), 0.0));
+    float spanS = dot(p.seg, fwd);
+    float span = abs(spanS);
+    if (depth + 3.0 * sigmaV + max(spanS, 0.0) < 0.0) return DUST_SPLIT_DROP;
+    if (!force && perspective && dust_is_volumetric(p, eye)) return DUST_SPLIT_VOLUME;
+    float d1 = depth + spanS;
+    if (!clipped && span > 0.0 && (depth < 0.0) != (d1 < 0.0)) {
+        // a shell-forced step (keepClip): the original's forced branch draws the unclipped packet
+        // as natural, so the clip is reported and p is left as it is
+        if (keepClip) return DUST_SPLIT_CLIP;
+        float uStar = -depth / spanS;
+        if (depth < 0.0) {
+            float uLo = uStar + DUST_SPLIT_CLIP_EPS * (1.0 - uStar);
+            bool openEnd = p.openEnd;  // (a local: see glslang PropagateNoContraction)
+            p = dust_sub_chord(p, uLo, 1.0, false, openEnd);
+            return DUST_SPLIT_CLIP;
+        }
+        float uHi = uStar * (1.0 - DUST_SPLIT_CLIP_EPS);
+        bool openStart = p.openStart;  // (a local: see glslang PropagateNoContraction)
+        p = dust_sub_chord(p, 0.0, uHi, openStart, false);
+        return DUST_SPLIT_CLIP;
+    }
+    bool want = force || 3.0 * sigmaV > depth
+             || (perspective && (sigmaV > DUST_SPLIT_EPS * depth || span > DUST_SPLIT_EPS * depth));
+    if (want && level < min(depthMax, DUST_SPLIT_DEPTH_MAX)) {
+        if (span > 3.0 * sigmaV) {
+            bool openStart = p.openStart, openEnd = p.openEnd;  // (locals: see glslang PropagateNoContraction)
+            p = second ? dust_sub_chord(p, 0.5, 1.0, true, openEnd)
+                       : dust_sub_chord(p, 0.0, 0.5, openStart, true);
+            return DUST_SPLIT_SPLIT;
+        }
+        if (sigmaV > 0.0) {
+            float k = DUST_SPLIT_A / sigmaV;
+            vec3 h = vec3((p.S[0] * fwd.x + p.S[1] * fwd.y + p.S[2] * fwd.z) * k,
+                          (p.S[1] * fwd.x + p.S[3] * fwd.y + p.S[4] * fwd.z) * k,
+                          (p.S[2] * fwd.x + p.S[4] * fwd.y + p.S[5] * fwd.z) * k);
+            p.S[0] = p.S[0] - h.x * h.x;
+            p.S[1] = p.S[1] - h.x * h.y;
+            p.S[2] = p.S[2] - h.x * h.z;
+            p.S[3] = p.S[3] - h.y * h.y;
+            p.S[4] = p.S[4] - h.y * h.z;
+            p.S[5] = p.S[5] - h.z * h.z;
+            p.flux = 0.5 * p.flux;
+            p.segT = vec3(0.0);
+            p.mean = second ? p.mean + h : p.mean - h;
+            return DUST_SPLIT_SPLIT;
+        }
+    }
+    if (want && !force && perspective) {
+        bool deepOnly = depth > 0.0 && span > 3.0 * sigmaV
+                     && !(3.0 * sigmaV > depth) && !(sigmaV > DUST_SPLIT_EPS * depth);
+        if (!(deepOnly && dust_deep_chord)) return DUST_SPLIT_VOLUME;
+    }
+    return DUST_SPLIT_KEEP;
+}
+
 // The speck shell's hand-over (dust::specks::ShellCut, same arithmetic): the ball of radius dMax
 // (local m) about the eye whose grains the speck pass draws; dMax <= 0 or not finite: none
 const int DUST_SHELL_OUTSIDE   = 0;
@@ -1375,6 +1472,7 @@ float dust_shell_outside_fraction(DustPacket p, vec3 eye, float dMax) {
 // Jacobian of `mvp` at its chord's midpoint (dust::project_packet). false: the start behind the camera (a
 // guard: dust_split_step drops, clips or slices a packet before it gets here), nothing in front
 // of the eye plane, or off screen.
+#ifndef DUST_NO_PROJECT_PACKET
 bool dust_project_packet(vec3 mean, float S[6], vec3 d, float flux, float exposure, mat4 mvp,
                          float W, float H, vec3 eyeLocal, bool openStart, bool openEnd, vec2 rho,
                          out DustScreenPacket P) {
@@ -1437,7 +1535,7 @@ bool dust_project_packet(vec3 mean, float S[6], vec3 d, float flux, float exposu
     P.rhAu = dust_phot_rh;
     P.albedo = dust_phot_albedo;
     P.wMean = dust_phot_albedo > 0.0
-        ? dust_radiance_weight(dust_phot_lut, dust_phot_albedo, dust_phot_sun, P.eye.xyz - P.eye.w * mean, dust_phot_rh)
+        ? dust_radiance_weight_o(uvec2(dust_phot_lut), dust_phot_albedo, dust_phot_sun, P.eye.xyz - P.eye.w * mean, dust_phot_rh)
         : 1.0;
 
     // `precise`: no fused multiply-add here, so the cancelling determinant rounds exactly as the
@@ -1474,6 +1572,8 @@ bool dust_project_packet(vec3 mean, float S[6], vec3 d, float flux, float exposu
         || any(isnan(P.seg)) || any(isinf(P.seg)) || isnan(P.sigmaMin) || isnan(P.depthAu)) return false;
     return true;
 }
+#endif  // DUST_NO_PROJECT_PACKET (a blob that never projects: its precise cone, even uncalled, marks the blob's
+// buffer-reference stores NoContraction in glslang — perf9_O split/LOG.md)
 
 // Optical depth per px^2 of the capsule at pixel x (dust::capsule_tau)
 // exp(x) - 1 without the cancellation at small x (mirror of dust::expm1_f32: the same polynomial
@@ -1557,9 +1657,7 @@ uint dust_time_pieces(float ratio) {
 // Packet of size bin b of a cluster (dust::subpackets): uniform along the bin's chord (a Gaussian
 // of DUST_CHORD_VAR_FACTOR half-chords^2 along it), Sigma_v scaled by the bin's speed factor,
 // 1/DUST_SIZE_BINS of the flux
-void dust_bin_packet_sub(uint mi, uint b, uint j, uint nj, out vec3 mean, out float S[6], out float flux) {
-    vec3 a, c; float fa, fc;
-    dust_sub_edges(mi, b, j, nj, a, c, fa, fc);
+void dust_bin_packet_at(uint mi, uint b, uint j, uint nj, vec3 a, vec3 c, float fa, float fc, out vec3 mean, out float S[6], out float flux) {
     mean = 0.5 * (a + c);
     vec3 h = 0.5 * (c - a);
     float f = 0.5 * (fa + fc);
@@ -1572,6 +1670,11 @@ void dust_bin_packet_sub(uint mi, uint b, uint j, uint nj, out vec3 mean, out fl
     S[5] = f2 * dust_mom.m[mi].cov_b_age_id.y + k * h.z * h.z;
     flux = dust_mom.m[mi].mean_flux.w * float(dust_group) / float(DUST_SIZE_BINS) * dust_sub_share(mi, b, j, nj);
 }
+void dust_bin_packet_sub(uint mi, uint b, uint j, uint nj, out vec3 mean, out float S[6], out float flux) {
+    vec3 a, c; float fa, fc;
+    dust_sub_edges(mi, b, j, nj, a, c, fa, fc);
+    dust_bin_packet_at(mi, b, j, nj, a, c, fa, fc, mean, S, flux);
+}
 void dust_bin_packet(uint mi, uint b, out vec3 mean, out float S[6], out float flux) {
     dust_bin_packet_sub(mi, b, 0u, 1u, mean, S, flux);
 }
@@ -1579,9 +1682,7 @@ void dust_bin_packet(uint mi, uint b, out vec3 mean, out float S[6], out float f
 // The packet drawn for size bin b (dust::bin_chord_packet): uniform along its chord (mean = the
 // start edge, seg = the chord), Sigma_v scaled by the bin's speed factor plus the bin's time
 // segment segT as a Gaussian of DUST_CHORD_VAR_FACTOR half-segments^2, 1/DUST_SIZE_BINS of the flux
-void dust_bin_chord_sub(uint mi, uint b, uint j, uint nj, vec3 segT, out vec3 mean, out vec3 chord, out float S[6], out float flux) {
-    vec3 a, c; float fa, fc;
-    dust_sub_edges(mi, b, j, nj, a, c, fa, fc);
+void dust_bin_chord_at(uint mi, uint b, uint j, uint nj, vec3 a, vec3 c, float fa, float fc, vec3 segT, out vec3 mean, out vec3 chord, out float S[6], out float flux) {
     mean = a;
     chord = c - a;
     vec3 h = 0.5 * segT;
@@ -1594,6 +1695,11 @@ void dust_bin_chord_sub(uint mi, uint b, uint j, uint nj, vec3 segT, out vec3 me
     S[4] = f2 * dust_mom.m[mi].cov_b_age_id.x + k * h.y * h.z;
     S[5] = f2 * dust_mom.m[mi].cov_b_age_id.y + k * h.z * h.z;
     flux = dust_mom.m[mi].mean_flux.w * float(dust_group) / float(DUST_SIZE_BINS) * dust_sub_share(mi, b, j, nj);
+}
+void dust_bin_chord_sub(uint mi, uint b, uint j, uint nj, vec3 segT, out vec3 mean, out vec3 chord, out float S[6], out float flux) {
+    vec3 a, c; float fa, fc;
+    dust_sub_edges(mi, b, j, nj, a, c, fa, fc);
+    dust_bin_chord_at(mi, b, j, nj, a, c, fa, fc, segT, mean, chord, S, flux);
 }
 void dust_bin_chord(uint mi, uint b, vec3 segT, out vec3 mean, out vec3 chord, out float S[6], out float flux) {
     dust_bin_chord_sub(mi, b, 0u, 1u, segT, mean, chord, S, flux);
@@ -1618,10 +1724,7 @@ uint dust_time_sweep(uint mi, uint pi, uint b, mat4 mvp, float W, float H) {
 // u = (k + 1/2)/nS between the bin's own edges and the predecessor's, Sigma_v scaled by the
 // bin's speed factor plus the residual Gaussian of the larger edge displacement / 2 nS along it,
 // 1/(DUST_SIZE_BINS nS) of the flux
-void dust_bin_sweep_sub(uint mi, uint pi, uint b, uint j, uint nj, uint k, uint nS, out vec3 mean, out vec3 chord, out float S[6], out float flux) {
-    vec3 a, c, pa, pc; float fa, fc, pfa, pfc;
-    dust_sub_edges(mi, b, j, nj, a, c, fa, fc);
-    dust_sub_edges(pi, b, j, nj, pa, pc, pfa, pfc);
+void dust_bin_sweep_at(uint mi, uint b, uint j, uint nj, vec3 a, vec3 c, float fa, float fc, vec3 pa, vec3 pc, uint k, uint nS, out vec3 mean, out vec3 chord, out float S[6], out float flux) {
     vec3 da = pa - a, dc = pc - c;
     vec3 dmax = dot(da, da) > dot(dc, dc) ? da : dc;
     float u = (float(k) + 0.5) / float(nS);
@@ -1640,6 +1743,12 @@ void dust_bin_sweep_sub(uint mi, uint pi, uint b, uint j, uint nj, uint k, uint 
     S[5] = f2 * dust_mom.m[mi].cov_b_age_id.y + kv * h.z * h.z;
     flux = dust_mom.m[mi].mean_flux.w * float(dust_group) / float(DUST_SIZE_BINS * nS) * dust_sub_share(mi, b, j, nj);
 }
+void dust_bin_sweep_sub(uint mi, uint pi, uint b, uint j, uint nj, uint k, uint nS, out vec3 mean, out vec3 chord, out float S[6], out float flux) {
+    vec3 a, c, pa, pc; float fa, fc, pfa, pfc;
+    dust_sub_edges(mi, b, j, nj, a, c, fa, fc);
+    dust_sub_edges(pi, b, j, nj, pa, pc, pfa, pfc);
+    dust_bin_sweep_at(mi, b, j, nj, a, c, fa, fc, pa, pc, k, nS, mean, chord, S, flux);
+}
 void dust_bin_sweep(uint mi, uint pi, uint b, uint k, uint nS, out vec3 mean, out vec3 chord, out float S[6], out float flux) {
     dust_bin_sweep_sub(mi, pi, b, 0u, 1u, k, nS, mean, chord, S, flux);
 }
@@ -1650,6 +1759,55 @@ vec3 dust_rotate3(vec3 v, vec3 axis, float angle) {
 }
 // R S R^T for the rotation by angle about the unit axis (dust::rotate_cov; S as xx, xy, xz, yy,
 // yz, zz): the cone pieces' predecessor covariance turned to the piece's emission direction
+#ifdef DUST_ROT_SHARED
+// (the splat: the scratch of the loop below in shared memory, a lane's slice each — the
+// dynamically indexed locals were a stack frame per inlined call; the loop and its arithmetic
+// are the same)
+shared vec3 dust_rot_r[DUST_ROT_SHARED][3];
+shared mat3 dust_rot_m[DUST_ROT_SHARED];
+shared float dust_rot_o[DUST_ROT_SHARED][6];
+void dust_rotate_cov(inout float S[6], vec3 axis, float angle) {
+    uint L = gl_LocalInvocationID.x;
+    dust_rot_r[L][0] = dust_rotate3(vec3(1.0, 0.0, 0.0), axis, angle);
+    dust_rot_r[L][1] = dust_rotate3(vec3(0.0, 1.0, 0.0), axis, angle);
+    dust_rot_r[L][2] = dust_rotate3(vec3(0.0, 0.0, 1.0), axis, angle);
+    dust_rot_m[L] = mat3(S[0], S[1], S[2], S[1], S[3], S[4], S[2], S[4], S[5]);
+    uint idx = 0u;
+    for (int a = 0; a < 3; ++a) {
+        for (int b = a; b < 3; ++b) {
+            float acc = 0.0;
+            for (int i = 0; i < 3; ++i) {
+                for (int j = 0; j < 3; ++j) acc += dust_rot_r[L][i][a] * dust_rot_m[L][i][j] * dust_rot_r[L][j][b];
+            }
+            dust_rot_o[L][idx++] = acc;
+        }
+    }
+    for (int k = 0; k < 6; ++k) S[k] = dust_rot_o[L][k];
+}
+#elif defined(DUST_ROT_SCALAR)
+// (the splat, perf9_O: no locals indexed at all — element (a, b) of R^T S R from the columns'
+// components, the products and the sum in the loop's order: i outer, j inner, acc from 0)
+float dust_rot_ab(float x0, float x1, float x2, float y0, float y1, float y2,
+                  float S0, float S1, float S2, float S3, float S4, float S5) {
+    float acc = 0.0;
+    acc += x0 * S0 * y0; acc += x0 * S1 * y1; acc += x0 * S2 * y2;
+    acc += x1 * S1 * y0; acc += x1 * S3 * y1; acc += x1 * S4 * y2;
+    acc += x2 * S2 * y0; acc += x2 * S4 * y1; acc += x2 * S5 * y2;
+    return acc;
+}
+void dust_rotate_cov(inout float S[6], vec3 axis, float angle) {
+    vec3 r0 = dust_rotate3(vec3(1.0, 0.0, 0.0), axis, angle);
+    vec3 r1 = dust_rotate3(vec3(0.0, 1.0, 0.0), axis, angle);
+    vec3 r2 = dust_rotate3(vec3(0.0, 0.0, 1.0), axis, angle);
+    float S0 = S[0], S1 = S[1], S2 = S[2], S3 = S[3], S4 = S[4], S5 = S[5];
+    S[0] = dust_rot_ab(r0.x, r1.x, r2.x, r0.x, r1.x, r2.x, S0, S1, S2, S3, S4, S5);
+    S[1] = dust_rot_ab(r0.x, r1.x, r2.x, r0.y, r1.y, r2.y, S0, S1, S2, S3, S4, S5);
+    S[2] = dust_rot_ab(r0.x, r1.x, r2.x, r0.z, r1.z, r2.z, S0, S1, S2, S3, S4, S5);
+    S[3] = dust_rot_ab(r0.y, r1.y, r2.y, r0.y, r1.y, r2.y, S0, S1, S2, S3, S4, S5);
+    S[4] = dust_rot_ab(r0.y, r1.y, r2.y, r0.z, r1.z, r2.z, S0, S1, S2, S3, S4, S5);
+    S[5] = dust_rot_ab(r0.z, r1.z, r2.z, r0.z, r1.z, r2.z, S0, S1, S2, S3, S4, S5);
+}
+#else
 void dust_rotate_cov(inout float S[6], vec3 axis, float angle) {
     vec3 r[3];
     r[0] = dust_rotate3(vec3(1.0, 0.0, 0.0), axis, angle);
@@ -1669,14 +1827,22 @@ void dust_rotate_cov(inout float S[6], vec3 axis, float angle) {
     }
     for (int k = 0; k < 6; ++k) S[k] = o[k];
 }
+#endif
 // the spiral of a rigidly rotating emitter (dust::spiral_point): the two samples (ages ageO,
 // ageP) un-spun by R(+omega age) are linear in age, interpolated, and re-spun by R(-omega age(u));
 // the straight segment when omega = 0
-vec3 dust_spiral_point(vec3 own, vec3 pred, float ageO, float ageP, vec3 axis, float omega, float u) {
+// (perf9_O: its lerp and its turn back as two functions; the splat stores the lerp's f32 between)
+vec3 dust_spiral_lerp(vec3 own, vec3 pred, float ageO, float ageP, vec3 axis, float omega, float u) {
     vec3 lO = dust_rotate3(own, axis, omega * ageO);
     vec3 lP = dust_rotate3(pred, axis, omega * ageP);
-    vec3 l = lO + (lP - lO) * u;
+    return lO + (lP - lO) * u;
+}
+vec3 dust_spiral_back(vec3 l, float ageO, float ageP, vec3 axis, float omega, float u) {
     return dust_rotate3(l, axis, -omega * (ageO + u * (ageP - ageO)));
+}
+vec3 dust_spiral_point(vec3 own, vec3 pred, float ageO, float ageP, vec3 axis, float omega, float u) {
+    vec3 l = dust_spiral_lerp(own, pred, ageO, ageP, axis, omega, u);
+    return dust_spiral_back(l, ageO, ageP, axis, omega, u);
 }
 // the cell line of a sample (dust::cell_line): its size polyline o + f c in the speed factor f;
 // false once radiation pressure bent it (the middle edge > 5 % of the chord off the line)
@@ -1723,12 +1889,10 @@ vec4 dust_piece_support(bool pieces, bool lineM, bool lineP, vec3 oM, vec3 cM, v
 }
 // dust_piece_support with the cell origin along the plane's normal (dust::subpackets_cells:
 // has = the plane is set, wO = n.o): the own cell's (ownSup, ownHas, ownO) when not a piece
-vec4 dust_piece_support_o(bool pieces, bool lineM, bool lineP, vec3 oM, vec3 cM, vec3 oP, vec3 cP,
-                          bool spiral, vec3 axis, float omega, float ageO, float ageP, float uc,
-                          float vStd, float fLo, vec4 ownSup, bool ownHas, float ownO, out bool has, out float wO) {
-    if (!pieces || !lineM || !lineP) { has = ownHas; wO = ownO; return ownSup; }
+// (the cell line at the piece's centre age: perf9_O, the splat computes it once per piece)
+void dust_piece_line(bool spiral, vec3 oM, vec3 cM, vec3 oP, vec3 cP, vec3 axis, float omega, float ageO, float ageP,
+                     float uc, out vec3 o, out vec3 c) {
     float ageU = ageO + uc * (ageP - ageO);
-    vec3 o, c;
     if (spiral) {
         o = dust_spiral_point(oM, oP, ageO, ageP, axis, omega, uc);
         c = dust_rotate3(cP, axis, omega * (ageP - ageU)) * (ageU / max(ageP, 1e-30));
@@ -1736,6 +1900,13 @@ vec4 dust_piece_support_o(bool pieces, bool lineM, bool lineP, vec3 oM, vec3 cM,
         o = oM + (oP - oM) * uc;
         c = cM + (cP - cM) * uc;
     }
+}
+vec4 dust_piece_support_o(bool pieces, bool lineM, bool lineP, vec3 oM, vec3 cM, vec3 oP, vec3 cP,
+                          bool spiral, vec3 axis, float omega, float ageO, float ageP, float uc,
+                          float vStd, float fLo, vec4 ownSup, bool ownHas, float ownO, out bool has, out float wO) {
+    if (!pieces || !lineM || !lineP) { has = ownHas; wO = ownO; return ownSup; }
+    vec3 o, c;
+    dust_piece_line(spiral, oM, cM, oP, cP, axis, omega, ageO, ageP, uc, o, c);
     vec4 sp = dust_support_plane(o, c, vStd, fLo);
     has = dust_has_support(sp);
     wO = dot(sp.xyz, o);
@@ -1754,9 +1925,9 @@ bool dust_spiral_of(uint mi, uint pi, out vec3 axis, out float omega) {
 void dust_pooled_packet(uint mi, out vec3 mean, out float S[6], out float flux) {
     float n = float(DUST_SIZE_BINS);
     mean = vec3(0.0);
-    for (uint b = 0u; b < DUST_SIZE_BINS; ++b) mean += 0.5 * (dust_mom.m[mi].edges[b].xyz + dust_mom.m[mi].edges[b + 1u].xyz) / n;
+    DUST_NOUNROLL for (uint b = 0u; b < DUST_SIZE_BINS; ++b) mean += 0.5 * (dust_mom.m[mi].edges[b].xyz + dust_mom.m[mi].edges[b + 1u].xyz) / n;
     for (int k = 0; k < 6; ++k) S[k] = 0.0;
-    for (uint b = 0u; b < DUST_SIZE_BINS; ++b) {
+    DUST_NOUNROLL for (uint b = 0u; b < DUST_SIZE_BINS; ++b) {
         vec3 mb; float Sb[6]; float fb;
         dust_bin_packet(mi, b, mb, Sb, fb);
         vec3 d = mb - mean;
@@ -1774,7 +1945,7 @@ void dust_pooled_packet(uint mi, out vec3 mean, out float S[6], out float flux) 
 void dust_pooled_within(uint mi, out float S[6]) {
     float n = float(DUST_SIZE_BINS);
     for (int k = 0; k < 6; ++k) S[k] = 0.0;
-    for (uint b = 0u; b < DUST_SIZE_BINS; ++b) {
+    DUST_NOUNROLL for (uint b = 0u; b < DUST_SIZE_BINS; ++b) {
         vec3 mb; float Sb[6]; float fb;
         dust_bin_packet(mi, b, mb, Sb, fb);
         for (int k = 0; k < 6; ++k) S[k] += Sb[k] / n;
@@ -1904,7 +2075,7 @@ bool dust_polyline_merged(uint mi, mat4 mvp, float W, float H) {
     }
     float wm = dust_clip_w(dust_mom.m[mi].mean_flux.xyz, mvp);
     float lo = wm, hi = wm;
-    for (uint j = 0u; j < DUST_SIZE_EDGES; ++j) {
+    DUST_NOUNROLL for (uint j = 0u; j < DUST_SIZE_EDGES; ++j) {
         float we = dust_clip_w(dust_mom.m[mi].edges[j].xyz, mvp);
         lo = min(lo, we);
         hi = max(hi, we);
@@ -1935,7 +2106,7 @@ float dust_lod_px_of(DustUintBuffer pyr) {
 // detail, as behind the camera)
 bool dust_polyline_depth(uint mi, vec3 eye, vec3 fwd, out float binDepth, out float near) {
     float lo = 0.0, hi = 0.0;
-    for (uint j = 0u; j < DUST_SIZE_EDGES; ++j) {
+    DUST_NOUNROLL for (uint j = 0u; j < DUST_SIZE_EDGES; ++j) {
         float d = dot(dust_mom.m[mi].edges[j].xyz - eye, fwd);
         lo = j == 0u ? d : min(lo, d);
         hi = j == 0u ? d : max(hi, d);
@@ -1966,7 +2137,7 @@ bool dust_polyline_extent_px(uint mi, mat4 mvp, float W, float H, out float ext)
     vec2 c, p;
     if (!dust_project_point(dust_mom.m[mi].mean_flux.xyz, mvp, W, H, c)) return false;
     ext = 0.0;
-    for (uint j = 0u; j < DUST_SIZE_EDGES; ++j) {
+    DUST_NOUNROLL for (uint j = 0u; j < DUST_SIZE_EDGES; ++j) {
         if (!dust_project_point(dust_mom.m[mi].edges[j].xyz, mvp, W, H, p)) return false;
         vec2 d = p - c;
         ext = max(ext, sqrt(d.x * d.x + d.y * d.y));
@@ -2068,34 +2239,52 @@ int dust_split_kind(DustPacket p, uint depthMax, vec3 eye, vec3 fwd, bool perspe
 // k >> 1 (the slow end bin's sub-bins first, then a bin each: dust_bin_subbins), its first piece
 // (k even) or its last (k odd); dust_haze_probes of them, a k past the list passes
 uint dust_haze_probes() { return 2u * (dust_bin_subbins(0u) + DUST_SIZE_BINS - 1u); }
-bool dust_haze_probe(uint mi, vec3 seg, float ratio, uint nT, vec3 eye, vec3 fwd, bool perspective, uint depthMax, uint k) {
+// (the probe's packet: false for a k past the list, which passes; perf9_O: the splat builds and
+// judges it in two dispatches)
+// (perf9_O: the probe's sub-bin; false past the list)
+bool dust_haze_probe_bin(uint k, out uint b, out uint j, out uint nj) {
     uint nj0 = dust_bin_subbins(0u);
-    if (k >= 2u * (nj0 + DUST_SIZE_BINS - 1u)) return true;
+    b = 0u; j = 0u; nj = 1u;
+    if (k >= 2u * (nj0 + DUST_SIZE_BINS - 1u)) return false;
     uint s = k >> 1u;
-    uint b = s < nj0 ? 0u : s - nj0 + 1u;
-    uint j = s < nj0 ? s : 0u;
-    uint nj = s < nj0 ? nj0 : 1u;
+    b = s < nj0 ? 0u : s - nj0 + 1u;
+    j = s < nj0 ? s : 0u;
+    nj = s < nj0 ? nj0 : 1u;
+    return true;
+}
+// (perf9_O: the probe's packet from its sub-bin's edges)
+void dust_haze_probe_packet_at(uint mi, vec3 seg, float ratio, uint nT, uint k, uint b, uint j, uint nj,
+                               vec3 a, vec3 c, float fa, float fc, out DustPacket p) {
     bool last = (k & 1u) != 0u;
     float uFirst = dust_piece_bound(1u, nT, ratio);
     float uLast = dust_piece_bound(nT - 1u, nT, ratio);
     float u = last ? uLast : 0.0, du = last ? 1.0 - uLast : uFirst;
-    DustPacket p;
     p.openStart = false;
     p.openEnd = false;
     p.rho = vec2(1.0);
     p.segT = vec3(0.0);
-    vec3 a, c; float fa, fc;
-    dust_sub_edges(mi, b, j, nj, a, c, fa, fc);
     bool timeMajor = dot(seg, seg) > dot(c - a, c - a);
     if (timeMajor) {
-        dust_bin_packet_sub(mi, b, j, nj, p.mean, p.S, p.flux);
+        dust_bin_packet_at(mi, b, j, nj, a, c, fa, fc, p.mean, p.S, p.flux);
         p.seg = seg * du;
     } else {
         vec3 chord;
-        dust_bin_chord_sub(mi, b, j, nj, seg * du, p.mean, chord, p.S, p.flux);
+        dust_bin_chord_at(mi, b, j, nj, a, c, fa, fc, seg * du, p.mean, chord, p.S, p.flux);
         p.seg = chord;
     }
     p.mean += seg * u;
+}
+bool dust_haze_probe_packet(uint mi, vec3 seg, float ratio, uint nT, uint k, out DustPacket p) {
+    uint b, j, nj;
+    if (!dust_haze_probe_bin(k, b, j, nj)) return false;
+    vec3 a, c; float fa, fc;
+    dust_sub_edges(mi, b, j, nj, a, c, fa, fc);
+    dust_haze_probe_packet_at(mi, seg, ratio, nT, k, b, j, nj, a, c, fa, fc, p);
+    return true;
+}
+bool dust_haze_probe(uint mi, vec3 seg, float ratio, uint nT, vec3 eye, vec3 fwd, bool perspective, uint depthMax, uint k) {
+    DustPacket p;
+    if (!dust_haze_probe_packet(mi, seg, ratio, nT, k, p)) return true;
     int kind = dust_split_kind(p, depthMax, eye, fwd, perspective);
     return kind == DUST_SPLIT_VOLUME || kind == DUST_SPLIT_DROP;
 }
@@ -2201,8 +2390,14 @@ void dust_kepler(Df3 r0, Df3 v0, vec2 mu, vec2 dt, out Df3 r, out Df3 v) {
     vec2 t = dt;
     if (mu.x > 0.0 && alpha.x > 0.0) {
         vec2 period = df_div(df_mul(DF_TWO_PI, mu), df_mul(alpha, df_sqrt(alpha)));
+#ifdef DUST_COMMON_MONO
+        // (perf9_K: the pre-perf9_O form, see df_add)
         vec2 k = df_div(t, period);
         k = k.x >= 0.0 ? df_floor(k) : -df_floor(-k);
+#else
+        vec2 k0 = df_div(t, period);
+        vec2 k = k0.x >= 0.0 ? df_floor(k0) : -df_floor(-k0);  // (a new local: see glslang PropagateNoContraction)
+#endif
         t = df_sub(t, df_mul(k, period));
     }
 
@@ -2247,6 +2442,78 @@ void dust_kepler(Df3 r0, Df3 v0, vec2 mu, vec2 dt, out Df3 r, out Df3 v) {
     vec2 gg = df_sub(t, df_mul(mu, g3));
     vec2 fd = -df_div(df_mul(mu, g1), df_mul(rn, r0n));
     vec2 gd = df_sub(vec2(1.0, 0.0), df_div(df_mul(mu, g2), rn));
+    r = df3_add(df3_scale(r0, ff), df3_scale(v0, gg));
+    v = df3_add(df3_scale(r0, fd), df3_scale(v0, gd));
+}
+
+// Round 9 step Z: the same solve as its Lagrange coefficients (f, g, fdot, gdot; `still` the early
+// exit's identity) and their application, so a caller can load (r0, v0) again from its buffer for
+// the application instead of keeping the twelve words live across the solve (Mali-G52: that was
+// the whole 52 B spill of a lone solve). dust_kepler_apply(r0, v0, dust_kepler_coef(r0, v0, ...))
+// is dust_kepler expression for expression, in the same order
+void dust_kepler_coef(Df3 r0, Df3 v0, vec2 mu, vec2 dt, out bool still, out vec2 ff, out vec2 gg, out vec2 fd, out vec2 gd) {
+    still = false; ff = vec2(0.0); gg = vec2(0.0); fd = vec2(0.0); gd = vec2(0.0);
+    vec2 r0n = df_sqrt(df3_dot(r0, r0));
+    if (!(r0n.x > 0.0) || dt.x == 0.0) { still = true; return; }
+    vec2 v2 = df3_dot(v0, v0);
+    vec2 eta = df3_dot(r0, v0);
+    vec2 alpha = df_sub(df_div(df_scale_pow2(mu, 2.0), r0n), v2); // = mu / a
+    vec2 zeta = df_sub(mu, df_mul(alpha, r0n));
+
+    // bound elliptic arguments: remove whole periods
+    vec2 t = dt;
+    if (mu.x > 0.0 && alpha.x > 0.0) {
+        vec2 period = df_div(df_mul(DF_TWO_PI, mu), df_mul(alpha, df_sqrt(alpha)));
+        vec2 k0 = df_div(t, period);
+        vec2 k = k0.x >= 0.0 ? df_floor(k0) : -df_floor(-k0);  // (a new local: see glslang PropagateNoContraction)
+        t = df_sub(t, df_mul(k, period));
+    }
+
+    // phase 1: f32 Laguerre from s = t / r0
+    float r0f = r0n.x, etaf = eta.x, zetaf = zeta.x, alphaf = alpha.x;
+    float tf = t.x + t.y;
+    float s = tf / r0f;
+    for (uint it = 0u; it < DUST_KEPLER_ITERS_F32; it++) {
+        vec4 c = dust_stumpff_f32(alphaf * s * s);
+        float s2 = s * s;
+        float f   = r0f * s + etaf * s2 * c.z + zetaf * s2 * s * c.w - tf;
+        float fp  = r0f + etaf * s * c.y + zetaf * s2 * c.z;
+        float fpp = etaf * c.x + zetaf * s * c.y;
+        float ds;
+        if (!dust_laguerre(f, fp, fpp, ds)) break;
+        s -= ds;
+        if (!(abs(ds) > DUST_KEPLER_TOL_F32 * abs(s))) break;
+    }
+
+    // phase 2: df64 residual, f32 correction
+    vec2 sd = vec2(s, 0.0);
+    vec2 c0, c1, c2, c3;
+    for (uint it = 0u; it < DUST_KEPLER_ITERS_DF; it++) {
+        dust_stumpff_df(df_mul(df_mul(alpha, sd), sd), c0, c1, c2, c3);
+        vec2 s2 = df_mul(sd, sd);
+        vec2 f = df_sub(df_add(df_add(df_mul(r0n, sd), df_mul(df_mul(eta, s2), c2)), df_mul(df_mul(df_mul(zeta, s2), sd), c3)), t);
+        vec2 fp = df_add(df_add(r0n, df_mul(df_mul(eta, sd), c1)), df_mul(df_mul(zeta, s2), c2));
+        float fpp = etaf * c0.x + zetaf * sd.x * c1.x;
+        float ds;
+        if (!dust_laguerre(f.x, fp.x, fpp, ds)) break;
+        sd = df_add_f(sd, -ds);
+        if (!(abs(ds) > DUST_KEPLER_TOL_DF * abs(sd.x))) break;
+    }
+
+    dust_stumpff_df(df_mul(df_mul(alpha, sd), sd), c0, c1, c2, c3);
+    vec2 s2 = df_mul(sd, sd);
+    vec2 g1 = df_mul(sd, c1);
+    vec2 g2 = df_mul(s2, c2);
+    vec2 g3 = df_mul(df_mul(s2, sd), c3);
+    vec2 rn = df_add(df_add(r0n, df_mul(eta, g1)), df_mul(zeta, g2));
+    ff = df_sub(vec2(1.0, 0.0), df_div(df_mul(mu, g2), r0n));
+    gg = df_sub(t, df_mul(mu, g3));
+    fd = -df_div(df_mul(mu, g1), df_mul(rn, r0n));
+    gd = df_sub(vec2(1.0, 0.0), df_div(df_mul(mu, g2), rn));
+}
+
+void dust_kepler_apply(Df3 r0, Df3 v0, bool still, vec2 ff, vec2 gg, vec2 fd, vec2 gd, out Df3 r, out Df3 v) {
+    if (still) { r = r0; v = v0; return; }
     r = df3_add(df3_scale(r0, ff), df3_scale(v0, gg));
     v = df3_add(df3_scale(r0, fd), df3_scale(v0, gd));
 }

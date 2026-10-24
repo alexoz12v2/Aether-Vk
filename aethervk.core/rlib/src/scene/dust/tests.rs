@@ -10863,6 +10863,30 @@ fn conic_slabs_scale_the_width_with_the_distance() {
   }
 }
 
+/// perf9_O C2 v5: the staged volume consumer's placement. The unstaged offsets are unchanged; the
+/// scratch rows start where the unstaged layout ends, the main drain's rows come first and the
+/// spill's after them, and the staged end is the spill's last row (a row per record of either drain).
+#[test]
+fn dust_queue_offsets_staged_scratch_is_portable() {
+  assert_eq!(DUST_VW_SX_WORDS, 784);
+  for n in [64u32, 16_384, 1000, DUST_VQUEUE_CAPACITY / 16, DUST_VQUEUE_CAPACITY] {
+    let plain = dust_queue_offsets(n);
+    let staged = dust_queue_offsets_for(n, true);
+    assert_eq!(dust_queue_offsets_for(n, false), plain, "{n}");
+    assert_eq!(staged.vqueue, plain.vqueue, "{n}");
+    assert_eq!(staged.squeue, plain.squeue, "{n}");
+    assert_eq!(staged.spill, plain.spill, "{n}");
+    assert_eq!(staged.vspill, plain.vspill, "{n}");
+    assert_eq!(staged.vedge, plain.vedge, "{n}");
+    assert_eq!(staged.vscratch[0], plain.end, "{n}");
+    assert_eq!(staged.vscratch[1] - staged.vscratch[0], n * DUST_VW_SX_WORDS, "{n}");
+    assert_eq!(staged.end - staged.vscratch[0], (n + dust_vspill_records(n)) * DUST_VW_SX_WORDS, "{n}");
+    assert_eq!(staged.end, staged.vscratch[1] + dust_vspill_records(n) * DUST_VW_SX_WORDS, "{n}");
+    // the unstaged layout's end and the staged scratch are disjoint
+    assert!(plain.end <= staged.vscratch[0], "{n}");
+  }
+}
+
 /// Portability (the baseline devices' compute limits): a view's queue placement
 /// (`dust_queue_offsets`, every host offset) is the shaders' (`dust_squeue_base` /
 /// `dust_spill_base` from the volume header's `DUST_VQUEUE_RECORDS` word) for any record count,
@@ -10889,9 +10913,11 @@ fn dust_queue_offsets_and_dispatch_are_portable() {
       let last = o.vqueue + DUST_VQUEUE_HEADER_WORDS + (DUST_VQUEUE_RECORD_WORDS - 1) * cap + cap - 1;
       assert!(last < o.squeue, "{records}/{cap}");
     }
-    // the sub-packet records' last word before the spill
+    // the sub-packet records, then the chunk clusters' plan rows (round 9 step O), before the spill
     let srec = o.squeue + DUST_SQUEUE_HEADER_WORDS + DUST_SQUEUE_CLUSTERS * DUST_SQUEUE_TABLE_WORDS;
-    assert_eq!(srec + DUST_SQUEUE_CAPACITY * DUST_SQUEUE_RECORD_WORDS, o.spill);
+    let splan = srec + DUST_SQUEUE_CAPACITY * DUST_SQUEUE_RECORD_WORDS;
+    assert_eq!(splan + DUST_SQUEUE_CLUSTERS * DUST_SPLAN_WORDS, o.spill);
+    assert!(DUST_SQUEUE_REC_B_ARGS + 3 <= DUST_SQUEUE_HEADER_WORDS);
     // the spill's slots and the trace end where the volume spill begins
     assert!((64..=DUST_SPILL_SLOTS).contains(&o.spill_slots), "{records}: {} slots", o.spill_slots);
     assert_eq!(glsl_trace(o.spill, o.spill_slots) + DUST_SPECKS_TRACE_CAPACITY * DUST_SPECKS_TRACE_WORDS, o.vspill);
@@ -10912,7 +10938,8 @@ fn dust_queue_offsets_and_dispatch_are_portable() {
     assert_eq!(o.vedge[0], o.vspill + DUST_VQUEUE_HEADER_WORDS + o.vspill_records * DUST_VQUEUE_RECORD_WORDS);
     // track 9A (t9a2d): the edge regions, placed as dust_vedge_base computes them from word 15 and
     // word 9 (the spill's records and a region's: n / 4 and n / 2, at least 64), each record's
-    // last word (structure-of-arrays at the capacity's stride, at most the region's records)
+    // last word (array-of-structures since perf9_O: record cap - 1's word DUST_VEDGE_RECORD_WORDS - 1,
+    // the same word as the structure-of-arrays' last; at most the region's records)
     // before the next region or the allocation's end
     let glsl_vedge = |word9: u32, odd: bool| {
       let n = if word9 == 0 { DUST_VQUEUE_CAPACITY } else { word9.min(DUST_VQUEUE_CAPACITY) };
@@ -10930,14 +10957,34 @@ fn dust_queue_offsets_and_dispatch_are_portable() {
         assert!(last < next, "{records}: edge region {k} at {cap}");
       }
     }
-    assert_eq!(o.end, o.vedge[1] + DUST_VQUEUE_HEADER_WORDS + o.vedge_records * DUST_VEDGE_RECORD_WORDS);
+    // the splitter family's regions (perf9 steps Z / O) after edge region 1, the slots last
+    assert_eq!(o.lqueue, o.vedge[1] + DUST_VQUEUE_HEADER_WORDS + o.vedge_records * DUST_VEDGE_RECORD_WORDS);
+    assert_eq!(o.lqueue_records, records.clamp(64, DUST_LQUEUE_CAPACITY), "{records}");
+    assert_eq!(o.lqueue_records, dust_lqueue_records(records), "{records}");
+    assert_eq!(o.cqueue_records, dust_cqueue_records(records), "{records}");
+    assert!(o.cqueue_records <= DUST_CQUEUE_CAPACITY && o.lqueue_records <= DUST_LQUEUE_CAPACITY);
+    // the frame-wide words after the offsets, inside the header; the chunk caps in range
+    assert!(DUST_LQUEUE_PQUEUE_OFFSET < DUST_LQUEUE_FRAME_LEAVES && DUST_LQUEUE_FRAME_CPC_MAX < DUST_VQUEUE_HEADER_WORDS as usize);
+    for ppc in [0.0f32, 1.0, 64.0, 1e6] {
+      assert!((1..=DUST_VQUEUE_CHUNK_MAX).contains(&dust_split_auto_chunk(o.lqueue_records, ppc)));
+    }
+    assert_eq!(o.lspill, o.lqueue + DUST_VQUEUE_HEADER_WORDS + o.lqueue_records * DUST_LQUEUE_RECORD_WORDS);
+    assert_eq!(o.blist, o.lspill + DUST_VQUEUE_HEADER_WORDS + o.lqueue_records * DUST_LQUEUE_RECORD_WORDS);
+    assert_eq!(o.cqueue, o.blist + DUST_VQUEUE_HEADER_WORDS + 2 * o.lqueue_records);
+    assert_eq!(o.pqueue, o.cqueue + DUST_VQUEUE_HEADER_WORDS + o.cqueue_records * DUST_CQUEUE_RECORD_WORDS);
+    assert_eq!(o.end, o.pqueue + o.cqueue_records * DUST_PQUEUE_RECORD_WORDS);
+    assert!(DUST_LQUEUE_LOST < DUST_VQUEUE_HEADER_WORDS as usize && DUST_LQUEUE_PQUEUE_OFFSET < DUST_VQUEUE_HEADER_WORDS as usize);
     // no u32 overflow in the word arithmetic (the host's u64 bytes from it)
     let wide = DUST_QUEUE_WORDS as u64
       + (DUST_VQUEUE_HEADER_WORDS + records * DUST_VQUEUE_RECORD_WORDS) as u64
       + DUST_SQUEUE_WORDS as u64
       + dust_spill_words(o.spill_slots) as u64
       + (DUST_VQUEUE_HEADER_WORDS + o.vspill_records * DUST_VQUEUE_RECORD_WORDS) as u64
-      + 2 * (DUST_VQUEUE_HEADER_WORDS + o.vedge_records * DUST_VEDGE_RECORD_WORDS) as u64;
+      + 2 * (DUST_VQUEUE_HEADER_WORDS + o.vedge_records * DUST_VEDGE_RECORD_WORDS) as u64
+      + 2 * (DUST_VQUEUE_HEADER_WORDS as u64 + o.lqueue_records as u64 * DUST_LQUEUE_RECORD_WORDS as u64)
+      + (DUST_VQUEUE_HEADER_WORDS as u64 + 2 * o.lqueue_records as u64)
+      + (DUST_VQUEUE_HEADER_WORDS as u64 + o.cqueue_records as u64 * DUST_CQUEUE_RECORD_WORDS as u64)
+      + o.cqueue_records as u64 * DUST_PQUEUE_RECORD_WORDS as u64;
     assert_eq!(wide, o.end as u64);
   }
   // the full volume queue: the former constant placement; 0 in word 9 means the full capacity
@@ -14526,4 +14573,138 @@ fn cad_handover_scene(classes: alloc::vec::Vec<u32>, still_frames: usize, light:
   }
   let members_end = (0..nc).map(|k| members(&st, k)).collect();
   CadHandoverRun { st, class8, stills, builds, admitted_at, members_end }
+}
+
+/// The in-frame gates per target on the CPU mirror (brief 07, the decision of 2026-10-18 in
+/// records/budget-loop.md): a class image's build draws read the frame's running counters (the
+/// header routing of `DustCadenceState::finish`: every word but the image's own copied frame →
+/// image before its draws and back after), so a cadenced frame trips each hard gate at the
+/// frame's total work across both targets, as a full draw does. Two runs of the 3-R parity scene
+/// (still eye, Δt 0, the gates on; one class of 8 frames in two phases at M = 0.2, as
+/// `cadence_budget_aborts_and_readmits`, so the builds start within its first cycles; the control
+/// runs until three frames drew builds, at most 24, the preloaded run as many): the control starts each frame's
+/// counters at 0, the gated run preloads the three gate counters (split children, EWA texels,
+/// volume evaluations) one past their hard limits. Asserted in the gated run, for every image
+/// with build draws in a frame: its counters are at least the preloaded ones (the builds started
+/// from the frame's total, not from 0) and the frame's final counters are at least the image's
+/// (the fresh pass continued the builds' total); and over the run the builds put less light on
+/// the levels below the gate level than the control's builds (the gates fired inside the builds),
+/// the control having some there (non-vacuity). The preloaded run draws serially (the parallel CPU
+/// draw zeroes each partial's counters: its gates never see the frame's). Printed: per frame the
+/// build draws and the frame's counters, per run the light below the gate level.
+#[test]
+fn cadence_builds_read_the_frame_gates() {
+  use super::cadence::{CadenceConfig, TierDraw, TierMeta};
+  let px = 128u32;
+  let layout = PyramidLayout::new(px, px);
+  let (mut tiers, radius) = cad_scene();
+  let anchor = tiers[0].0.anchor_m;
+  let view = cad_static_view(anchor, radius, px, 3.0);
+  let inv_unit = cad_inv_unit(&tiers, &view, &layout, None, 1e-2).expect("τ_max");
+  let t = tiers[0].0.frame.ps_r_t_hi[3] as f64;
+  let preload: [(u32, u32); 3] = [
+    (PYR_SPLIT_CHILDREN, DUST_FRAME_HARD_FACTOR * DUST_SPLIT_BUDGET + 1),
+    (PYR_EWA_TEXELS, DUST_FRAME_HARD_FACTOR * (DUST_EWA_FRAME_BUDGET / DUST_EWA_TEXEL_UNIT as u32) + 1),
+    (PYR_VOLUME_EVALS, DUST_FRAME_HARD_FACTOR * DUST_VOLUME_FRAME_BUDGET + 1),
+  ];
+  let cfg = CadenceConfig { classes: alloc::vec![8], phases: 2, eps_px: 1.0, margin_frac: 0.2, retain: true, handover: true, light_tol: 0.0 };
+  let np = cfg.phases as usize;
+  let il = cfg.image_geom(px, px).layout;
+  let gate = gate_level(il.level_count()) as usize;
+  // the light (Σ counts) of an image's build pyramid on the levels below the gate level
+  let fine_light = |p: &[u32]| -> f64 {
+    il.levels
+      .iter()
+      .take(gate)
+      .map(|&(off, w, h)| (0..w * h).map(|i| p[(off + i * PYRAMID_TEXEL_WORDS) as usize] as f64).sum::<f64>())
+      .sum()
+  };
+  let mut fine = [0.0f64; 2];
+  let mut built = [0usize; 2];
+  let mut nf = 24usize;
+  for (run, gated) in [false, true].into_iter().enumerate() {
+    let mut st = cad_state(cfg.clone());
+    // the preloaded run draws serially: the parallel CPU draw gives each thread a partial pyramid
+    // with the counters zeroed (`splat_tier_list_parallel`, `draw_list_traced`), so its gates read
+    // per-partial counters and never see the frame's (measured: a preloaded parallel run drew the
+    // control's work word for word); the serial draw continues the pyramid's counters, as the
+    // GPU's header atomics do. The control stays parallel: the ungated reference.
+    if gated {
+      st.threads = 1;
+    }
+    let mut frames_built = 0usize;
+    for f in 0..nf {
+      let fm = cad_frame_meta(view, t, anchor, 1.0 / inv_unit);
+      let mut frame = alloc::vec![0u32; layout.total_words as usize];
+      let mut header = layout.header();
+      if gated {
+        for &(w, v) in &preload {
+          header[w as usize] = v;
+        }
+      }
+      frame[..header.len()].copy_from_slice(&header);
+      {
+        let metas: alloc::vec::Vec<TierMeta<'_>> = tiers
+          .iter()
+          .enumerate()
+          .map(|(ti, (ds, (r, _)))| TierMeta {
+            key: ti as u64,
+            first_slot: ds.first_slot,
+            capacity: ds.capacity,
+            live_count: r.len() as u32,
+            emitted: ds.compute_wait,
+            rewritten_from: r.len() as u32,
+            anchor_m: ds.anchor_m,
+            render: r,
+          })
+          .collect();
+        st.begin(&fm, &metas, &layout);
+      }
+      let mut draws: alloc::vec::Vec<TierDraw<'_>> = tiers
+        .iter_mut()
+        .map(|(ds, (r, m))| {
+          let pc = cad_pc(&fm.view, ds.anchor_m, r.len() as u32, inv_unit);
+          TierDraw { moments: m.as_mut_slice(), render: r.as_slice(), pc, flow: Default::default(), specks_pc: None, stamp: 0 }
+        })
+        .collect();
+      let rep = st.finish(&mut draws, &layout, &mut frame);
+      drop(draws);
+      let mut pairs: alloc::vec::Vec<(usize, usize)> = rep.drawn_build.iter().map(|d| (d.k, d.p)).collect();
+      pairs.sort_unstable();
+      pairs.dedup();
+      built[run] += rep.drawn_build.len();
+      frames_built += (!rep.drawn_build.is_empty()) as usize;
+      for &(k, p) in &pairs {
+        let im = &st.images[k * np + p];
+        fine[run] += fine_light(&im.build);
+        if gated {
+          for &(w, v) in &preload {
+            let (wi, fr) = (im.build[w as usize], frame[w as usize]);
+            assert!(wi >= v, "frame {f}, image ({k}, {p}): counter word {w} = {wi} below the frame's preloaded {v}: the builds did not read the frame's total");
+            assert!(fr >= wi, "frame {f}, image ({k}, {p}): the frame's counter word {w} = {fr} below the image's {wi}: the fresh pass did not continue the builds' total");
+          }
+        }
+      }
+      std::println!(
+        "gates per target ({}) {f}: mode {:?}, build draws {} in pairs {pairs:?}, frame counters (children, EWA, volume) ({}, {}, {})",
+        if gated { "preloaded" } else { "control" },
+        rep.mode,
+        rep.drawn_build.len(),
+        frame[PYR_SPLIT_CHILDREN as usize],
+        frame[PYR_EWA_TEXELS as usize],
+        frame[PYR_VOLUME_EVALS as usize]
+      );
+      if !gated && frames_built >= 3 {
+        nf = f + 1;
+        break;
+      }
+    }
+  }
+  std::println!(
+    "gates per target: build draws control {} / preloaded {}; light below the gate level {gate} in the drawn images: control {:.4e}, preloaded {:.4e}",
+    built[0], built[1], fine[0], fine[1]
+  );
+  assert!(built[0] > 0 && built[0] == built[1], "the runs must draw the same builds (counters decide no list): {built:?}");
+  assert!(fine[0] > 0.0, "the control's builds put no light below the gate level: the test cannot see the gates");
+  assert!(fine[1] < fine[0], "the preloaded counters did not gate the builds (light below the gate {} vs {})", fine[1], fine[0]);
 }

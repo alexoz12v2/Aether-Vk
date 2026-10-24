@@ -2,22 +2,24 @@
 //
 // Dust packet queue: one workgroup per record of the view's queue (dust_scatter.glsl, filled by
 // dust_splat.comp), dispatched indirectly after every tier's splat and before the measurement
-// (Device::cmd_dust_frame_end). The 64 invocations share the record's row segments
-// (dust_scatter_rows_wg: the rows' column ranges once in shared memory, the segments shared out
-// by number): the same texels, the same per-segment dither, so the
+// (Device::cmd_dust_frame_end). The 64 invocations draw the record's row segments four at a time,
+// a lane per texel (dust_draw_texel.glsl: the tau, then the segment's carry walk, then the
+// deposit): the same texels, the same per-segment dither, so the
 // pyramid equals the one the cluster threads would have drawn alone (the sums, the depth minimum
 // and the level mask are order-free). No CPU mirror is needed: dust::scatter_into is the same
 // drawing.
 #version 450 core
 #extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_control_flow_attributes : require
 #ifdef DUST_PROFILE
 #extension GL_ARB_shader_clock : require
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
 #endif
-#define DUST_QUEUE_WORKGROUP 1
+#define DUST_QUEUE_TEXEL 1
 #include "dust_common.glsl"
 #include "dust_scatter.glsl"
+#include "dust_draw_texel.glsl"
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
@@ -29,36 +31,31 @@ layout(push_constant, std430) uniform PushConstants {
 
 void main() {
     // the profiler (dust_profile.glsl): the record's load and band setup, then the rows
-    DUST_PROF_BEGIN(qthread)
-    DUST_PROF_BEGIN(qload)
-    uint base = dust_queue_base(pc.pyramid);
+#ifdef DUST_PROFILE
+    dust_qt_t0[gl_LocalInvocationID.x] = clock2x32ARB().x;
+#endif
+    uint base = pc.pyramid.v[DUST_PYR_QUEUE_BASE];
     // two-dimensional (dust_queue_append: x at most DUST_QUEUE_DISPATCH_X), the last row partial
     uint r = gl_WorkGroupID.y * DUST_QUEUE_DISPATCH_X + gl_WorkGroupID.x;
-    if (r >= dust_queue_held(pc.pyramid, base)) return;
+    // dust_queue_held: the count, at most the capacity (dust_queue_capacity: header word 4, 0 = the default)
+    uint cap = pc.pyramid.v[base + 4u];
+    cap = cap == 0u ? DUST_QUEUE_CAPACITY : min(cap, DUST_QUEUE_CAPACITY);
+    if (r >= min(pc.pyramid.v[base + 3u], cap)) return;
     uint at = base + DUST_QUEUE_HEADER_WORDS + r * DUST_QUEUE_RECORD_WORDS;
     uint w0 = pc.pyramid.v[at];
-    // the phase table rides in the header; the timing probe bits (plain_add) too
-    dust_phot_lut_addr = uvec2(pc.pyramid);
-    dust_pyr_split_word = pc.pyramid.v[DUST_PYR_SPLIT_DEPTH];
+    // the phase table (dust_phot_lut_addr) and the timing probe bits (dust_pyr_split_word) are
+    // set at their use by dust_queue_rows_texel
     if ((w0 >> 30u) == DUST_QUEUE_EWA) {
         uint level = w0 & 0xFFu;
-        uint seed = pc.pyramid.v[at + 1u];
-        uint off = pc.pyramid.v[at + 2u];
-        uint w = pc.pyramid.v[at + 3u];
-        uint h = pc.pyramid.v[at + 4u];
-        int rowA = int(pc.pyramid.v[at + 5u]);
-        int rowB = int(pc.pyramid.v[at + 6u]);
-        vec3 color = vec3(dust_queue_get_f(pc.pyramid, at + 7u), dust_queue_get_f(pc.pyramid, at + 8u),
-                          dust_queue_get_f(pc.pyramid, at + 9u));
-        float invUnit = dust_queue_get_f(pc.pyramid, at + 10u);
-        DustScreenPacket P = dust_queue_get_screen_packet(pc.pyramid, at + 11u);
-        DUST_PROF_END(qload)
-        if (dust_scatter_rows_wg(pc.pyramid, invUnit, P, color, float(1u << level), off, w, h, seed, rowA, rowB,
-                                 64u, gl_LocalInvocationID.x)) {
+        // the record's words (seed 1, off 2, w 3, h 4, rows 5-6, colour 7-9, invUnit 10, packet 11-43)
+        // are read by dust_queue_rows_texel
+        if (dust_queue_rows_texel(uvec2(pc.pyramid), at, gl_LocalInvocationID.x)) {
             atomicOr(pc.pyramid.v[DUST_PYR_LEVEL_MASK], 1u << level);
         }
         // every lane of the workgroup reaches this (the record is uniform over it)
-        DUST_PROF_END(qthread)
-        DUST_PROF_FLUSH_QUEUE(pc.pyramid, base)
+#ifdef DUST_PROFILE
+        // base reloaded: held across the row loop it put Mali-G52 over 32 work registers
+        dust_qt_prof_flush(uvec2(pc.pyramid), pc.pyramid.v[DUST_PYR_QUEUE_BASE], gl_LocalInvocationID.x);
+#endif
     }
 }

@@ -60,10 +60,50 @@ const uint DUST_PROF_WORDS_END     = 144u; // (DUST_QUEUE_HEADER_WORDS = 144)
 #define DUST_PROF_FLUSH_EDGE(pyr, base)        dust_prof_flush_edge(pyr, base);
 
 // the splat's stage sums (cycles) and counts, per thread
+#ifdef DUST_PROF_SHARED
+shared uint dust_prof_thread_s[DUST_PROF_SHARED];
+#define dust_prof_thread dust_prof_thread_s[gl_LocalInvocationID.x]
+shared uint dust_prof_setup_s[DUST_PROF_SHARED];
+#define dust_prof_setup dust_prof_setup_s[gl_LocalInvocationID.x]
+shared uint dust_prof_subpk_s[DUST_PROF_SHARED];
+#define dust_prof_subpk dust_prof_subpk_s[gl_LocalInvocationID.x]
+shared uint dust_prof_packet_s[DUST_PROF_SHARED];
+#define dust_prof_packet dust_prof_packet_s[gl_LocalInvocationID.x]
+shared uint dust_prof_cone_s[DUST_PROF_SHARED];
+#define dust_prof_cone dust_prof_cone_s[gl_LocalInvocationID.x]
+shared uint dust_prof_split_s[DUST_PROF_SHARED];
+#define dust_prof_split dust_prof_split_s[gl_LocalInvocationID.x]
+shared uint dust_prof_project_s[DUST_PROF_SHARED];
+#define dust_prof_project dust_prof_project_s[gl_LocalInvocationID.x]
+shared uint dust_prof_scprep_s[DUST_PROF_SHARED];
+#define dust_prof_scprep dust_prof_scprep_s[gl_LocalInvocationID.x]
+shared uint dust_prof_qput_s[DUST_PROF_SHARED];
+#define dust_prof_qput dust_prof_qput_s[gl_LocalInvocationID.x]
+shared uint dust_prof_ewa_s[DUST_PROF_SHARED];
+#define dust_prof_ewa dust_prof_ewa_s[gl_LocalInvocationID.x]
+shared uint dust_prof_vplan_s[DUST_PROF_SHARED];
+#define dust_prof_vplan dust_prof_vplan_s[gl_LocalInvocationID.x]
+shared uint dust_prof_vdraw_s[DUST_PROF_SHARED];
+#define dust_prof_vdraw dust_prof_vdraw_s[gl_LocalInvocationID.x]
+shared uint dust_prof_tracer_s[DUST_PROF_SHARED];
+#define dust_prof_tracer dust_prof_tracer_s[gl_LocalInvocationID.x]
+shared uint dust_prof_vemit_s[DUST_PROF_SHARED];
+#define dust_prof_vemit dust_prof_vemit_s[gl_LocalInvocationID.x]
+shared uint dust_prof_count_s[DUST_PROF_SHARED];
+#define dust_prof_count dust_prof_count_s[gl_LocalInvocationID.x]
+shared uint dust_prof_t0_thread_s[DUST_PROF_SHARED], dust_prof_t0_subpk_s[DUST_PROF_SHARED];
+#define dust_prof_t0_thread dust_prof_t0_thread_s[gl_LocalInvocationID.x]
+#define dust_prof_t0_subpk dust_prof_t0_subpk_s[gl_LocalInvocationID.x]
+#define DUST_PROF_BEGIN_SH(t) dust_prof_t0_##t = clock2x32ARB().x;
+void dust_prof_zero() { dust_prof_thread = 0u; dust_prof_setup = 0u; dust_prof_subpk = 0u; dust_prof_packet = 0u; dust_prof_cone = 0u; dust_prof_split = 0u; dust_prof_project = 0u; dust_prof_scprep = 0u; dust_prof_qput = 0u; dust_prof_ewa = 0u; dust_prof_vplan = 0u; dust_prof_vdraw = 0u; dust_prof_tracer = 0u; dust_prof_vemit = 0u; dust_prof_count = 0u; }
+#else
 uint dust_prof_thread = 0u, dust_prof_setup = 0u, dust_prof_subpk = 0u, dust_prof_packet = 0u,
      dust_prof_cone = 0u, dust_prof_split = 0u, dust_prof_project = 0u, dust_prof_scprep = 0u,
      dust_prof_qput = 0u, dust_prof_ewa = 0u, dust_prof_vplan = 0u, dust_prof_vdraw = 0u,
      dust_prof_tracer = 0u, dust_prof_vemit = 0u, dust_prof_count = 0u;
+void dust_prof_zero() {}
+#define DUST_PROF_BEGIN_SH(t) DUST_PROF_BEGIN(t)
+#endif
 // K1c's parts (nested in vplan / vdraw)
 uint dust_prof_vclass = 0u, dust_prof_vsmallpts = 0u, dust_prof_vsmall = 0u, dust_prof_vsubline = 0u,
      dust_prof_vcentre = 0u, dust_prof_vsmprep = 0u, dust_prof_vsmfast = 0u, dust_prof_vsmedge = 0u,
@@ -210,6 +250,7 @@ void dust_prof_flush_edge(DustUintBuffer pyr, uint base) {
 #define DUST_PROF_BEGIN_AS(t)
 #define DUST_PROF_END_AS(s, t)
 #define DUST_PROF_BEGIN(s)
+#define DUST_PROF_BEGIN_SH(t)
 #define DUST_PROF_END(s)
 #define DUST_PROF_COUNT(c, n)
 #define DUST_PROF_FLUSH_SPLAT(pyr, base, ran)

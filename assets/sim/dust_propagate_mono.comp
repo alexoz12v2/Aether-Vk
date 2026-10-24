@@ -1,0 +1,202 @@
+// @assets/sim/dust_propagate_mono.comp
+//
+// perf9_K (K4, the propagate / emit family knob): the pre-perf9_O dust_propagate.comp verbatim, the
+// GTX 1070 default (AETHERVK_DUST_PROP_STAGED=0; Device::dust_prop_staged). The only addition is
+// DUST_COMMON_MONO below: dust_common.glsl then keeps its pre-perf9_O df_add / dust_kepler bodies
+// (the perf9_O "new local" rewrites for glslang's PropagateNoContraction), so this blob is the
+// pre-package dust_propagate.comp blob byte for byte (apply/perf9_K/prop_mono_equiv.sh).
+//
+//
+// Dust v3/v4 per-frame evaluation: one thread per live cluster. Closed-form Kepler propagation
+// with mu = GM_sun (1 - beta) from the emission record, then df64 subtraction of the particle
+// system's current heliocentric position -> f32 particle-system local metres.
+// Mirror of `dust::evaluate_cluster` (the render cluster) and `dust::packet_moments` (the second
+// moments of the cluster's grains, transported by secants over the real spreads: the lateral
+// dispersion sigma_lat across the ejection axis and the speed spread sigma_rad along it, 3
+// solves; and the size polyline: DUST_SIZE_EDGES bin edges of equal cross-section, each at its
+// own beta and speed, one solve each).
+// Reads ring slot (firstSlot + i) & ringMask, writes render / moments at the same slot (slot
+// indexed: the tier's buffers have one record per ring slot). The moments carry the mean's
+// heliocentric velocity (particle-system axes) in edges[9..11].w and the host's propagate
+// generation in edges[12].w (bits); with the skip flag a slot already stamped with this
+// generation is left as it is (the same inputs: the same words).
+#version 450 core
+#extension GL_GOOGLE_include_directive : require
+#define DUST_COMMON_MONO 1
+#include "dust_common.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PushConstants {
+    DustClusterBuffer clusters;  // 0
+    DustRenderBuffer  render;    // 8
+    DustMomentsBuffer moments;   // 16
+    uint firstSlot;              // 24
+    uint liveCount;              // 28
+    uint ringMask;               // 32
+    uint generation;             // 36: the host's propagate generation (the stamp, edges[12].w)
+    uvec2 skip;                  // 40: x bit 0: 1 = skip a slot stamped with `generation`, bits 1-2
+                                 //     log2 of the size-polyline edge stride (the trajectory detail,
+                                 //     dust::propagate_stride_bits); y the cadence's propagate
+                                 //     bitmask address, low word (0, 0 = every slot)
+                                 //     (std430: the vec4 below is 16-aligned)
+    vec4 ps_r_t_hi;              // 48: particle-system heliocentric position (m), w = t_now (s); df64 hi
+    vec4 ps_r_t_lo;              // 64: ... low part
+    vec4 rot_inv;                // 80: root -> particle-system quaternion (xyzw)
+    vec4 ttl;                    // 96: age band: x max age = TTL (s), y min age (s), z 1 = no fade,
+                                 //     w the tier's stream shift
+    vec3 spin;                   // 112: nucleus spin axis * omega (rad/s, particle-system axes)
+    uint maskHi;                 // 124: the bitmask address, high word
+} pc;                            // 128 bytes
+
+// K(r0, v0 + dv, mu, dt) - r, rotated into the particle-system frame
+vec3 secant_v(Df3 r0, Df3 v0, vec3 dv, vec2 mu, vec2 dt, Df3 r) {
+    Df3 v = df3_add(v0, df3_from_f32(dv));
+    Df3 rr, vv;
+    dust_kepler(r0, v, mu, dt, rr, vv);
+    return dust_qrot(pc.rot_inv, df3_to_f32(df3_sub(rr, r)));
+}
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.liveCount) return;
+    uint slot = (pc.firstSlot + i) & pc.ringMask;
+    // the cadence's propagate set (dust_classify.comp's marks: fresh, the build chunks, their
+    // predecessors): an unmarked slot keeps its moments
+    uvec2 maskAddr = uvec2(pc.skip.y, pc.maskHi);
+    if (maskAddr != uvec2(0u) && (DustUintBuffer(maskAddr).v[slot >> 5u] & (1u << (slot & 31u))) == 0u) return;
+    bool hasMoments = uvec2(pc.moments) != uvec2(0u);
+    // already at this generation's time (a paused frame): the record and moments stand
+    // bit 0 only: bits 1-2 carry the edge stride (until 2026-10-22 `!= 0u` skipped at every detail < 17)
+    if ((pc.skip.x & 1u) != 0u && hasMoments && floatBitsToUint(pc.moments.m[slot].edges[12].w) == pc.generation) return;
+    DustCluster C = pc.clusters.c[slot];
+
+    DustRenderCluster R;
+    R.pos_size = vec4(0.0);
+    R.age_id_dbeta_flux = vec4(0.0, uintBitsToFloat(slot), 0.0, 0.0);
+    vec2 t_now = vec2(pc.ps_r_t_hi.w, pc.ps_r_t_lo.w);
+    vec2 age = df_sub(t_now, vec2(C.r0_t0_hi.w, C.r0_t0_lo.w));
+    float age_f = age.x + age.y;
+    float ttl = pc.ttl.x;
+    // age band of this tier (dust::DustSystemState): neighbouring tiers overlap in emission time,
+    // each draws only its own ages
+    bool inBand = age_f >= pc.ttl.y && age_f >= 0.0 && age_f <= ttl;
+    // (the moments below need these past the render record: declared here)
+    float beta = C.v0_hi_beta.w;
+    vec2 mu;
+    Df3 r0, v0, r, v, ps;
+    vec3 local;
+    float flux = 0.0;
+    if (inBand) {
+        mu = df_mul(DF_SUN_MU, df_two_sum(1.0, -beta));
+        r0.hi = C.r0_t0_hi.xyz;   r0.lo = C.r0_t0_lo.xyz;
+        v0.hi = C.v0_hi_beta.xyz; v0.lo = C.v0_lo_mass.xyz;
+        dust_kepler(r0, v0, mu, age, r, v);
+        ps.hi = pc.ps_r_t_hi.xyz; ps.lo = pc.ps_r_t_lo.xyz;
+        local = dust_qrot(pc.rot_inv, df3_to_f32(df3_sub(r, ps)));
+        // fade the last 10% of the lifetime (oldest tier only)
+        float fade = pc.ttl.z > 0.5 ? 1.0 : clamp((1.0 - age_f / ttl) * 10.0, 0.0, 1.0);
+        flux = C.v0_lo_mass.w * C.misc.z * fade;
+        R.pos_size = vec4(local, C.misc.x * age_f);
+        // z: the beta half-spread with the child-pattern id in its low bits, copied bit for bit
+        // y: slot, the tier's stream shift and the live bit (dust::render_word): streak predecessors
+        // and log2 of the ring capacity (bitCount of the mask): readers derive the mask from it
+        R.age_id_dbeta_flux = vec4(age_f, uintBitsToFloat(dust_render_word(slot, uint(pc.ttl.w), bitCount(pc.ringMask))), C.misc.w, flux);
+    }
+    // the render record first: nothing of it stays live across the edge solves below
+    // member-wise: Adreno 619 drivers fail to link a whole-struct store through this pointer
+    pc.render.c[slot].pos_size = R.pos_size;
+    pc.render.c[slot].age_id_dbeta_flux = R.age_id_dbeta_flux;
+
+    // the moments in a private record, stored whole at the end: buffer stores inside the edge
+    // loop were 7 % (Mali-G52) to 14 % (Adreno 619) slower, neutral on the GTX 1070
+    // (perf8_prop_h1). Everything that needs the mean (r, v) or the secants before the edge
+    // loop, so only the loop's own inputs stay live across it
+    DustMoments M;
+    if (inBand && flux > 0.0 && hasMoments) {
+        // velocity dispersion: sigma_lat across the ejection axis, sigma_rad along it, secants
+        // over the real spreads
+        vec3 e1, e2, e3;
+        dust_dispersion_frame(C.eject.xyz, e1, e2, e3);
+        float sigmaLat = max(C.misc.x, 0.0), sigmaRad = max(C.misc.y, 0.0);
+        vec3 a0 = secant_v(r0, v0, e1 * sigmaLat, mu, age, r);
+        vec3 a1 = secant_v(r0, v0, e2 * sigmaLat, mu, age, r);
+        vec3 a2 = secant_v(r0, v0, e3 * sigmaRad, mu, age, r);
+        M.mean_flux = vec4(local, flux);
+        M.cov_a = vec4(a0.x * a0.x + a1.x * a1.x + a2.x * a2.x,
+                       a0.x * a0.y + a1.x * a1.y + a2.x * a2.y,
+                       a0.x * a0.z + a1.x * a1.z + a2.x * a2.z,
+                       a0.y * a0.y + a1.y * a1.y + a2.y * a2.y);
+        M.cov_b_age_id = vec4(a0.y * a0.z + a1.y * a1.z + a2.y * a2.z,
+                              a0.z * a0.z + a1.z * a1.z + a2.z * a2.z,
+                              age_f, uintBitsToFloat(dust_child_id(C.misc.w)));
+        // the w lanes of edges 1..12 and 15 (the edge loop leaves them alone; edges 0, 13, 14
+        // and 16 keep their speed factors, which are linear in k: dust_edge_factor).
+        // The nucleus spin
+        float omega = length(pc.spin.xyz);
+        vec3 axis = omega > 0.0 ? pc.spin.xyz / omega : vec3(0.0, 0.0, 1.0);
+        M.edges[1].w = omega;
+        M.edges[2].w = axis.x;
+        M.edges[3].w = axis.y;
+        M.edges[4].w = axis.z;
+        // the heliocentric distance and the Sun direction of the mean (dust::packet_moments)
+        vec3 rM = df3_to_f32(r);
+        float rN = max(length(rM), 1.0);
+        vec3 sun = dust_qrot(pc.rot_inv, rM * (-1.0 / rN));
+        M.edges[5].w = rN / DUST_AU_M;
+        M.edges[6].w = sun.x;
+        M.edges[7].w = sun.y;
+        M.edges[8].w = sun.z;
+        // the mean's heliocentric velocity (m/s, particle-system axes) and the generation stamp
+        vec3 vel = dust_qrot(pc.rot_inv, df3_to_f32(v));
+        M.edges[9].w = vel.x;
+        M.edges[10].w = vel.y;
+        M.edges[11].w = vel.z;
+        M.edges[12].w = uintBitsToFloat(pc.generation);
+        // the speck pass's walk mask lane (dust_specks_mask): nothing walked until it runs
+        M.edges[15].w = 0.0;
+        // the size polyline: every bin edge at its own beta and speed (v ~ s^-1/2). The
+        // trajectory detail (round 8 step D, dust::propagate_edge_stride; pc.skip.x bits 1-2):
+        // every stride-th edge solved, the others placed linearly between their solved
+        // neighbours below; the speed factors exact for every edge (linear in k anyway).
+        // The stride is uniform
+        float sqrtBeta = sqrt(max(beta, 0.0));
+        float range = dust_size_range_factor(C);
+        uint stride = 1u << ((pc.skip.x >> 1u) & 3u);
+        for (uint k = 0u; k < DUST_SIZE_EDGES; ++k) {
+            float sb = dust_size_edge_sqrt_beta(beta, range, k);
+            float factor = sqrtBeta > 0.0 ? sb / sqrtBeta : 1.0;
+            vec3 e = vec3(0.0);
+            if ((k & (stride - 1u)) == 0u) {
+                float betaK = sb * sb;
+                Df3 vK = df3_add(v0, df3_from_f32(C.eject.xyz * (factor - 1.0)));
+                Df3 rK, vvK;
+                dust_kepler(r0, vK, df_mul(DF_SUN_MU, df_two_sum(1.0, -betaK)), age, rK, vvK);
+                e = dust_qrot(pc.rot_inv, df3_to_f32(df3_sub(rK, ps)));
+            }
+            M.edges[k].xyz = e;
+            if (k == 0u || k == 13u || k == 14u || k == 16u) M.edges[k].w = factor;
+        }
+        // the skipped edges from their solved neighbours
+        if (stride == 2u) {
+            for (uint k = 1u; k < DUST_SIZE_BINS; k += 2u) {
+                vec3 e0 = M.edges[k - 1u].xyz, e1 = M.edges[k + 1u].xyz;
+                M.edges[k].xyz = e0 + (e1 - e0) * 0.5;
+            }
+        } else if (stride == 4u) {
+            for (uint k0 = 0u; k0 < DUST_SIZE_BINS; k0 += 4u) {
+                vec3 e0 = M.edges[k0].xyz, e1 = M.edges[k0 + 4u].xyz;
+                M.edges[k0 + 1u].xyz = e0 + (e1 - e0) * 0.25;
+                M.edges[k0 + 2u].xyz = e0 + (e1 - e0) * 0.5;
+                M.edges[k0 + 3u].xyz = e0 + (e1 - e0) * 0.75;
+            }
+        }
+    } else {
+        // outside the age band or no flux: the record's zero words
+        M.mean_flux = vec4(0.0);
+        M.cov_a = vec4(0.0);
+        M.cov_b_age_id = vec4(0.0);
+        for (uint k = 0u; k < DUST_SIZE_EDGES; ++k) M.edges[k] = vec4(0.0);
+    }
+    if (hasMoments) pc.moments.m[slot] = M;
+}

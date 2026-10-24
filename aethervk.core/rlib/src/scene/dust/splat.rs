@@ -7385,7 +7385,81 @@ pub const DUST_SQUEUE_TABLE_WORDS: u32 = 4;
 pub const DUST_SQUEUE_CLUSTERS: u32 = DUST_VQUEUE_CHUNK_MAX;
 pub const DUST_SQUEUE_PER_CLUSTER: u32 = 136;
 pub const DUST_SQUEUE_CAPACITY: u32 = DUST_SQUEUE_CLUSTERS * DUST_SQUEUE_PER_CLUSTER;
-pub const DUST_SQUEUE_RECORD_WORDS: u32 = 36;
+/// the sub-packet record (perf9 step Z, layer 4): words 0-32 the packet, 33-44 the prep stage's
+/// cone words, 45-46 the record's candidate run, 47 the walk state, 48-67 the walk's node row
+/// (`dust_scatter.glsl`'s `DUST_SQUEUE_RECORD_WORDS`)
+pub const DUST_SQUEUE_RECORD_WORDS: u32 = 68;
+// ─── The splitter family's queues (perf9 steps Z / O; GPU only: `dust_scatter.glsl`) ────────────
+// After the deferred edge regions (`dust_queue_offsets`): the leaf queue, the leaf spill and the
+// large leaves' index list (each a volume-queue-format header: words 0-2 the indirect dispatch, 3
+// the raw appends, 4 the capacity, 5 the lost count), the candidate buffer (the walk stage's
+// output, [`DUST_CQUEUE_RECORD_WORDS`] consecutive words a candidate) and the screen-packet slots
+// (the project stage's output, [`DUST_PQUEUE_RECORD_WORDS`] consecutive words a candidate, no
+// header). The EWA queue header's words 5-7 place the first three, the leaf queue header's words
+// 6-7 the last two (words from the EWA queue base, host-written each drawn frame).
+/// Z §8.3 item 17: the leaf record (seed, record, level | large << 31, the valve's level, the
+/// candidate slot), structure-of-arrays at the capacity's stride
+pub const DUST_LQUEUE_RECORD_WORDS: u32 = 5;
+/// Z §4 item 2: the leaf queue's and the leaf spill's records (the large-leaf list holds twice)
+pub const DUST_LQUEUE_CAPACITY: u32 = 1 << 18;
+/// Z §4 item 2: a leaf header's word 5, the leaves both the queue and the spill refused (kept for
+/// the frame: the per-chunk header update writes words 0-4)
+pub const DUST_LQUEUE_LOST: usize = 5;
+/// Z §4 item 3: the EWA queue header's words placing the leaf queue, the leaf spill and the list
+pub const DUST_QUEUE_LQUEUE_OFFSET: usize = 5;
+pub const DUST_QUEUE_LSPILL_OFFSET: usize = 6;
+pub const DUST_QUEUE_BLIST_OFFSET: usize = 7;
+/// Z §7 item 10, §8.3 item 15: the leaf queue header's word 6 places the candidate buffer; its
+/// header's word 5 counts the candidates of the clusters it refused (reset per chunk: the SEQ draw
+/// stage draws the granted range [0, word 3 − word 5))
+pub const DUST_LQUEUE_CQUEUE_OFFSET: usize = 6;
+pub const DUST_CQUEUE_LOST: usize = 5;
+/// Z §8.3 item 15: words 0-14 the packet, 15 the open ends | volume << 2 (perf9_O: | ordinal << 3),
+/// 16 the sub-packet record
+pub const DUST_CQUEUE_RECORD_WORDS: u32 = 17;
+pub const DUST_CQUEUE_CAPACITY: u32 = 262_144;
+/// Z §8.3 item 16: the leaf queue header's word 7 places the screen-packet slots; O §3 item 4: 47
+/// words a slot (0-32 the screen packet, 33-42 the leaf consumer's walk words, 43-46 its staged texel)
+pub const DUST_LQUEUE_PQUEUE_OFFSET: usize = 7;
+pub const DUST_PQUEUE_RECORD_WORDS: u32 = 47;
+/// the leaf queue header's frame-wide words (zero per frame with the header, never reset per
+/// chunk; GPU-written once per chunk by one lane of each consumer): the leaves (Σ the queue's word
+/// 3), the candidates (Σ the candidate header's word 3), the large leaves (Σ the list's word 3),
+/// the spilled leaves (Σ the spill's word 3). The host sizes the chunks from 8 and 9
+pub const DUST_LQUEUE_FRAME_LEAVES: usize = 8;
+pub const DUST_LQUEUE_FRAME_CANDIDATES: usize = 9;
+pub const DUST_LQUEUE_FRAME_LARGE: usize = 10;
+pub const DUST_LQUEUE_FRAME_SPILLED: usize = 11;
+/// the candidates the candidate buffer refused this frame (Σ its word 5: whole clusters, not drawn)
+/// and the largest chunk density (max over chunks of ceil(candidates / the chunk's clusters))
+pub const DUST_LQUEUE_FRAME_REFUSED: usize = 12;
+pub const DUST_LQUEUE_FRAME_CPC_MAX: usize = 13;
+/// the large-leaf list's indirect dispatch (a workgroup per entry): x at most this, the rows in y
+/// (`dust_lqueue_append`, `dust_draw_leaf.comp`'s wg blob)
+pub const DUST_LQUEUE_DISPATCH_MAX_X: u32 = 65_535;
+/// The leaf queue's (and the leaf spill's) records for a view of `vqueue_records` volume records:
+/// as many, at least 64, at most [`DUST_LQUEUE_CAPACITY`] (the low-end ring stays allocatable)
+pub const fn dust_lqueue_records(vqueue_records: u32) -> u32 {
+  if vqueue_records < 64 {
+    64
+  } else if vqueue_records > DUST_LQUEUE_CAPACITY {
+    DUST_LQUEUE_CAPACITY
+  } else {
+    vqueue_records
+  }
+}
+/// The candidate buffer's (and the screen-packet slots') records: as the leaf queue's, at most
+/// [`DUST_CQUEUE_CAPACITY`]
+pub const fn dust_cqueue_records(vqueue_records: u32) -> u32 {
+  let r = dust_lqueue_records(vqueue_records);
+  if r > DUST_CQUEUE_CAPACITY { DUST_CQUEUE_CAPACITY } else { r }
+}
+/// The chunk (clusters) that fits `records` twice over at `per_cluster` records a cluster (the
+/// leaf queue at the leaves per cluster, the candidate buffer at the candidates per cluster; as
+/// [`dust_vqueue_auto_chunk`]), in [1, [`DUST_VQUEUE_CHUNK_MAX`]]
+pub fn dust_split_auto_chunk(records: u32, per_cluster: f32) -> u32 {
+  ((records as f32 / (2.0 * per_cluster.max(1.0))) as u32).clamp(1, DUST_VQUEUE_CHUNK_MAX)
+}
 // The speck walk's spill (after the sub-packet queue, `dust_spill_base`): the walk pass keeps a
 // workgroup's node stack in shared memory, whose size sets the pass's occupancy; a walk whose
 // stack would overflow moves its oldest nodes to a slot here (claimed by the first spill, the
@@ -7406,9 +7480,91 @@ pub const DUST_SPECKS_TRACE_WORDS: u32 = 12;
 pub const fn dust_spill_words(slots: u32) -> u32 {
   DUST_SPILL_HEADER_WORDS + slots * DUST_SPILL_NODES * DUST_SPILL_NODE_WORDS + DUST_SPECKS_TRACE_CAPACITY * DUST_SPECKS_TRACE_WORDS
 }
+/// The breadth-first speck walk's region (round 9 step O, `dust_specks.comp`): it takes the spill
+/// slots' words after the spill header (the walk keeps no stack; the slots hold its records, leaf
+/// queues and frontiers). Spill header words 9–13: the region's first word (in pyramid-buffer
+/// words), then the capacities: records ([`DUST_WR_WORDS`] each), many-speck leaves, frontier
+/// (even: two ping-pong frontiers), single-speck leaves (leaves and frontier entries
+/// [`DUST_WR_LEAF_WORDS`] each). The region's own header ([`DUST_WR_REGION_HEADER`] words): the
+/// many-speck leaves pass's indirect args (0–2), the record count (3), the many-speck leaf count
+/// (4), setup passes 2–5's args (5–7), per step `s < DUST_WR_STEPS` the frontier count (8 + 4s)
+/// and the step pass's args (9 + 4s ..), the single-speck leaf count ([`DUST_WR_LEAF1`]) and its
+/// pass's args (+1 ..). The host zeroes the counts and every `x`, and writes 1 to every `y`, `z`.
+pub const DUST_WR_WORDS: u32 = 74 + 16 * 6;
+pub const DUST_WR_LEAF_WORDS: u32 = 7;
+pub const DUST_WR_STEPS: u32 = 62;
+pub const DUST_WR_LEAF1: u32 = 8 + 4 * DUST_WR_STEPS;
+pub const DUST_WR_REGION_HEADER: u32 = DUST_WR_LEAF1 + 4;
+/// the spill header words carrying the region (`Device::cmd_dust_specks`)
+pub const DUST_SPILL_REGION: usize = 9;
+pub const DUST_SPILL_CAP_RECORDS: usize = 10;
+pub const DUST_SPILL_CAP_LEAVES: usize = 11;
+pub const DUST_SPILL_CAP_FRONTIER: usize = 12;
+pub const DUST_SPILL_CAP_LEAVES1: usize = 13;
+/// The region's capacities (records, many-speck leaves, frontier, single-speck leaves) of a view
+/// with `spill_slots` slots: the 1 024-slot proportions (8 192 / 8 192 / 131 072 / 262 144: 5.1 M
+/// of the 6.3 M words) scaled to the slots' words, at least 64 each, the frontier even; the sum
+/// fits the slots' words after the region header at every slot count.
+pub const fn dust_walk_region_caps(spill_slots: u32) -> [u32; 4] {
+  let words = spill_slots as u64 * DUST_SPILL_NODES as u64 * DUST_SPILL_NODE_WORDS as u64;
+  let avail = words - DUST_WR_REGION_HEADER as u64;
+  let full = 1024u64 * DUST_SPILL_NODES as u64 * DUST_SPILL_NODE_WORDS as u64;
+  // the scale avail / full in 1/65536
+  let s = avail * 65536 / full;
+  let mut r = (8192 * s / 65536) as u32;
+  let mut lm = (8192 * s / 65536) as u32;
+  let mut f = ((131072 * s / 65536) as u32) & !1;
+  let mut ls = (262144 * s / 65536) as u32;
+  if r < 64 {
+    r = 64;
+  }
+  if lm < 64 {
+    lm = 64;
+  }
+  if f < 64 {
+    f = 64;
+  }
+  if ls < 64 {
+    ls = 64;
+  }
+  let need = r as u64 * DUST_WR_WORDS as u64 + (lm as u64 + ls as u64 + 2 * f as u64) * DUST_WR_LEAF_WORDS as u64;
+  assert!(need <= avail);
+  [r, lm, f, ls]
+}
+/// the words a region of these capacities takes (header included)
+pub const fn dust_walk_region_words(caps: [u32; 4]) -> u32 {
+  DUST_WR_REGION_HEADER + caps[0] * DUST_WR_WORDS + (caps[1] + caps[3] + 2 * caps[2]) * DUST_WR_LEAF_WORDS
+}
+/// `dust_splat.comp` (round 9 step O): the enumerator runs as a chain of [`DUST_SPLAT_STAGES`]
+/// stage pipelines over a chunk; every chunk cluster has a plan row of `DUST_SPLAN_WORDS` words
+/// after the sub-packet records (`dust_splan_base`: the stages' state, nothing crosses a stage
+/// in registers). Stage ids (the blob's `DUST_SPLAT_STAGE`): LIVE 0, PRE 1, LOD 2, HAZE_A 3,
+/// HAZE_B 4, SHAPE 5, GEO 6, SUBW 7, COUNT 8, REC_A 9, REC_B 10, HAZE_E 11; lanes per cluster
+/// [`DUST_SPLAT_STAGE_LANES`] (REC_A / REC_B are per record, dispatched indirectly from the
+/// sub-packet queue header words 8–10 / 11–13, which COUNT atomicMaxes).
+pub const DUST_SPLAN_WORDS: u32 = 384;
+pub const DUST_SPLAT_STAGES: usize = 12;
+pub const DUST_SPLAT_STAGE_LIVE: usize = 0;
+pub const DUST_SPLAT_STAGE_PRE: usize = 1;
+pub const DUST_SPLAT_STAGE_LOD: usize = 2;
+pub const DUST_SPLAT_STAGE_HAZE_A: usize = 3;
+pub const DUST_SPLAT_STAGE_HAZE_B: usize = 4;
+pub const DUST_SPLAT_STAGE_SHAPE: usize = 5;
+pub const DUST_SPLAT_STAGE_GEO: usize = 6;
+pub const DUST_SPLAT_STAGE_SUBW: usize = 7;
+pub const DUST_SPLAT_STAGE_COUNT: usize = 8;
+pub const DUST_SPLAT_STAGE_REC_A: usize = 9;
+pub const DUST_SPLAT_STAGE_REC_B: usize = 10;
+pub const DUST_SPLAT_STAGE_HAZE_E: usize = 11;
+/// lanes per chunk cluster of the direct stages (0 for the indirect record stages)
+pub const DUST_SPLAT_STAGE_LANES: [u32; DUST_SPLAT_STAGES] = [1, 85, 13, 70, 35, 1, 64, 32, 32, 0, 0, 35];
+/// the sub-packet queue header's indirect args: REC_A at words 8–10, REC_B at 11–13
+pub const DUST_SQUEUE_REC_A_ARGS: u32 = 8;
+pub const DUST_SQUEUE_REC_B_ARGS: u32 = 11;
 pub const DUST_SQUEUE_WORDS: u32 = DUST_SQUEUE_HEADER_WORDS
   + DUST_SQUEUE_CLUSTERS * DUST_SQUEUE_TABLE_WORDS
-  + DUST_SQUEUE_CAPACITY * DUST_SQUEUE_RECORD_WORDS;
+  + DUST_SQUEUE_CAPACITY * DUST_SQUEUE_RECORD_WORDS
+  + DUST_SQUEUE_CLUSTERS * DUST_SPLAN_WORDS;
 /// header word 2: records a chunk could not hold (never by construction; the test asserts 0)
 pub const DUST_SQUEUE_OVERFLOWED: usize = 2;
 /// header words: the chunk's cluster range, the frame's records drawn by the consumer from the
@@ -7450,7 +7606,8 @@ pub const fn dust_vspill_records(vqueue_records: u32) -> u32 {
 }
 /// Track 9A (t9a2d), the deferred edge pieces: the volume consumer draws no small piece whose
 /// centre slice's 3σ crosses the frame; it appends the piece (its inputs, range, level, colour,
-/// depth bits and rounding seed: [`DUST_VEDGE_RECORD_WORDS`], structure-of-arrays) to the region of
+/// depth bits and rounding seed: [`DUST_VEDGE_RECORD_WORDS`], array-of-structures, a piece's
+/// words together; perf9_O) to the region of
 /// its chunk's parity ([`DUST_VIEW_EDGE_ODD`]), and `dust_draw_small_edge.comp` draws them (the
 /// demotion or the sigma points: `dust::volume_small_points`' edge branch, the same arithmetic)
 /// beside the next chunk's producer. Two regions after the volume spill, each a header in the
@@ -7525,9 +7682,29 @@ pub struct DustQueueOffsets {
   /// `vedge[1]`, each a header and `vedge_records` records
   pub vedge: [u32; 2],
   pub vedge_records: u32,
+  /// the splitter family (perf9 steps Z / O): the leaf queue, the leaf spill (each a header and
+  /// `lqueue_records` leaf records), the large leaves' list (a header and 2 × `lqueue_records`
+  /// words), the candidate buffer (a header and [`DUST_CQUEUE_CAPACITY`] records), the
+  /// screen-packet slots ([`DUST_CQUEUE_CAPACITY`] slots, no header)
+  pub lqueue: u32,
+  pub lspill: u32,
+  pub blist: u32,
+  pub lqueue_records: u32,
+  pub cqueue: u32,
+  /// the candidate buffer's records and the screen-packet slots ([`dust_cqueue_records`])
+  pub cqueue_records: u32,
+  pub pqueue: u32,
+  /// perf9_O C2 v5: the staged volume consumer's scratch rows (`DUST_VW_SX_WORDS` words a row):
+  /// the main drain's `vqueue_records` rows at `vscratch[0]`, the spill's `vspill_records` rows
+  /// after them, up to `vscratch[1]`; `vscratch[0]` is the unstaged `end`. Zero-length (the
+  /// same `[end, end]`) when not staged.
+  pub vscratch: [u32; 2],
   pub end: u32,
 }
-pub const fn dust_queue_offsets(vqueue_records: u32) -> DustQueueOffsets {
+/// perf9_O C2 v5: the staged volume consumer's scratch row per record, in words (the shader's
+/// `DUST_VW_SX_WORDS`: the record's state, axes, codes, evaluations and piece rows)
+pub const DUST_VW_SX_WORDS: u32 = 784;
+pub const fn dust_queue_offsets_for(vqueue_records: u32, volume_staged: bool) -> DustQueueOffsets {
   let vqueue = DUST_QUEUE_WORDS;
   let squeue = vqueue + DUST_VQUEUE_HEADER_WORDS + vqueue_records * DUST_VQUEUE_RECORD_WORDS;
   let spill = squeue + DUST_SQUEUE_WORDS;
@@ -7539,6 +7716,21 @@ pub const fn dust_queue_offsets(vqueue_records: u32) -> DustQueueOffsets {
   let vedge0 = vspill + DUST_VQUEUE_HEADER_WORDS + vspill_records * DUST_VQUEUE_RECORD_WORDS;
   let vedge_records = dust_vedge_records(vqueue_records);
   let vedge1 = vedge0 + DUST_VQUEUE_HEADER_WORDS + vedge_records * DUST_VEDGE_RECORD_WORDS;
+  // Z §4 item 2 (the leaf queue, its spill, the large-leaf list after `vedge[1]`; §8.3 item 17:
+  // five words a leaf), §7 item 10 / §8.3 item 15 (the candidate buffer after the list), §8.3
+  // item 16 (the screen-packet slots next to it): no earlier offset moves
+  let lqueue = vedge1 + DUST_VQUEUE_HEADER_WORDS + vedge_records * DUST_VEDGE_RECORD_WORDS;
+  let lqueue_records = dust_lqueue_records(vqueue_records);
+  let cqueue_records = dust_cqueue_records(vqueue_records);
+  let lspill = lqueue + DUST_VQUEUE_HEADER_WORDS + lqueue_records * DUST_LQUEUE_RECORD_WORDS;
+  let blist = lspill + DUST_VQUEUE_HEADER_WORDS + lqueue_records * DUST_LQUEUE_RECORD_WORDS;
+  let cqueue = blist + DUST_VQUEUE_HEADER_WORDS + 2 * lqueue_records;
+  let pqueue = cqueue + DUST_VQUEUE_HEADER_WORDS + cqueue_records * DUST_CQUEUE_RECORD_WORDS;
+  // today's end (the unstaged layout: the splitter family's slots last); the staged scratch rows
+  // follow it (perf9_O C2 v5)
+  let old_end = pqueue + cqueue_records * DUST_PQUEUE_RECORD_WORDS;
+  let vscratch = [old_end, old_end + vqueue_records * DUST_VW_SX_WORDS];
+  let end = if volume_staged { vscratch[1] + dust_vspill_records(vqueue_records) * DUST_VW_SX_WORDS } else { old_end };
   DustQueueOffsets {
     vqueue,
     squeue,
@@ -7548,8 +7740,20 @@ pub const fn dust_queue_offsets(vqueue_records: u32) -> DustQueueOffsets {
     vspill_records,
     vedge: [vedge0, vedge1],
     vedge_records,
-    end: vedge1 + DUST_VQUEUE_HEADER_WORDS + vedge_records * DUST_VEDGE_RECORD_WORDS,
+    lqueue,
+    lspill,
+    blist,
+    lqueue_records,
+    cqueue,
+    cqueue_records,
+    pqueue,
+    vscratch,
+    end,
   }
+}
+/// The unstaged placement (every caller before the staged consumer; its offsets are unchanged)
+pub const fn dust_queue_offsets(vqueue_records: u32) -> DustQueueOffsets {
+  dust_queue_offsets_for(vqueue_records, false)
 }
 /// [`PYR_FLAGS`] bit (host-written, `AETHERVK_DUST_VQUEUE=0` or the device's test hook): the main
 /// volume queue refuses every record, so every volumetric packet goes through the volume spill
@@ -7564,6 +7768,24 @@ pub const DUST_VIEW_VOLUME_SPILL: u32 = 1 << 28;
 /// sets it on an odd chunk's consumer dispatches and on the edge pass that drains them, and refuses
 /// a caller's flags carrying it): the deferred edge pieces' region 1 instead of 0
 pub const DUST_VIEW_EDGE_ODD: u32 = 1 << 29;
+/// [`DustSplatPushConstants::flags`] bit, host-internal (perf9 step Z; `Device::cmd_dust_splat`
+/// sets it on the leaf consumer's second dispatch of each chunk and refuses a caller's flags
+/// carrying it): `dust_draw_leaf.comp` drains the leaf spill instead of the leaf queue
+/// (bit 15: the flags word's 0-1, 8-13, 16-17, 20-27 and 28-29 are taken; 27 was the debug value's)
+pub const DUST_VIEW_LEAF_SPILL: u32 = 1 << 15;
+const _: () = assert!(
+  DUST_VIEW_LEAF_SPILL
+    & (crate::scene::dust::DUST_VIEW_TRACERS
+      | crate::scene::dust::DUST_VIEW_FLOW
+      | (7 << crate::scene::dust::DUST_FLAGS_VOLUME_DETAIL_SHIFT)
+      | (7 << crate::scene::dust::DUST_FLAGS_HAZE_DETAIL_SHIFT)
+      | crate::scene::dust::DUST_VIEW_DEBUG_STREAM
+      | crate::scene::dust::DUST_VIEW_DEBUG_SAMPLE
+      | (0xFF << 20)
+      | DUST_VIEW_VOLUME_SPILL
+      | DUST_VIEW_EDGE_ODD)
+    == 0
+);
 /// [`PYR_FLAGS`] bit (a test hook through `Device::dust_set_vqueue_mode`): `dust_split.comp`
 /// walks a cluster's records in one lane with a running ordinal (the former per-cluster thread's
 /// order), the word-identical reference for its counting pass and prefix

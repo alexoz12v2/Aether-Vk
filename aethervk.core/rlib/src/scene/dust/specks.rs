@@ -1717,6 +1717,16 @@ impl SpeckCluster {
     (out, n)
   }
 
+  /// The start nodes as `(level, lo, mant, exp, hash)` (diagnostics: the GPU record's start list
+  /// is compared with it)
+  pub fn debug_start_nodes(&self, eye: [f32; 3], d_max: f32) -> alloc::vec::Vec<(u32, [u32; 3], u32, u32, u32)> {
+    let me_df = self.mean_rel(eye);
+    let me = [me_df[0].hi + me_df[0].lo, me_df[1].hi + me_df[1].lo, me_df[2].hi + me_df[2].lo];
+    let (y_eye, sigma_lo) = self.eye_in_xi(me);
+    let (s, n) = self.start_nodes(y_eye, sigma_lo, d_max);
+    s[..n].iter().map(|o| (o.level, o.lo, o.mant, o.exp, o.hash)).collect()
+  }
+
   /// Enumerates the specks of this bin whose tree nodes meet the ball of radius `d_max` about
   /// `eye` and are not wholly behind the plane through `eye` normal to `fwd` (`fwd` zero: no
   /// plane). Only specks inside the ball are reported (`f(speck) → false` stops). The traversal

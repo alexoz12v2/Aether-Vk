@@ -109,13 +109,13 @@ const uint DUST_CADS_SHOWN_LIGHT = 1040u;   // (lo, hi)
 const uint DUST_CADS_FRAME_LIGHT = 1042u;   // (lo, hi)
 // adds a non-negative float to the (lo, hi) 64-bit counter at word w, with a carry (no 64-bit
 // atomics on the baseline: as dust_profile.glsl's add64)
-void dust_cad_add64(DustUintBuffer b, uint w, float v) {
+void dust_cad_add64(uvec2 b, uint w, float v) {
     if (!(v > 0.0)) return;
     uint hi = uint(min(floor(v * (1.0 / 4294967296.0)), 4294967295.0));
     uint lo = uint(min(v - float(hi) * 4294967296.0, 4294967295.0));
-    uint old = atomicAdd(b.v[w], lo);
+    uint old = atomicAdd(DustUintBuffer(b).v[w], lo);
     if (old + lo < old) hi += 1u;
-    if (hi != 0u) atomicAdd(b.v[w + 1u], hi);
+    if (hi != 0u) atomicAdd(DustUintBuffer(b).v[w + 1u], hi);
 }
 const uint DUST_CADS_PROF = 1536u;         // the profiler's lane-cycle words (DUST_PROFILE)
 const uint DUST_CADS_WORDS = 2048u;
@@ -142,26 +142,37 @@ uint dust_cad_blocks(uint R, uint nc, uint np, uint rb, uint t, uint nb, uint l)
 // the incoming bytes (the handover; dust_cadence::CadenceSysLayout::incoming0): after the blocks
 uint dust_cad_inc0(uint R, uint nc, uint np) { return dust_cad_blocks0(R, nc) + 6u * nc * np * (R / 1024u + DUST_CAD_MAX_TIERS); }
 
+// dust_streak_pred with the render buffer's address (perf9_O round 11: no helper takes a buffer
+// reference; the Adreno 619 compiler keeps such an argument in private memory). The same statements.
+int dust_cad_streak_pred(uvec2 render, uint slot, uint firstSlot, uint liveCount) {
+    vec2 yz = DustRenderBuffer(render).c[slot].age_id_dbeta_flux.yz;
+    uint mask = dust_render_mask(yz.x);
+    uint n = 1u << dust_render_shift(yz.x);
+    uint k = (slot - firstSlot) & mask;
+    if (k < n || k >= liveCount || dust_stream_break(yz.y)) return -1;
+    uint p = (slot - n) & mask;
+    return dust_render_live(DustRenderBuffer(render).c[p].age_id_dbeta_flux.y) ? int(p) : -1;
+}
 // the owner byte of byte index i (ring base + slot)
-uint dust_own_get(DustUintBuffer sys, uint i) { return (sys.v[i >> 2u] >> ((i & 3u) * 8u)) & 0xFFu; }
+uint dust_own_get(uvec2 sys, uint i) { return (DustUintBuffer(sys).v[i >> 2u] >> ((i & 3u) * 8u)) & 0xFFu; }
 // stores byte i (the pass's only writer of it; the word's other bytes are other threads': atomics)
-void dust_own_set(DustUintBuffer sys, uint i, uint oldB, uint newB) {
+void dust_own_set(uvec2 sys, uint i, uint oldB, uint newB) {
     if (oldB == newB) return;
     uint sh = (i & 3u) * 8u;
-    atomicAnd(sys.v[i >> 2u], ~(0xFFu << sh));
-    if (newB != 0u) atomicOr(sys.v[i >> 2u], newB << sh);
+    atomicAnd(DustUintBuffer(sys).v[i >> 2u], ~(0xFFu << sh));
+    if (newB != 0u) atomicOr(DustUintBuffer(sys).v[i >> 2u], newB << sh);
 }
 // the incoming byte of byte index i (ring base + slot), its store (as dust_own_set)
-uint dust_inc_get(DustUintBuffer sys, uint inc0, uint i) { return (sys.v[inc0 + (i >> 2u)] >> ((i & 3u) * 8u)) & 0xFFu; }
-void dust_inc_set(DustUintBuffer sys, uint inc0, uint i, uint oldB, uint newB) {
+uint dust_inc_get(uvec2 sys, uint inc0, uint i) { return (DustUintBuffer(sys).v[inc0 + (i >> 2u)] >> ((i & 3u) * 8u)) & 0xFFu; }
+void dust_inc_set(uvec2 sys, uint inc0, uint i, uint oldB, uint newB) {
     if (oldB == newB) return;
     uint sh = (i & 3u) * 8u;
-    atomicAnd(sys.v[inc0 + (i >> 2u)], ~(0xFFu << sh));
-    if (newB != 0u) atomicOr(sys.v[inc0 + (i >> 2u)], newB << sh);
+    atomicAnd(DustUintBuffer(sys).v[inc0 + (i >> 2u)], ~(0xFFu << sh));
+    if (newB != 0u) atomicOr(DustUintBuffer(sys).v[inc0 + (i >> 2u)], newB << sh);
 }
 // marks bit i (ring base + slot) of the propagate bitmask
-void dust_cad_mark(DustUintBuffer sys, uint R, uint i) {
-    atomicOr(sys.v[dust_cad_pmask0(R) + (i >> 5u)], 1u << (i & 31u));
+void dust_cad_mark(uvec2 sys, uint R, uint i) {
+    atomicOr(DustUintBuffer(sys).v[dust_cad_pmask0(R) + (i >> 5u)], 1u << (i & 31u));
 }
 
 // ── scalar helpers in the CPU's evaluation order (no contraction) ──
@@ -195,17 +206,17 @@ vec2 dust_cad_lambda(uint mi) {
 // host computes in f64 and casts once, added in f32 to the mean and the 17 edges): 0 at this
 // frame's stamp; else the tier's anchor table by binary search; false (and 0) when the stamp left
 // the history (the CPU's `unshifted_stale`)
-bool dust_cad_shift(DustUintBuffer an, uint t, uint stamp, out vec3 d) {
+bool dust_cad_shift(uvec2 an, uint t, uint stamp, out vec3 d) {
     d = vec3(0.0);
     uint base = t * DUST_CAD_ANCH_TIER_WORDS;
-    if (stamp == an.v[base + 1u]) return true;
-    uint lo = 0u, hi = an.v[base];
+    if (stamp == DustUintBuffer(an).v[base + 1u]) return true;
+    uint lo = 0u, hi = DustUintBuffer(an).v[base];
     while (lo < hi) {
         uint mid = (lo + hi) >> 1u;
         uint e = base + DUST_CAD_ANCH_ENTRY0 + 4u * mid;
-        uint sm = an.v[e];
+        uint sm = DustUintBuffer(an).v[e];
         if (sm == stamp) {
-            d = vec3(uintBitsToFloat(an.v[e + 1u]), uintBitsToFloat(an.v[e + 2u]), uintBitsToFloat(an.v[e + 3u]));
+            d = vec3(uintBitsToFloat(DustUintBuffer(an).v[e + 1u]), uintBitsToFloat(DustUintBuffer(an).v[e + 2u]), uintBitsToFloat(DustUintBuffer(an).v[e + 3u]));
             return true;
         }
         if (sm < stamp) lo = mid + 1u; else hi = mid;
@@ -289,12 +300,12 @@ bool dust_cad_footprint(uint mi, vec3 sh, int pred, vec3 shP, mat4 mvp, float W,
 // k + 1 the largest k with δ_k · 2 N_k ≤ ε and, with the fallback's shape bound θ > 0,
 // 2 N_k · Δt ≤ θ · age), the δ_k (∞ when not finite or no class k), the
 // sensitivity g (px/m) and the enclosing flag. `pred` ≥ 0: the predecessor at the same stamp.
-uint dust_cad_rate(uint mi, vec3 sh, int pred, vec3 shP, mat4 mvp, vec3 eye, DustUintBuffer prm,
+uint dust_cad_rate(uint mi, vec3 sh, int pred, vec3 shP, mat4 mvp, vec3 eye, uvec2 prm,
                    out float dl0, out float dl1, out float dl2, out float gOut, out bool enclosingOut) {
     float INF = uintBitsToFloat(DUST_CAD_INF_BITS);
     dl0 = INF; dl1 = INF; dl2 = INF; gOut = INF; enclosingOut = false;
     if (!(dust_mom.m[mi].mean_flux.w > 0.0)) return 0u;
-    float W = uintBitsToFloat(prm.v[DUST_CADP_W]), H = uintBitsToFloat(prm.v[DUST_CADP_H]);
+    float W = uintBitsToFloat(DustUintBuffer(prm).v[DUST_CADP_W]), H = uintBitsToFloat(DustUintBuffer(prm).v[DUST_CADP_H]);
     bool persp;
     vec3 fwd = dust_view_forward(mvp, eye, persp);
     // the near point: the edge of the smallest depth along the view (the mean orthographic)
@@ -317,9 +328,9 @@ uint dust_cad_rate(uint mi, vec3 sh, int pred, vec3 shP, mat4 mvp, vec3 eye, Dus
         }
     }
     vec3 v = vec3(dust_mom.m[mi].edges[9].w, dust_mom.m[mi].edges[10].w, dust_mom.m[mi].edges[11].w);
-    float dt = uintBitsToFloat(prm.v[DUST_CADP_DT]);
-    vec3 dEye = vec3(uintBitsToFloat(prm.v[DUST_CADP_DEYE]), uintBitsToFloat(prm.v[DUST_CADP_DEYE + 1u]),
-                     uintBitsToFloat(prm.v[DUST_CADP_DEYE + 2u]));
+    float dt = uintBitsToFloat(DustUintBuffer(prm).v[DUST_CADP_DT]);
+    vec3 dEye = vec3(uintBitsToFloat(DustUintBuffer(prm).v[DUST_CADP_DEYE]), uintBitsToFloat(DustUintBuffer(prm).v[DUST_CADP_DEYE + 1u]),
+                     uintBitsToFloat(DustUintBuffer(prm).v[DUST_CADP_DEYE + 2u]));
     precise vec3 s;
     if (persp) s = vec3(v.x * dt - dEye.x, v.y * dt - dEye.y, v.z * dt - dEye.z);
     else s = vec3(v.x * dt, v.y * dt, v.z * dt);
@@ -356,7 +367,7 @@ uint dust_cad_rate(uint mi, vec3 sh, int pred, vec3 shP, mat4 mvp, vec3 eye, Dus
     float sigmaMin = max(sqrt(max(lam.x, 0.0)), DUST_CAD_SIGMA_MIN_M);
     vec3 dm = dust_mom.m[mi].mean_flux.xyz + sh - eye;
     bool enclosing = persp && (!hasE || dust_cad_dot(dm, dm) < 9.0 * max(lam.y, 0.0));
-    float framePx = uintBitsToFloat(prm.v[DUST_CADP_FRAME_PX]);
+    float framePx = uintBitsToFloat(DustUintBuffer(prm).v[DUST_CADP_FRAME_PX]);
     precise float d4 = enclosing ? (sn / sigmaMin + dt / age) * framePx : 0.0;
     if (enclosing) {
         // a cloud around the eye: its sensitivity is frame_px / σ_min; no measurable smallest axis
@@ -375,38 +386,253 @@ uint dust_cad_rate(uint mi, vec3 sh, int pred, vec3 shP, mat4 mvp, vec3 eye, Dus
     gOut = g;
     enclosingOut = enclosing;
     uint cls = 0u;
-    uint nc = prm.v[DUST_CADP_NC];
-    float eps = uintBitsToFloat(prm.v[DUST_CADP_EPS]);
+    uint nc = DustUintBuffer(prm).v[DUST_CADP_NC];
+    float eps = uintBitsToFloat(DustUintBuffer(prm).v[DUST_CADP_EPS]);
     // the by-count fallback's shape bound (θ = 0: off, every class passes it): 2 N_k · Δt ≤ θ · age,
     // the CPU's two f32 products and comparison
-    float theta = uintBitsToFloat(prm.v[DUST_CADP_SHAPE]);
+    float theta = uintBitsToFloat(DustUintBuffer(prm).v[DUST_CADP_SHAPE]);
     bool shapeOn = theta > 0.0;
     precise float thAge = theta * age;
     if (nc > 0u) {
-        precise float dk = base + uintBitsToFloat(prm.v[DUST_CADP_AW]) * g;
+        precise float dk = base + uintBitsToFloat(DustUintBuffer(prm).v[DUST_CADP_AW]) * g;
         bool fin = dust_cad_finite(dk);
         dl0 = fin ? dk : INF;
-        precise float lhs = dk * 2.0 * float(prm.v[DUST_CADP_N]);
-        precise float shp = 2.0 * float(prm.v[DUST_CADP_N]) * dt;
+        precise float lhs = dk * 2.0 * float(DustUintBuffer(prm).v[DUST_CADP_N]);
+        precise float shp = 2.0 * float(DustUintBuffer(prm).v[DUST_CADP_N]) * dt;
         if (fin && lhs <= eps && (!shapeOn || shp <= thAge)) cls = 1u;
     }
     if (nc > 1u) {
-        precise float dk = base + uintBitsToFloat(prm.v[DUST_CADP_AW + 1u]) * g;
+        precise float dk = base + uintBitsToFloat(DustUintBuffer(prm).v[DUST_CADP_AW + 1u]) * g;
         bool fin = dust_cad_finite(dk);
         dl1 = fin ? dk : INF;
-        precise float lhs = dk * 2.0 * float(prm.v[DUST_CADP_N + 1u]);
-        precise float shp = 2.0 * float(prm.v[DUST_CADP_N + 1u]) * dt;
+        precise float lhs = dk * 2.0 * float(DustUintBuffer(prm).v[DUST_CADP_N + 1u]);
+        precise float shp = 2.0 * float(DustUintBuffer(prm).v[DUST_CADP_N + 1u]) * dt;
         if (fin && lhs <= eps && (!shapeOn || shp <= thAge)) cls = 2u;
     }
     if (nc > 2u) {
-        precise float dk = base + uintBitsToFloat(prm.v[DUST_CADP_AW + 2u]) * g;
+        precise float dk = base + uintBitsToFloat(DustUintBuffer(prm).v[DUST_CADP_AW + 2u]) * g;
         bool fin = dust_cad_finite(dk);
         dl2 = fin ? dk : INF;
-        precise float lhs = dk * 2.0 * float(prm.v[DUST_CADP_N + 2u]);
-        precise float shp = 2.0 * float(prm.v[DUST_CADP_N + 2u]) * dt;
+        precise float lhs = dk * 2.0 * float(DustUintBuffer(prm).v[DUST_CADP_N + 2u]);
+        precise float shp = 2.0 * float(DustUintBuffer(prm).v[DUST_CADP_N + 2u]) * dt;
         if (fin && lhs <= eps && (!shapeOn || shp <= thAge)) cls = 3u;
     }
     return cls;
 }
+
+
+// ── perf9_O: the classify's per-slot evaluation in stages (dust_classify.comp modes 7-14) ──
+// cadence::cadence_rate, shell_capable and footprint_inside as before, expression for expression;
+// what changes is where values live. Each stage is its own dispatch (a mode of dust_classify.comp,
+// a barrier between): it reads its inputs from the slot's row in the system's cadence buffer (and
+// from the moments / params / push constants) and writes its outputs there, so a stage holds its
+// own working set only (Mali-G52 <= 32 registers, GCN <= 32 VGPRs; one stage in one program).
+// Row of ring slot s of the tier at ring base rb: DUST_CADR_WORDS words at
+// dust_cad_rows0(R, nc, np) + (rb + s) * DUST_CADR_WORDS (after the incoming bytes; the host's
+// CadenceSysLayout::rows0). Words:
+//   0..2 sh (the stale moments' shift), 3 pred (int bits; the predecessor at the same stamp),
+//   4 flags (DUST_CADR_F_*, the class r at bits 12-13, target + 1 at bits 16-19),
+//   5..6 lam (λ_min, λ_max), 7 ext (the on-screen extent, then max with the time segment),
+//   8..10 the near point; after the jac/step stage 8 d1, 9 sn; after the rate 8..10 dl0..dl2,
+//   11 g (the Jacobian norm; after the rate the rate's g, gOut)
+#ifdef DUST_CAD_STAGES  // (dust_classify.comp; the loops' attributes need GL_EXT_control_flow_attributes)
+const uint DUST_CADR_WORDS = 12u;
+const uint DUST_CADR_F_EVAL = 1u;       // the slot is evaluated (CLASSIFY: some pair takes it; DEBUG: live)
+const uint DUST_CADR_F_OK = 2u;         // mean flux > 0 and the render word live
+const uint DUST_CADR_F_SHIFTED = 4u;    // dust_cad_shift found the stamp (CLASSIFY)
+const uint DUST_CADR_F_SHELL = 8u;      // dust_cad_shell_capable
+const uint DUST_CADR_F_HAS_E = 16u;     // the extent is finite
+const uint DUST_CADR_F_PERSP = 32u;     // the view is perspective (dust_view_forward)
+const uint DUST_CADR_F_ENC = 64u;       // the rate's enclosing flag (its output)
+const uint DUST_CADR_F_EARLY = 128u;    // the rate returned class 0 early (enclosing without a smallest axis)
+const uint DUST_CADR_F_INSIDE = 256u;   // dust_cad_footprint
+const uint DUST_CADR_F_RATE = 512u;     // the rate is computed (CLASSIFY: !shell; DEBUG: always)
+uint dust_cad_rows0(uint R, uint nc, uint np) { return dust_cad_inc0(R, nc, np) + R / 4u; }
+vec3 dust_cadr_v3(uvec2 row, uint at) {
+    return vec3(uintBitsToFloat(DustUintBuffer(row).v[at]), uintBitsToFloat(DustUintBuffer(row).v[at + 1u]), uintBitsToFloat(DustUintBuffer(row).v[at + 2u]));
+}
+void dust_cadr_put3(uvec2 row, uint at, vec3 v) {
+    DustUintBuffer(row).v[at] = floatBitsToUint(v.x); DustUintBuffer(row).v[at + 1u] = floatBitsToUint(v.y); DustUintBuffer(row).v[at + 2u] = floatBitsToUint(v.z);
+}
+// λ (words 5-6): dust_cad_lambda, once per slot (shell_capable, the rate and the footprint read
+// the same two floats the function returns)
+void dust_cadr_lam(uint mi, uvec2 row, uint rw) {
+    vec2 lam = dust_cad_lambda(mi);
+    DustUintBuffer(row).v[rw + 5u] = floatBitsToUint(lam.x);
+    DustUintBuffer(row).v[rw + 6u] = floatBitsToUint(lam.y);
+}
+// cadence::shell_capable (dust_cad_shell_capable with λ_max from the row)
+bool dust_cadr_shell(uint mi, uvec2 row, uint rw, vec3 eye, float dMax) {
+    if (!(dMax > 0.0)) return false;
+    vec3 sh = dust_cadr_v3(row, rw);
+    float d = dust_cad_len(dust_mom.m[mi].mean_flux.xyz + sh - eye);
+    // (not unrolled: GCN's scheduler hoists the 17 edges' loads, 36 VGPRs)
+    [[dont_unroll]] for (uint j = 0u; j < DUST_SIZE_EDGES; ++j) d = min(d, dust_cad_len(dust_mom.m[mi].edges[j].xyz + sh - eye));
+    float sm = sqrt(max(uintBitsToFloat(DustUintBuffer(row).v[rw + 6u]), 0.0));
+    precise float lhs = d - 3.0 * sm;
+    return lhs < DUST_CAD_SHELL_MARGIN * dMax;
+}
+// the rate's extent and time segment (word 7, flag HAS_E)
+void dust_cadr_extent(uint mi, uvec2 row, uint rw, mat4 mvp, uvec2 prm) {
+    vec3 sh = dust_cadr_v3(row, rw);
+    int pred = int(DustUintBuffer(row).v[rw + 3u]);
+    float W = uintBitsToFloat(DustUintBuffer(prm).v[DUST_CADP_W]), H = uintBitsToFloat(DustUintBuffer(prm).v[DUST_CADP_H]);
+    float extP = 0.0, tP = 0.0;
+    bool hasE = dust_cad_extent_px(mi, sh, mvp, W, H, extP);
+    bool hasT = pred >= 0 && dust_cad_time_px(mi, sh, uint(pred), sh, mvp, W, H, tP);
+    float ext = hasE ? (hasT ? max(extP, tP) : extP) : 0.0;
+    DustUintBuffer(row).v[rw + 7u] = floatBitsToUint(ext);
+    DustUintBuffer(row).v[rw + 4u] = (DustUintBuffer(row).v[rw + 4u] & ~DUST_CADR_F_HAS_E) | (hasE ? DUST_CADR_F_HAS_E : 0u);
+}
+// the rate's near point (words 8-10, flag PERSP): the edge of the smallest depth along the view
+// (the mean orthographic) by its index — the first of equal depths, as the strict comparison
+// keeps — its point recomputed after the loop by the same expression; DUST_CAD_NEAR_SIGMAS > 0
+// moves it toward the eye
+void dust_cadr_near(uint mi, uvec2 row, uint rw, mat4 mvp, vec3 eye) {
+    float INF = uintBitsToFloat(DUST_CAD_INF_BITS);
+    vec3 sh = dust_cadr_v3(row, rw);
+    bool persp;
+    vec3 fwd = dust_view_forward(mvp, eye, persp);
+    int jb = -1;
+    if (persp) {
+        float best = INF;
+        [[dont_unroll]] for (uint j = 0u; j < DUST_SIZE_EDGES; ++j) {
+            vec3 e = dust_mom.m[mi].edges[j].xyz + sh;
+            float dd = dust_cad_dot(e - eye, fwd);
+            if (dd < best) { best = dd; jb = int(j); }
+        }
+    }
+    vec3 nearP = jb < 0 ? dust_mom.m[mi].mean_flux.xyz + sh : dust_mom.m[mi].edges[uint(jb)].xyz + sh;
+    if (persp && DUST_CAD_NEAR_SIGMAS > 0.0) {
+        float lamY = uintBitsToFloat(DustUintBuffer(row).v[rw + 6u]);
+        vec3 toEye = eye - nearP;
+        float r = dust_cad_len(toEye);
+        if (r > 0.0) {
+            float l = min(DUST_CAD_NEAR_SIGMAS * sqrt(max(lamY, 0.0)), 0.9 * r);
+            nearP = vec3(nearP.x + toEye.x / r * l, nearP.y + toEye.y / r * l, nearP.z + toEye.z / r * l);
+        }
+    }
+    dust_cadr_put3(row, rw + 8u, nearP);
+    DustUintBuffer(row).v[rw + 4u] = (DustUintBuffer(row).v[rw + 4u] & ~DUST_CADR_F_PERSP) | (persp ? DUST_CADR_F_PERSP : 0u);
+}
+// the Jacobian's Frobenius norm at the near point (word 11)
+void dust_cadr_jac(uvec2 row, uint rw, mat4 mvp, uvec2 prm) {
+    float INF = uintBitsToFloat(DUST_CAD_INF_BITS);
+    vec3 nearP = dust_cadr_v3(row, rw + 8u);
+    float W = uintBitsToFloat(DustUintBuffer(prm).v[DUST_CADP_W]), H = uintBitsToFloat(DustUintBuffer(prm).v[DUST_CADP_H]);
+    vec3 r0 = vec3(mvp[0][0], mvp[1][0], mvp[2][0]);
+    vec3 r1 = vec3(mvp[0][1], mvp[1][1], mvp[2][1]);
+    vec3 r3 = vec3(mvp[0][3], mvp[1][3], mvp[2][3]);
+    precise float w = dust_cad_dot(r3, nearP) + mvp[3][3];
+    float g = INF;
+    if (w > 0.0) {
+        precise float nx = (dust_cad_dot(r0, nearP) + mvp[3][0]) / w;
+        precise float ny = (dust_cad_dot(r1, nearP) + mvp[3][1]) / w;
+        float kx = 0.5 * W / w;
+        float ky = 0.5 * H / w;
+        precise vec3 jx = vec3((r0.x - r3.x * nx) * kx, (r0.y - r3.y * nx) * kx, (r0.z - r3.z * nx) * kx);
+        precise vec3 jy = vec3((r1.x - r3.x * ny) * ky, (r1.y - r3.y * ny) * ky, (r1.z - r3.z * ny) * ky);
+        precise float j2 = dust_cad_dot(jx, jx) + dust_cad_dot(jy, jy);
+        g = sqrt(j2);
+    }
+    DustUintBuffer(row).v[rw + 11u] = floatBitsToUint(g);
+}
+// the step s: its length sn (word 9) and its screen length d1 (word 8; the near point's words
+// are read first)
+void dust_cadr_step(uint mi, uvec2 row, uint rw, mat4 mvp, uvec2 prm) {
+    float INF = uintBitsToFloat(DUST_CAD_INF_BITS);
+    bool persp = (DustUintBuffer(row).v[rw + 4u] & DUST_CADR_F_PERSP) != 0u;
+    vec3 nearP = dust_cadr_v3(row, rw + 8u);
+    vec3 v = vec3(dust_mom.m[mi].edges[9].w, dust_mom.m[mi].edges[10].w, dust_mom.m[mi].edges[11].w);
+    float dt = uintBitsToFloat(DustUintBuffer(prm).v[DUST_CADP_DT]);
+    vec3 dEye = vec3(uintBitsToFloat(DustUintBuffer(prm).v[DUST_CADP_DEYE]), uintBitsToFloat(DustUintBuffer(prm).v[DUST_CADP_DEYE + 1u]),
+                     uintBitsToFloat(DustUintBuffer(prm).v[DUST_CADP_DEYE + 2u]));
+    precise vec3 s;
+    if (persp) s = vec3(v.x * dt - dEye.x, v.y * dt - dEye.y, v.z * dt - dEye.z);
+    else s = vec3(v.x * dt, v.y * dt, v.z * dt);
+    float sn = dust_cad_len(s);
+    float W = uintBitsToFloat(DustUintBuffer(prm).v[DUST_CADP_W]), H = uintBitsToFloat(DustUintBuffer(prm).v[DUST_CADP_H]);
+    vec2 pa, pb;
+    float d1 = INF;
+    bool oa = dust_project_point(nearP, mvp, W, H, pa);
+    bool ob = dust_project_point(vec3(nearP.x + s.x, nearP.y + s.y, nearP.z + s.z), mvp, W, H, pb);
+    if (oa && ob) {
+        precise float r2 = (pb.x - pa.x) * (pb.x - pa.x) + (pb.y - pa.y) * (pb.y - pa.y);
+        d1 = sqrt(r2);
+    }
+    DustUintBuffer(row).v[rw + 8u] = floatBitsToUint(d1);
+    DustUintBuffer(row).v[rw + 9u] = floatBitsToUint(sn);
+}
+// the rate's tail (dust_cad_rate after the Jacobian, verbatim): the enclosing test, base and the
+// classes (the three class blocks as one loop over k < min(nc, 3), the same expressions with the
+// class's words); dl_k to words 8 + k, gOut to word 11, the class and the flags ENC / EARLY. The
+// outputs at an early return are the function's initial ones (INF, false, class 0).
+uint dust_cadr_rate(uint mi, uvec2 row, uint rw, vec3 eye, uvec2 prm) {
+    float INF = uintBitsToFloat(DUST_CAD_INF_BITS);
+    uint fl = DustUintBuffer(row).v[rw + 4u];
+    vec3 sh = dust_cadr_v3(row, rw);
+    bool hasE = (fl & DUST_CADR_F_HAS_E) != 0u, persp = (fl & DUST_CADR_F_PERSP) != 0u;
+    float lamX = uintBitsToFloat(DustUintBuffer(row).v[rw + 5u]), lamY = uintBitsToFloat(DustUintBuffer(row).v[rw + 6u]);
+    float dt = uintBitsToFloat(DustUintBuffer(prm).v[DUST_CADP_DT]);
+    float age = max(dust_mom.m[mi].cov_b_age_id.z, DUST_CAD_AGE_MIN_S);
+    float sigmaMin = max(sqrt(max(lamX, 0.0)), DUST_CAD_SIGMA_MIN_M);
+    vec3 dm = dust_mom.m[mi].mean_flux.xyz + sh - eye;
+    bool enclosing = persp && (!hasE || dust_cad_dot(dm, dm) < 9.0 * max(lamY, 0.0));
+    float framePx = uintBitsToFloat(DustUintBuffer(prm).v[DUST_CADP_FRAME_PX]);
+    float g = uintBitsToFloat(DustUintBuffer(row).v[rw + 11u]);
+    precise float d4 = enclosing ? (uintBitsToFloat(DustUintBuffer(row).v[rw + 9u]) / sigmaMin + dt / age) * framePx : 0.0;
+    DustUintBuffer(row).v[rw + 8u + 2u] = DUST_CAD_INF_BITS;
+    if (enclosing) {
+        if (!(lamX > uintBitsToFloat(DUST_CAD_SIGMA_MIN2_BITS))) {
+            DustUintBuffer(row).v[rw + 8u] = DUST_CAD_INF_BITS; DustUintBuffer(row).v[rw + 9u] = DUST_CAD_INF_BITS;
+            DustUintBuffer(row).v[rw + 11u] = DUST_CAD_INF_BITS;
+            DustUintBuffer(row).v[rw + 4u] = fl | DUST_CADR_F_EARLY;
+            return 0u;
+        }
+        g = framePx / sigmaMin;
+    }
+    precise float base;
+    if (hasE) {
+        float ext = uintBitsToFloat(DustUintBuffer(row).v[rw + 7u]);
+        precise float d2 = ext * dt / age;
+        precise float d3 = abs(dust_mom.m[mi].edges[1].w) * dt * ext;
+        base = uintBitsToFloat(DustUintBuffer(row).v[rw + 8u]) + d2 + d3 + d4;
+    } else {
+        base = d4;
+    }
+    DustUintBuffer(row).v[rw + 8u] = DUST_CAD_INF_BITS; DustUintBuffer(row).v[rw + 9u] = DUST_CAD_INF_BITS;
+    DustUintBuffer(row).v[rw + 11u] = floatBitsToUint(g);
+    DustUintBuffer(row).v[rw + 4u] = fl | (enclosing ? DUST_CADR_F_ENC : 0u);
+    uint cls = 0u;
+    uint nc = DustUintBuffer(prm).v[DUST_CADP_NC];
+    float eps = uintBitsToFloat(DustUintBuffer(prm).v[DUST_CADP_EPS]);
+    // the by-count fallback's shape bound (θ = 0: off, every class passes it): 2 N_k · Δt ≤ θ · age,
+    // the CPU's two f32 products and comparison
+    float theta = uintBitsToFloat(DustUintBuffer(prm).v[DUST_CADP_SHAPE]);
+    bool shapeOn = theta > 0.0;
+    precise float thAge = theta * age;
+    for (uint k = 0u; k < nc && k < 3u; ++k) {
+        precise float dk = base + uintBitsToFloat(DustUintBuffer(prm).v[DUST_CADP_AW + k]) * g;
+        bool fin = dust_cad_finite(dk);
+        DustUintBuffer(row).v[rw + 8u + k] = fin ? floatBitsToUint(dk) : DUST_CAD_INF_BITS;
+        precise float lhs = dk * 2.0 * float(DustUintBuffer(prm).v[DUST_CADP_N + k]);
+        precise float shp = 2.0 * float(DustUintBuffer(prm).v[DUST_CADP_N + k]) * dt;
+        if (fin && lhs <= eps && (!shapeOn || shp <= thAge)) cls = k + 1u;
+    }
+    return cls;
+}
+// cadence::footprint_inside (dust_cad_footprint with λ_max of the slot from the row; the
+// predecessor's λ_max computed here as before)
+bool dust_cadr_footprint(uint mi, uvec2 row, uint rw, vec3 sh, int pred, mat4 mvp, float W, float H) {
+    float sm = sqrt(max(uintBitsToFloat(DustUintBuffer(row).v[rw + 6u]), 0.0));
+    if (!dust_cad_fp_point(dust_mom.m[mi].mean_flux.xyz + sh, sm, mvp, W, H)) return false;
+    for (uint j = 0u; j < DUST_SIZE_EDGES; ++j) {
+        if (!dust_cad_fp_point(dust_mom.m[mi].edges[j].xyz + sh, sm, mvp, W, H)) return false;
+    }
+    if (pred < 0) return true;
+    float sp = sqrt(max(dust_cad_lambda(uint(pred)).y, 0.0));
+    return dust_cad_fp_point(dust_mom.m[uint(pred)].mean_flux.xyz + sh, max(sm, sp), mvp, W, H);
+}
+#endif  // DUST_CAD_STAGES
 
 #endif

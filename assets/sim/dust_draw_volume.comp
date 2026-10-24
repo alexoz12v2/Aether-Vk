@@ -1,29 +1,34 @@
 // @assets/sim/dust_draw_volume.comp
 //
-// The volume packet queue's consumer: one lane per record of the chunk's queue
+// The volume packet queue's consumer: a 64-lane workgroup per 64 records of the chunk's queue
 // (dust_scatter.glsl DUST_VQUEUE_*, filled by dust_split.comp dust_volume_emit), dispatched
 // indirectly after each chunk's splitter dispatch (Device::cmd_dust_splat), then a second time
-// over the chunk's volume spill (DUST_VIEW_VOLUME_SPILL: the records the queue refused). Every lane runs the
-// same code on its own packet (dust_volume_draw.glsl, the arithmetic the producer would have run
-// in its cluster's thread, with the packet's own rounding seed), so the pyramid is the producer's
-// word for word and the lanes stay coherent, which the per-cluster thread's walk is not. The same
-// push constants as the splat (dust::DustSplatPushConstants). No CPU mirror: dust::volume_scatter
-// is the same drawing.
+// over the chunk's volume spill (DUST_VIEW_VOLUME_SPILL: the records the queue refused). The
+// workgroup draws its records one after another, its lanes cooperating on each
+// (dust_volume_draw.glsl: the arithmetic the producer would have run in its cluster's thread, with
+// the packet's own rounding seed, staged across the lanes), so the pyramid is the producer's word
+// for word. The same push constants as the splat (dust::DustSplatPushConstants). No CPU mirror:
+// dust::volume_scatter is the same drawing. The workgroup's state between the steps lives in
+// shared words. The staged form (-DDUST_VW_STAGE=1..5, -DDUST_VW_PART=1|2 for 3 and 4: the blobs
+// .s1 .s2 .s3a .s3b .s4a .s4b .s5, the Adreno consumer, dispatched in that order) carries a record's
+// state from one dispatch to the next in its scratch row of the pyramid buffer
+// (dust::dust_queue_offsets_for's vscratch; dust_volume_draw.glsl DUST_VW_SX_*).
 #version 450 core
 #extension GL_GOOGLE_include_directive : require
-// (round 8 step F2) the `.sg` blob (-DDUST_SUBGROUP=1, the `.prof` one too) reduces the top-level
-// deposits over the subgroup (GL_KHR_shader_subgroup_arithmetic: optional on the baseline devices,
-// so the host picks the blob by the device's subgroup operations: PhysicsPipelines dust_draw_volume);
-// the plain blob deposits as before, word for word the same pyramid
-#if defined(DUST_SUBGROUP) || defined(DUST_PROFILE)
+#extension GL_EXT_control_flow_attributes : require
+#extension GL_EXT_buffer_reference : require
+// (round 8 step F2; perf9_O) the `.sg` blob (-DDUST_SUBGROUP=1, the `.prof` one too) sums the
+// top-level deposits of the workgroup into its scratch words and writes them once (the accumulate
+// mode; no subgroup operation now: the host's choice of blob by the device's subgroup operations
+// stays, the plain blob deposits as before, word for word the same pyramid)
+#ifdef DUST_PROFILE
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
-#endif
-#ifdef DUST_PROFILE
 #extension GL_ARB_shader_clock : require
 #endif
 #include "dust_common.glsl"
 #include "dust_scatter.glsl"
+#include "dust_draw_texel.glsl"
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
@@ -43,23 +48,22 @@ layout(push_constant, std430) uniform PushConstants {
 
 #include "dust_volume_draw.glsl"
 
-// the record r of the chunk's volume queue, or of its volume spill with DUST_VIEW_VOLUME_SPILL
-// (the second dispatch of each chunk; false: none)
-bool dust_draw_volume_record(uint r) {
-    bool spill = (pc.flags & DUST_VIEW_VOLUME_SPILL) != 0u;
-    uint vbase = dust_vqueue_base(pc.pyramid);
-    uint base = spill ? dust_vspill_base(pc.pyramid) : vbase;
-    uint raw = pc.pyramid.v[base + 3u];
-    uint cap = dust_vqueue_capacity(pc.pyramid, base);
-    uint n = min(raw, cap);
-    // the frame's counts (lane 0 of each drain, once per chunk; all in the main header). The
-    // main drain counts only what it drew: its refusals, main raw - main n, are exactly the
-    // spill's raw appends (dust_volume_emit appends each refused record to the spill once; with
-    // the queue off main raw = 0), so the spill drain counts them as OVERFLOWED, and splits them
-    // into SPILL_DRAWN and LOST (OVERFLOWED = SPILL_DRAWN + LOST). The spill drain's lane 0 runs
-    // whenever its raw count is > 0: its record 0 is always held (capacity >= 1), so the
-    // indirect x is >= 1.
-    if (r == 0u) {
+void main() {
+    uint lane = gl_LocalInvocationIndex;
+    // the frame's counts (lane 0 of workgroup 0 of each drain, once per chunk; all in the main
+    // header). The main drain counts only what it drew: its refusals, main raw - main n, are
+    // exactly the spill's raw appends (dust_volume_emit appends each refused record to the spill
+    // once; with the queue off main raw = 0), so the spill drain counts them as OVERFLOWED, and
+    // splits them into SPILL_DRAWN and LOST (OVERFLOWED = SPILL_DRAWN + LOST). The spill drain's
+    // workgroup 0 runs whenever its raw count is > 0: its record 0 is always held (capacity >= 1),
+    // so the indirect x is >= 1.
+#if !defined(DUST_VW_STAGE) || DUST_VW_STAGE == 1
+    if (gl_WorkGroupID.x == 0u && lane == 0u) {
+        bool spill = (pc.flags & DUST_VIEW_VOLUME_SPILL) != 0u;
+        uint vbase = dust_vw_vqueue_base();
+        uint base = spill ? dust_vw_vspill_base() : vbase;
+        uint raw = pc.pyramid.v[base + 3u];
+        uint n = min(raw, dust_vw_vqueue_capacity(base));
         if (!spill) {
             atomicAdd(pc.pyramid.v[vbase + DUST_VQUEUE_DRAWN], n);
         } else {
@@ -68,103 +72,6 @@ bool dust_draw_volume_record(uint r) {
             atomicAdd(pc.pyramid.v[vbase + DUST_VQUEUE_LOST], raw - n);
         }
     }
-    if (r >= n) return false;
-    DustPacket p;
-    uint seed;
-    float exposure, rh;
-    vec3 color, sun;
-    vec4 support;
-    DUST_VQUEUE_GET(pc.pyramid, base, cap, r, p, seed, exposure, color, support, sun, rh)
-    // the per-packet globals dust_volume_draw reads (set per cluster by the producer)
-    dust_phot_support = support;
-    dust_phot_sun = sun;
-    dust_phot_rh = rh;
-    dust_phot_albedo = pc.albedo;
-    dust_phot_lut_addr = uvec2(pc.pyramid);
-    dust_pyr_split_word = pc.pyramid.v[DUST_PYR_SPLIT_DEPTH];
-    uint levels = pc.pyramid.v[DUST_PYR_LEVELS];
-    float W = float(pc.pyramid.v[DUST_PYR_WIDTH]);
-    float H = float(pc.pyramid.v[DUST_PYR_HEIGHT]);
-    // bits 8-15: the volume level bias; 16-17: the volumetric axis mode (as dust_splat.comp)
-    uint volumeBias = (dust_pyr_split_word >> 8u) & 0xFFu;
-    uint volumeAxis = (dust_pyr_split_word >> 16u) & 0x3u;
-    // (the record's address and column stride as DUST_VQUEUE_GET's: pass B re-reads the packet's
-    // seed, colour, segments, flux and photometry there at each piece, step 9C)
-    dust_volume_draw(p, base + DUST_VQUEUE_HEADER_WORDS + r, cap, exposure, levels, W, H, volumeBias, volumeAxis);
-    return true;
-}
-
-#ifdef DUST_SUBGROUP
-// (round 8 step F2) one word of the subgroup's top-texel sum: the 16-bit halves summed (each
-// < 2^21 for 32 lanes) and recombined with carries, as dust_prof_add64; the word saturates when
-// the total passed 2^32 in a lane (wrapped), over the subgroup (the carry) or in the running sum
-// (the add's wrap), as dust_atomic_add_sat's adds would have; the probe plain_add never saturates
-void dust_volume_flush_word(uint w, uint v, bool wrapped, bool plain) {
-    uint hi = subgroupAdd(v >> 16u), lo = subgroupAdd(v & 0xFFFFu);
-    if (subgroupElect()) {
-        uint sumLo = (hi << 16u) + lo;
-        bool over = wrapped || (hi >> 16u) != 0u || (hi << 16u) > 0xFFFFFFFFu - lo;
-        if (sumLo != 0u) {
-            uint old = atomicAdd(pc.pyramid.v[w], sumLo);
-            over = over || old + sumLo < old;
-        }
-        if (over && !plain) atomicMax(pc.pyramid.v[w], 0xFFFFFFFFu);
-    }
-}
-// the subgroup's deposits into the 1 x 1 top texel (dust_volume_deposit's accumulate mode) and
-// the lanes' end words, one atomic per word; every lane of the subgroup reaches this (zeros for
-// one without a record or off screen)
-void dust_volume_flush_top() {
-    uint off = dust_vacc_off;
-    bool plain = ((pc.pyramid.v[DUST_PYR_SPLIT_DEPTH] >> 30u) & 3u) == 1u;
-    uint wrap = subgroupOr(dust_vacc_wrap);
-    dust_volume_flush_word(off,      dust_vacc_sum.x, (wrap & 1u) != 0u, plain);
-    dust_volume_flush_word(off + 1u, dust_vacc_sum.y, (wrap & 2u) != 0u, plain);
-    dust_volume_flush_word(off + 2u, dust_vacc_sum.z, (wrap & 4u) != 0u, plain);
-    dust_volume_flush_word(off + 3u, dust_vacc_sum.w, (wrap & 8u) != 0u, plain);
-    uint d = subgroupMin(dust_vacc_depth == 0u ? 0xFFFFFFFFu : dust_vacc_depth);
-    uint splits = subgroupAdd(dust_vacc_splits);
-    uint peakBits = subgroupMax(floatBitsToUint(max(dust_vacc_peak, 0.0)));
-    uint mask = subgroupOr(dust_vacc_mask);
-    uint evals = subgroupAdd(dust_vacc_evals);
-    if (subgroupElect()) {
-        if (d != 0xFFFFFFFFu) {
-            // nearest dust: 0 means "no dust yet" (positive f32 bits order as uints)
-            uint cur = pc.pyramid.v[off + 4u];
-            if (cur == 0u || d < cur) {
-                uint seen = atomicCompSwap(pc.pyramid.v[off + 4u], 0u, d);
-                if (seen != 0u) atomicMin(pc.pyramid.v[off + 4u], d);
-            }
-        }
-        if (splits != 0u) atomicAdd(pc.pyramid.v[dust_vqueue_base(pc.pyramid) + DUST_VQUEUE_SPLIT_ADDS], splits);
-        if (peakBits != 0u) atomicMax(pc.pyramid.v[DUST_PYR_TAU_MAX], peakBits);
-        if (mask != 0u) atomicOr(pc.pyramid.v[DUST_PYR_LEVEL_MASK], mask);
-        if (evals != 0u) atomicAdd(pc.pyramid.v[DUST_PYR_VOLUME_EVALS], evals);
-    }
-}
 #endif
-
-void main() {
-    uint r = gl_GlobalInvocationID.x;
-#ifdef DUST_PROFILE
-    DUST_PROF_BEGIN(thread)
-#endif
-#ifdef DUST_SUBGROUP
-    // (round 8 step F2) the accumulate mode, frame-uniform: the top texel's words
-    {
-        uint levels = pc.pyramid.v[DUST_PYR_LEVELS];
-        uint bias = (pc.pyramid.v[DUST_PYR_SPLIT_DEPTH] >> 8u) & 0xFFu;
-        dust_vacc = dust_volume_top_known(levels, bias);
-        dust_vacc_off = pc.pyramid.v[DUST_PYR_TABLE + 3u * (levels - 1u)];
-    }
-#endif
-    bool ran = dust_draw_volume_record(r);
-#ifdef DUST_SUBGROUP
-    if (dust_vacc) dust_volume_flush_top();
-#endif
-#ifdef DUST_PROFILE
-    DUST_PROF_END(thread)
-    // every lane reaches this (0 for one without a record): the subgroup reductions need them all
-    DUST_PROF_FLUSH_VOLUME(pc.pyramid, dust_queue_base(pc.pyramid), ran)
-#endif
+    dust_volume_draw_workgroup(lane);
 }

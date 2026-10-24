@@ -11,10 +11,15 @@
 // mirror: dust::splat_tier is the same drawing.
 #version 450 core
 #extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_control_flow_attributes : require
 #ifdef DUST_PROFILE
 #extension GL_ARB_shader_clock : require
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
+#endif
+#define DUST_NO_PROJECT_PACKET 1
+#if !defined(DUST_SPLIT_PREP) && !defined(DUST_SPLIT_SEQ) && !defined(DUST_HARD_AXIS)
+#define DUST_W_VIEW_SHARED 1
 #endif
 #include "dust_common.glsl"
 #include "dust_scatter.glsl"
@@ -38,19 +43,28 @@ layout(push_constant, std430) uniform PushConstants {
 // the frame words the leaf path reads (the splitter draws no volumetric packet: dust_volume_emit
 // queues every one, to the volume queue or its spill, for dust_draw_volume.comp)
 #include "dust_frame_gates.glsl"
-#include "dust_leaf.glsl"
-
 // the speck shell's radius word (dust_splat.comp defines it too; the include guards keep it out
-// of dust_common.glsl)
+// of dust_common.glsl; perf9_O: before dust_leaf.glsl, whose prep reads it)
 const uint DUST_PYR_SPECKS_DMAX = 252u;
+#include "dust_leaf.glsl"
 
 // the records' seed counts, then their exclusive prefix (DUST_SQUEUE_PER_CLUSTER at most)
 shared uint dust_rec_seeds[DUST_SQUEUE_PER_CLUSTER];
+// the walk stage: the cluster's run in the candidate buffer (its first slot; ~0u refused)
+shared uint dust_cand_run;
 
+// (perf9_O: the sequencer has its own mains below; this frame is the hard-axis diagnostic's)
+#if !defined(DUST_SPLIT_PREP) && !defined(DUST_SPLIT_SEQ) && defined(DUST_HARD_AXIS)
 // record r of the cluster (its index in the chunk's queue `recs + r`) through the leaf path:
 // counting (dust_counting) or drawing from the ordinal `ord`
 void dust_split_record(uint recs, uint r, uint ord, uint levels, float W, float H, vec3 fwd, bool perspective,
                        uint splitDepth, uint volumeBias, float shellDMax, uint volumeAxis) {
+#ifdef DUST_SPLIT_SEQ
+    // (the sequencer reads the record's words at their uses: dust_seq_exposure, dust_seq_color,
+    // the volume put's photometry; the cluster seed is the one word kept)
+    dust_cluster_seed = dust_hash32(pc.pyramid.v[recs + r + 32u * DUST_SQUEUE_CAPACITY]);
+    dust_packet_ord = ord;
+#else
     vec3 mean, d, segT, color, sun;
     float S[6];
     float flux, exposure, origin, rh;
@@ -69,13 +83,217 @@ void dust_split_record(uint recs, uint r, uint ord, uint levels, float W, float 
     dust_phot_rh = rh;
     dust_cluster_seed = dust_hash32(i);
     dust_packet_ord = ord;
+#endif
+#ifdef DUST_SPLIT_SEQ
+    // the sequencer stage: the record's candidates (the walk stage's) through the leaf path
+    dust_seq_record(recs, r, levels);
+#else
+    // the walk stage: `ord` is the record's first slot in the candidate buffer (0 counting, or
+    // the cluster's run refused: dust_cand_on false); the run written to the record's words 45-46
+    dust_cand_on = !dust_counting && dust_cand_run != 0xFFFFFFFFu;
+#ifdef DUST_HARD_AXIS
+    dust_leaf_rec = recs + r;
+    dust_w_row = dust_w_addr(recs + r);
     dust_project_split_scatter(mean, S, d, flux, exposure, openStart, openEnd, rho, segT, color, levels,
                                W, H, fwd, perspective, splitDepth, volumeBias, recShell, volumeAxis);
+#endif
+    if (!dust_counting) {
+        pc.pyramid.v[recs + r + DUST_SQUEUE_CAND_BASE * DUST_SQUEUE_CAPACITY] = dust_cand_on ? ord : 0u;
+        pc.pyramid.v[recs + r + DUST_SQUEUE_CAND_COUNT * DUST_SQUEUE_CAPACITY] = dust_cand_on ? dust_packet_ord - ord : 0u;
+    }
+#endif
 }
 
+#endif  // !DUST_SPLIT_PREP && (SEQ || HARD)
+
+#ifdef DUST_SPLIT_PREP
+// the prep stage (round 9 step Z; blob dust_split_prep, dispatched like the splitter between the
+// enumerator and it): a lane per record of the cluster decides its cut (dust_leaf_prep) and
+// writes the record's cone words; no seeds, no drawing, no shared memory
+void main() {
+    // (perf9_O) a lane per record, the record's word index the loop's one value: the record through
+    // dust_leaf_prep_p (its words, the cone words and the frame words read at their uses), the
+    // cluster's end re-derived from the queue words at each test (dust_p_end)
+    uint sbase = dust_squeue_base_o(uvec2(pc.pyramid));
+    uint t = dust_squeue_table(sbase) + gl_WorkGroupID.x * DUST_SQUEUE_TABLE_WORDS;
+#ifdef DUST_PROFILE
+    DUST_PROF_BEGIN(thread)
+#endif
+    bool ran = false;
+    for (uint a = dust_squeue_records(sbase) + pc.pyramid.v[t] + gl_LocalInvocationID.x; a < dust_p_end(); a += 64u) {
+        dust_leaf_prep_p(a);
+        ran = true;
+    }
+#ifdef DUST_PROFILE
+    DUST_PROF_END(thread)
+    DUST_PROF_FLUSH_SPLIT(pc.pyramid, dust_queue_base_o(uvec2(pc.pyramid)), ran)
+#endif
+}
+#elif !defined(DUST_SPLIT_SEQ) && !defined(DUST_HARD_AXIS)
+// the walk stage (perf9_O): main's loops as dust_split.comp's walk variant (the counting pass
+// lane-parallel, the prefix and the reservation by lane 0, the writing pass, lane 0 alone in
+// record order when serial), its record step dust_walk_record: the record's pointer the only
+// per-lane value over the walk (the lane's record index derived from it after), the counter
+// dust_packet_ord counting in the counting pass and placing in the writing pass
+shared uint dust_w_rb;
+shared uint dust_w_n;
+void dust_walk_record(uint rec, uint ord, uint depthMax) {
+    dust_w_row = dust_w_addr(rec);
+    dust_w_lri[gl_LocalInvocationID.x] = rec;
+    dust_cand_on = !dust_counting && dust_cand_run != 0xFFFFFFFFu;
+    // the counter (the record's word 46 while the walk runs): from 0 counting, from the record's
+    // first slot writing (word 45, the run's base, written before the walk); dust_walk leaves the
+    // record's count in word 46
+    if (!dust_counting) REC_W(DUST_SQUEUE_CAND_BASE) = dust_cand_on ? ord : 0u;
+    REC_W(DUST_SQUEUE_CAND_COUNT) = dust_counting ? 0u : ord;
+    dust_walk(depthMax);
+}
 void main() {
     uint lane = gl_LocalInvocationID.x;
-    uint sbase = dust_squeue_base(pc.pyramid);
+    uint sbase = dust_squeue_base_o(uvec2(pc.pyramid));
+    uint t = dust_squeue_table(sbase) + gl_WorkGroupID.x * DUST_SQUEUE_TABLE_WORDS;
+    // the cluster's first record (its word index: the records' base + the table's base)
+    uint rb = dust_squeue_records(sbase) + pc.pyramid.v[t];
+    uint n = min(pc.pyramid.v[t + 1u], DUST_SQUEUE_PER_CLUSTER);
+#ifdef DUST_PROFILE
+    DUST_PROF_BEGIN(thread)
+#endif
+    if (lane == 0u) {
+        bool persp;
+        vec3 fwd = dust_view_forward(pc.mvp, pc.eyeLocal.xyz, persp);
+        bool deep = (pc.pyramid.v[DUST_PYR_FLAGS] & DUST_FRAME_DEEP_CHORD) != 0u;
+        dust_w_view = vec4(fwd, float((persp ? 1u : 0u) | (deep ? 2u : 0u)));
+        dust_w_rb = rb; dust_w_n = n;
+    }
+    barrier();
+    // the two passes as two loops (perf9_O: not one loop over the passes, whose control, the serial
+    // stride and the reservation between, the compiler keeps live over the walk): the counting
+    // pass, every lane its records, the count each leaves in its word 46 to the shared prefix
+    bool ran = false;
+    DUST_PROF_BEGIN_AS(cnt)
+    dust_counting = true;
+    // (the loop over the record's word index a = rb + r: the one value per lane over a walk)
+    uint a = dust_w_rb + lane;
+    for (; a < dust_w_rb + dust_w_n; a += 64u) {
+        dust_walk_record(a, 0u, min(pc.pyramid.v[DUST_PYR_SPLIT_DEPTH] & 0xFFu, DUST_SPLIT_DEPTH_MAX));
+        dust_rec_seeds[a - dust_w_rb] = DUST_REC(DUST_SQUEUE_CAND_COUNT);
+    }
+    DUST_PROF_END_AS(count, cnt)
+    // (the lane from the counting loop's exit index: a = rb + lane + 64 k, so nothing of the lane
+    // id is kept over the counting pass's walks)
+    uint ln = (a - dust_w_rb) & 63u;
+    barrier();
+    if (ln == 0u) {
+        uint acc = 0u;
+        for (uint r = 0u; r < dust_w_n; ++r) {
+            uint c = dust_rec_seeds[r];
+            dust_rec_seeds[r] = acc;
+            acc += c;
+        }
+        dust_cand_run = dust_cqueue_reserve_o(uvec2(pc.pyramid), dust_cqueue_base_o(uvec2(pc.pyramid)), acc);
+    }
+    barrier();
+    // the writing pass (serial, a test hook: lane 0 alone in record order, the stride re-read from
+    // the frame word after each record, volatile, so nothing of it is kept over the walk)
+    dust_counting = false;
+    for (a = dust_w_rb + ((pc.pyramid.v[DUST_PYR_FLAGS] & DUST_FRAME_SPLIT_SERIAL) != 0u ? (ln == 0u ? 0u : dust_w_n) : ln); a < dust_w_rb + dust_w_n; ) {
+        dust_walk_record(a, dust_cand_run == 0xFFFFFFFFu ? 0u : dust_cand_run + dust_rec_seeds[a - dust_w_rb],
+                         min(pc.pyramid.v[DUST_PYR_SPLIT_DEPTH] & 0xFFu, DUST_SPLIT_DEPTH_MAX));
+        ran = true;
+        a += (DustWState(uvec2(pc.pyramid)).v[DUST_PYR_FLAGS] & DUST_FRAME_SPLIT_SERIAL) != 0u ? 1u : 64u;
+    }
+#ifdef DUST_PROFILE
+    DUST_PROF_END(thread)
+    DUST_PROF_FLUSH_SPLIT(pc.pyramid, dust_queue_base_o(uvec2(pc.pyramid)), ran)
+#endif
+}
+#elif defined(DUST_SPLIT_SEQ) && defined(DUST_SEQ_DRAW)
+// (perf9_O) the sequencer's draw stage: a lane per candidate of the candidate buffer (indirect from
+// its header word 0, as dust_project_leaf.comp), the reserved runs [0, word 3 - DUST_CQUEUE_LOST)
+// (dust_cqueue_reserve grants a prefix of the reservations: every one after the first refused is
+// refused, each refused one adds its n to both words), dust_s_draw keeping the records' runs
+void main() {
+#ifdef DUST_PROFILE
+    DUST_PROF_BEGIN(thread)
+#endif
+    dust_mom_addr = uvec2(pc.moments);
+    dust_phot_albedo = pc.albedo;
+    dust_phot_lut_addr = uvec2(pc.pyramid);
+    uint cbase = dust_cqueue_base_o(uvec2(pc.pyramid));
+    uint c = gl_GlobalInvocationID.x;
+    bool ran = c < pc.pyramid.v[cbase + 3u] - pc.pyramid.v[cbase + DUST_CQUEUE_LOST];
+    if (ran) dust_s_draw(c);
+#ifdef DUST_PROFILE
+    DUST_PROF_END(thread)
+    DUST_PROF_FLUSH_SPLIT(pc.pyramid, dust_queue_base_o(uvec2(pc.pyramid)), ran)
+#endif
+}
+#elif defined(DUST_SPLIT_SEQ)
+// (perf9_O) the sequencer's order stage: the cluster's candidate run (its first record's run start,
+// the records' counts summed), a chunk of 64 candidates at a time: each lane counts its candidate's
+// seeds (dust_s_count), lane 0 turns the chunk's counts into ordinals (the exclusive prefix, the
+// running total carried in shared memory), each lane writes its candidate's ordinal into word 15
+// above the flag bits. Two barriers per chunk. Under DUST_FRAME_SPLIT_SERIAL the same (the prefix is
+// lane 0's in candidate order either way).
+shared uint dust_s_c0, dust_s_tot, dust_s_carry;
+shared uint dust_s_f[64];
+void main() {
+    uint lane = gl_LocalInvocationID.x;
+#ifdef DUST_PROFILE
+    DUST_PROF_BEGIN(thread)
+#endif
+    if (lane == 0u) {
+        uint sbase = dust_squeue_base_o(uvec2(pc.pyramid));
+        uint t = dust_squeue_table(sbase) + gl_WorkGroupID.x * DUST_SQUEUE_TABLE_WORDS;
+        uint rb = dust_squeue_records(sbase) + pc.pyramid.v[t];
+        uint n = min(pc.pyramid.v[t + 1u], DUST_SQUEUE_PER_CLUSTER);
+        uint tot = 0u;
+        for (uint r = 0u; r < n; ++r) tot += pc.pyramid.v[rb + r + DUST_SQUEUE_CAND_COUNT * DUST_SQUEUE_CAPACITY];
+        dust_s_c0 = n > 0u ? pc.pyramid.v[rb + DUST_SQUEUE_CAND_BASE * DUST_SQUEUE_CAPACITY] : 0u;
+        dust_s_tot = tot;
+        dust_s_carry = 0u;
+        // (the chunk's candidate reservations into the leaf queue header's frame-wide word: the host's chunk feedback)
+        if (gl_WorkGroupID.x == 0u) {
+            uint lq_ = dust_lqueue_base_o(uvec2(pc.pyramid));
+            uint cq_ = dust_cqueue_base_o(uvec2(pc.pyramid));
+            uint dem_ = pc.pyramid.v[cq_ + 3u];
+            atomicAdd(pc.pyramid.v[lq_ + DUST_LQUEUE_FRAME_CANDIDATES], dem_);
+            atomicAdd(pc.pyramid.v[lq_ + DUST_LQUEUE_FRAME_REFUSED], pc.pyramid.v[cq_ + DUST_CQUEUE_LOST]);
+            atomicMax(pc.pyramid.v[lq_ + DUST_LQUEUE_FRAME_CPC_MAX], (dem_ + gl_NumWorkGroups.x - 1u) / gl_NumWorkGroups.x);
+        }
+    }
+    barrier();
+    bool ran = false;
+    for (uint b = 0u; b < dust_s_tot; b += 64u) {
+        DUST_PROF_BEGIN_AS(cnt)
+        dust_s_f[lane] = b + lane < dust_s_tot ? dust_s_count(dust_s_c0 + b + lane) : 0u;
+        DUST_PROF_END_AS(count, cnt)
+        barrier();
+        if (lane == 0u) {
+            uint acc = dust_s_carry;
+            for (uint j = 0u; j < 64u; ++j) {
+                uint f = dust_s_f[j];
+                dust_s_f[j] = acc;
+                acc += f;
+            }
+            dust_s_carry = acc;
+        }
+        barrier();
+        if (b + lane < dust_s_tot) {
+            uint w = dust_cqueue_base_o(uvec2(pc.pyramid)) + DUST_VQUEUE_HEADER_WORDS + (dust_s_c0 + b + lane) * DUST_CQUEUE_RECORD_WORDS + 15u;
+            pc.pyramid.v[w] = (pc.pyramid.v[w] & 7u) | (dust_s_f[lane] << 3u);
+            ran = true;
+        }
+    }
+#ifdef DUST_PROFILE
+    DUST_PROF_END(thread)
+    DUST_PROF_FLUSH_SPLIT(pc.pyramid, dust_queue_base_o(uvec2(pc.pyramid)), ran)
+#endif
+}
+#else
+void main() {
+    uint lane = gl_LocalInvocationID.x;
+    uint sbase = dust_squeue_base_o(uvec2(pc.pyramid));
     uint t = dust_squeue_table(sbase) + gl_WorkGroupID.x * DUST_SQUEUE_TABLE_WORDS;
     uint recBase = pc.pyramid.v[t];
     uint total = pc.pyramid.v[t + 1u];
@@ -101,53 +319,76 @@ void main() {
     float shellDMax = uintBitsToFloat(pc.pyramid.v[DUST_PYR_SPECKS_DMAX]);
     uint n = min(total, DUST_SQUEUE_PER_CLUSTER);
     // the serial reference (DUST_FRAME_SPLIT_SERIAL): lane 0 walks the records in order, the
-    // ordinal running on as the per-cluster thread's did
-    if ((pc.pyramid.v[DUST_PYR_FLAGS] & DUST_FRAME_SPLIT_SERIAL) != 0u) {
-        bool ranS = false;
-        if (lane == 0u) {
-            uint ord = 0u;
-            for (uint r = 0u; r < n; ++r) {
-                dust_split_record(recs, recBase + r, ord, levels, W, H, fwd, perspective, splitDepth, volumeBias, shellDMax, volumeAxis);
-                ord = dust_packet_ord;
-                ranS = true;
-            }
-        }
-#ifdef DUST_PROFILE
-        DUST_PROF_END(thread)
-        DUST_PROF_FLUSH_SPLIT(pc.pyramid, dust_queue_base(pc.pyramid), ranS)
-#endif
-        return;
-    }
-    // the counting pass: the seeds each record draws
-    DUST_PROF_BEGIN_AS(cnt)
-    dust_counting = true;
-    for (uint r = lane; r < n; r += 64u) {
-        dust_seed_count = 0u;
-        dust_split_record(recs, recBase + r, 0u, levels, W, H, fwd, perspective, splitDepth, volumeBias, shellDMax, volumeAxis);
-        dust_rec_seeds[r] = dust_seed_count;
-    }
-    dust_counting = false;
-    DUST_PROF_END_AS(count, cnt)
-    barrier();
-    // the exclusive prefix in record order (lane 0)
-    if (lane == 0u) {
-        uint acc = 0u;
-        for (uint r = 0u; r < n; ++r) {
-            uint c = dust_rec_seeds[r];
-            dust_rec_seeds[r] = acc;
-            acc += c;
-        }
-    }
-    barrier();
-    // the drawing pass
+    // ordinal running on as the per-cluster thread's did; otherwise the counting pass (the seeds
+    // each record draws), the exclusive prefix in record order (lane 0), the drawing pass.
+    // (round 9 step C4: one call site for the leaf path — the serial, counting and drawing
+    // copies each had their own frame; a pass loop, pass 0 counting, pass 1 drawing)
+    bool serial = (pc.pyramid.v[DUST_PYR_FLAGS] & DUST_FRAME_SPLIT_SERIAL) != 0u;
     bool ran = false;
-    for (uint r = lane; r < n; r += 64u) {
-        dust_split_record(recs, recBase + r, dust_rec_seeds[r], levels, W, H, fwd, perspective, splitDepth, volumeBias, shellDMax, volumeAxis);
-        ran = true;
+    uint ord = 0u;
+#ifndef DUST_SPLIT_SEQ
+    // the walk stage (round 9 step Z2): the counting pass always and lane-parallel (the
+    // candidates each record writes; no side effect), the prefix, lane 0 reserving the cluster's
+    // run (dust_cqueue_reserve), the writing pass — lane 0 alone in record order under
+    // DUST_FRAME_SPLIT_SERIAL, so the children gate's order is the serial reference's
+    bool serialPass = false;
+    for (uint pass = 0u; pass < 2u; ++pass) {
+        if (pass == 1u) {
+            barrier();
+            if (lane == 0u) {
+                uint acc = 0u;
+                for (uint r = 0u; r < n; ++r) {
+                    uint c = dust_rec_seeds[r];
+                    dust_rec_seeds[r] = acc;
+                    acc += c;
+                }
+                dust_cand_run = dust_cqueue_reserve_o(uvec2(pc.pyramid), dust_cqueue_base_o(uvec2(pc.pyramid)), acc);
+            }
+            barrier();
+            serialPass = serial;
+        }
+        DUST_PROF_BEGIN_AS(cnt)
+        dust_counting = pass == 0u;
+        for (uint k = 0u; ; ++k) {
+            uint r = serialPass ? k : lane + 64u * k;
+            if (r >= n || (serialPass && lane != 0u)) break;
+            dust_seed_count = 0u;
+            dust_split_record(recs, recBase + r, pass == 0u || dust_cand_run == 0xFFFFFFFFu ? 0u : dust_cand_run + dust_rec_seeds[r],
+                              levels, W, H, fwd, perspective, splitDepth, volumeBias, shellDMax, volumeAxis);
+#else
+    for (uint pass = serial ? 1u : 0u; pass < 2u; ++pass) {
+        if (pass == 1u && !serial) {
+            barrier();
+            if (lane == 0u) {
+                uint acc = 0u;
+                for (uint r = 0u; r < n; ++r) {
+                    uint c = dust_rec_seeds[r];
+                    dust_rec_seeds[r] = acc;
+                    acc += c;
+                }
+            }
+            barrier();
+        }
+        DUST_PROF_BEGIN_AS(cnt)
+        dust_counting = pass == 0u;
+        for (uint k = 0u; ; ++k) {
+            uint r = serial ? k : lane + 64u * k;
+            if (r >= n || (serial && lane != 0u)) break;
+            dust_seed_count = 0u;
+            dust_split_record(recs, recBase + r, serial ? ord : (pass == 0u ? 0u : dust_rec_seeds[r]),
+                              levels, W, H, fwd, perspective, splitDepth, volumeBias, shellDMax, volumeAxis);
+#endif
+            if (pass == 0u) dust_rec_seeds[r] = dust_seed_count;
+            else ran = true;
+            ord = dust_packet_ord;
+        }
+        dust_counting = false;
+        if (pass == 0u) { DUST_PROF_END_AS(count, cnt) }
     }
 #ifdef DUST_PROFILE
     DUST_PROF_END(thread)
     // every lane reaches this (0 for one without a record): the subgroup reductions need them all
-    DUST_PROF_FLUSH_SPLIT(pc.pyramid, dust_queue_base(pc.pyramid), ran)
+    DUST_PROF_FLUSH_SPLIT(pc.pyramid, dust_queue_base_o(uvec2(pc.pyramid)), ran)
 #endif
 }
+#endif  // DUST_SPLIT_PREP

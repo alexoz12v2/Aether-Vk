@@ -1,0 +1,128 @@
+// @assets/sim/dust_emit_mono.comp
+//
+// perf9_K (K4, the propagate / emit family knob): the pre-perf9_O dust_emit.comp verbatim, the
+// GTX 1070 default (AETHERVK_DUST_PROP_STAGED=0; Device::dust_prop_staged). The only addition is
+// DUST_COMMON_MONO below: dust_common.glsl then keeps its pre-perf9_O df_add / dust_kepler bodies
+// (the perf9_O "new local" rewrites for glslang's PropagateNoContraction), so this blob is the
+// pre-package dust_emit.comp blob byte for byte (apply/perf9_K/prop_mono_equiv.sh).
+//
+//
+// Dust v3 emission: one thread per cluster of the batch. Writes immutable `DustCluster` records
+// into the ring at slot (first_index + j) & ring_mask. Mirror of `dust::emit_cluster`.
+#version 450 core
+#extension GL_GOOGLE_include_directive : require
+#define DUST_COMMON_MONO 1
+#include "dust_common.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PushConstants {
+    DustClusterBuffer clusters;
+    DustBatchRef      batch;
+} pc;
+
+void main() {
+    uint j = gl_GlobalInvocationID.x;
+    DustBatch B = pc.batch.b;
+    if (j >= B.count) return;
+
+    uint global = B.first_index + j;
+    // randomness from the in-batch index (seed unique per emission window): a window always
+    // produces the same clusters whatever ring slots it lands on (deterministic seek)
+    uint h0 = dust_pcg(B.seed ^ dust_pcg(j));
+    uint h1 = dust_pcg(h0);
+    uint h2 = dust_pcg(h1);
+    uint h3 = dust_pcg(h2);
+    uint h4 = dust_pcg(h3);
+    uint h5 = dust_pcg(h4);
+
+    // cluster j = i*S + s: time sample i of stream s (dust::emit_cluster). The stream fixes the cone
+    // cell (keyed per jet), jittered per cluster; the cluster is the whole cell: the mean speed with
+    // the full speed spread as its radial dispersion, the full size distribution, 1/S of the sample
+    uint shift = dust_batch_streams(B).x;
+    uint n = 1u << shift;
+    uint s = j & (n - 1u);
+    float samples = float(max(B.count >> shift, 1u));
+    uint key = uint(B.mass_params.z * 16777216.0);
+
+    float u_t = dust_stream_time_u01(B, j);
+    // the sample's share of the window's lit time (dust::emit_cluster)
+    float u_prev = (j >> shift) == 0u ? 0.0 : dust_stream_time_u01(B, j - n);
+    float share = max(u_t - u_prev, 0.0);
+    vec2 t_start = vec2(B.comet_r_t_hi.w, B.comet_r_t_lo.w);
+    vec2 dur = vec2(B.comet_v_dur_hi.w, B.comet_v_dur_lo.w);
+    // lit time only: dark phases of the jet site get no clusters (full df64 when always lit)
+    vec2 dt_in = B.lit.w == DUST_LIT_MODE_PERIODIC
+        ? vec2(dust_lit_time_map(u_t, B.lit, B.spin.w, dur.x + dur.y), 0.0)
+        : df_mul_f(dur, u_t);
+    vec2 t0 = df_add(t_start, dt_in);
+
+    // the window-start site position in free fall over the sub-interval (the site's turn is added
+    // below)
+    Df3 rc0, vc0, rcStart, vc;
+    rc0.hi = B.comet_r_t_hi.xyz;   rc0.lo = B.comet_r_t_lo.xyz;
+    vc0.hi = B.comet_v_dur_hi.xyz; vc0.lo = B.comet_v_dur_lo.xyz;
+    dust_kepler(rc0, vc0, DF_SUN_MU, dt_in, rcStart, vc);
+
+    // direction: the stream's cone cell (polar stratum in solid angle, golden-ratio azimuth turned
+    // by the key), jittered, rotated with the attitude at t0
+    float aperture = B.jet_dir_aperture.w;
+    precise float pol = float(s) + 0.5 + DUST_STREAM_DIR_JITTER * (dust_u01(h2) - 0.5);
+    float u_pol = pol / float(n);
+    precise float az0 = dust_u01(dust_pcg(key ^ 0x6A09E667u)) + float(s) * DUST_STREAK_PHI_INV;
+    precise float az = az0 + DUST_STREAM_DIR_JITTER * (dust_u01(h1) - 0.5);
+    vec3 dir_ps = dust_sample_cone(az - floor(az), u_pol, B.jet_dir_aperture.xyz, aperture);
+    // exact nucleus spin from the window start
+    vec4 rot = dust_qmul(dust_qaxis_angle(B.spin.xyz, B.spin.w * (dt_in.x + dt_in.y)), B.rot_start);
+    vec3 dir = dust_qrot(rot, dir_ps);
+
+    // the site turns with the nucleus: its offset at t0 instead of the window start, with the
+    // surface velocity omega x offset (dust::emit_cluster)
+    vec3 oStart = dust_qrot(B.rot_start, B.site_offset.xyz);
+    vec3 oT0 = dust_qrot(rot, B.site_offset.xyz);
+    Df3 rc = df3_add(rcStart, df3_from_f32(oT0 - oStart));
+    vec3 vSite = cross(B.spin.xyz * B.spin.w, oT0);
+
+    // the reference grain: the batch's s_ref; the cluster carries every size of the distribution
+    // (beta ~ 1/s), the renderer spreads it along the syndyne
+    float s_min = B.size_params.x;
+    float s_max = B.size_params.y;
+    float s_ref = B.vel_params.z;
+    float beta = B.vel_params.w / s_ref;
+
+    // the stream's share of the time sample's mass: all sizes, 1/S of the sample
+    float mass_g = B.mass_params.x * share / float(n);
+
+    // ejection speed: the mean speed of the reference grain, no draw (the speed spread is the
+    // packet's radial dispersion sigma_rad: the S streams of a cell sum to one smooth cone of
+    // every speed instead of S speed shells)
+    float v_ref = B.vel_params.x;
+    float v_ej = max(v_ref, 0.0);
+    // lateral dispersion of the stream: DUST_STREAM_SIGMA_CELLS of its cone cell, at least
+    // DUST_CHILD_SIGMA_V_REL of the speed (dust::STREAM_SIGMA_CELLS)
+    float sigma_lat = v_ej * max(DUST_STREAM_SIGMA_CELLS * aperture / sqrt(float(n)), DUST_CHILD_SIGMA_V_REL);
+    // radial dispersion: the whole speed distribution of the jet
+    float sigma_rad = v_ej * max(B.vel_params.y, 0.0);
+
+    vec3 eject = dir * v_ej;
+    Df3 v0 = df3_add(vc, df3_from_f32(eject + vSite));
+
+    // mean cross-section per gram of the size distribution (dust::size_mean_inv_s_um)
+    float rho_g_m3 = B.mass_params.y * 1.0e6;
+    float xsec_per_g = 3.0 / (4.0 * rho_g_m3 * dust_size_mean_inv_s_um(B.size_params) * 1.0e-6);
+    // the half log-size range; low mantissa bits: the child-pattern id, hashed from (seed, j)
+    // (dust::pack_child_id); sign bit: the stream is interrupted before this cluster
+    float dbeta = 0.5 * log(s_max / s_min);
+    uint db = (floatBitsToUint(dbeta) & ~DUST_CHILD_ID_MASK) | (dust_pcg(h0 ^ 0x2C1B3C6Du) & DUST_CHILD_ID_MASK);
+    if (dust_stream_breaks_before(B, j)) db |= DUST_STREAM_BREAK_BIT;
+    dbeta = uintBitsToFloat(db);
+
+    DustCluster C;
+    C.r0_t0_hi   = vec4(rc.hi, t0.x);
+    C.r0_t0_lo   = vec4(rc.lo, t0.y);
+    C.v0_hi_beta = vec4(v0.hi, beta);
+    C.v0_lo_mass = vec4(v0.lo, mass_g);
+    C.misc       = vec4(sigma_lat, sigma_rad, xsec_per_g, dbeta);
+    C.eject      = vec4(eject, s_ref);
+    pc.clusters.c[global & B.ring_mask] = C;
+}

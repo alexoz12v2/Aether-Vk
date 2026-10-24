@@ -36,7 +36,7 @@ use crate::{
       swapchain::PresentationState,
     },
     instance,
-    physics::VulkanComputeKernels,
+    physics::{VulkanComputeKernels, dust_staged_passes, dust_volume_stages_wanted},
     utils::{self, NonZeroHandle, RwLockable},
   },
   scene::{EntityId, StaticMeshComponent, text::FontAtlas},
@@ -2312,6 +2312,8 @@ impl Device {
       chosen_physical_device_query_result
         .optional_extensions
         .contains(utils::OptionalExtensionSupportFlags::SUBGROUP_ARITHMETIC),
+      dust_staged_passes(chosen_physical_device_query_result.physical_device_properties.vendor_id),
+      dust_volume_stages_wanted(chosen_physical_device_query_result.physical_device_properties.vendor_id),
     ) {
       Ok(k) => {
         // the dust pipelines' compiled statistics, once (`AETHERVK_DUST_PROFILE=1`)
