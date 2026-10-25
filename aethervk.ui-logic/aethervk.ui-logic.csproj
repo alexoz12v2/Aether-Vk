@@ -344,7 +344,7 @@
       Text="Synchronization2 layer json not found in workflow-data."
     />
     <Error
-      Condition="'$(IsWindows)' == 'true' And '$(Configuration)' != 'Release' And !Exists('$(VkWinShare)/VkLayer_khronos_validation.json')"
+      Condition="'$(IsWindows)' == 'true' And '$(Configuration)' != 'Release' And !Exists('$(VkWinLib)/VkLayer_khronos_validation.json')"
       Text="Validation layer json not found in Bin directory."
     />
   </Target>
@@ -450,7 +450,7 @@
 
   <ItemGroup Condition="'$(IsWindows)' == 'true' And '$(Configuration)' != 'Release'">
     <Content
-      Include="$(VkWinShare)/VkLayer_khronos_validation.json"
+      Include="$(VkWinLib)/VkLayer_khronos_validation.json"
       Link="vulkan/share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json"
       CopyToOutputDirectory="PreserveNewest"
     />

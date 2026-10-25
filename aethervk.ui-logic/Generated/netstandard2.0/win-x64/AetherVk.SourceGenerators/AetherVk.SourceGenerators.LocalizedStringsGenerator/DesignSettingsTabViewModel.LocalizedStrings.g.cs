@@ -11,6 +11,22 @@ public partial class DesignSettingsTabViewModel : ISettingsTabViewModel
     public bool   CanClose { get; set; } = true;
 
     public string StrGeneral { get; set; } = "General";
+    public string StrCometAppearance { get; set; } = "Comet Appearance";
+    public string StrDisplayMode { get; set; } = "Display mode";
+    public string StrDisplayModeDefault { get; set; } = "Procedural sphere";
+    public string StrDisplayModeCustom { get; set; } = "Custom mesh";
+    public string StrCustomMesh { get; set; } = "Custom mesh";
+    public string StrMesh { get; set; } = "Mesh";
+    public string StrChannelAlbedo { get; set; } = "Albedo";
+    public string StrChannelNormal { get; set; } = "Normal";
+    public string StrChannelRoughness { get; set; } = "Roughness";
+    public string StrChannelAo { get; set; } = "Ambient occlusion";
+    public string StrTextureNone { get; set; } = "None";
+    public string StrRotation { get; set; } = "Rotation (yaw, pitch, roll) °";
+    public string StrTranslation { get; set; } = "Offset (nucleus radii)";
+    public string StrResetPlacement { get; set; } = "Reset placement";
+    public string StrAppearanceLockedHint { get; set; } = "Pause the simulation to change display mode, mesh and textures";
+    public string StrNoMeshesHint { get; set; } = "Import a mesh in the Imports tab to use it here";
     public string StrCometName { get; set; } = "Comet Name";
     public string StrStartDate { get; set; } = "Start Date";
     public string StrEndDate { get; set; } = "End Date";
@@ -27,5 +43,34 @@ public partial class DesignSettingsTabViewModel : ISettingsTabViewModel
     public string StrHelpContentArgumentOfPerihelion { get; set; } = "[...]";
     public string StrHelpHeaderInclination { get; set; } = "Inclination";
     public string StrHelpContentInclination { get; set; } = "[...]";
+    public string StrBillboards { get; set; } = "Billboards";
+    public string StrBillboardsHint { get; set; } = "Show an imported texture in its own window over the desktop. Drag it with the left button; right click cycles the move, rotate and scale handles, which you drag with the right button (Ctrl snaps the rotation, Shift keeps the aspect).";
+    public string StrBillboardsNoTextures { get; set; } = "Import a PNG, JPEG or uncompressed KTX2 texture in the Imports tab first.";
+    public string StrBillboardTexture { get; set; } = "Texture";
+    public string StrCreateBillboard { get; set; } = "Create billboard";
+    public string StrBillboardPosition { get; set; } = "Centre (desktop px)";
+    public string StrBillboardSize { get; set; } = "Size (px)";
+    public string StrBillboardAspectLock { get; set; } = "Keep aspect";
+    public string StrBillboardAlpha { get; set; } = "Opacity";
+    public string StrBillboardRotation { get; set; } = "Rotation (°)";
+    public string StrBillboardVisible { get; set; } = "Visible";
+    public string StrBillboardDelete { get; set; } = "Delete";
+    public string StrBillboardMissing { get; set; } = "Texture not loaded: import it again to show it.";
+    public string StrInputBindings { get; set; } = "Input bindings";
+    public string StrInputBindingsHint { get; set; } = "Rebind captures the next key chord (Esc cancels). Changes apply at once and are saved.";
+    public string StrAddChord { get; set; } = "Add";
+    public string StrRebind { get; set; } = "Rebind";
+    public string StrRemoveChord { get; set; } = "Remove";
+    public string StrResetBindings { get; set; } = "Reset to defaults";
+    public string StrParticleRendering { get; set; } = "Particle rendering";
+    public string StrVolumeDetail { get; set; } = "Volume detail";
+    public string StrVolumeDetailHint { get; set; } = "Lower: faster, coarser volumetric dust";
+    public string StrPropagateDetail { get; set; } = "Trajectory detail";
+    public string StrPropagateDetailHint { get; set; } = "Size steps whose orbits are solved exactly per frame; the rest are interpolated. Lower: faster, dust tails a little straighter";
+    public string StrHazeDetail { get; set; } = "Haze detail";
+    public string StrHazeDetailHint { get; set; } = "Packets per dust cluster when the haze is drawn on the coarsest level. Lower: faster, the haze's light sampled more coarsely";
+    public string StrReuseTolerance { get; set; } = "Temporal reuse tolerance";
+    public string StrReuseToleranceHint { get; set; } = "Reuses dust that moved less than this many pixels instead of drawing it again. Off draws every frame fresh; higher values are faster but can smear moving dust.";
+    public string StrReuseToleranceOff { get; set; } = "Off";
 }
 #endif

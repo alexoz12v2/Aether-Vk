@@ -6,6 +6,27 @@ namespace AetherVk.Logic.ViewModels
     /// <inheritdoc/>
     partial class MainWindowViewModel
     {
+        /// <inheritdoc cref="_windowTitle"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public string WindowTitle
+        {
+            get => _windowTitle;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<string>.Default.Equals(_windowTitle, value))
+                {
+                    OnWindowTitleChanging(value);
+                    OnWindowTitleChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.WindowTitle);
+                    _windowTitle = value;
+                    OnWindowTitleChanged(value);
+                    OnWindowTitleChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.WindowTitle);
+                }
+            }
+        }
+
         /// <inheritdoc cref="_dockingManager"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
@@ -90,6 +111,28 @@ namespace AetherVk.Logic.ViewModels
             }
         }
 
+        /// <summary>Executes the logic for when <see cref="WindowTitle"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="WindowTitle"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnWindowTitleChanging(string value);
+        /// <summary>Executes the logic for when <see cref="WindowTitle"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="WindowTitle"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnWindowTitleChanging(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="WindowTitle"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="WindowTitle"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnWindowTitleChanged(string value);
+        /// <summary>Executes the logic for when <see cref="WindowTitle"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="WindowTitle"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnWindowTitleChanged(string? oldValue, string newValue);
         /// <summary>Executes the logic for when <see cref="DockingManager"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="DockingManager"/> is changed.</remarks>

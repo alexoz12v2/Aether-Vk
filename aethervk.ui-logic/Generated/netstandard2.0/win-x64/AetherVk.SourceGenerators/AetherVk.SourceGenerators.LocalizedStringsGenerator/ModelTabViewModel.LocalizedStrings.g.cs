@@ -6,6 +6,66 @@ namespace AetherVk.Logic.ViewModels;
 partial class ModelTabViewModel
 {
     // ── plain localized strings ─────────────────────────────────────────────
+    private string _strDustVisibility = string.Empty;
+    public string StrDustVisibility
+    {
+        get => _strDustVisibility;
+        set
+        {
+            if (_strDustVisibility == value) return;
+            _strDustVisibility = value;
+            OnPropertyChanged(nameof(StrDustVisibility));
+        }
+    }
+
+    private string _strDustFlow = string.Empty;
+    public string StrDustFlow
+    {
+        get => _strDustFlow;
+        set
+        {
+            if (_strDustFlow == value) return;
+            _strDustFlow = value;
+            OnPropertyChanged(nameof(StrDustFlow));
+        }
+    }
+
+    private string _strDustTracers = string.Empty;
+    public string StrDustTracers
+    {
+        get => _strDustTracers;
+        set
+        {
+            if (_strDustTracers == value) return;
+            _strDustTracers = value;
+            OnPropertyChanged(nameof(StrDustTracers));
+        }
+    }
+
+    private string _strDustFlowSpeed = string.Empty;
+    public string StrDustFlowSpeed
+    {
+        get => _strDustFlowSpeed;
+        set
+        {
+            if (_strDustFlowSpeed == value) return;
+            _strDustFlowSpeed = value;
+            OnPropertyChanged(nameof(StrDustFlowSpeed));
+        }
+    }
+
+    private string _strShowReferenceError = string.Empty;
+    public string StrShowReferenceError
+    {
+        get => _strShowReferenceError;
+        set
+        {
+            if (_strShowReferenceError == value) return;
+            _strShowReferenceError = value;
+            OnPropertyChanged(nameof(StrShowReferenceError));
+        }
+    }
+
     private string _strSun = string.Empty;
     public string StrSun
     {
@@ -186,6 +246,54 @@ partial class ModelTabViewModel
         }
     }
 
+    private string _strScatteringEfficiency = string.Empty;
+    public string StrScatteringEfficiency
+    {
+        get => _strScatteringEfficiency;
+        set
+        {
+            if (_strScatteringEfficiency == value) return;
+            _strScatteringEfficiency = value;
+            OnPropertyChanged(nameof(StrScatteringEfficiency));
+        }
+    }
+
+    private string _strGeometricAlbedo = string.Empty;
+    public string StrGeometricAlbedo
+    {
+        get => _strGeometricAlbedo;
+        set
+        {
+            if (_strGeometricAlbedo == value) return;
+            _strGeometricAlbedo = value;
+            OnPropertyChanged(nameof(StrGeometricAlbedo));
+        }
+    }
+
+    private string _strSizeQ = string.Empty;
+    public string StrSizeQ
+    {
+        get => _strSizeQ;
+        set
+        {
+            if (_strSizeQ == value) return;
+            _strSizeQ = value;
+            OnPropertyChanged(nameof(StrSizeQ));
+        }
+    }
+
+    private string _strSizeRange = string.Empty;
+    public string StrSizeRange
+    {
+        get => _strSizeRange;
+        set
+        {
+            if (_strSizeRange == value) return;
+            _strSizeRange = value;
+            OnPropertyChanged(nameof(StrSizeRange));
+        }
+    }
+
     private string _strBeta = string.Empty;
     public string StrBeta
     {
@@ -273,6 +381,11 @@ partial class ModelTabViewModel
     /// <summary>Called once on construction and on every culture change.</summary>
     private void RefreshStrings()
     {
+        StrDustVisibility = _translationService.GetString("Tabs_Model_DustVisibility");
+        StrDustFlow = _translationService.GetString("Tabs_Model_DustFlow");
+        StrDustTracers = _translationService.GetString("Tabs_Model_DustTracers");
+        StrDustFlowSpeed = _translationService.GetString("Tabs_Model_DustFlowSpeed");
+        StrShowReferenceError = _translationService.GetString("Tabs_Model_ShowReferenceError");
         StrSun = _translationService.GetString("Tabs_Model_Sun");
         StrDistance = _translationService.GetString("Tabs_Model_Distance");
         StrSTO = _translationService.GetString("Tabs_Model_STO");
@@ -288,6 +401,10 @@ partial class ModelTabViewModel
         StrDustDensity = _translationService.GetString("Tabs_Model_DustDensity");
         StrDustDiameter = _translationService.GetString("Tabs_Model_DustDiameter");
         StrAlbedo = _translationService.GetString("Tabs_Model_Albedo");
+        StrScatteringEfficiency = _translationService.GetString("Tabs_Model_ScatteringEfficiency");
+        StrGeometricAlbedo = _translationService.GetString("Tabs_Model_GeometricAlbedo");
+        StrSizeQ = _translationService.GetString("Tabs_Model_SizeQ");
+        StrSizeRange = _translationService.GetString("Tabs_Model_SizeRange");
         StrBeta = _translationService.GetString("Tabs_Model_Beta");
         StrAcceleration = _translationService.GetString("Tabs_Model_Acceleration");
         StrSpeed = _translationService.GetString("Tabs_Model_Speed");

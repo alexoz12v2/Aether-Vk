@@ -18,9 +18,12 @@ public class SpkRecordItem
 
   /// <summary>
   /// True when RecordId is a parseable positive integer — i.e. a real SPK record,
-  /// not the SBDB placeholder row "(9 match — enter record # …)".
+  /// not the SBDB placeholder row "(9 match — enter record # …)" — or the designation
+  /// command of a single-record comet ("DES=2025 A6").
   /// </summary>
-  public bool IsValid => int.TryParse(RecordId, out int id) && id > 0;
+  public bool IsValid =>
+    (int.TryParse(RecordId, out int id) && id > 0)
+    || (RecordId.StartsWith("DES=", StringComparison.Ordinal) && RecordId.Length > 4);
 }
 
 public class ObjectDataProperty

@@ -27,6 +27,139 @@ namespace AetherVk.Logic.ViewModels
             }
         }
 
+        /// <inheritdoc cref="_hasMeshes"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public bool HasMeshes
+        {
+            get => _hasMeshes;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_hasMeshes, value))
+                {
+                    OnHasMeshesChanging(value);
+                    OnHasMeshesChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.HasMeshes);
+                    _hasMeshes = value;
+                    OnHasMeshesChanged(value);
+                    OnHasMeshesChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.HasMeshes);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_hasTextures"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public bool HasTextures
+        {
+            get => _hasTextures;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_hasTextures, value))
+                {
+                    OnHasTexturesChanging(value);
+                    OnHasTexturesChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.HasTextures);
+                    _hasTextures = value;
+                    OnHasTexturesChanged(value);
+                    OnHasTexturesChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.HasTextures);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_isImporting"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public bool IsImporting
+        {
+            get => _isImporting;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_isImporting, value))
+                {
+                    OnIsImportingChanging(value);
+                    OnIsImportingChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsImporting);
+                    _isImporting = value;
+                    OnIsImportingChanged(value);
+                    OnIsImportingChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsImporting);
+                    ImportCommand.NotifyCanExecuteChanged();
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_isBusy"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public bool IsBusy
+        {
+            get => _isBusy;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_isBusy, value))
+                {
+                    OnIsBusyChanging(value);
+                    OnIsBusyChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsBusy);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.CanUnload);
+                    _isBusy = value;
+                    OnIsBusyChanged(value);
+                    OnIsBusyChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsBusy);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.CanUnload);
+                    RemoveAssetCommand.NotifyCanExecuteChanged();
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_isSimulationRunning"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public bool IsSimulationRunning
+        {
+            get => _isSimulationRunning;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_isSimulationRunning, value))
+                {
+                    OnIsSimulationRunningChanging(value);
+                    OnIsSimulationRunningChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsSimulationRunning);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.CanUnload);
+                    _isSimulationRunning = value;
+                    OnIsSimulationRunningChanged(value);
+                    OnIsSimulationRunningChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsSimulationRunning);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.CanUnload);
+                    RemoveAssetCommand.NotifyCanExecuteChanged();
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_statusMessage"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public string StatusMessage
+        {
+            get => _statusMessage;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<string>.Default.Equals(_statusMessage, value))
+                {
+                    OnStatusMessageChanging(value);
+                    OnStatusMessageChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.StatusMessage);
+                    _statusMessage = value;
+                    OnStatusMessageChanged(value);
+                    OnStatusMessageChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.StatusMessage);
+                }
+            }
+        }
+
         /// <summary>Executes the logic for when <see cref="SessionFolders"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="SessionFolders"/> is changed.</remarks>
@@ -49,5 +182,137 @@ namespace AetherVk.Logic.ViewModels
         /// <remarks>This method is invoked right after the value of <see cref="SessionFolders"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnSessionFoldersChanged(global::System.Collections.ObjectModel.ObservableCollection<string>? oldValue, global::System.Collections.ObjectModel.ObservableCollection<string> newValue);
+        /// <summary>Executes the logic for when <see cref="HasMeshes"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="HasMeshes"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnHasMeshesChanging(bool value);
+        /// <summary>Executes the logic for when <see cref="HasMeshes"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="HasMeshes"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnHasMeshesChanging(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="HasMeshes"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="HasMeshes"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnHasMeshesChanged(bool value);
+        /// <summary>Executes the logic for when <see cref="HasMeshes"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="HasMeshes"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnHasMeshesChanged(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="HasTextures"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="HasTextures"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnHasTexturesChanging(bool value);
+        /// <summary>Executes the logic for when <see cref="HasTextures"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="HasTextures"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnHasTexturesChanging(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="HasTextures"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="HasTextures"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnHasTexturesChanged(bool value);
+        /// <summary>Executes the logic for when <see cref="HasTextures"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="HasTextures"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnHasTexturesChanged(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="IsImporting"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="IsImporting"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsImportingChanging(bool value);
+        /// <summary>Executes the logic for when <see cref="IsImporting"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="IsImporting"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsImportingChanging(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="IsImporting"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="IsImporting"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsImportingChanged(bool value);
+        /// <summary>Executes the logic for when <see cref="IsImporting"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="IsImporting"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsImportingChanged(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="IsBusy"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="IsBusy"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsBusyChanging(bool value);
+        /// <summary>Executes the logic for when <see cref="IsBusy"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="IsBusy"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsBusyChanging(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="IsBusy"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="IsBusy"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsBusyChanged(bool value);
+        /// <summary>Executes the logic for when <see cref="IsBusy"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="IsBusy"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsBusyChanged(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="IsSimulationRunning"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="IsSimulationRunning"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsSimulationRunningChanging(bool value);
+        /// <summary>Executes the logic for when <see cref="IsSimulationRunning"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="IsSimulationRunning"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsSimulationRunningChanging(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="IsSimulationRunning"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="IsSimulationRunning"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsSimulationRunningChanged(bool value);
+        /// <summary>Executes the logic for when <see cref="IsSimulationRunning"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="IsSimulationRunning"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsSimulationRunningChanged(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="StatusMessage"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="StatusMessage"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnStatusMessageChanging(string value);
+        /// <summary>Executes the logic for when <see cref="StatusMessage"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="StatusMessage"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnStatusMessageChanging(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="StatusMessage"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="StatusMessage"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnStatusMessageChanged(string value);
+        /// <summary>Executes the logic for when <see cref="StatusMessage"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="StatusMessage"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnStatusMessageChanged(string? oldValue, string newValue);
     }
 }

@@ -27,6 +27,27 @@ namespace AetherVk.Logic.ViewModels
             }
         }
 
+        /// <inheritdoc cref="_isRunningToEnd"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public bool IsRunningToEnd
+        {
+            get => _isRunningToEnd;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_isRunningToEnd, value))
+                {
+                    OnIsRunningToEndChanging(value);
+                    OnIsRunningToEndChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsRunningToEnd);
+                    _isRunningToEnd = value;
+                    OnIsRunningToEndChanged(value);
+                    OnIsRunningToEndChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsRunningToEnd);
+                }
+            }
+        }
+
         /// <inheritdoc cref="_jetPreviewSizeString"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
@@ -161,56 +182,6 @@ namespace AetherVk.Logic.ViewModels
             }
         }
 
-        /// <inheritdoc cref="_isSunOffScreen"/>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-        public bool IsSunOffScreen
-        {
-            get => _isSunOffScreen;
-            set
-            {
-                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_isSunOffScreen, value))
-                {
-                    OnIsSunOffScreenChanging(value);
-                    OnIsSunOffScreenChanging(default, value);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsSunOffScreen);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.SunIndicatorLeft);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.SunIndicatorTop);
-                    _isSunOffScreen = value;
-                    OnIsSunOffScreenChanged(value);
-                    OnIsSunOffScreenChanged(default, value);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsSunOffScreen);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.SunIndicatorLeft);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.SunIndicatorTop);
-                }
-            }
-        }
-
-        /// <inheritdoc cref="_sunIndicatorAngleDeg"/>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-        public double SunIndicatorAngleDeg
-        {
-            get => _sunIndicatorAngleDeg;
-            set
-            {
-                if (!global::System.Collections.Generic.EqualityComparer<double>.Default.Equals(_sunIndicatorAngleDeg, value))
-                {
-                    OnSunIndicatorAngleDegChanging(value);
-                    OnSunIndicatorAngleDegChanging(default, value);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.SunIndicatorAngleDeg);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.SunIndicatorLeft);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.SunIndicatorTop);
-                    _sunIndicatorAngleDeg = value;
-                    OnSunIndicatorAngleDegChanged(value);
-                    OnSunIndicatorAngleDegChanged(default, value);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.SunIndicatorAngleDeg);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.SunIndicatorLeft);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.SunIndicatorTop);
-                }
-            }
-        }
-
         /// <summary>Executes the logic for when <see cref="CurrentEpochString"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="CurrentEpochString"/> is changed.</remarks>
@@ -233,6 +204,28 @@ namespace AetherVk.Logic.ViewModels
         /// <remarks>This method is invoked right after the value of <see cref="CurrentEpochString"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnCurrentEpochStringChanged(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="IsRunningToEnd"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="IsRunningToEnd"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsRunningToEndChanging(bool value);
+        /// <summary>Executes the logic for when <see cref="IsRunningToEnd"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="IsRunningToEnd"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsRunningToEndChanging(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="IsRunningToEnd"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="IsRunningToEnd"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsRunningToEndChanged(bool value);
+        /// <summary>Executes the logic for when <see cref="IsRunningToEnd"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="IsRunningToEnd"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsRunningToEndChanged(bool oldValue, bool newValue);
         /// <summary>Executes the logic for when <see cref="JetPreviewSizeString"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="JetPreviewSizeString"/> is changed.</remarks>
@@ -365,49 +358,5 @@ namespace AetherVk.Logic.ViewModels
         /// <remarks>This method is invoked right after the value of <see cref="ShowMeasurementIndicator"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnShowMeasurementIndicatorChanged(bool oldValue, bool newValue);
-        /// <summary>Executes the logic for when <see cref="IsSunOffScreen"/> is changing.</summary>
-        /// <param name="value">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="IsSunOffScreen"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnIsSunOffScreenChanging(bool value);
-        /// <summary>Executes the logic for when <see cref="IsSunOffScreen"/> is changing.</summary>
-        /// <param name="oldValue">The previous property value that is being replaced.</param>
-        /// <param name="newValue">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="IsSunOffScreen"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnIsSunOffScreenChanging(bool oldValue, bool newValue);
-        /// <summary>Executes the logic for when <see cref="IsSunOffScreen"/> just changed.</summary>
-        /// <param name="value">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="IsSunOffScreen"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnIsSunOffScreenChanged(bool value);
-        /// <summary>Executes the logic for when <see cref="IsSunOffScreen"/> just changed.</summary>
-        /// <param name="oldValue">The previous property value that was replaced.</param>
-        /// <param name="newValue">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="IsSunOffScreen"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnIsSunOffScreenChanged(bool oldValue, bool newValue);
-        /// <summary>Executes the logic for when <see cref="SunIndicatorAngleDeg"/> is changing.</summary>
-        /// <param name="value">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="SunIndicatorAngleDeg"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnSunIndicatorAngleDegChanging(double value);
-        /// <summary>Executes the logic for when <see cref="SunIndicatorAngleDeg"/> is changing.</summary>
-        /// <param name="oldValue">The previous property value that is being replaced.</param>
-        /// <param name="newValue">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="SunIndicatorAngleDeg"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnSunIndicatorAngleDegChanging(double oldValue, double newValue);
-        /// <summary>Executes the logic for when <see cref="SunIndicatorAngleDeg"/> just changed.</summary>
-        /// <param name="value">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="SunIndicatorAngleDeg"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnSunIndicatorAngleDegChanged(double value);
-        /// <summary>Executes the logic for when <see cref="SunIndicatorAngleDeg"/> just changed.</summary>
-        /// <param name="oldValue">The previous property value that was replaced.</param>
-        /// <param name="newValue">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="SunIndicatorAngleDeg"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnSunIndicatorAngleDegChanged(double oldValue, double newValue);
     }
 }

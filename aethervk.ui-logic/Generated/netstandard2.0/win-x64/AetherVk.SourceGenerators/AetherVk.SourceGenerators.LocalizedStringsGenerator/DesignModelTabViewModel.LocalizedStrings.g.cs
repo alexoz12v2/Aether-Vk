@@ -10,6 +10,11 @@ public partial class DesignModelTabViewModel : IModelTabViewModel
     public string Icon     { get; set; } = "⬡";
     public bool   CanClose { get; set; } = true;
 
+    public string StrDustVisibility { get; set; } = "Dust visibility";
+    public string StrDustFlow { get; set; } = "Flow pulses";
+    public string StrDustTracers { get; set; } = "Particle tracers";
+    public string StrDustFlowSpeed { get; set; } = "Flow time-lapse";
+    public string StrShowReferenceError { get; set; } = "show reference-position error";
     public string StrSun { get; set; } = "Sun";
     public string StrDistance { get; set; } = "Distance";
     public string StrSTO { get; set; } = "STO";
@@ -25,6 +30,10 @@ public partial class DesignModelTabViewModel : IModelTabViewModel
     public string StrDustDensity { get; set; } = "Dust Density";
     public string StrDustDiameter { get; set; } = "Dust Diameter";
     public string StrAlbedo { get; set; } = "Albedo";
+    public string StrScatteringEfficiency { get; set; } = "Radiation pressure Q_pr";
+    public string StrGeometricAlbedo { get; set; } = "Geometric albedo p";
+    public string StrSizeQ { get; set; } = "Size law exponent q (specks)";
+    public string StrSizeRange { get; set; } = "Size range factor F";
     public string StrBeta { get; set; } = "Beta";
     public string StrAcceleration { get; set; } = "Acceleration";
     public string StrSpeed { get; set; } = "Speed";

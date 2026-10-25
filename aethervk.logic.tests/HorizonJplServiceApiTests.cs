@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Threading;
@@ -178,6 +179,84 @@ namespace aethervk.logic.tests
       Assert.Contains("COMMAND=%2790000703%3B%27", handler.LastRequestUrl);
       Assert.Equal(1.7, radiusKm, 6);
       Assert.Equal(6.622e-7 / 6.6743e-20, massKg, 1);
+    }
+
+    private static (HorizonJplService service, FixedResponseHandler handler) CreateFixedService(string body)
+    {
+      var handler = new FixedResponseHandler(body);
+      var storageMock = new Mock<ILocalStorageService>();
+      storageMock
+        .Setup(s => s.GetPersistentPath(It.IsAny<string>()))
+        .Returns(() => System.IO.Path.Combine(System.IO.Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".bsp"));
+      var service = new HorizonJplService(
+        new ConsoleService(new Mock<IUiThreadDispatcher>().Object),
+        new BreadcrumbService(),
+        storageMock.Object
+      );
+      service._httpClient = new HttpClient(handler);
+      return (service, handler);
+    }
+
+    // Horizons' answer to "DES=2025 A6;" with EPHEM_TYPE=SPK (trimmed): a single SBDB record, so
+    // no record table, the SPK itself.
+    private const string SingleRecordResponse =
+      "API VERSION: 1.2\nAPI SOURCE: NASA/JPL Horizons API\n\n\nID= '1004054'\n\n"
+      + "SPK Binary Data Follows -- base64 encoded:\n\n"
+      + "REFGL1NQSyACAAAABgAAAFNNQl9TUEtfRklMRSAgICAgICAgICAgICAgICAgICAgICAgICAgICAg\n";
+
+    // Horizons' answer to "DES=67P;" (trimmed): several apparitions, a record table.
+    private const string MultiRecordResponse =
+      "API VERSION: 1.2\nAPI SOURCE: NASA/JPL Horizons API\n\n"
+      + "*******************************************************************************\n"
+      + " Matching small-bodies: \n\n"
+      + "    Record #  Epoch-yr  >MATCH DESIG<  Primary Desig  Name  \n"
+      + "    --------  --------  -------------  -------------  -------------------------\n"
+      + "    90000702    2013    67P            67P             Churyumov-Gerasimenko\n"
+      + "    90000703    2015    67P            67P             Churyumov-Gerasimenko\n\n"
+      + " (9 matches. To SELECT, enter record # (integer), followed by semi-colon.)\n"
+      + "*******************************************************************************\n";
+
+    /// A single-record comet (C/2025 A6, C/2022 N2, C/2013 R1) used to list 0 records, which
+    /// left Download &amp; Commit disabled: it now lists one record addressed by its designation.
+    [Fact]
+    public async Task FetchSpkRecordsAsync_SingleRecordComet_ListsTheDesignationRecord()
+    {
+      var (service, handler) = CreateFixedService(SingleRecordResponse);
+
+      await service.FetchSpkRecordsAsync("2025 A6", "2021-10-25", "2031-10-25");
+
+      Assert.Contains("COMMAND=%27DES%3D2025%20A6%3B%27", handler.LastRequestUrl);
+      var record = Assert.Single(service.SpkRecordsData);
+      Assert.Equal("DES=2025 A6", record.RecordId);
+      Assert.Equal("2025 A6 (SPK 1004054)", record.Name);
+      Assert.True(record.IsValid);
+    }
+
+    [Fact]
+    public async Task FetchSpkRecordsAsync_MultiRecordComet_ParsesTheTable()
+    {
+      var (service, _) = CreateFixedService(MultiRecordResponse);
+
+      await service.FetchSpkRecordsAsync("67P", "2021-10-25", "2031-10-25");
+
+      Assert.Equal(["90000702", "90000703"], service.SpkRecordsData.Select(r => r.RecordId));
+      Assert.All(service.SpkRecordsData, r => Assert.True(r.IsValid));
+      Assert.Equal("2015", service.SpkRecordsData[1].EpochYear);
+    }
+
+    /// The designation record downloads with "DES=&lt;pdes&gt;;", which Horizons resolves to the
+    /// single record (the bare SPK id "1004054;" is rejected as out of bounds).
+    [Fact]
+    public async Task DownloadSpkByIdAsync_DesignationRecord_SendsTheDesignationCommand()
+    {
+      var (service, handler) = CreateFixedService(SingleRecordResponse);
+      var savePath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".bsp");
+
+      var path = await service.DownloadSpkByIdAsync("2025 A6", "DES=2025 A6", savePath, "2025-10-01", "2025-10-20");
+
+      Assert.Contains("COMMAND=%27DES%3D2025%20A6%3B%27", handler.LastRequestUrl);
+      Assert.NotNull(path);
+      Assert.Equal("DAF/SPK", System.Text.Encoding.ASCII.GetString(System.IO.File.ReadAllBytes(path!), 0, 7));
     }
 }
 }

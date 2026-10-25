@@ -6,4 +6,19 @@ namespace AetherVk.Logic.ViewModels;
 public partial interface IImportsTabViewModel
 {
     string StrTitle { get; set; }
+    string StrMeshes { get; set; }
+    string StrTextures { get; set; }
+    string StrImport { get; set; }
+    string StrDialogTitle { get; set; }
+    string StrHint { get; set; }
+    string StrEmptyMeshes { get; set; }
+    string StrEmptyTextures { get; set; }
+    string StrImporting { get; set; }
+    string StrStatusImported { get; set; }
+    string StrStatusAlreadyImported { get; set; }
+    string StrStatusFailed { get; set; }
+    string StrStatusUnsupported { get; set; }
+    string StrUnload { get; set; }
+    string StrStatusUnloaded { get; set; }
+    string StrStatusUnloadFailed { get; set; }
 }

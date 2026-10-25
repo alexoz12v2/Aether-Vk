@@ -216,6 +216,48 @@ namespace AetherVk.Logic.Models
             }
         }
 
+        /// <inheritdoc cref="_tp"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public double Tp
+        {
+            get => _tp;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<double>.Default.Equals(_tp, value))
+                {
+                    OnTpChanging(value);
+                    OnTpChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.Tp);
+                    _tp = value;
+                    OnTpChanged(value);
+                    OnTpChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.Tp);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_elementsEpochJd"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public double ElementsEpochJd
+        {
+            get => _elementsEpochJd;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<double>.Default.Equals(_elementsEpochJd, value))
+                {
+                    OnElementsEpochJdChanging(value);
+                    OnElementsEpochJdChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.ElementsEpochJd);
+                    _elementsEpochJd = value;
+                    OnElementsEpochJdChanged(value);
+                    OnElementsEpochJdChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.ElementsEpochJd);
+                }
+            }
+        }
+
         /// <inheritdoc cref="_e"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
@@ -541,6 +583,50 @@ namespace AetherVk.Logic.Models
         /// <remarks>This method is invoked right after the value of <see cref="OrbitId"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnOrbitIdChanged(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="Tp"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="Tp"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnTpChanging(double value);
+        /// <summary>Executes the logic for when <see cref="Tp"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="Tp"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnTpChanging(double oldValue, double newValue);
+        /// <summary>Executes the logic for when <see cref="Tp"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="Tp"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnTpChanged(double value);
+        /// <summary>Executes the logic for when <see cref="Tp"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="Tp"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnTpChanged(double oldValue, double newValue);
+        /// <summary>Executes the logic for when <see cref="ElementsEpochJd"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="ElementsEpochJd"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnElementsEpochJdChanging(double value);
+        /// <summary>Executes the logic for when <see cref="ElementsEpochJd"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="ElementsEpochJd"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnElementsEpochJdChanging(double oldValue, double newValue);
+        /// <summary>Executes the logic for when <see cref="ElementsEpochJd"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="ElementsEpochJd"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnElementsEpochJdChanged(double value);
+        /// <summary>Executes the logic for when <see cref="ElementsEpochJd"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="ElementsEpochJd"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnElementsEpochJdChanged(double oldValue, double newValue);
         /// <summary>Executes the logic for when <see cref="E"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="E"/> is changed.</remarks>

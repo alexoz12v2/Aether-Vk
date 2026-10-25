@@ -18,9 +18,100 @@ partial class TimelineTabViewModel
         }
     }
 
+    private string _strSpeed = string.Empty;
+    public string StrSpeed
+    {
+        get => _strSpeed;
+        set
+        {
+            if (_strSpeed == value) return;
+            _strSpeed = value;
+            OnPropertyChanged(nameof(StrSpeed));
+        }
+    }
+
+    private string _strSpeed10s = string.Empty;
+    public string StrSpeed10s
+    {
+        get => _strSpeed10s;
+        set
+        {
+            if (_strSpeed10s == value) return;
+            _strSpeed10s = value;
+            OnPropertyChanged(nameof(StrSpeed10s));
+        }
+    }
+
+    private string _strSpeed1min = string.Empty;
+    public string StrSpeed1min
+    {
+        get => _strSpeed1min;
+        set
+        {
+            if (_strSpeed1min == value) return;
+            _strSpeed1min = value;
+            OnPropertyChanged(nameof(StrSpeed1min));
+        }
+    }
+
+    private string _strSpeed1h = string.Empty;
+    public string StrSpeed1h
+    {
+        get => _strSpeed1h;
+        set
+        {
+            if (_strSpeed1h == value) return;
+            _strSpeed1h = value;
+            OnPropertyChanged(nameof(StrSpeed1h));
+        }
+    }
+
+    private string _strSpeed3h = string.Empty;
+    public string StrSpeed3h
+    {
+        get => _strSpeed3h;
+        set
+        {
+            if (_strSpeed3h == value) return;
+            _strSpeed3h = value;
+            OnPropertyChanged(nameof(StrSpeed3h));
+        }
+    }
+
+    private string _strSpeed1d = string.Empty;
+    public string StrSpeed1d
+    {
+        get => _strSpeed1d;
+        set
+        {
+            if (_strSpeed1d == value) return;
+            _strSpeed1d = value;
+            OnPropertyChanged(nameof(StrSpeed1d));
+        }
+    }
+
+    private string _strSelectSpeed = string.Empty;
+    public string StrSelectSpeed
+    {
+        get => _strSelectSpeed;
+        set
+        {
+            if (_strSelectSpeed == value) return;
+            _strSelectSpeed = value;
+            OnPropertyChanged(nameof(StrSelectSpeed));
+        }
+    }
+
     /// <summary>Called once on construction and on every culture change.</summary>
     private void RefreshStrings()
     {
         StrTitle = _translationService.GetString("Tabs_Timeline_Title");
+        StrSpeed = _translationService.GetString("Tabs_Timeline_Speed");
+        StrSpeed10s = _translationService.GetString("Tabs_Timeline_Speed10s");
+        StrSpeed1min = _translationService.GetString("Tabs_Timeline_Speed1min");
+        StrSpeed1h = _translationService.GetString("Tabs_Timeline_Speed1h");
+        StrSpeed3h = _translationService.GetString("Tabs_Timeline_Speed3h");
+        StrSpeed1d = _translationService.GetString("Tabs_Timeline_Speed1d");
+        StrSelectSpeed = _translationService.GetString("Tabs_Timeline_SelectSpeed");
     }
 }

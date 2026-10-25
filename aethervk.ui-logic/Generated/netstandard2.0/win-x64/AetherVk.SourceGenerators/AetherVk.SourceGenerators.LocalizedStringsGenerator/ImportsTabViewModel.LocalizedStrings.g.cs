@@ -18,9 +18,204 @@ partial class ImportsTabViewModel
         }
     }
 
+    private string _strMeshes = string.Empty;
+    public string StrMeshes
+    {
+        get => _strMeshes;
+        set
+        {
+            if (_strMeshes == value) return;
+            _strMeshes = value;
+            OnPropertyChanged(nameof(StrMeshes));
+        }
+    }
+
+    private string _strTextures = string.Empty;
+    public string StrTextures
+    {
+        get => _strTextures;
+        set
+        {
+            if (_strTextures == value) return;
+            _strTextures = value;
+            OnPropertyChanged(nameof(StrTextures));
+        }
+    }
+
+    private string _strImport = string.Empty;
+    public string StrImport
+    {
+        get => _strImport;
+        set
+        {
+            if (_strImport == value) return;
+            _strImport = value;
+            OnPropertyChanged(nameof(StrImport));
+        }
+    }
+
+    private string _strDialogTitle = string.Empty;
+    public string StrDialogTitle
+    {
+        get => _strDialogTitle;
+        set
+        {
+            if (_strDialogTitle == value) return;
+            _strDialogTitle = value;
+            OnPropertyChanged(nameof(StrDialogTitle));
+        }
+    }
+
+    private string _strHint = string.Empty;
+    public string StrHint
+    {
+        get => _strHint;
+        set
+        {
+            if (_strHint == value) return;
+            _strHint = value;
+            OnPropertyChanged(nameof(StrHint));
+        }
+    }
+
+    private string _strEmptyMeshes = string.Empty;
+    public string StrEmptyMeshes
+    {
+        get => _strEmptyMeshes;
+        set
+        {
+            if (_strEmptyMeshes == value) return;
+            _strEmptyMeshes = value;
+            OnPropertyChanged(nameof(StrEmptyMeshes));
+        }
+    }
+
+    private string _strEmptyTextures = string.Empty;
+    public string StrEmptyTextures
+    {
+        get => _strEmptyTextures;
+        set
+        {
+            if (_strEmptyTextures == value) return;
+            _strEmptyTextures = value;
+            OnPropertyChanged(nameof(StrEmptyTextures));
+        }
+    }
+
+    private string _strImporting = string.Empty;
+    public string StrImporting
+    {
+        get => _strImporting;
+        set
+        {
+            if (_strImporting == value) return;
+            _strImporting = value;
+            OnPropertyChanged(nameof(StrImporting));
+        }
+    }
+
+    private string _strStatusImported = string.Empty;
+    public string StrStatusImported
+    {
+        get => _strStatusImported;
+        set
+        {
+            if (_strStatusImported == value) return;
+            _strStatusImported = value;
+            OnPropertyChanged(nameof(StrStatusImported));
+        }
+    }
+
+    private string _strStatusAlreadyImported = string.Empty;
+    public string StrStatusAlreadyImported
+    {
+        get => _strStatusAlreadyImported;
+        set
+        {
+            if (_strStatusAlreadyImported == value) return;
+            _strStatusAlreadyImported = value;
+            OnPropertyChanged(nameof(StrStatusAlreadyImported));
+        }
+    }
+
+    private string _strStatusFailed = string.Empty;
+    public string StrStatusFailed
+    {
+        get => _strStatusFailed;
+        set
+        {
+            if (_strStatusFailed == value) return;
+            _strStatusFailed = value;
+            OnPropertyChanged(nameof(StrStatusFailed));
+        }
+    }
+
+    private string _strStatusUnsupported = string.Empty;
+    public string StrStatusUnsupported
+    {
+        get => _strStatusUnsupported;
+        set
+        {
+            if (_strStatusUnsupported == value) return;
+            _strStatusUnsupported = value;
+            OnPropertyChanged(nameof(StrStatusUnsupported));
+        }
+    }
+
+    private string _strUnload = string.Empty;
+    public string StrUnload
+    {
+        get => _strUnload;
+        set
+        {
+            if (_strUnload == value) return;
+            _strUnload = value;
+            OnPropertyChanged(nameof(StrUnload));
+        }
+    }
+
+    private string _strStatusUnloaded = string.Empty;
+    public string StrStatusUnloaded
+    {
+        get => _strStatusUnloaded;
+        set
+        {
+            if (_strStatusUnloaded == value) return;
+            _strStatusUnloaded = value;
+            OnPropertyChanged(nameof(StrStatusUnloaded));
+        }
+    }
+
+    private string _strStatusUnloadFailed = string.Empty;
+    public string StrStatusUnloadFailed
+    {
+        get => _strStatusUnloadFailed;
+        set
+        {
+            if (_strStatusUnloadFailed == value) return;
+            _strStatusUnloadFailed = value;
+            OnPropertyChanged(nameof(StrStatusUnloadFailed));
+        }
+    }
+
     /// <summary>Called once on construction and on every culture change.</summary>
     private void RefreshStrings()
     {
         StrTitle = _translationService.GetString("Tabs_Imports_Title");
+        StrMeshes = _translationService.GetString("Tabs_Imports_Meshes");
+        StrTextures = _translationService.GetString("Tabs_Imports_Textures");
+        StrImport = _translationService.GetString("Tabs_Imports_Import");
+        StrDialogTitle = _translationService.GetString("Tabs_Imports_DialogTitle");
+        StrHint = _translationService.GetString("Tabs_Imports_Hint");
+        StrEmptyMeshes = _translationService.GetString("Tabs_Imports_EmptyMeshes");
+        StrEmptyTextures = _translationService.GetString("Tabs_Imports_EmptyTextures");
+        StrImporting = _translationService.GetString("Tabs_Imports_Importing");
+        StrStatusImported = _translationService.GetString("Tabs_Imports_StatusImported");
+        StrStatusAlreadyImported = _translationService.GetString("Tabs_Imports_StatusAlreadyImported");
+        StrStatusFailed = _translationService.GetString("Tabs_Imports_StatusFailed");
+        StrStatusUnsupported = _translationService.GetString("Tabs_Imports_StatusUnsupported");
+        StrUnload = _translationService.GetString("Tabs_Imports_Unload");
+        StrStatusUnloaded = _translationService.GetString("Tabs_Imports_StatusUnloaded");
+        StrStatusUnloadFailed = _translationService.GetString("Tabs_Imports_StatusUnloadFailed");
     }
 }

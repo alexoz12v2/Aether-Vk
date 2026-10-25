@@ -405,8 +405,9 @@ public class HorizonJplService
       }
       var text = await resp.Content.ReadAsStringAsync();
       _console.Log($"[HorizonJpl] SPK Records Response:\n{text}");
-      ParseSpkRecordsText(text, startTime, stopTime);
-      await _breadcrumb.ShowMessageAsync(
+      ParseSpkRecordsText(text, pdes);
+      // not awaited: the toast's display duration must not hold up the record list
+      _ = _breadcrumb.ShowMessageAsync(
         "Horizon API",
         $"{SpkRecordsData.Count} records found.",
         status: 1
@@ -423,9 +424,33 @@ public class HorizonJplService
     }
   }
 
-  private void ParseSpkRecordsText(string text, string startTime, string stopTime)
+  /// <summary>Prefix of a <see cref="SpkRecordItem.RecordId"/> that is a designation command
+  /// (<c>DES=2025 A6</c>) rather than a numeric Horizons record number.</summary>
+  public const string DesignationRecordPrefix = "DES=";
+
+  private void ParseSpkRecordsText(string text, string pdes)
   {
     SpkRecordsData.Clear();
+
+    // A designation with a single SBDB record (most long-period comets, e.g. C/2025 A6) gets no
+    // "Matching small-bodies" table: Horizons answers the SPK request directly ("ID= '1004054'",
+    // then the base64 SPK). The bare SPK id is not a valid COMMAND, so the record is addressed
+    // by the designation itself, which Horizons resolves to that single record again.
+    if (text.Contains("SPK Binary Data Follows", StringComparison.Ordinal))
+    {
+      var spkId = Regex.Match(text, @"ID=\s*'(\d+)'");
+      SpkRecordsData.Add(
+        new SpkRecordItem
+        {
+          RecordId = DesignationRecordPrefix + pdes,
+          EpochYear = "(only record)",
+          MatchDesig = pdes,
+          PrimaryDesig = pdes,
+          Name = spkId.Success ? $"{pdes} (SPK {spkId.Groups[1].Value})" : pdes,
+        }
+      );
+      return;
+    }
 
     var lines = text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
     bool inData = false;

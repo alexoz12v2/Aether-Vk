@@ -18,6 +18,198 @@ partial class SettingsTabViewModel
         }
     }
 
+    private string _strCometAppearance = string.Empty;
+    public string StrCometAppearance
+    {
+        get => _strCometAppearance;
+        set
+        {
+            if (_strCometAppearance == value) return;
+            _strCometAppearance = value;
+            OnPropertyChanged(nameof(StrCometAppearance));
+        }
+    }
+
+    private string _strDisplayMode = string.Empty;
+    public string StrDisplayMode
+    {
+        get => _strDisplayMode;
+        set
+        {
+            if (_strDisplayMode == value) return;
+            _strDisplayMode = value;
+            OnPropertyChanged(nameof(StrDisplayMode));
+        }
+    }
+
+    private string _strDisplayModeDefault = string.Empty;
+    public string StrDisplayModeDefault
+    {
+        get => _strDisplayModeDefault;
+        set
+        {
+            if (_strDisplayModeDefault == value) return;
+            _strDisplayModeDefault = value;
+            OnPropertyChanged(nameof(StrDisplayModeDefault));
+        }
+    }
+
+    private string _strDisplayModeCustom = string.Empty;
+    public string StrDisplayModeCustom
+    {
+        get => _strDisplayModeCustom;
+        set
+        {
+            if (_strDisplayModeCustom == value) return;
+            _strDisplayModeCustom = value;
+            OnPropertyChanged(nameof(StrDisplayModeCustom));
+        }
+    }
+
+    private string _strCustomMesh = string.Empty;
+    public string StrCustomMesh
+    {
+        get => _strCustomMesh;
+        set
+        {
+            if (_strCustomMesh == value) return;
+            _strCustomMesh = value;
+            OnPropertyChanged(nameof(StrCustomMesh));
+        }
+    }
+
+    private string _strMesh = string.Empty;
+    public string StrMesh
+    {
+        get => _strMesh;
+        set
+        {
+            if (_strMesh == value) return;
+            _strMesh = value;
+            OnPropertyChanged(nameof(StrMesh));
+        }
+    }
+
+    private string _strChannelAlbedo = string.Empty;
+    public string StrChannelAlbedo
+    {
+        get => _strChannelAlbedo;
+        set
+        {
+            if (_strChannelAlbedo == value) return;
+            _strChannelAlbedo = value;
+            OnPropertyChanged(nameof(StrChannelAlbedo));
+        }
+    }
+
+    private string _strChannelNormal = string.Empty;
+    public string StrChannelNormal
+    {
+        get => _strChannelNormal;
+        set
+        {
+            if (_strChannelNormal == value) return;
+            _strChannelNormal = value;
+            OnPropertyChanged(nameof(StrChannelNormal));
+        }
+    }
+
+    private string _strChannelRoughness = string.Empty;
+    public string StrChannelRoughness
+    {
+        get => _strChannelRoughness;
+        set
+        {
+            if (_strChannelRoughness == value) return;
+            _strChannelRoughness = value;
+            OnPropertyChanged(nameof(StrChannelRoughness));
+        }
+    }
+
+    private string _strChannelAo = string.Empty;
+    public string StrChannelAo
+    {
+        get => _strChannelAo;
+        set
+        {
+            if (_strChannelAo == value) return;
+            _strChannelAo = value;
+            OnPropertyChanged(nameof(StrChannelAo));
+        }
+    }
+
+    private string _strTextureNone = string.Empty;
+    public string StrTextureNone
+    {
+        get => _strTextureNone;
+        set
+        {
+            if (_strTextureNone == value) return;
+            _strTextureNone = value;
+            OnPropertyChanged(nameof(StrTextureNone));
+        }
+    }
+
+    private string _strRotation = string.Empty;
+    public string StrRotation
+    {
+        get => _strRotation;
+        set
+        {
+            if (_strRotation == value) return;
+            _strRotation = value;
+            OnPropertyChanged(nameof(StrRotation));
+        }
+    }
+
+    private string _strTranslation = string.Empty;
+    public string StrTranslation
+    {
+        get => _strTranslation;
+        set
+        {
+            if (_strTranslation == value) return;
+            _strTranslation = value;
+            OnPropertyChanged(nameof(StrTranslation));
+        }
+    }
+
+    private string _strResetPlacement = string.Empty;
+    public string StrResetPlacement
+    {
+        get => _strResetPlacement;
+        set
+        {
+            if (_strResetPlacement == value) return;
+            _strResetPlacement = value;
+            OnPropertyChanged(nameof(StrResetPlacement));
+        }
+    }
+
+    private string _strAppearanceLockedHint = string.Empty;
+    public string StrAppearanceLockedHint
+    {
+        get => _strAppearanceLockedHint;
+        set
+        {
+            if (_strAppearanceLockedHint == value) return;
+            _strAppearanceLockedHint = value;
+            OnPropertyChanged(nameof(StrAppearanceLockedHint));
+        }
+    }
+
+    private string _strNoMeshesHint = string.Empty;
+    public string StrNoMeshesHint
+    {
+        get => _strNoMeshesHint;
+        set
+        {
+            if (_strNoMeshesHint == value) return;
+            _strNoMeshesHint = value;
+            OnPropertyChanged(nameof(StrNoMeshesHint));
+        }
+    }
+
     private string _strCometName = string.Empty;
     public string StrCometName
     {
@@ -210,10 +402,374 @@ partial class SettingsTabViewModel
         }
     }
 
+    private string _strBillboards = string.Empty;
+    public string StrBillboards
+    {
+        get => _strBillboards;
+        set
+        {
+            if (_strBillboards == value) return;
+            _strBillboards = value;
+            OnPropertyChanged(nameof(StrBillboards));
+        }
+    }
+
+    private string _strBillboardsHint = string.Empty;
+    public string StrBillboardsHint
+    {
+        get => _strBillboardsHint;
+        set
+        {
+            if (_strBillboardsHint == value) return;
+            _strBillboardsHint = value;
+            OnPropertyChanged(nameof(StrBillboardsHint));
+        }
+    }
+
+    private string _strBillboardsNoTextures = string.Empty;
+    public string StrBillboardsNoTextures
+    {
+        get => _strBillboardsNoTextures;
+        set
+        {
+            if (_strBillboardsNoTextures == value) return;
+            _strBillboardsNoTextures = value;
+            OnPropertyChanged(nameof(StrBillboardsNoTextures));
+        }
+    }
+
+    private string _strBillboardTexture = string.Empty;
+    public string StrBillboardTexture
+    {
+        get => _strBillboardTexture;
+        set
+        {
+            if (_strBillboardTexture == value) return;
+            _strBillboardTexture = value;
+            OnPropertyChanged(nameof(StrBillboardTexture));
+        }
+    }
+
+    private string _strCreateBillboard = string.Empty;
+    public string StrCreateBillboard
+    {
+        get => _strCreateBillboard;
+        set
+        {
+            if (_strCreateBillboard == value) return;
+            _strCreateBillboard = value;
+            OnPropertyChanged(nameof(StrCreateBillboard));
+        }
+    }
+
+    private string _strBillboardPosition = string.Empty;
+    public string StrBillboardPosition
+    {
+        get => _strBillboardPosition;
+        set
+        {
+            if (_strBillboardPosition == value) return;
+            _strBillboardPosition = value;
+            OnPropertyChanged(nameof(StrBillboardPosition));
+        }
+    }
+
+    private string _strBillboardSize = string.Empty;
+    public string StrBillboardSize
+    {
+        get => _strBillboardSize;
+        set
+        {
+            if (_strBillboardSize == value) return;
+            _strBillboardSize = value;
+            OnPropertyChanged(nameof(StrBillboardSize));
+        }
+    }
+
+    private string _strBillboardAspectLock = string.Empty;
+    public string StrBillboardAspectLock
+    {
+        get => _strBillboardAspectLock;
+        set
+        {
+            if (_strBillboardAspectLock == value) return;
+            _strBillboardAspectLock = value;
+            OnPropertyChanged(nameof(StrBillboardAspectLock));
+        }
+    }
+
+    private string _strBillboardAlpha = string.Empty;
+    public string StrBillboardAlpha
+    {
+        get => _strBillboardAlpha;
+        set
+        {
+            if (_strBillboardAlpha == value) return;
+            _strBillboardAlpha = value;
+            OnPropertyChanged(nameof(StrBillboardAlpha));
+        }
+    }
+
+    private string _strBillboardRotation = string.Empty;
+    public string StrBillboardRotation
+    {
+        get => _strBillboardRotation;
+        set
+        {
+            if (_strBillboardRotation == value) return;
+            _strBillboardRotation = value;
+            OnPropertyChanged(nameof(StrBillboardRotation));
+        }
+    }
+
+    private string _strBillboardVisible = string.Empty;
+    public string StrBillboardVisible
+    {
+        get => _strBillboardVisible;
+        set
+        {
+            if (_strBillboardVisible == value) return;
+            _strBillboardVisible = value;
+            OnPropertyChanged(nameof(StrBillboardVisible));
+        }
+    }
+
+    private string _strBillboardDelete = string.Empty;
+    public string StrBillboardDelete
+    {
+        get => _strBillboardDelete;
+        set
+        {
+            if (_strBillboardDelete == value) return;
+            _strBillboardDelete = value;
+            OnPropertyChanged(nameof(StrBillboardDelete));
+        }
+    }
+
+    private string _strBillboardMissing = string.Empty;
+    public string StrBillboardMissing
+    {
+        get => _strBillboardMissing;
+        set
+        {
+            if (_strBillboardMissing == value) return;
+            _strBillboardMissing = value;
+            OnPropertyChanged(nameof(StrBillboardMissing));
+        }
+    }
+
+    private string _strInputBindings = string.Empty;
+    public string StrInputBindings
+    {
+        get => _strInputBindings;
+        set
+        {
+            if (_strInputBindings == value) return;
+            _strInputBindings = value;
+            OnPropertyChanged(nameof(StrInputBindings));
+        }
+    }
+
+    private string _strInputBindingsHint = string.Empty;
+    public string StrInputBindingsHint
+    {
+        get => _strInputBindingsHint;
+        set
+        {
+            if (_strInputBindingsHint == value) return;
+            _strInputBindingsHint = value;
+            OnPropertyChanged(nameof(StrInputBindingsHint));
+        }
+    }
+
+    private string _strAddChord = string.Empty;
+    public string StrAddChord
+    {
+        get => _strAddChord;
+        set
+        {
+            if (_strAddChord == value) return;
+            _strAddChord = value;
+            OnPropertyChanged(nameof(StrAddChord));
+        }
+    }
+
+    private string _strRebind = string.Empty;
+    public string StrRebind
+    {
+        get => _strRebind;
+        set
+        {
+            if (_strRebind == value) return;
+            _strRebind = value;
+            OnPropertyChanged(nameof(StrRebind));
+        }
+    }
+
+    private string _strRemoveChord = string.Empty;
+    public string StrRemoveChord
+    {
+        get => _strRemoveChord;
+        set
+        {
+            if (_strRemoveChord == value) return;
+            _strRemoveChord = value;
+            OnPropertyChanged(nameof(StrRemoveChord));
+        }
+    }
+
+    private string _strResetBindings = string.Empty;
+    public string StrResetBindings
+    {
+        get => _strResetBindings;
+        set
+        {
+            if (_strResetBindings == value) return;
+            _strResetBindings = value;
+            OnPropertyChanged(nameof(StrResetBindings));
+        }
+    }
+
+    private string _strParticleRendering = string.Empty;
+    public string StrParticleRendering
+    {
+        get => _strParticleRendering;
+        set
+        {
+            if (_strParticleRendering == value) return;
+            _strParticleRendering = value;
+            OnPropertyChanged(nameof(StrParticleRendering));
+        }
+    }
+
+    private string _strVolumeDetail = string.Empty;
+    public string StrVolumeDetail
+    {
+        get => _strVolumeDetail;
+        set
+        {
+            if (_strVolumeDetail == value) return;
+            _strVolumeDetail = value;
+            OnPropertyChanged(nameof(StrVolumeDetail));
+        }
+    }
+
+    private string _strVolumeDetailHint = string.Empty;
+    public string StrVolumeDetailHint
+    {
+        get => _strVolumeDetailHint;
+        set
+        {
+            if (_strVolumeDetailHint == value) return;
+            _strVolumeDetailHint = value;
+            OnPropertyChanged(nameof(StrVolumeDetailHint));
+        }
+    }
+
+    private string _strPropagateDetail = string.Empty;
+    public string StrPropagateDetail
+    {
+        get => _strPropagateDetail;
+        set
+        {
+            if (_strPropagateDetail == value) return;
+            _strPropagateDetail = value;
+            OnPropertyChanged(nameof(StrPropagateDetail));
+        }
+    }
+
+    private string _strPropagateDetailHint = string.Empty;
+    public string StrPropagateDetailHint
+    {
+        get => _strPropagateDetailHint;
+        set
+        {
+            if (_strPropagateDetailHint == value) return;
+            _strPropagateDetailHint = value;
+            OnPropertyChanged(nameof(StrPropagateDetailHint));
+        }
+    }
+
+    private string _strHazeDetail = string.Empty;
+    public string StrHazeDetail
+    {
+        get => _strHazeDetail;
+        set
+        {
+            if (_strHazeDetail == value) return;
+            _strHazeDetail = value;
+            OnPropertyChanged(nameof(StrHazeDetail));
+        }
+    }
+
+    private string _strHazeDetailHint = string.Empty;
+    public string StrHazeDetailHint
+    {
+        get => _strHazeDetailHint;
+        set
+        {
+            if (_strHazeDetailHint == value) return;
+            _strHazeDetailHint = value;
+            OnPropertyChanged(nameof(StrHazeDetailHint));
+        }
+    }
+
+    private string _strReuseTolerance = string.Empty;
+    public string StrReuseTolerance
+    {
+        get => _strReuseTolerance;
+        set
+        {
+            if (_strReuseTolerance == value) return;
+            _strReuseTolerance = value;
+            OnPropertyChanged(nameof(StrReuseTolerance));
+        }
+    }
+
+    private string _strReuseToleranceHint = string.Empty;
+    public string StrReuseToleranceHint
+    {
+        get => _strReuseToleranceHint;
+        set
+        {
+            if (_strReuseToleranceHint == value) return;
+            _strReuseToleranceHint = value;
+            OnPropertyChanged(nameof(StrReuseToleranceHint));
+        }
+    }
+
+    private string _strReuseToleranceOff = string.Empty;
+    public string StrReuseToleranceOff
+    {
+        get => _strReuseToleranceOff;
+        set
+        {
+            if (_strReuseToleranceOff == value) return;
+            _strReuseToleranceOff = value;
+            OnPropertyChanged(nameof(StrReuseToleranceOff));
+        }
+    }
+
     /// <summary>Called once on construction and on every culture change.</summary>
     private void RefreshStrings()
     {
         StrGeneral = _translationService.GetString("Tabs_Settings_General");
+        StrCometAppearance = _translationService.GetString("Tabs_Settings_CometAppearance");
+        StrDisplayMode = _translationService.GetString("Tabs_Settings_DisplayMode");
+        StrDisplayModeDefault = _translationService.GetString("Tabs_Settings_DisplayModeDefault");
+        StrDisplayModeCustom = _translationService.GetString("Tabs_Settings_DisplayModeCustom");
+        StrCustomMesh = _translationService.GetString("Tabs_Settings_CustomMesh");
+        StrMesh = _translationService.GetString("Tabs_Settings_Mesh");
+        StrChannelAlbedo = _translationService.GetString("Tabs_Settings_ChannelAlbedo");
+        StrChannelNormal = _translationService.GetString("Tabs_Settings_ChannelNormal");
+        StrChannelRoughness = _translationService.GetString("Tabs_Settings_ChannelRoughness");
+        StrChannelAo = _translationService.GetString("Tabs_Settings_ChannelAo");
+        StrTextureNone = _translationService.GetString("Tabs_Settings_TextureNone");
+        StrRotation = _translationService.GetString("Tabs_Settings_Rotation");
+        StrTranslation = _translationService.GetString("Tabs_Settings_Translation");
+        StrResetPlacement = _translationService.GetString("Tabs_Settings_ResetPlacement");
+        StrAppearanceLockedHint = _translationService.GetString("Tabs_Settings_AppearanceLockedHint");
+        StrNoMeshesHint = _translationService.GetString("Tabs_Settings_NoMeshesHint");
         StrCometName = _translationService.GetString("Tabs_Settings_CometName");
         StrStartDate = _translationService.GetString("Tabs_Settings_StartDate");
         StrEndDate = _translationService.GetString("Tabs_Settings_EndDate");
@@ -230,5 +786,34 @@ partial class SettingsTabViewModel
         StrHelpContentArgumentOfPerihelion = _translationService.GetString("Tabs_Settings_Help_Content_ArgumentOfPerihelion");
         StrHelpHeaderInclination = _translationService.GetString("Tabs_Settings_Help_Header_Inclination");
         StrHelpContentInclination = _translationService.GetString("Tabs_Settings_Help_Content_Inclination");
+        StrBillboards = _translationService.GetString("Tabs_Settings_Billboards");
+        StrBillboardsHint = _translationService.GetString("Tabs_Settings_BillboardsHint");
+        StrBillboardsNoTextures = _translationService.GetString("Tabs_Settings_BillboardsNoTextures");
+        StrBillboardTexture = _translationService.GetString("Tabs_Settings_BillboardTexture");
+        StrCreateBillboard = _translationService.GetString("Tabs_Settings_CreateBillboard");
+        StrBillboardPosition = _translationService.GetString("Tabs_Settings_BillboardPosition");
+        StrBillboardSize = _translationService.GetString("Tabs_Settings_BillboardSize");
+        StrBillboardAspectLock = _translationService.GetString("Tabs_Settings_BillboardAspectLock");
+        StrBillboardAlpha = _translationService.GetString("Tabs_Settings_BillboardAlpha");
+        StrBillboardRotation = _translationService.GetString("Tabs_Settings_BillboardRotation");
+        StrBillboardVisible = _translationService.GetString("Tabs_Settings_BillboardVisible");
+        StrBillboardDelete = _translationService.GetString("Tabs_Settings_BillboardDelete");
+        StrBillboardMissing = _translationService.GetString("Tabs_Settings_BillboardMissing");
+        StrInputBindings = _translationService.GetString("Tabs_Settings_InputBindings");
+        StrInputBindingsHint = _translationService.GetString("Tabs_Settings_InputBindingsHint");
+        StrAddChord = _translationService.GetString("Tabs_Settings_AddChord");
+        StrRebind = _translationService.GetString("Tabs_Settings_Rebind");
+        StrRemoveChord = _translationService.GetString("Tabs_Settings_RemoveChord");
+        StrResetBindings = _translationService.GetString("Tabs_Settings_ResetBindings");
+        StrParticleRendering = _translationService.GetString("Tabs_Settings_ParticleRendering");
+        StrVolumeDetail = _translationService.GetString("Tabs_Settings_VolumeDetail");
+        StrVolumeDetailHint = _translationService.GetString("Tabs_Settings_VolumeDetailHint");
+        StrPropagateDetail = _translationService.GetString("Tabs_Settings_PropagateDetail");
+        StrPropagateDetailHint = _translationService.GetString("Tabs_Settings_PropagateDetailHint");
+        StrHazeDetail = _translationService.GetString("Tabs_Settings_HazeDetail");
+        StrHazeDetailHint = _translationService.GetString("Tabs_Settings_HazeDetailHint");
+        StrReuseTolerance = _translationService.GetString("Tabs_Settings_ReuseTolerance");
+        StrReuseToleranceHint = _translationService.GetString("Tabs_Settings_ReuseToleranceHint");
+        StrReuseToleranceOff = _translationService.GetString("Tabs_Settings_ReuseToleranceOff");
     }
 }

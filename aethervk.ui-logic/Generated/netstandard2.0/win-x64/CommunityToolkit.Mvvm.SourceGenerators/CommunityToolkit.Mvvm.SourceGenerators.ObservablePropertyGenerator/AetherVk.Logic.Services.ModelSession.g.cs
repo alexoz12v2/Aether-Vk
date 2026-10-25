@@ -6,27 +6,6 @@ namespace AetherVk.Logic.Services
     /// <inheritdoc/>
     partial class ModelSession
     {
-        /// <inheritdoc cref="_massVariabilityPerc"/>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-        public float MassVariabilityPerc
-        {
-            get => _massVariabilityPerc;
-            set
-            {
-                if (!global::System.Collections.Generic.EqualityComparer<float>.Default.Equals(_massVariabilityPerc, value))
-                {
-                    OnMassVariabilityPercChanging(value);
-                    OnMassVariabilityPercChanging(default, value);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.MassVariabilityPerc);
-                    _massVariabilityPerc = value;
-                    OnMassVariabilityPercChanged(value);
-                    OnMassVariabilityPercChanged(default, value);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.MassVariabilityPerc);
-                }
-            }
-        }
-
         /// <inheritdoc cref="_diametreUm"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
@@ -86,6 +65,69 @@ namespace AetherVk.Logic.Services
                     OnScatteringEfficiencyChanged(value);
                     OnScatteringEfficiencyChanged(default, value);
                     OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.ScatteringEfficiency);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_geometricAlbedo"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public float GeometricAlbedo
+        {
+            get => _geometricAlbedo;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<float>.Default.Equals(_geometricAlbedo, value))
+                {
+                    OnGeometricAlbedoChanging(value);
+                    OnGeometricAlbedoChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.GeometricAlbedo);
+                    _geometricAlbedo = value;
+                    OnGeometricAlbedoChanged(value);
+                    OnGeometricAlbedoChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.GeometricAlbedo);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_sizeQ"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public float SizeQ
+        {
+            get => _sizeQ;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<float>.Default.Equals(_sizeQ, value))
+                {
+                    OnSizeQChanging(value);
+                    OnSizeQChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.SizeQ);
+                    _sizeQ = value;
+                    OnSizeQChanged(value);
+                    OnSizeQChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.SizeQ);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_sizeRange"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public float SizeRange
+        {
+            get => _sizeRange;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<float>.Default.Equals(_sizeRange, value))
+                {
+                    OnSizeRangeChanging(value);
+                    OnSizeRangeChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.SizeRange);
+                    _sizeRange = value;
+                    OnSizeRangeChanged(value);
+                    OnSizeRangeChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.SizeRange);
                 }
             }
         }
@@ -174,28 +216,6 @@ namespace AetherVk.Logic.Services
             }
         }
 
-        /// <summary>Executes the logic for when <see cref="MassVariabilityPerc"/> is changing.</summary>
-        /// <param name="value">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="MassVariabilityPerc"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnMassVariabilityPercChanging(float value);
-        /// <summary>Executes the logic for when <see cref="MassVariabilityPerc"/> is changing.</summary>
-        /// <param name="oldValue">The previous property value that is being replaced.</param>
-        /// <param name="newValue">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="MassVariabilityPerc"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnMassVariabilityPercChanging(float oldValue, float newValue);
-        /// <summary>Executes the logic for when <see cref="MassVariabilityPerc"/> just changed.</summary>
-        /// <param name="value">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="MassVariabilityPerc"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnMassVariabilityPercChanged(float value);
-        /// <summary>Executes the logic for when <see cref="MassVariabilityPerc"/> just changed.</summary>
-        /// <param name="oldValue">The previous property value that was replaced.</param>
-        /// <param name="newValue">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="MassVariabilityPerc"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnMassVariabilityPercChanged(float oldValue, float newValue);
         /// <summary>Executes the logic for when <see cref="DiametreUm"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="DiametreUm"/> is changed.</remarks>
@@ -262,6 +282,72 @@ namespace AetherVk.Logic.Services
         /// <remarks>This method is invoked right after the value of <see cref="ScatteringEfficiency"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnScatteringEfficiencyChanged(float oldValue, float newValue);
+        /// <summary>Executes the logic for when <see cref="GeometricAlbedo"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="GeometricAlbedo"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnGeometricAlbedoChanging(float value);
+        /// <summary>Executes the logic for when <see cref="GeometricAlbedo"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="GeometricAlbedo"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnGeometricAlbedoChanging(float oldValue, float newValue);
+        /// <summary>Executes the logic for when <see cref="GeometricAlbedo"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="GeometricAlbedo"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnGeometricAlbedoChanged(float value);
+        /// <summary>Executes the logic for when <see cref="GeometricAlbedo"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="GeometricAlbedo"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnGeometricAlbedoChanged(float oldValue, float newValue);
+        /// <summary>Executes the logic for when <see cref="SizeQ"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="SizeQ"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnSizeQChanging(float value);
+        /// <summary>Executes the logic for when <see cref="SizeQ"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="SizeQ"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnSizeQChanging(float oldValue, float newValue);
+        /// <summary>Executes the logic for when <see cref="SizeQ"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="SizeQ"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnSizeQChanged(float value);
+        /// <summary>Executes the logic for when <see cref="SizeQ"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="SizeQ"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnSizeQChanged(float oldValue, float newValue);
+        /// <summary>Executes the logic for when <see cref="SizeRange"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="SizeRange"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnSizeRangeChanging(float value);
+        /// <summary>Executes the logic for when <see cref="SizeRange"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="SizeRange"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnSizeRangeChanging(float oldValue, float newValue);
+        /// <summary>Executes the logic for when <see cref="SizeRange"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="SizeRange"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnSizeRangeChanged(float value);
+        /// <summary>Executes the logic for when <see cref="SizeRange"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="SizeRange"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnSizeRangeChanged(float oldValue, float newValue);
         /// <summary>Executes the logic for when <see cref="Afrho0Cm"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="Afrho0Cm"/> is changed.</remarks>
