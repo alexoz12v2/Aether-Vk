@@ -10,10 +10,20 @@ public sealed class TimelineSession : ITabSession
   public string CommittedStartEpoch { get; set; } = string.Empty;
   public string CommittedEndEpoch { get; set; } = string.Empty;
   
-  public string ProposedStartEpoch { get; set; } = string.Empty;
-  public string ProposedEndEpoch { get; set; } = string.Empty;
+  // the default range lives here, not in the tab: the untouched session is the save-file "dirty"
+  // baseline, so a tab seeding it later would mark a fresh application as changed
+  public string ProposedStartEpoch { get; set; } = DefaultProposedStart;
+  public string ProposedEndEpoch { get; set; } = DefaultProposedEnd;
+
+  // TODO: read defaults from a configuration file in the future.
+  public const string DefaultProposedStart = "2025-10-01T00:00:00Z";
+  public const string DefaultProposedEnd = "2025-11-11T00:00:00Z";
   
   public string CurrentEpochString { get; set; } = string.Empty;
+
+  /// <summary>The selected playback speed (<c>TimelineTabViewModel.SimulationSpeed</c> as int),
+  /// null before one was chosen.</summary>
+  public int? Speed { get; set; }
 
   /// <summary>True while Run to End seeks to the committed end (the viewport overlay shows a
   /// spinner).</summary>

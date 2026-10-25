@@ -111,6 +111,10 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
 
   private bool CanPlayPause() => SelectedSpeed.HasValue;
 
+  // the session keeps the speed for the savefile (TimelineDto.Speed)
+  partial void OnSelectedSpeedChanged(SimulationSpeed? value) =>
+    _timelineSessionService?.UpdateSession(SessionId, s => s.Speed = (int?)value);
+
   partial void OnIsPlayingChanged(bool value)
   {
     if (value && SelectedSpeed.HasValue)
@@ -257,6 +261,20 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
     if (ok) PollSimulationClock();
   }
 
+  /// <summary>
+  /// The viewport's date label for the engine clock (<paramref name="cent"/>, <paramref name="ns"/>):
+  /// "yyyy-MM-dd HH:mm", or empty at the committed start (and without a committed start).
+  /// </summary>
+  internal static string ClockLabel(short cent, ulong ns, string committedStartEpoch)
+  {
+    if (!TimeUtils.TryParseIso8601(committedStartEpoch, out var startDt))
+      return string.Empty;
+    var currentDt = new DateTimeOffset(2000, 1, 1, 12, 0, 0, TimeSpan.Zero)
+       .AddTicks((long)cent * TimeSpan.TicksPerDay * 36525L + (long)(ns / 100UL));
+    var currentStr = currentDt.ToString("yyyy-MM-dd HH:mm");
+    return currentStr != startDt.ToString("yyyy-MM-dd HH:mm") ? currentStr : string.Empty;
+  }
+
   private void PollSimulationClock()
   {
     if (_runtimeService.GetSimulationClock(out var cent, out var ns))
@@ -268,11 +286,6 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
       {
          return;
       }
-
-      var currentDt = new DateTimeOffset(2000, 1, 1, 12, 0, 0, TimeSpan.Zero)
-         .AddTicks((long)cent * TimeSpan.TicksPerDay * 36525L + (long)(ns / 100UL));
-      
-      var currentStr = currentDt.ToString("yyyy-MM-dd HH:mm");
 
       if (TimeUtils.TryParseIso8601(startEpochStr, out var startDt) && TimeUtils.TryParseIso8601(endEpochStr, out var endDt))
       {
@@ -286,23 +299,9 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
          double progress = (currentTicks - startTicks) / (endTicks - startTicks) * 100.0;
          Progress = Math.Max(0, Math.Min(100, progress));
 
-         // Format the start epoch the same way to compare
-         var startFormatted = startDt.ToString("yyyy-MM-dd HH:mm");
-         if (currentStr != startFormatted)
-         {
-             // Publish the current epoch string to the session for Overlay window
-             _timelineSessionService.UpdateSession(SessionId, s =>
-             {
-                 s.CurrentEpochString = currentStr;
-             });
-         }
-         else
-         {
-             _timelineSessionService.UpdateSession(SessionId, s =>
-             {
-                 s.CurrentEpochString = string.Empty;
-             });
-         }
+         // Publish the current epoch string to the session for Overlay window
+         var label = ClockLabel(cent, ns, startEpochStr);
+         _timelineSessionService.UpdateSession(SessionId, s => s.CurrentEpochString = label);
       }
     }
   }
@@ -414,8 +413,7 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
   {
     if (CurrentSession == null || _timelineSessionService == null) return;
 
-    // Seed default proposed range if the session has never had one set.
-    // TODO: read defaults from a configuration file in the future.
+    // Seed the default proposed range if it was cleared.
     bool needsSeed = string.IsNullOrEmpty(CurrentSession.ProposedStartEpoch)
                   || string.IsNullOrEmpty(CurrentSession.ProposedEndEpoch);
     if (needsSeed)
@@ -423,9 +421,9 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
       _timelineSessionService.UpdateSession(SessionId, s =>
       {
         if (string.IsNullOrEmpty(s.ProposedStartEpoch))
-          s.ProposedStartEpoch = "2025-10-01T00:00:00Z";
+          s.ProposedStartEpoch = TimelineSession.DefaultProposedStart;
         if (string.IsNullOrEmpty(s.ProposedEndEpoch))
-          s.ProposedEndEpoch = "2025-11-11T00:00:00Z";
+          s.ProposedEndEpoch = TimelineSession.DefaultProposedEnd;
       });
     }
 
@@ -442,11 +440,17 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
                       endTai.centuries,   endTai.nanoseconds));
     }
 
+    // the saved speed (a savefile open); none saved keeps the current selection
+    if (CurrentSession.Speed is int speed && Enum.IsDefined(typeof(SimulationSpeed), speed))
+      SelectedSpeed = (SimulationSpeed)speed;
+
     HasError = false;
     ErrorMessage = string.Empty;
     RefreshCommittedState();
     RefreshProposedState();
     CheckProposedVsCommitted();
+    // the engine's clock (a reopened save sits at its saved epoch, not at the start)
+    if (!IsPlaying) PollSimulationClock();
   }
 
   private bool _isProposing;

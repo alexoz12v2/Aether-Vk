@@ -53,6 +53,8 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
 
   partial void OnFovUnitIndexChanged(int value)
   {
+    if (!_applyingDisplay && _cameraService is not null)
+      _cameraService.DisplayState = _cameraService.DisplayState with { FovUnitIndex = value };
     OnPropertyChanged(nameof(PerspFovDisplay));
     OnPropertyChanged(nameof(PerspFovStep));
     OnPropertyChanged(nameof(PerspFovMin));
@@ -117,6 +119,8 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
 
   partial void OnOrthoUnitIndexChanged(int value)
   {
+    if (!_applyingDisplay && _cameraService is not null)
+      _cameraService.DisplayState = _cameraService.DisplayState with { OrthoUnitIndex = value };
     OnPropertyChanged(nameof(OrthoHalfWidthDisplay));
     OnPropertyChanged(nameof(OrthoHalfHeightDisplay));
     OnPropertyChanged(nameof(OrthoNearDisplay));
@@ -180,6 +184,27 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
   [NotifyPropertyChangedFor(nameof(OrthoFarDisplay))]
   private double _orthoFar = 200.0;
 
+  // set while the panel takes the camera's display state (a savefile open): its unit setters
+  // must not write the half-applied state back
+  private bool _applyingDisplay;
+
+  /// <summary>The panel shows the camera's display choices (<see cref="CameraService.DisplayState"/>).</summary>
+  private void ApplyDisplayState(ViewportDisplayState d)
+  {
+    _applyingDisplay = true;
+    try
+    {
+      OrthoUnitIndex = d.OrthoUnitIndex;
+      FovUnitIndex = d.FovUnitIndex;
+    }
+    finally
+    {
+      _applyingDisplay = false;
+    }
+    OnPropertyChanged(nameof(IsOrthoProportionsLocked));
+    RestoreOrthoProportionsCommand.NotifyCanExecuteChanged();
+  }
+
   public bool IsOrthoProportionsLocked
   {
     get => _cameraService?.IsOrthoProportionsLocked ?? false;
@@ -206,8 +231,21 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
 
   /// <summary>True when the camera is in Earth Observer mode (EarthPosition).</summary>
   [ObservableProperty]
-  [NotifyPropertyChangedFor(nameof(IsEarthObserverMode), nameof(IsUpZenithMode))]
+  [NotifyPropertyChangedFor(nameof(IsEarthObserverMode), nameof(IsUpZenithMode), nameof(IsCometOrbitingMode))]
   private CameraMode _currentCameraMode = CameraMode.UpZenith;
+
+  /// <summary>True in CometOrbiting mode (comet debug): shows the lighting switch.</summary>
+  public bool IsCometOrbitingMode => CurrentCameraMode == CameraMode.CometOrbiting;
+
+  /// <summary>Comet debug: physical nucleus lighting instead of the display shading.</summary>
+  [ObservableProperty]
+  private bool _isPhysicalLighting;
+
+  partial void OnIsPhysicalLightingChanged(bool value)
+  {
+    if (_cameraService is not null)
+      _cameraService.PhysicalLighting = value;
+  }
 
   public bool IsEarthObserverMode => CurrentCameraMode == CameraMode.EarthPosition;
 
@@ -293,6 +331,12 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
       HandleProjectionCallback
     );
 
+    ApplyDisplayState(_cameraService.DisplayState);
+    _cameraService
+      .DisplayStateChanged.ObserveOn(schedulerProvider.MainThread)
+      .Subscribe(ApplyDisplayState)
+      .AddDisposableTo(_disposables);
+
     // Track camera mode to show/hide the Earth Observer subsection.
     _cameraService
       .CameraModeChanged.ObserveOn(schedulerProvider.MainThread)
@@ -324,6 +368,26 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
         try
         {
           EarthObserverOrientationMode = mode;
+        }
+        finally
+        {
+          _isUpdatingFromRuntime = false;
+        }
+      })
+      .AddDisposableTo(_disposables);
+
+    // Mirror observer sites set outside the sliders (opened saves, FITS headers, suggestions).
+    _cameraService
+      .EarthObserverSiteChanged.ObserveOn(schedulerProvider.MainThread)
+      .Subscribe(site =>
+      {
+        // Echo of our own slider push: keep the full-precision double.
+        if ((float)EarthObserverLatDeg == site.LatDeg && (float)EarthObserverLonDeg == site.LonDeg) return;
+        _isUpdatingFromRuntime = true;
+        try
+        {
+          EarthObserverLatDeg = site.LatDeg;
+          EarthObserverLonDeg = site.LonDeg;
         }
         finally
         {

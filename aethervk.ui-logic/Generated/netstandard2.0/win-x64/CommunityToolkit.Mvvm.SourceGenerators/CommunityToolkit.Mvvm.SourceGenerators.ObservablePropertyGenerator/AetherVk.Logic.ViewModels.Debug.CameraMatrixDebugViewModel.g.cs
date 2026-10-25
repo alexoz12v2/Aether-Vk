@@ -6,6 +6,48 @@ namespace AetherVk.Logic.ViewModels.Debug
     /// <inheritdoc/>
     partial class CameraMatrixDebugViewModel
     {
+        /// <inheritdoc cref="_dustHistory"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public string DustHistory
+        {
+            get => _dustHistory;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<string>.Default.Equals(_dustHistory, value))
+                {
+                    OnDustHistoryChanging(value);
+                    OnDustHistoryChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.DustHistory);
+                    _dustHistory = value;
+                    OnDustHistoryChanged(value);
+                    OnDustHistoryChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.DustHistory);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_earthObserver"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public string EarthObserver
+        {
+            get => _earthObserver;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<string>.Default.Equals(_earthObserver, value))
+                {
+                    OnEarthObserverChanging(value);
+                    OnEarthObserverChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.EarthObserver);
+                    _earthObserver = value;
+                    OnEarthObserverChanged(value);
+                    OnEarthObserverChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.EarthObserver);
+                }
+            }
+        }
+
         /// <inheritdoc cref="_posX"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
@@ -72,12 +114,12 @@ namespace AetherVk.Logic.ViewModels.Debug
         /// <inheritdoc cref="_rotX"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-        public float RotX
+        public double RotX
         {
             get => _rotX;
             set
             {
-                if (!global::System.Collections.Generic.EqualityComparer<float>.Default.Equals(_rotX, value))
+                if (!global::System.Collections.Generic.EqualityComparer<double>.Default.Equals(_rotX, value))
                 {
                     OnRotXChanging(value);
                     OnRotXChanging(default, value);
@@ -93,12 +135,12 @@ namespace AetherVk.Logic.ViewModels.Debug
         /// <inheritdoc cref="_rotY"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-        public float RotY
+        public double RotY
         {
             get => _rotY;
             set
             {
-                if (!global::System.Collections.Generic.EqualityComparer<float>.Default.Equals(_rotY, value))
+                if (!global::System.Collections.Generic.EqualityComparer<double>.Default.Equals(_rotY, value))
                 {
                     OnRotYChanging(value);
                     OnRotYChanging(default, value);
@@ -114,12 +156,12 @@ namespace AetherVk.Logic.ViewModels.Debug
         /// <inheritdoc cref="_rotZ"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-        public float RotZ
+        public double RotZ
         {
             get => _rotZ;
             set
             {
-                if (!global::System.Collections.Generic.EqualityComparer<float>.Default.Equals(_rotZ, value))
+                if (!global::System.Collections.Generic.EqualityComparer<double>.Default.Equals(_rotZ, value))
                 {
                     OnRotZChanging(value);
                     OnRotZChanging(default, value);
@@ -135,12 +177,12 @@ namespace AetherVk.Logic.ViewModels.Debug
         /// <inheritdoc cref="_rotW"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-        public float RotW
+        public double RotW
         {
             get => _rotW;
             set
             {
-                if (!global::System.Collections.Generic.EqualityComparer<float>.Default.Equals(_rotW, value))
+                if (!global::System.Collections.Generic.EqualityComparer<double>.Default.Equals(_rotW, value))
                 {
                     OnRotWChanging(value);
                     OnRotWChanging(default, value);
@@ -153,6 +195,50 @@ namespace AetherVk.Logic.ViewModels.Debug
             }
         }
 
+        /// <summary>Executes the logic for when <see cref="DustHistory"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="DustHistory"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnDustHistoryChanging(string value);
+        /// <summary>Executes the logic for when <see cref="DustHistory"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="DustHistory"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnDustHistoryChanging(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="DustHistory"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="DustHistory"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnDustHistoryChanged(string value);
+        /// <summary>Executes the logic for when <see cref="DustHistory"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="DustHistory"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnDustHistoryChanged(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="EarthObserver"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="EarthObserver"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEarthObserverChanging(string value);
+        /// <summary>Executes the logic for when <see cref="EarthObserver"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="EarthObserver"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEarthObserverChanging(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="EarthObserver"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="EarthObserver"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEarthObserverChanged(string value);
+        /// <summary>Executes the logic for when <see cref="EarthObserver"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="EarthObserver"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEarthObserverChanged(string? oldValue, string newValue);
         /// <summary>Executes the logic for when <see cref="PosX"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="PosX"/> is changed.</remarks>
@@ -223,89 +309,89 @@ namespace AetherVk.Logic.ViewModels.Debug
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="RotX"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnRotXChanging(float value);
+        partial void OnRotXChanging(double value);
         /// <summary>Executes the logic for when <see cref="RotX"/> is changing.</summary>
         /// <param name="oldValue">The previous property value that is being replaced.</param>
         /// <param name="newValue">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="RotX"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnRotXChanging(float oldValue, float newValue);
+        partial void OnRotXChanging(double oldValue, double newValue);
         /// <summary>Executes the logic for when <see cref="RotX"/> just changed.</summary>
         /// <param name="value">The new property value that was set.</param>
         /// <remarks>This method is invoked right after the value of <see cref="RotX"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnRotXChanged(float value);
+        partial void OnRotXChanged(double value);
         /// <summary>Executes the logic for when <see cref="RotX"/> just changed.</summary>
         /// <param name="oldValue">The previous property value that was replaced.</param>
         /// <param name="newValue">The new property value that was set.</param>
         /// <remarks>This method is invoked right after the value of <see cref="RotX"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnRotXChanged(float oldValue, float newValue);
+        partial void OnRotXChanged(double oldValue, double newValue);
         /// <summary>Executes the logic for when <see cref="RotY"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="RotY"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnRotYChanging(float value);
+        partial void OnRotYChanging(double value);
         /// <summary>Executes the logic for when <see cref="RotY"/> is changing.</summary>
         /// <param name="oldValue">The previous property value that is being replaced.</param>
         /// <param name="newValue">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="RotY"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnRotYChanging(float oldValue, float newValue);
+        partial void OnRotYChanging(double oldValue, double newValue);
         /// <summary>Executes the logic for when <see cref="RotY"/> just changed.</summary>
         /// <param name="value">The new property value that was set.</param>
         /// <remarks>This method is invoked right after the value of <see cref="RotY"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnRotYChanged(float value);
+        partial void OnRotYChanged(double value);
         /// <summary>Executes the logic for when <see cref="RotY"/> just changed.</summary>
         /// <param name="oldValue">The previous property value that was replaced.</param>
         /// <param name="newValue">The new property value that was set.</param>
         /// <remarks>This method is invoked right after the value of <see cref="RotY"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnRotYChanged(float oldValue, float newValue);
+        partial void OnRotYChanged(double oldValue, double newValue);
         /// <summary>Executes the logic for when <see cref="RotZ"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="RotZ"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnRotZChanging(float value);
+        partial void OnRotZChanging(double value);
         /// <summary>Executes the logic for when <see cref="RotZ"/> is changing.</summary>
         /// <param name="oldValue">The previous property value that is being replaced.</param>
         /// <param name="newValue">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="RotZ"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnRotZChanging(float oldValue, float newValue);
+        partial void OnRotZChanging(double oldValue, double newValue);
         /// <summary>Executes the logic for when <see cref="RotZ"/> just changed.</summary>
         /// <param name="value">The new property value that was set.</param>
         /// <remarks>This method is invoked right after the value of <see cref="RotZ"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnRotZChanged(float value);
+        partial void OnRotZChanged(double value);
         /// <summary>Executes the logic for when <see cref="RotZ"/> just changed.</summary>
         /// <param name="oldValue">The previous property value that was replaced.</param>
         /// <param name="newValue">The new property value that was set.</param>
         /// <remarks>This method is invoked right after the value of <see cref="RotZ"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnRotZChanged(float oldValue, float newValue);
+        partial void OnRotZChanged(double oldValue, double newValue);
         /// <summary>Executes the logic for when <see cref="RotW"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="RotW"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnRotWChanging(float value);
+        partial void OnRotWChanging(double value);
         /// <summary>Executes the logic for when <see cref="RotW"/> is changing.</summary>
         /// <param name="oldValue">The previous property value that is being replaced.</param>
         /// <param name="newValue">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="RotW"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnRotWChanging(float oldValue, float newValue);
+        partial void OnRotWChanging(double oldValue, double newValue);
         /// <summary>Executes the logic for when <see cref="RotW"/> just changed.</summary>
         /// <param name="value">The new property value that was set.</param>
         /// <remarks>This method is invoked right after the value of <see cref="RotW"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnRotWChanged(float value);
+        partial void OnRotWChanged(double value);
         /// <summary>Executes the logic for when <see cref="RotW"/> just changed.</summary>
         /// <param name="oldValue">The previous property value that was replaced.</param>
         /// <param name="newValue">The new property value that was set.</param>
         /// <remarks>This method is invoked right after the value of <see cref="RotW"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnRotWChanged(float oldValue, float newValue);
+        partial void OnRotWChanged(double oldValue, double newValue);
     }
 }

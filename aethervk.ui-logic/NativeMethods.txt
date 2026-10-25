@@ -65,4 +65,6 @@ VK_RWIN
 // functionality, wParam stores the window button being pressed
 SetCapture
 ReleaseCapture
+// Keyboard focus for the viewport child window on click (its WM_KEYDOWN carries the camera shortcuts)
+SetFocus
 SetCursorPos

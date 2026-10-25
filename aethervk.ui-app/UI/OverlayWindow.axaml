@@ -275,7 +275,7 @@
     <ContentControl Content="{Binding CurrentEpochString}" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,16">
       <ContentControl.DataTemplates>
         <DataTemplate DataType="{x:Type x:String}">
-          <TextBlock Text="{Binding}" Foreground="White" FontSize="14" FontWeight="SemiBold" IsVisible="{Binding Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+          <TextBlock AutomationProperties.AutomationId="ViewportEpochLabel" Text="{Binding}" Foreground="White" FontSize="14" FontWeight="SemiBold" IsVisible="{Binding Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
         </DataTemplate>
       </ContentControl.DataTemplates>
     </ContentControl>

@@ -60,7 +60,9 @@ public sealed partial class JetViewModel : ObservableObject
   private float _apertureDeg;
 
   /// <summary>
-  /// Mean initial particle speed in m/s. Typical cometary dust ejects at 0.1–2.0 m/s.
+  /// Mean initial particle speed in m/s, of the reference grain. Large grains leave at 0.1–2 m/s
+  /// (Rosetta, close to the nucleus); the small grains that shape the telescopic coma (fans, the
+  /// sunward "U" of a fountain) at tens to hundreds of m/s near perihelion.
   /// Corresponds to <c>ParticleSystemEmitParams.start_velocity_mean</c>.
   /// </summary>
   [ObservableProperty]

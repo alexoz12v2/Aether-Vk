@@ -292,6 +292,8 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
 
   private void OnSessionRestored()
   {
+    // a savefile open / New replaced the scene: the Play snapshot belongs to the old one
+    _snapshotExists = false;
     if (CurrentSession is { } session)
       RestoreFromSession(session);
   }

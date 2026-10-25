@@ -388,7 +388,14 @@ pub fn deserialize_scene(
         }
 
         SerializedComponent::StaticMesh(sm) => {
-          let arc = resolve_or_create_mesh(sm, mesh_cache);
+          let Some(arc) = resolve_or_create_mesh(sm, mesh_cache, scene, entity) else {
+            aethervk_oshal_rlib::log!(
+              "[scene dump] entity {:#x}: mesh \"{}\" neither cached, inlined nor live: not restored",
+              se.ffi_id,
+              sm.asset_path
+            );
+            continue;
+          };
           new_mesh_hashes.insert(arc.id);
           let _ = scene.add_component(
             entity,
@@ -405,7 +412,7 @@ pub fn deserialize_scene(
           // Cannot freshly construct a ParticleSystemComponent from serialized data alone
           // (GPU `device_data` must already exist). Use with_component_mut to patch config fields.
           // Dust clusters are not serialized: the restored system starts empty and regrows.
-          scene.with_component_mut(entity, |ps: &mut ParticleSystemComponent| {
+          let patched = scene.with_component_mut(entity, |ps: &mut ParticleSystemComponent| {
             ps.emission_params = psc.emission_params;
             ps.draw_params = ParticleSystemDrawParams {
               stream_color: psc.stream_color,
@@ -414,6 +421,15 @@ pub fn deserialize_scene(
             ps.emission_start_us = psc.emission_start_us;
             ps.dust.get_mut().reset();
           });
+          if patched.is_none() {
+            // the jets are re-created before a restore: a dumped id that no longer names one
+            // keeps the live jet's configuration (the compatibility check matched its
+            // parameters and TTL; its emission start is the live one's)
+            aethervk_oshal_rlib::log!(
+              "[scene dump] entity {:#x}: no particle system to restore the jet configuration onto",
+              se.ffi_id
+            );
+          }
         }
 
         SerializedComponent::AlmanacPlanet(sp) => {
@@ -497,15 +513,30 @@ pub fn deserialize_scene(
 
 /// Return an existing `Arc<Comet>` from the cache (lookup by `asset_path`), or construct a
 /// new one from inline serialized data and optionally insert it under `asset_path`.
+///
+/// An asset-backed mesh is dumped without its geometry. When its `asset_path` is not in the cache
+/// (an engine-internal mesh such as the jet marker's `__internal_jet__`, never loaded from a
+/// file), the mesh `entity` already carries under the same path is kept; without one, `None`:
+/// an empty mesh was installed before, and its zero-size upload failed every frame.
 fn resolve_or_create_mesh(
   sm: &SerializedStaticMesh,
   mesh_cache: &crate::scene::AssetCache<Comet>,
-) -> alloc::sync::Arc<Comet> {
+  scene: &Scene,
+  entity: crate::scene::EntityId,
+) -> Option<alloc::sync::Arc<Comet>> {
   // Overwrite-merge: if the same asset_path is already cached, reuse it — no duplicate upload.
   if !sm.asset_path.is_empty()
     && let Some(existing) = mesh_cache.get(&sm.asset_path)
   {
-    return existing;
+    return Some(existing);
+  }
+  let inlined = sm.vertices.as_ref().is_some_and(|v| !v.is_empty());
+  if !sm.asset_path.is_empty() && !inlined {
+    return scene
+      .with_component(entity, |live: &StaticMeshComponent| {
+        (live.asset_path == sm.asset_path && !live.mesh.vertices.is_empty()).then(|| live.mesh.clone())
+      })
+      .flatten();
   }
 
   // Reconstruct Comet from inline vertex/index data.
@@ -532,11 +563,11 @@ fn resolve_or_create_mesh(
     ao_map: sm.ao_map.as_ref().map(serial_to_texture),
   };
 
-  if !sm.asset_path.is_empty() {
+  Some(if !sm.asset_path.is_empty() {
     mesh_cache.insert(sm.asset_path.clone(), comet)
   } else {
     alloc::sync::Arc::new(comet)
-  }
+  })
 }
 
 pub(crate) fn serial_to_texture(st: &SerializedTexture) -> Texture {

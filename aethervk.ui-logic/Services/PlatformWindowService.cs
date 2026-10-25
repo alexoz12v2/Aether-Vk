@@ -305,4 +305,20 @@ public sealed class PlatformWindowService : IPlatformWindowService
 #endif
     // All three branches are compile-time gated; on an unrecognised platform this is a safe no-op.
   }
+
+  /// <inheritdoc/>
+  public void SetImmersiveDarkMode(nint windowHandle, bool dark)
+  {
+#if TARGET_IS_WINDOWS
+    if (windowHandle == 0) return;
+    const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+    int value = dark ? 1 : 0;
+    _ = DwmSetWindowAttribute(windowHandle, DWMWA_USE_IMMERSIVE_DARK_MODE, ref value, sizeof(int));
+#endif
+  }
+
+#if TARGET_IS_WINDOWS
+  [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
+  private static extern int DwmSetWindowAttribute(nint hwnd, int attribute, ref int value, int size);
+#endif
 }

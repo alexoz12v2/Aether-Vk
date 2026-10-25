@@ -2,6 +2,7 @@ using System;
 using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.VisualTree;
 using AetherVk.Logic.Services;
 
@@ -126,12 +127,16 @@ public sealed class OverlaySynchronizer : IDisposable
     // 6. Make the overlay window fully click-through at the OS level.
     //    This must happen after Show() so the platform handle (_overlayHandle) is valid.
     //    - Linux/X11:  XFixes empty input shape region → X server delivers no pointer events to this XID.
-    //    - Windows:    WS_EX_TRANSPARENT extended style → DWM passes all clicks to the window behind.
+    //    - Windows:    WS_EX_TRANSPARENT extended style, which Windows honours for mouse
+    //                  hit-testing only on layered windows (Avalonia's composited transparent
+    //                  windows are not): the WM_NCHITTEST hook below does the pass-through.
     //    - macOS:      NSWindow.ignoresMouseEvents = YES → AppKit never hit-tests this window.
     //    Avalonia's IsHitTestVisible="False" on the content is still set as a defence-in-depth
     //    measure for Avalonia-internal routing, but it is the OS-level call here that actually
     //    prevents events from being delivered to the process.
     _platformWindowService.SetWindowInputPassthrough(_overlayHandle);
+    if (OperatingSystem.IsWindows())
+      Win32Properties.AddWndProcHookCallback(_overlayWindow, PassTransparentHitsThrough);
 
     // 7. Subscribe to position/bounds AFTER setup to avoid spurious events from the remap cycle.
     _mainWindow.PositionChanged    += OnPositionChanged;
@@ -140,6 +145,9 @@ public sealed class OverlaySynchronizer : IDisposable
     _boundsSubscription = _nativeHost
       .GetObservable(Visual.BoundsProperty)
       .Subscribe(_ => SyncBounds());
+    // Bounds is relative to the parent: a dock column resized beside the viewport moves the host
+    // on screen without changing it (the overlay was left offset over the side panel)
+    _mainWindow.LayoutUpdated += OnMainWindowLayoutUpdated;
 
     SyncBounds(); // initial placement
   }
@@ -149,6 +157,38 @@ public sealed class OverlaySynchronizer : IDisposable
 
   private void OnOverlayPositionChanged(object? sender, Avalonia.Controls.PixelPointEventArgs e)
     => SyncBounds();
+
+  private void OnMainWindowLayoutUpdated(object? sender, EventArgs e)
+    => SyncBounds();
+
+  /// <summary>
+  /// Windows: a pointer over the overlay's transparent void answers HTTRANSPARENT, so the hit goes
+  /// to the window below on the same UI thread — the viewport's native child or the MainWindow.
+  /// Only the widgets inside the window's content keep it: a hit on the content root itself (the
+  /// viewport overlay's <c>TransparentRoot</c>), on the window or its template parts (all a
+  /// content that is not hit-test visible, like the breadcrumbs', can yield) is the void.
+  /// </summary>
+  private IntPtr PassTransparentHitsThrough(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+  {
+    const uint WM_NCHITTEST = 0x0084;
+    const int HTTRANSPARENT = -1;
+    if (msg != WM_NCHITTEST)
+      return IntPtr.Zero;
+
+    long lp = lParam.ToInt64();
+    var screen = new PixelPoint((short)(lp & 0xFFFF), (short)((lp >> 16) & 0xFFFF));
+    var hit = _overlayWindow.InputHitTest(_overlayWindow.PointToClient(screen)) as Visual;
+    bool onWidget = hit is not null
+                    && _overlayWindow.Content is Visual content
+                    && content != hit
+                    && content.IsVisualAncestorOf(hit);
+    if (!onWidget)
+    {
+      handled = true;
+      return HTTRANSPARENT;
+    }
+    return IntPtr.Zero;
+  }
 
   private void OnMainWindowActivated(object? sender, EventArgs e)
   {
@@ -220,6 +260,9 @@ public sealed class OverlaySynchronizer : IDisposable
     _disposed = true;
     _mainWindow.PositionChanged    -= OnPositionChanged;
     _overlayWindow.PositionChanged -= OnOverlayPositionChanged;
+    _mainWindow.LayoutUpdated      -= OnMainWindowLayoutUpdated;
+    if (OperatingSystem.IsWindows())
+      Win32Properties.RemoveWndProcHookCallback(_overlayWindow, PassTransparentHitsThrough);
     _mainWindow.Activated          -= OnMainWindowActivated;
     _mainWindow.Deactivated        -= OnMainWindowDeactivated;
     if (_isOverrideRedirect)

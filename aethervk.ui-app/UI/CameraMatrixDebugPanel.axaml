@@ -50,7 +50,7 @@
                FontWeight="Bold" FontSize="9"
                Foreground="{DynamicResource Accent.Primary}"
                Margin="0,0,0,3"/>
-    <TextBlock Text="{ReflectionBinding EarthObserver}"
+    <TextBlock AutomationProperties.AutomationId="EarthObserverStatus" Text="{ReflectionBinding EarthObserver}"
                FontFamily="Consolas,Monospace" FontSize="9"
                Foreground="{DynamicResource Text.Primary}"/>
   </StackPanel>

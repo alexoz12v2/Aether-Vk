@@ -49,6 +49,25 @@ public class SaveIndexMappingTests
   }
 
   [Fact]
+  public void ViewportDisplay_RoundTrips_AndOlderSavesHaveNone()
+  {
+    var state = new CameraPersistedState(CameraMode.EarthPosition, null, null, Vector3.Zero, 0, 0, 0,
+      EarthObserverOrientationMode.CometLockIn, [0, 0, 0, 1], [0, 0, 0, 1], new ViewportDisplayState(1, 2, false));
+    var json = SaveIndexIo.ToJson(new SaveIndex { Viewports = [SaveIndexMapping.ToDto(state)] });
+    Assert.Contains("\"ortho_unit\": \"km\"", json);
+    Assert.Contains("\"fov_unit\": \"arcsec\"", json);
+    var back = System.Text.Json.JsonSerializer.Deserialize(json, SaveIndexJsonContext.Default.SaveIndex)!;
+    Assert.Equal(new ViewportDisplayState(1, 2, false), SaveIndexMapping.FromDto(back.Viewports[0]).Display);
+    // a save written before the field: no display state (the camera keeps its own)
+    Assert.Null(SaveIndexMapping.FromDto(new ViewportDto()).Display);
+    // an unknown unit name falls back to the first unit
+    Assert.Equal(new ViewportDisplayState(0, 0, true), SaveIndexMapping.FromDto(new ViewportDto
+    {
+      Display = new ViewportDisplayDto { OrthoUnit = "parsec", FovUnit = "deg" },
+    }).Display);
+  }
+
+  [Fact]
   public void ModelJetsSbdbRotationBillboards_RoundTrip()
   {
     var model = new ModelSession { DiametreUm = 321, AfrhoPower = 1.5f, DustFlow = true, ManualNucleusRadiusKm = 4.5f };

@@ -21,6 +21,7 @@ public partial class MainWindow : Window
 #endif
 
     KeyDown += OnKeyDown;
+    TitleDragArea.PointerPressed += OnTitleDragPressed;
     AddHandler(
       GotFocusEvent,
       OnElementGotFocus,
@@ -155,6 +156,17 @@ public partial class MainWindow : Window
       FocusManager?.ClearFocus();
       e.Handled = true;
     }
+  }
+
+  private void OnTitleDragPressed(object? sender, PointerPressedEventArgs e)
+  {
+    if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+      return;
+    if (e.ClickCount == 2)
+      WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+    else if (WindowState != WindowState.FullScreen)
+      BeginMoveDrag(e);
+    e.Handled = true;
   }
 
   private void ToggleFullscreen()

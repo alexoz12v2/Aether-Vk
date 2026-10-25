@@ -28,6 +28,50 @@ namespace AetherVk.Logic.ViewModels.Debug
             }
         }
 
+        /// <inheritdoc cref="_isSimulationRunning"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public bool IsSimulationRunning
+        {
+            get => _isSimulationRunning;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_isSimulationRunning, value))
+                {
+                    OnIsSimulationRunningChanging(value);
+                    OnIsSimulationRunningChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsSimulationRunning);
+                    _isSimulationRunning = value;
+                    OnIsSimulationRunningChanged(value);
+                    OnIsSimulationRunningChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsSimulationRunning);
+                    CaptureCommand.NotifyCanExecuteChanged();
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_hasParticleSystems"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public bool HasParticleSystems
+        {
+            get => _hasParticleSystems;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_hasParticleSystems, value))
+                {
+                    OnHasParticleSystemsChanging(value);
+                    OnHasParticleSystemsChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.HasParticleSystems);
+                    _hasParticleSystems = value;
+                    OnHasParticleSystemsChanged(value);
+                    OnHasParticleSystemsChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.HasParticleSystems);
+                    CaptureCommand.NotifyCanExecuteChanged();
+                }
+            }
+        }
+
         /// <summary>Executes the logic for when <see cref="IsRenderDocAvailable"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="IsRenderDocAvailable"/> is changed.</remarks>
@@ -50,5 +94,49 @@ namespace AetherVk.Logic.ViewModels.Debug
         /// <remarks>This method is invoked right after the value of <see cref="IsRenderDocAvailable"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnIsRenderDocAvailableChanged(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="IsSimulationRunning"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="IsSimulationRunning"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsSimulationRunningChanging(bool value);
+        /// <summary>Executes the logic for when <see cref="IsSimulationRunning"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="IsSimulationRunning"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsSimulationRunningChanging(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="IsSimulationRunning"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="IsSimulationRunning"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsSimulationRunningChanged(bool value);
+        /// <summary>Executes the logic for when <see cref="IsSimulationRunning"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="IsSimulationRunning"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsSimulationRunningChanged(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="HasParticleSystems"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="HasParticleSystems"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnHasParticleSystemsChanging(bool value);
+        /// <summary>Executes the logic for when <see cref="HasParticleSystems"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="HasParticleSystems"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnHasParticleSystemsChanging(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="HasParticleSystems"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="HasParticleSystems"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnHasParticleSystemsChanged(bool value);
+        /// <summary>Executes the logic for when <see cref="HasParticleSystems"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="HasParticleSystems"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnHasParticleSystemsChanged(bool oldValue, bool newValue);
     }
 }

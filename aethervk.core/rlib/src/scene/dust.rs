@@ -295,8 +295,10 @@ pub fn dust_reuse_px_default() -> u32 {
 // every particle by 0.005 px, so the coma looked like one shape sliding with the comet. And ~1 M
 // dots blend into a fog in which no flow shows even when fast.
 
-/// [`DUST_VIEW_TRACERS`]: one cluster in `TRACER_EVERY` is also drawn as a bright dot at its exact
-/// position (real particles to follow); [`DUST_VIEW_FLOW`]: synchrone marks ([`flow_factor`])
+/// [`DUST_VIEW_TRACERS`]: one cluster in `TRACER_EVERY` is also drawn as bright dots at the exact
+/// positions of its grain sizes, one per size-polyline edge (real particles to follow, spanning
+/// the cluster's stretch of the tail; its reference grain alone reached a tenth of the tail);
+/// [`DUST_VIEW_FLOW`]: synchrone marks ([`flow_factor`])
 pub const DUST_VIEW_TRACERS: u32 = 1;
 pub const DUST_VIEW_FLOW: u32 = 2;
 /// diagnostics (`AETHERVK_DUST_DEBUG_STREAM=<s>`): the splat draws one stream of every tier; the
@@ -321,7 +323,7 @@ pub fn dust_view_flags_default() -> u32 {
   }
   f
 }
-/// one tracer per this many clusters (~400 in a wide view of the coma and tail)
+/// one tracer cluster per this many clusters (~400 in a wide view of the coma and tail, ×17 dots)
 pub const TRACER_EVERY: u32 = 256;
 /// tracer dot radius (pixels)
 pub const TRACER_PX: f32 = 2.0;

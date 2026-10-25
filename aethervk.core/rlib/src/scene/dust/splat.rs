@@ -276,6 +276,40 @@ pub const DUST_VOLUME_BIAS_MAX: u32 = 15;
 pub const DUST_EWA_FRAME_BUDGET: u32 = 1 << 28;
 /// the largest EWA bias: the per-packet texel cap is `DUST_SPLAT_MAX_TEXELS / 4^bias` (4 at 6)
 pub const DUST_EWA_BIAS_MAX: u32 = 6;
+/// the largest EWA bias the host feedback chooses ([`EwaStats::suggested_bias_for`]); 6 stays for
+/// `AETHERVK_DUST_EWA_BIAS` only. At 6 the cap sends nearly every packet of a frame-filling coma
+/// to the gate level, widened: the frame collapses to a flat field (67P from the Earth at
+/// 1.9·10⁵ km half-width: every texel 262 143 or 582 841 counts, the fan gone), and the exposure,
+/// measuring that field, puts the white at its median: a grey wall. A frame 2× over the budget at
+/// 5 is the lesser evil, and a static one is refined anyway ([`dust_refine_factor`])
+pub const DUST_EWA_BIAS_FEEDBACK_MAX: u32 = 5;
+/// this frame's EWA in-frame gate scale (host-written; 0 and 1 = the default gate at
+/// [`DUST_FRAME_HARD_FACTOR`] budgets): a static view's refined frames ([`dust_refine_factor`]) are
+/// over the budget by design, and the gate would otherwise send their late packets to the gate
+/// level (blocky regions in the refined image)
+pub const PYR_EWA_GATE_SCALE: u32 = 60;
+const _: () = assert!(PYR_PROF_PAIR < PYR_EWA_GATE_SCALE && PYR_EWA_GATE_SCALE < PYR_LOD);
+/// the largest [`PYR_EWA_GATE_SCALE`] (the gate's threshold stays below 2³² counts)
+pub const DUST_EWA_GATE_SCALE_MAX: u32 = 64;
+/// the EWA gate scale a frame was written with (at least 1)
+pub fn ewa_gate_scale(pyramid: &[u32]) -> u32 {
+  pyramid[PYR_EWA_GATE_SCALE as usize].clamp(1, DUST_EWA_GATE_SCALE_MAX)
+}
+/// default of [`dust_refine_factor`]
+pub const DUST_REFINE_FACTOR_DEFAULT: u32 = 16;
+/// frames a view's draw inputs must stay unchanged before each refinement step
+pub const DUST_REFINE_AFTER_FRAMES: u32 = 4;
+/// Static refinement: once a view's draw inputs stop changing, its frames are reused, so one
+/// expensive frame is paid once. The EWA bias then steps down one level per redraw below the
+/// budget's, while the next level's estimated work (the measured texels × 4) stays within this many
+/// EWA frame budgets; the first changed frame returns to the budget's bias.
+/// `AETHERVK_DUST_REFINE=<factor>` (0 = off), at most [`DUST_EWA_GATE_SCALE_MAX`].
+pub fn dust_refine_factor() -> u32 {
+  aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_REFINE")
+    .and_then(|v| v.trim().parse::<u32>().ok())
+    .unwrap_or(DUST_REFINE_FACTOR_DEFAULT)
+    .min(DUST_EWA_GATE_SCALE_MAX)
+}
 /// the in-frame gates of the split, the volumetric and the EWA work sit at this many frame
 /// budgets: past it a packet takes the cheapest path at once (no further split, the coarsest
 /// level), so a frame the host feedback has not caught up with — a cold start or a jump inside
@@ -889,6 +923,12 @@ impl DustMoments {
   /// local position of size-bin edge `j`
   pub fn edge(&self, j: usize) -> [f32; 3] {
     [self.edges[j][0], self.edges[j][1], self.edges[j][2]]
+  }
+  /// where a tracer cluster's dots sit ([`DUST_VIEW_TRACERS`]): every size-polyline edge, the
+  /// slow large grains to the fast small ones. Mirror of the shaders' tracer loops
+  /// (`dust_splat_mono.comp`, `dust_ra_tracer`).
+  pub fn tracer_points(&self) -> [[f32; 3]; SIZE_EDGES as usize] {
+    core::array::from_fn(|j| self.edge(j))
   }
   /// speed factor `√(β_j/β)` of edge `j`: linear in `j` ([`size_edge_sqrt_beta`]), from the
   /// stored factors of the first and last edge. Mirror of `dust_edge_factor`.
@@ -3726,8 +3766,8 @@ impl EwaStats {
   }
 
   /// The bias for the next frame: over [`DUST_EWA_FRAME_BUDGET`], up by `⌈log₄(texels /
-  /// budget)⌉` at once (a level quarters a capped packet's texels); below an eighth of it, one
-  /// down; else unchanged.
+  /// budget)⌉` at once (a level quarters a capped packet's texels), at most
+  /// [`DUST_EWA_BIAS_FEEDBACK_MAX`]; below an eighth of it, one down; else unchanged.
   pub fn suggested_bias(&self) -> u32 {
     self.suggested_bias_for(DUST_EWA_FRAME_BUDGET as u64)
   }
@@ -3737,7 +3777,7 @@ impl EwaStats {
     if self.texels > budget {
       let ratio = self.texels as f64 / budget as f64;
       let up = (ratio.ln() / 4f64.ln()).ceil().max(1.0) as u32;
-      (self.bias + up).min(DUST_EWA_BIAS_MAX)
+      (self.bias + up).min(DUST_EWA_BIAS_FEEDBACK_MAX)
     } else if self.texels < budget / 8 {
       self.bias.saturating_sub(1)
     } else {
@@ -8169,7 +8209,7 @@ pub fn splat_scatter(
     let before = *t;
     *t = t.wrapping_add((work / DUST_EWA_TEXEL_UNIT) as u32 + 1);
     if frame_gates_on(pyramid)
-      && before > DUST_FRAME_HARD_FACTOR * (DUST_EWA_FRAME_BUDGET / DUST_EWA_TEXEL_UNIT as u32)
+      && before > DUST_FRAME_HARD_FACTOR * ewa_gate_scale(pyramid) * (DUST_EWA_FRAME_BUDGET / DUST_EWA_TEXEL_UNIT as u32)
     {
       level = level.max(gate_level(layout.level_count()));
     }
@@ -8416,7 +8456,13 @@ pub fn scatter_into(
 }
 
 /// Stamps a tracer dot ([`TRACER_PX`] radius, `counts` high, white colour) at `mu` on level 0.
-pub fn splat_tracer(mu: [f32; 2], counts: u32, layout: &PyramidLayout, pyramid: &mut [u32]) {
+/// A tracer dot's colour word: `counts` dots of colour channel `c`, rounded
+/// (`dust_tracer_color_word`).
+pub fn tracer_color_word(counts: u32, c: f32) -> u32 {
+  (counts as f32 * c.clamp(0.0, 1.0) * DUST_COLOR_SCALE + 0.5) as u32
+}
+
+pub fn splat_tracer(mu: [f32; 2], counts: u32, color: [f32; 3], layout: &PyramidLayout, pyramid: &mut [u32]) {
   if counts == 0 {
     return;
   }
@@ -8435,10 +8481,7 @@ pub fn splat_tracer(mu: [f32; 2], counts: u32, layout: &PyramidLayout, pyramid: 
       let i = (off + (ty as u32 * w + tx as u32) * PYRAMID_TEXEL_WORDS) as usize;
       sat_add(&mut pyramid[i], counts);
       for k in 1..4 {
-        sat_add(
-          &mut pyramid[i + k],
-          counts.saturating_mul(DUST_COLOR_SCALE as u32),
-        );
+        sat_add(&mut pyramid[i + k], tracer_color_word(counts, color[k - 1]));
       }
     }
   }
@@ -9049,18 +9092,23 @@ fn splat_cluster_inner(
       }
     }
     if pc.flags & DUST_VIEW_TRACERS != 0 && is_tracer(m.id()) {
-      // the tracer sits at the exact cluster position
-      let p = Packet {
-        mean: m.mean(),
-        cov: [0.0; 6],
-        seg: [0.0; 3],
-        flux: 1.0,
-        open: [false, false],
-        rho: [1.0, 1.0],
-        seg_t: [0.0; 3],
-      };
-      if let Some(sp) = project_packet(&p, 1.0, &pc.mvp, layout.width, layout.height, eye) {
-        splat_tracer(sp.mu, tracer_counts, layout, pyramid);
+      // the tracer dots sit at the exact positions of the cluster's grain sizes, one per
+      // size-polyline edge: a tracer cluster spans its tail, the slow grains to the fast ones (its
+      // reference grain alone, the mean, reached a tenth of the tail), in the cluster's colour
+      // (the stream colour's hue turned by the age)
+      for point in m.tracer_points() {
+        let p = Packet {
+          mean: point,
+          cov: [0.0; 6],
+          seg: [0.0; 3],
+          flux: 1.0,
+          open: [false, false],
+          rho: [1.0, 1.0],
+          seg_t: [0.0; 3],
+        };
+        if let Some(sp) = project_packet(&p, 1.0, &pc.mvp, layout.width, layout.height, eye) {
+          splat_tracer(sp.mu, tracer_counts, color, layout, pyramid);
+        }
       }
     }
   }
@@ -9129,6 +9177,30 @@ pub fn white_point_from_level(level: &[u32], texel_px: u32, unit: f32) -> Option
     at(super::WHITE_TILE_PERCENTILE) * unit / area,
     at(0.5) * unit / area,
   ))
+}
+
+/// lit texels below which [`level_is_flat`] never calls a level flat (a small object's few texels
+/// may all be its brightest)
+pub const DUST_FLAT_MIN_TEXELS: usize = 64;
+
+/// Whether a white-point level is a flat field: at least [`DUST_FLAT_MIN_TEXELS`] lit texels and
+/// the brightest within 1 % of the [`super::WHITE_TILE_PERCENTILE`] one. No dust image is: its
+/// densest texels sit well above the 99th percentile (×4–×8 measured). A frame whose packets all
+/// went to a coarse level is (every texel 262 143 counts: an EWA bias of 6 over a frame-filling
+/// coma), and its p99 would put the white at its median: the exposure skips it.
+pub fn level_is_flat(level: &[u32]) -> bool {
+  let mut v: alloc::vec::Vec<u32> = level
+    .chunks_exact(PYRAMID_TEXEL_WORDS as usize)
+    .map(|t| t[0])
+    .filter(|&c| c > 0)
+    .collect();
+  if v.len() < DUST_FLAT_MIN_TEXELS {
+    return false;
+  }
+  v.sort_unstable();
+  let p99 = v[(((v.len() - 1) as f32 * super::WHITE_TILE_PERCENTILE).round() as usize).min(v.len() - 1)] as f64;
+  let max = *v.last().unwrap() as f64;
+  max <= p99 * 1.01
 }
 
 /// Display level the auto softening puts the median dust texel at (`asinh` stretch, relative

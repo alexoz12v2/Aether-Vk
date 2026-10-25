@@ -77,6 +77,13 @@ public unsafe class WindowsNativeInputHandler(IntPtr handle, string handleDescri
     s_instances.TryRemove(_handle, out _);
   }
 
+  /// <summary>Keyboard focus to the viewport HWND (as a click on it does, see WndProcHook).</summary>
+  public override void FocusViewportWindow()
+  {
+    if (_handle != IntPtr.Zero)
+      PInvoke.SetFocus((HWND)_handle);
+  }
+
   protected override void DoSetSolidColor(byte r, byte g, byte b)
   {
     if (_bgBrush != HBRUSH.Null) PInvoke.DeleteObject(_bgBrush);
@@ -157,6 +164,7 @@ public unsafe class WindowsNativeInputHandler(IntPtr handle, string handleDescri
 
       // --- MOUSE CLICKS --
       case PInvoke.WM_LBUTTONDOWN:
+        PInvoke.SetFocus(hWnd); // the camera shortcuts (1/2/3, V, Tab…) arrive as this window's WM_KEYDOWN
         PInvoke.SetCapture(hWnd); // Mimick AppKit: Lock input to this window for the out-of-bounds drags
         instance.PublishMouseEvent(GetX(lParam), GetY(lParam), MouseButton.Left, isDown: true, GetModifiers());
         break;
@@ -168,6 +176,7 @@ public unsafe class WindowsNativeInputHandler(IntPtr handle, string handleDescri
         break;
 
       case PInvoke.WM_RBUTTONDOWN:
+        PInvoke.SetFocus(hWnd); // the camera shortcuts (1/2/3, V, Tab…) arrive as this window's WM_KEYDOWN
         PInvoke.SetCapture(hWnd); // Mimick AppKit: Lock input to this window for the out-of-bounds drags
         instance.PublishMouseEvent(GetX(lParam), GetY(lParam), MouseButton.Right, isDown: true, GetModifiers());
         break;
@@ -179,6 +188,7 @@ public unsafe class WindowsNativeInputHandler(IntPtr handle, string handleDescri
         break;
 
       case PInvoke.WM_MBUTTONDOWN:
+        PInvoke.SetFocus(hWnd); // the camera shortcuts (1/2/3, V, Tab…) arrive as this window's WM_KEYDOWN
         PInvoke.SetCapture(hWnd); // Mimick AppKit: Lock input to this window for the out-of-bounds drags
         instance.PublishMouseEvent(GetX(lParam), GetY(lParam), MouseButton.Middle, isDown: true, GetModifiers());
         break;

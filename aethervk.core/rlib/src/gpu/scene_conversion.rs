@@ -186,6 +186,9 @@ impl SceneConversionExt2 for Scene {
       )
       .map(|l| (self.ancestor_depth_layer(l.comet), l))
       .filter(|(layer, _)| *layer > 0);
+    // the comet's root-level overlays follow the same displacement (collected before the
+    // extraction closures)
+    let light_time_overlay = LightTimeOverlay::of(self, camera_entity);
     // Phase 2 — `archetypes.read()` from `query1_without` is now released.
     // Safe to call `get_relative_transform_f64` which re-acquires `archetypes.read()`.
     for entry in frame_entries {
@@ -305,11 +308,15 @@ impl SceneConversionExt2 for Scene {
       dust_haze_detail: crate::scene::dust::DUST_HAZE_DETAIL_DEFAULT,
       dust_propagate_detail: crate::scene::dust::DUST_PROPAGATE_DETAIL_DEFAULT,
       dust_reuse_px: crate::scene::dust::dust_reuse_px_default(),
+      dust_feedback_gen: 0,
       dust_sim_speed: 0.0,
       dust_view_flags: 0,
       dust_flow: Default::default(),
       dust_view: Default::default(),
       layer_ref_dist: core::array::from_fn(|i| layer_ref_dists.get(&(i as u32)).copied().unwrap_or(0.0)),
+      mesh_shading: self
+        .with_component(camera_entity, |s: &crate::scene::CameraShadingComponent| s.0)
+        .unwrap_or(0),
     };
 
     // ------ 3. Zero-Copy GPU Upload Abstraction Macro -------------------------------------
@@ -392,7 +399,18 @@ impl SceneConversionExt2 for Scene {
         // TODO reintroduce following and selected if necessary. If reintroduced, the selection and
         // following state should have been stored in the scene
         let outline = get_mesh_outline(false, false, render_outline);
-        (layer_idx, id, mesh.clone(), rte, outline)
+        let mut mesh = mesh.clone();
+        // a jet marker in the nucleus shadow is dimmed: the editor shows where the spawn
+        // point is and whether it emits now
+        if self.has_component::<crate::scene::ParticleSystemComponent>(id)
+            == crate::scene::HasComponentResultEnum::EntityHasComponent
+          && jet_site_lit(self, id) == Some(false)
+        {
+          for c in &mut mesh.emissive_color[..3] {
+            *c *= UNLIT_JET_MARKER_DIM;
+          }
+        }
+        (layer_idx, id, mesh, rte, outline)
       })
     });
 
@@ -855,7 +873,13 @@ impl SceneConversionExt2 for Scene {
         Some(Some(seg)) => seg,
         _ => alloc::vec::Vec::new(),
       };
-      compute_rte(self, id).map(|(layer_idx, rte)| {
+      compute_rte(self, id).map(|(layer_idx, mut rte)| {
+        // a comet line under the observer's light time: drawn where the telescope sees the comet
+        if layer_idx == 0 {
+          if let Some(o) = light_time_overlay.track_offset(id) {
+            rte.position = rte.position + o;
+          }
+        }
         // layer-0 pieces near a micro frame origin are anchored there (empty candidate list
         // while PRECISE_COMPOSITE is off: the output is camera_relative_control_points')
         let (rel, anchor) = if layer_idx == 0 {
@@ -1243,12 +1267,16 @@ impl SceneConversionExt2 for Scene {
         // Project the target's global (AU) position in the macro layer whatever frame it lives in:
         // a comet body sits in a micro frame (layer 1), and its label is still drawn on the macro
         // overlay. f64 camera-relative, as for every RTE path.
-        let Some(target_global) = self.global_transform_f64(ref_ind.target_entity) else {
+        let Some(mut target_global) = self.global_transform_f64(ref_ind.target_entity) else {
           return;
         };
         let Some(cam_macro) = camera_in_frames.get(&0) else {
           return;
         };
+        // the comet's label sits on the nucleus the telescope sees (light-time displaced)
+        if let Some(o) = light_time_overlay.label_offset(ref_ind.target_entity) {
+          target_global.position = target_global.position + o;
+        }
         let rte = crate::scene::HighResTransformComponent {
           position: target_global.position - cam_macro.position,
           rotation: target_global.rotation,
@@ -1885,6 +1913,72 @@ pub fn rte_relative_to_camera(
     position: object_position - camera_in_frame.position,
     rotation: object_rotation,
     scale: object_scale,
+  }
+}
+
+/// Emissive factor of a jet marker whose site faces away from the Sun.
+pub(crate) const UNLIT_JET_MARKER_DIM: f32 = 0.25;
+
+/// Whether the jet site `jet` (a child of the nucleus, translated to its surface) faces the Sun,
+/// the heliocentric origin: `(site − nucleus) · (−nucleus) > 0`, the dust emission's lit test at
+/// the current rotation. `None` without a parent or transforms.
+pub(crate) fn jet_site_lit(scene: &Scene, jet: EntityId) -> Option<bool> {
+  use aethervk_oshal_rlib::math::vector::Vector3;
+  let nucleus = scene.global_transform_f64(scene.get_parent(jet)?)?.position;
+  let site = scene.global_transform_f64(jet)?.position;
+  let normal = site - nucleus;
+  let to_sun = -nucleus;
+  Some(normal.x() * to_sun.x() + normal.y() * to_sun.y() + normal.z() * to_sun.z() > 0.0)
+}
+
+/// The Earth observer's light-time displacement (`earth_observer::LightTimeViewComponent` on the
+/// camera) for the comet's root-level overlays: the micro layer moves the comet itself, these
+/// move its label (which targets the comet body) and its lines (marked with a
+/// `LightTimeTrackComponent`) by the same `offset_au`, whatever layer the comet is on.
+#[derive(Debug, Default)]
+pub(crate) struct LightTimeOverlay {
+  comet: Option<EntityId>,
+  offset_au: aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64,
+  tracks: alloc::vec::Vec<EntityId>,
+}
+
+impl LightTimeOverlay {
+  pub(crate) fn of(scene: &Scene, camera: EntityId) -> Self {
+    use crate::simulation_api::earth_observer::{LightTimeTrackComponent, LightTimeViewComponent};
+    let Some(lt) = scene.with_component(camera, |l: &LightTimeViewComponent| *l) else {
+      return Self::default();
+    };
+    let mut tracks = alloc::vec::Vec::new();
+    scene.query1(|id, t: &LightTimeTrackComponent| {
+      if t.comet == lt.comet {
+        tracks.push(id);
+      }
+    });
+    Self {
+      comet: Some(lt.comet),
+      offset_au: aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(
+        lt.offset_au[0],
+        lt.offset_au[1],
+        lt.offset_au[2],
+      ),
+      tracks,
+    }
+  }
+
+  /// displacement (AU) of a label pointing at `target`
+  pub(crate) fn label_offset(
+    &self,
+    target: EntityId,
+  ) -> Option<aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64> {
+    (self.comet == Some(target)).then_some(self.offset_au)
+  }
+
+  /// displacement (AU) of the root-level line `entity`
+  pub(crate) fn track_offset(
+    &self,
+    entity: EntityId,
+  ) -> Option<aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64> {
+    self.tracks.contains(&entity).then_some(self.offset_au)
   }
 }
 

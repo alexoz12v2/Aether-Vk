@@ -252,6 +252,9 @@ public partial class TabItemViewModel : ViewModelBase
   [ObservableProperty]
   private bool _isSelected;
 
+  /// <summary>Locale-independent id of the tab header for UI automation ("Tab.CometTab").</summary>
+  public string AutomationKey => "Tab." + GetType().Name.Replace("ViewModel", string.Empty);
+
   public TabItemViewModel(string title)
     : base()
   {

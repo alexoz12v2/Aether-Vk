@@ -386,6 +386,7 @@ fn process_command(
               let mut dust_propagate_detail = crate::scene::dust::DUST_PROPAGATE_DETAIL_DEFAULT;
               let mut dust_haze_detail = crate::scene::dust::DUST_HAZE_DETAIL_DEFAULT;
               let mut dust_reuse_px = crate::scene::dust::DUST_REUSE_PX_DEFAULT;
+              let mut dust_feedback_gen = 0u32;
               let mut dust_sim_speed = 0.0f64;
               let mut dust_view_flags = 0u32;
               let mut dust_flow = crate::scene::dust::DustFlowClock::default();
@@ -425,6 +426,8 @@ fn process_command(
                 dust_haze_detail =
                   scene_context_read.dust_haze_detail.load(core::sync::atomic::Ordering::Relaxed);
                 dust_reuse_px = scene_context_read.dust_reuse_px.load(core::sync::atomic::Ordering::Relaxed);
+                dust_feedback_gen =
+                  scene_context_read.dust_feedback_gen.load(core::sync::atomic::Ordering::Relaxed);
                 dust_sim_speed = scene_context_read.time_state.read().speed.scale_factor();
                 // flow: advances while the sim runs, held on pause (identical paused frames)
                 {
@@ -471,6 +474,7 @@ fn process_command(
               render_scene.set_dust_propagate_detail(dust_propagate_detail);
               render_scene.set_dust_haze_detail(dust_haze_detail);
               render_scene.dust_reuse_px = dust_reuse_px;
+              render_scene.dust_feedback_gen = dust_feedback_gen;
               render_scene.dust_sim_speed = dust_sim_speed;
               render_scene.dust_view_flags = dust_view_flags;
               render_scene.dust_flow = dust_flow;

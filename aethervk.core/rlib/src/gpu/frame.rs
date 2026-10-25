@@ -1051,6 +1051,9 @@ pub fn prepare_dust(
   let tracing = crate::gpu::dust_trace::trace_path().is_some()
     && frame_no % crate::gpu::dust_trace::trace_every() == 0;
   let specks_needed = device.dust_specks_needed(pe);
+  // a discontinuity since the last frame (restored save, seek): the feedback restarts cold and
+  // this frame draws, so it measures the settled view
+  device.dust_sync_feedback_gen(pe, render_scene.dust_feedback_gen);
   // an unchanged frame keeps the last frame's image (`cmd_dust_frame_begin_reusable`): no
   // propagate, splat or specks; a traced frame always draws
   let (view, reuse) = if dust_debug_skip("zero") {
@@ -1103,7 +1106,13 @@ pub fn prepare_dust(
   // `AETHERVK_DUST_CADENCE=1` (the diagnostic path with the budget loop); its begin before the
   // propagates (the resets, aborts, swaps, the propagate set); a failure turns it off for the
   // view (this frame draws everything fresh)
-  let cad_plan = if !reuse && !dust_debug_skip("propagate") && device.dust_cadence_auto(pe, render_scene.dust_reuse_px) {
+  // (a static view's refined frame, `dust::dust_refine_factor`, draws everything fresh: the
+  // cadence's retained class images hold the budget's bias)
+  let cad_plan = if !reuse
+    && !device.dust_refining(pe)
+    && !dust_debug_skip("propagate")
+    && device.dust_cadence_auto(pe, render_scene.dust_reuse_px)
+  {
     device.cmd_checkpoint(cmd, c"dust: cadence");
     // the budget loop's ε and class lengths (step 5); the salt resets the cadence at a changed class length
     let salt = device.dust_budget_apply_cadence(pe);
@@ -1835,6 +1844,9 @@ pub struct RenderScene {
   /// dust temporal reuse tolerance of the scene in px (`SceneContext::dust_reuse_px`, 0 = off):
   /// ε > 0 runs the view's cadence with that ε (`Device::dust_cadence_auto`)
   pub dust_reuse_px: u32,
+  /// dust feedback generation of the scene (`SceneContext::dust_feedback_gen`): a change restarts
+  /// the view's adaptive quality feedback cold (`Device::dust_sync_feedback_gen`)
+  pub dust_feedback_gen: u32,
   /// the simulation speed (`SimSpeed::scale_factor`, 0 paused) the frame is drawn at, for the
   /// cadence's speed reset (`FrameMeta::speed`, round 9 step R)
   pub dust_sim_speed: f64,
@@ -1850,6 +1862,8 @@ pub struct RenderScene {
   /// distance reference of depth layers 0..7 (layer units, 0 = absolute), the same numbers as the
   /// meshes' `DrawCall::layer_ref_dist` (composite precision plan §3.6)
   pub layer_ref_dist: [f64; 8],
+  /// how the view's camera shades meshes (`scene::CAMERA_SHADING_*`, `CameraShadingComponent`)
+  pub mesh_shading: u32,
 }
 
 impl RenderScene {
@@ -1874,12 +1888,14 @@ impl RenderScene {
       dust_volume_detail: crate::scene::dust::DUST_VOLUME_DETAIL_DEFAULT,
       dust_haze_detail: crate::scene::dust::DUST_HAZE_DETAIL_DEFAULT,
       dust_reuse_px: crate::scene::dust::dust_reuse_px_default(),
+      dust_feedback_gen: 0,
       dust_sim_speed: 0.0,
       dust_propagate_detail: crate::scene::dust::DUST_PROPAGATE_DETAIL_DEFAULT,
       dust_view_flags: 0,
       dust_flow: Default::default(),
       dust_view: Default::default(),
       layer_ref_dist: [0.0; 8],
+      mesh_shading: 0,
     }
   }
 
@@ -2691,6 +2707,9 @@ fn draw_layer_content(
     // The result is pre-normalized, so the fragment shader uses it directly as lightDir.
     // For point lights: sun_pos is passed unchanged; the shader computes the per-fragment
     // direction from sunPos − inWorldPos as before.
+    // Physical shading (`CAMERA_SHADING_PHYSICAL`): sunColor.w = 2 and the irradiance of the
+    // mesh's heliocentric distance relative to 1 AU, (1 AU / r)², in sunColor.rgb.
+    let mut draw_sun_color = sun_color;
     let effective_sun_pos = match &sun_pos_f64_km {
       Some(sun_km) => {
         let c = &draw_call.center_rte_f64;
@@ -2698,6 +2717,12 @@ fn draw_layer_content(
         let dy = sun_km[1] - c[1];
         let dz = sun_km[2] - c[2];
         let len = (dx * dx + dy * dy + dz * dz).sqrt();
+        if render_scene.mesh_shading & crate::scene::CAMERA_SHADING_PHYSICAL != 0 && len > 1e-30 {
+          let fs = layer.frame_scale as f64;
+          let r_au = if layer.layer_index > 0 && fs > 0.0 && fs < 1.0 { len * fs } else { len };
+          let irradiance = (1.0 / (r_au * r_au)) as f32;
+          draw_sun_color = [irradiance, irradiance, irradiance, 2.0];
+        }
         if len > 1e-30 {
           Vec3f32::from_components((dx / len) as f32, (dy / len) as f32, (dz / len) as f32)
         } else {
@@ -2711,7 +2736,7 @@ fn draw_layer_content(
       device,
       &layer_camera,
       effective_sun_pos,
-      sun_color,
+      draw_sun_color,
       cmd_buffer,
       handle,
       draw_call,

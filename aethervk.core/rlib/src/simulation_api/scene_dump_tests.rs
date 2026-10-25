@@ -203,6 +203,60 @@ mod scene_dump_tests {
       .expect("StaticMeshComponent must exist after restore");
   }
 
+  /// An asset-backed mesh the cache never held (the jet marker's `__internal_jet__`, built in
+  /// memory) restores onto a live scene by keeping the entity's own mesh, and is not restored at
+  /// all onto an entity without one: it used to come back empty, and its zero-size upload failed
+  /// every frame after a savefile open.
+  #[test]
+  fn test_uncached_internal_mesh_keeps_the_live_mesh() {
+    let mut scene = make_test_scene();
+    let jet = scene.spawn_entity("jet");
+    let bare = scene.spawn_entity("bare");
+    let marker = Arc::new(Comet {
+      id: next_comet_id(),
+      vertices: vec![
+        Vertex { position: [0.0; 3], normal: [0.0, 1.0, 0.0], uv: [0.0; 2], tangent: [1.0, 0.0, 0.0, 1.0] };
+        3
+      ],
+      indices: vec![0, 1, 2],
+      albedo_map: None,
+      normal_map: None,
+      roughness_map: None,
+      ao_map: None,
+    });
+    let mesh = |is_visible| StaticMeshComponent {
+      asset_path: "__internal_jet__".to_string(),
+      mesh: marker.clone(),
+      emissive_color: [1.0, 0.5, 0.0, 1.0],
+      is_visible,
+    };
+    scene.add_component(jet, mesh(false)).expect("jet mesh");
+    scene.add_component(bare, mesh(true)).expect("bare mesh");
+    let serialized = serialize_scene(&scene);
+
+    // the live scene the dump is restored into: the jet re-created with its marker, `bare` without
+    let mut live = make_test_scene();
+    let jet2 = live.spawn_entity("jet");
+    let bare2 = live.spawn_entity("bare");
+    assert_eq!((jet2, bare2), (jet, bare), "same creation order, same ids");
+    live.add_component(jet2, mesh(true)).expect("live jet mesh");
+    let cache = AssetCache::new();
+    let result = deserialize_scene(&mut live, &serialized, &cache);
+
+    live
+      .with_component(jet2, |m: &StaticMeshComponent| {
+        assert_eq!(m.mesh.id, marker.id, "the live marker mesh is kept");
+        assert_eq!(m.mesh.vertices.len(), 3);
+        assert!(!m.is_visible, "the dumped visibility is restored");
+      })
+      .expect("the jet keeps its mesh");
+    assert!(result.new_mesh_hashes.contains(&marker.id), "kept mesh must not be evicted");
+    assert!(
+      live.with_component(bare2, |_: &StaticMeshComponent| ()).is_none(),
+      "no empty mesh installed where there is nothing to keep"
+    );
+  }
+
   // ── Test 3 ─────────────────────────────────────────────────────────────────
 
   /// `format` and `has_mipmaps` survive `texture_to_serial` → `serial_to_texture`.

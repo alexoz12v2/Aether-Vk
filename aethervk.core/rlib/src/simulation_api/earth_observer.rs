@@ -211,6 +211,29 @@ pub struct LightTimeViewComponent {
 
 impl crate::scene::Component for LightTimeViewComponent {}
 
+/// Marks a root-level overlay drawn for `comet` (its orbit, the path it actually followed): with a
+/// [`LightTimeViewComponent`] for that comet the renderer translates it by `offset_au` like the
+/// comet's micro layer, so the line passes through the nucleus the telescope sees. A translation is
+/// exact at the comet and first order along the curve (`offset ≈ −v·τ` varies with the velocity).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LightTimeTrackComponent {
+  pub comet: EntityId,
+}
+
+impl crate::scene::Component for LightTimeTrackComponent {}
+
+/// Adds a [`LightTimeTrackComponent`] for `comet` to `entity` (registered on first use, as
+/// [`LightTimeViewComponent`]).
+pub fn mark_light_time_track(scene: &Scene, entity: EntityId, comet: EntityId) {
+  let track = LightTimeTrackComponent { comet };
+  if let Err(crate::scene::AddComponentError::ComponentNotRegistered) =
+    scene.add_component(entity, track)
+  {
+    scene.register_component::<LightTimeTrackComponent>(&[]);
+    let _ = scene.add_component(entity, track);
+  }
+}
+
 /// Removes the light-time view from `camera` (observer cleared or moved to another camera).
 pub fn clear_light_time_view(scene: &Scene, camera: EntityId) {
   let _ = scene.remove_component::<LightTimeViewComponent>(camera);

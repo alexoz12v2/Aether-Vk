@@ -117,7 +117,7 @@ public abstract class NativeInputHandlerBase : INativeInputHandlerSubscribable
   }
 
   /// <inheritdoc/>
-  public virtual void FocusViewportWindow() { /* no-op on Windows and macOS */ }
+  public virtual void FocusViewportWindow() { /* no-op on macOS */ }
 
   // Note: public abstract is an antipattern. This is a temporary method to test native control
   // calls the abstract method from the main thread

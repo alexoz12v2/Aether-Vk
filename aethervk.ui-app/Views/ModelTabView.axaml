@@ -79,7 +79,7 @@
           <b:ShowFlyoutOnHoverBehavior DelayMs="500" />
         </i:Interaction.Behaviors>
         <Border Classes="accordion" IsEnabled="{Binding EnableLegacyExpanders}">
-          <Expander>
+          <Expander AutomationProperties.AutomationId="ModelSunSection">
           <Expander.Header>
             <StackPanel Orientation="Horizontal" Spacing="4">
               <TextBlock Text="{Binding StrSun}" />
@@ -145,7 +145,7 @@
           <b:ShowFlyoutOnHoverBehavior DelayMs="500" />
         </i:Interaction.Behaviors>
         <Border Classes="accordion" IsEnabled="{Binding EnableLegacyExpanders}">
-          <Expander>
+          <Expander AutomationProperties.AutomationId="NucleusSpinSection">
           <Expander.Header>
             <TextBlock Text="Nucleus and Spin Axis" />
           </Expander.Header>
@@ -230,7 +230,7 @@
 
       <!-- ══════════════════ DUST ═════════════════════════════════════════════ -->
       <Border Classes="accordion">
-        <Expander>
+        <Expander AutomationProperties.AutomationId="DustSection">
           <Expander.Header>
             <TextBlock Text="Dust" />
           </Expander.Header>
@@ -265,9 +265,10 @@
                       IsChecked="{Binding DustFlow}"
                       ToolTip.Tip="Brightness marks riding the dust along synchrones (the dust of one emission instant), a motion cue near the nucleus: peak 4x, trough 0.15x, mean 1.&#x0A;Off by default: seen from 0.03 AU and beyond the marks are the synchrone fan itself, hard rays through the nucleus that the physical optical depth does not show.&#x0A;Visual only." />
             <CheckBox Margin="12,10,12,0"
+                      AutomationProperties.AutomationId="DustTracersToggle"
                       Content="{Binding StrDustTracers}"
                       IsChecked="{Binding DustTracers}"
-                      ToolTip.Tip="Draws one dust particle in 256 as a bright dot at its exact position.&#x0A;The dust drifts at 2 to 150 m/s while a pixel of a wide view spans tens of km: at low sim speed it moves far less than a pixel per second, and the dense dots blend into a still fog. Tracers are real particles to follow (raise the sim speed to see them stream).&#x0A;Visual only." />
+                      ToolTip.Tip="Draws one dust cluster in 256 as bright dots at the exact positions of its grain sizes, from the slow large grains to the fast small ones: the dots span the tail.&#x0A;The dust drifts at 2 to 150 m/s while a pixel of a wide view spans tens of km: at low sim speed it moves far less than a pixel per second, and the dense dots blend into a still fog. Tracers are real particles to follow (raise the sim speed to see them stream).&#x0A;Visual only." />
 
             <!-- ──── Flow time-lapse factor of the dust marks ──────────── -->
             <Grid ColumnDefinitions="*,12,1.6*"
@@ -291,7 +292,7 @@
               <TextBlock Grid.Column="0"
                          Text="Nucleus Radius"
                          VerticalAlignment="Center" />
-              <controls:UnboundedSlider Grid.Column="2"
+              <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="NucleusRadiusSlider"
                                         Value="{Binding ManualNucleusRadiusKmNullable}"
                                         HasBounds="True"
                                         MinBound="0.1"
@@ -321,7 +322,7 @@
                          Foreground="{DynamicResource Text.Secondary}"
                          VerticalAlignment="Center" />
               <Panel Grid.Column="1">
-                <Button Classes="accent"
+                <Button Classes="accent" AutomationProperties.AutomationId="AddJetButton"
                         Command="{Binding AddJetCommand}"
                         ToolTip.Tip="Add a new dust emission jet"
                         Padding="10,2"
@@ -425,7 +426,7 @@
 
                   <!-- Latitude -->
                   <TextBlock Grid.Row="0" Grid.Column="0" Text="Latitude" />
-                  <controls:UnboundedSlider Grid.Row="0" Grid.Column="2"
+                  <controls:UnboundedSlider Grid.Row="0" Grid.Column="2" AutomationProperties.AutomationId="JetLatitudeSlider"
                                             Value="{Binding LatitudeDeg}">
                     <controls:UnboundedSlider.InnerRightContent>
                       <TextBlock Classes="unit-of-measurement" Text="°" />
@@ -434,7 +435,7 @@
 
                   <!-- Longitude -->
                   <TextBlock Grid.Row="2" Grid.Column="0" Text="Longitude" />
-                  <controls:UnboundedSlider Grid.Row="2" Grid.Column="2"
+                  <controls:UnboundedSlider Grid.Row="2" Grid.Column="2" AutomationProperties.AutomationId="JetLongitudeSlider"
                                             Value="{Binding LongitudeDeg}">
                     <controls:UnboundedSlider.InnerRightContent>
                       <TextBlock Classes="unit-of-measurement" Text="°" />
@@ -443,7 +444,7 @@
 
                   <!-- Aperture -->
                   <TextBlock Grid.Row="4" Grid.Column="0" Text="Aperture" />
-                  <controls:UnboundedSlider Grid.Row="4" Grid.Column="2"
+                  <controls:UnboundedSlider Grid.Row="4" Grid.Column="2" AutomationProperties.AutomationId="JetApertureSlider"
                                             Value="{Binding ApertureDeg}">
                     <controls:UnboundedSlider.InnerRightContent>
                       <TextBlock Classes="unit-of-measurement" Text="°" />
@@ -453,10 +454,10 @@
                   <!-- Start Velocity Mean -->
                   <TextBlock Grid.Row="6" Grid.Column="0" Text="Velocity" />
                   <Panel Grid.Row="6" Grid.Column="2" Classes="unit-overlay">
-                    <TextBox>
+                    <TextBox AutomationProperties.AutomationId="JetVelocityBox">
                       <i:Interaction.Behaviors>
                         <b:NumericTextBoxBehavior Value="{Binding StartVelocityMeanMs}"
-                                                 Minimum="0.01" Maximum="100" Format="0.##" />
+                                                 Minimum="0.01" Maximum="1000" Format="0.##" />
                       </i:Interaction.Behaviors>
                     </TextBox>
                     <TextBlock Classes="unit-of-measurement" Text="m/s" />
@@ -465,10 +466,10 @@
                   <!-- Velocity Std -->
                   <TextBlock Grid.Row="8" Grid.Column="0" Text="Vel. σ" />
                   <Panel Grid.Row="8" Grid.Column="2" Classes="unit-overlay">
-                    <TextBox>
+                    <TextBox AutomationProperties.AutomationId="JetVelocityStdBox">
                       <i:Interaction.Behaviors>
                         <b:NumericTextBoxBehavior Value="{Binding StartVelocityStdMs}"
-                                                 Minimum="0" Maximum="50" Format="0.###" />
+                                                 Minimum="0" Maximum="500" Format="0.###" />
                       </i:Interaction.Behaviors>
                     </TextBox>
                     <TextBlock Classes="unit-of-measurement" Text="m/s" />

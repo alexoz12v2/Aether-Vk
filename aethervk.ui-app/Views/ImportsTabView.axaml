@@ -105,7 +105,8 @@
         <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,12,*" Margin="16,16,16,8">
             <Button Grid.Column="0" Classes="accent"
                     Content="{Binding StrImport}"
-                    Command="{Binding ImportCommand}" />
+                    AutomationProperties.AutomationId="ImportButton"
+                Command="{Binding ImportCommand}" />
             <StackPanel Grid.Column="2" VerticalAlignment="Center" Spacing="2">
                 <TextBlock Classes="secondary" Text="{Binding StrHint}" />
                 <StackPanel Orientation="Horizontal" Spacing="8">

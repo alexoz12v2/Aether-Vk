@@ -55,6 +55,8 @@ public class HorizonJplService
   private readonly ILocalStorageService _storage;
 
   private const string HorizonsBase = "https://ssd.jpl.nasa.gov/api/horizons.api";
+  // days of SPK requested beyond the timeline on each side (see DownloadSpkByIdAsync)
+  private const int SpkMarginDays = 30;
   private const string SbdbBase = "https://ssd-api.jpl.nasa.gov/sbdb_query.api";
 
   // ── Observable collections consumed by ViewModels
@@ -889,7 +891,7 @@ public class HorizonJplService
   )
   {
     // ── Persistent cache: SPK data is immutable for a given ID + epoch range ──
-    var cacheKey = $"spk_{Sanitize(cmdId)}_{Sanitize(startTime)}_{Sanitize(stopTime)}.bsp";
+    var cacheKey = $"spk_m{SpkMarginDays}_{Sanitize(cmdId)}_{Sanitize(startTime)}_{Sanitize(stopTime)}.bsp";
     var cachePath = _storage.GetPersistentPath(cacheKey);
 
     bool useCache = false;
@@ -917,16 +919,20 @@ public class HorizonJplService
 
     try
     {
+      // Horizons' small-body SPKs (type 21) have variable-step records: the first usable one
+      // can start days after the segment's nominal start (C/2022 N2 asked from 2024-07-17 is
+      // interpolable only from 2024-07-21T19:55), so a 1-day margin left the start epoch outside
+      // and the commit failed. A month on both sides covers the record steps.
       string startTimeApi = startTime;
       if (DateTime.TryParse(startTime, out var dtStart))
       {
-          startTimeApi = dtStart.AddDays(-1).ToString("yyyy-MM-dd");
+          startTimeApi = dtStart.AddDays(-SpkMarginDays).ToString("yyyy-MM-dd");
       }
 
       string stopTimeApi = stopTime;
       if (DateTime.TryParse(stopTime, out var dtStop))
       {
-          stopTimeApi = dtStop.AddDays(2).ToString("yyyy-MM-dd");
+          stopTimeApi = dtStop.AddDays(SpkMarginDays).ToString("yyyy-MM-dd");
       }
       
       var start = Uri.EscapeDataString($"'{startTimeApi}'");

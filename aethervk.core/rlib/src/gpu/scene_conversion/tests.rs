@@ -342,3 +342,76 @@ fn test_trajectory_rte_with_camera_parented_in_micro_frame() {
     "track should pass 6 km below the camera: {closest_km}"
   );
 }
+
+/// The Earth observer's light time moves the comet's label and its marked lines by the same
+/// offset as its micro layer, and nothing else; without the view component nothing moves.
+#[test]
+fn light_time_overlay_displaces_only_the_comet_label_and_lines() {
+  use super::LightTimeOverlay;
+  use crate::simulation_api::earth_observer::{LightTimeViewComponent, mark_light_time_track};
+  use aethervk_oshal_rlib::math::vector::Vector3;
+
+  let scene = Scene::new(Arc::new(RwLock::new(TextureCache::new("test_light_time_overlay"))));
+  scene.register_all_crate_components();
+  let camera = scene.spawn_entity("camera");
+  let comet = scene.spawn_entity("Comet_body");
+  let orbit = scene.spawn_entity("Comet_orbit");
+  let effective = scene.spawn_entity("effective_comet_trajectory");
+  let earth_orbit = scene.spawn_entity("Earth_orbit");
+  let other_comet = scene.spawn_entity("Other_body");
+  mark_light_time_track(&scene, orbit, comet);
+  mark_light_time_track(&scene, effective, comet);
+  mark_light_time_track(&scene, earth_orbit, other_comet);
+
+  let idle = LightTimeOverlay::of(&scene, camera);
+  assert!(idle.label_offset(comet).is_none() && idle.track_offset(orbit).is_none());
+
+  let offset_au = [1.5e-4, -2.0e-4, 3.0e-5];
+  scene.register_component::<LightTimeViewComponent>(&[]);
+  scene
+    .add_component(camera, LightTimeViewComponent { comet, delay_s: 1650.0, offset_au })
+    .unwrap();
+  let lt = LightTimeOverlay::of(&scene, camera);
+  for o in [lt.label_offset(comet), lt.track_offset(orbit), lt.track_offset(effective)] {
+    let o = o.expect("the comet's overlays follow the light time");
+    assert_eq!([o.x(), o.y(), o.z()], offset_au);
+  }
+  assert!(lt.label_offset(other_comet).is_none(), "another body's label stays geometric");
+  assert!(lt.track_offset(earth_orbit).is_none(), "another comet's line stays geometric");
+  assert!(lt.track_offset(comet).is_none(), "an unmarked entity is not a line");
+}
+
+/// Jet markers: a site facing the Sun (the heliocentric origin) is lit, the antipodal one is
+/// not, and turning the nucleus half a revolution swaps them (the marker follows the spin).
+#[test]
+fn jet_site_lit_follows_the_sun_and_the_nucleus_rotation() {
+  use super::jet_site_lit;
+  use aethervk_oshal_rlib::math::quaternion::Quaternion;
+
+  let scene = Scene::new(Arc::new(RwLock::new(TextureCache::new("test_jet_site_lit"))));
+  scene.register_all_crate_components();
+  let at = |position: Vec3f32, rotation: Quat| TransformComponent { position, rotation, scale: Vec3f32::one() };
+  let nucleus = scene.spawn_entity("Comet_body");
+  scene
+    .add_component(nucleus, at(Vec3f32::from_components(1.0, 0.0, 0.0), Quat::identity()))
+    .unwrap();
+  let site = |name: &str, x: f32| {
+    let jet = scene.spawn_entity(name);
+    scene.set_parent(jet, Some(nucleus));
+    scene.add_component(jet, at(Vec3f32::from_components(x, 0.0, 0.0), Quat::identity())).unwrap();
+    jet
+  };
+  let sunward = site("jet_sunward", -1e-6);
+  let antisolar = site("jet_antisolar", 1e-6);
+  assert_eq!(jet_site_lit(&scene, sunward), Some(true));
+  assert_eq!(jet_site_lit(&scene, antisolar), Some(false));
+  assert_eq!(jet_site_lit(&scene, nucleus), None, "no parent: not a jet site");
+
+  scene
+    .with_component_mut(nucleus, |t: &mut TransformComponent| {
+      t.rotation = Quat::from_axis_angle(Vec3f32::from_components(0.0, 0.0, 1.0), core::f32::consts::PI);
+    })
+    .unwrap();
+  assert_eq!(jet_site_lit(&scene, sunward), Some(false));
+  assert_eq!(jet_site_lit(&scene, antisolar), Some(true));
+}

@@ -103,6 +103,14 @@ public interface ISaveFileHost
 
   void ApplyBillboards(IReadOnlyList<BillboardDto> billboards);
 
+  /// <summary>Shows the engine's clock (where a restore or seek left it) on the timeline: its
+  /// progress and the viewport's date label.</summary>
+  void SyncClock();
+
+  /// <summary>Once the restored cameras have reached their saved poses, restarts the engine's
+  /// adaptive dust quality feedback, so it measures the settled view (does not wait for it).</summary>
+  void RestartDustFeedbackWhenSettled();
+
   /// <summary>
   /// Fires (on the UI thread, debounced) after a change that may alter the compatibility JSON:
   /// commit, radius, jets. The service then looks for a cached state to reuse.

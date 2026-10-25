@@ -1,5 +1,24 @@
 use std::{env, fs, path::PathBuf, process::Command};
 
+/// Git Bash on Windows: `AETHERVK_BASH`, else `bin/bash.exe` next to the `git` on PATH, else the
+/// default install. Never `System32\bash.exe` (WSL: a Linux VULKAN_SDK, not the Windows one).
+fn find_git_bash() -> Option<PathBuf> {
+  if let Some(p) = env::var_os("AETHERVK_BASH").map(PathBuf::from) {
+    return p.is_file().then_some(p);
+  }
+  let from_git = env::var_os("PATH").and_then(|paths| {
+    env::split_paths(&paths)
+      .filter(|dir| dir.join("git.exe").is_file())
+      // <Git>/cmd/git.exe or <Git>/bin/git.exe -> <Git>/bin/bash.exe
+      .find_map(|dir| dir.parent().map(|git| git.join("bin").join("bash.exe")).filter(|b| b.is_file()))
+  });
+  from_git.or_else(|| {
+    env::var_os("ProgramFiles")
+      .map(|pf| PathBuf::from(pf).join("Git").join("bin").join("bash.exe"))
+      .filter(|b| b.is_file())
+  })
+}
+
 fn main() {
   let mut cargo_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
 
@@ -65,20 +84,19 @@ fn main() {
   }
 
   if needs_recompile {
-    let is_windows = cfg!(target_os = "windows");
-    let script = if is_windows {
-      "compile_shaders.ps1"
-    } else {
-      "compile_shaders.sh"
-    };
+    // compile_shaders.sh is the maintained script (blob variants, spv1.4, spirv-opt): on Windows
+    // it runs under Git Bash; compile_shaders.ps1 is a stale fallback whose inline `-Os` crashes
+    // shaderc on dust_emit_mono.comp ("Aligned operand value 0")
+    let windows_bash = if cfg!(target_os = "windows") { find_git_bash() } else { None };
 
-    let mut cmd = if is_windows {
+    let mut cmd = if cfg!(target_os = "windows") && windows_bash.is_none() {
+      println!("cargo:warning=Git Bash not found (set AETHERVK_BASH): falling back to compile_shaders.ps1");
       let mut c = Command::new("powershell");
-      c.arg("-ExecutionPolicy").arg("Bypass").arg("-File").arg(script);
+      c.arg("-ExecutionPolicy").arg("Bypass").arg("-File").arg("compile_shaders.ps1");
       c
     } else {
-      let mut c = Command::new("bash");
-      c.arg(script);
+      let mut c = Command::new(windows_bash.unwrap_or_else(|| PathBuf::from("bash")));
+      c.arg("compile_shaders.sh");
       c
     };
 
@@ -98,6 +116,8 @@ fn main() {
       }
     }
   }
+
+  println!("cargo:rerun-if-env-changed=AETHERVK_BASH");
 
   if env::var("CARGO_FEATURE_TESTBED").is_ok() {
     let prof_dir = env::var("PROFILE").unwrap();

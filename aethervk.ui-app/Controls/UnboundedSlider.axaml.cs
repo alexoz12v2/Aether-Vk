@@ -1,6 +1,7 @@
 using System.Linq;
 using AetherVk.Behaviors;
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -186,6 +187,9 @@ public partial class UnboundedSlider : UserControl
     base.OnPropertyChanged(change);
     if (change.Property == ValueProperty || change.Property == DisplayFormatProperty)
       UpdateDisplayedValue();
+    // UI tests reach the typed value through the inner box: "<slider id>.Input"
+    else if (change.Property == AutomationProperties.AutomationIdProperty && InputBox is not null)
+      AutomationProperties.SetAutomationId(InputBox, change.NewValue is string id ? id + ".Input" : null);
   }
 
   private void OnPointerPressed(object? sender, PointerPressedEventArgs e)

@@ -327,11 +327,15 @@ impl AlmanacPackedData {
     let cartesian_state = 'cartesian_state: {
       // 1. Attempt to get the precise planet center (e.g., 399 for Earth)
       let res = self.almanac.spk_ezr(spk_id, epoch, orientation, observer, None);
-      if res.is_err() && allow_barycentre_fallback {
+      if let Err(e) = &res
+        && allow_barycentre_fallback
+      {
         // 2. FALLBACK: If the precise ID fails, fall back to the planet's system
         // Barycentre (e.g., 199 / 100 = 1 for Mercury).
         let barycentre = spk_id / 100;
         if barycentre > 0 {
+          // the fallback's error would hide this one (a comet's 1003861 falls back to 10038)
+          aethervk_oshal_rlib::log!("[Almanac] {} failed, trying barycentre {}: {}", spk_id, barycentre, e);
           break 'cartesian_state self.almanac.spk_ezr(
             barycentre,
             epoch,

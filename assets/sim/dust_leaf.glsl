@@ -463,7 +463,7 @@ void scatter(uint cslot, vec3 color, uint levels) {
     // (the counting pass neither counts the work nor sees the gate: a frame the gate fires in is
     // order-dependent anyway, dust::splat_scatter)
     uint before = dust_counting ? 0u : atomicAdd(pc.pyramid.v[DUST_PYR_EWA_TEXELS], uint(work / DUST_EWA_TEXEL_UNIT) + 1u);
-    if (!dust_counting && dust_frame_gates_on() && before > DUST_FRAME_HARD_FACTOR * (DUST_EWA_FRAME_BUDGET / uint(DUST_EWA_TEXEL_UNIT))) level = max(level, dust_gate_level(levels));
+    if (!dust_counting && dust_frame_gates_on() && before > DUST_FRAME_HARD_FACTOR * clamp(pc.pyramid.v[DUST_PYR_EWA_GATE_SCALE], 1u, DUST_EWA_GATE_SCALE_MAX) * (DUST_EWA_FRAME_BUDGET / uint(DUST_EWA_TEXEL_UNIT))) level = max(level, dust_gate_level(levels));
     // (the counting pass widens and closes nothing: the drawing pass writes the slot once, and the
     // band test below reads the same fields either way — the widening reads them from the slot)
     if (level > levelValve) {

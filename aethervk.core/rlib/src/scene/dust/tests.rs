@@ -14708,3 +14708,23 @@ fn cadence_builds_read_the_frame_gates() {
   assert!(fine[0] > 0.0, "the control's builds put no light below the gate level: the test cannot see the gates");
   assert!(fine[1] < fine[0], "the preloaded counters did not gate the builds (light below the gate {} vs {})", fine[1], fine[0]);
 }
+
+/// the tracer dots of a cluster span its size polyline: the fast small grains' end of an old,
+/// stretched cluster is a dot too, not only its reference grain (the mean), whose dots formed a
+/// knot a tenth of the tail long (2026-10-25)
+#[test]
+fn tracer_points_span_the_size_polyline() {
+  let mut m = splat::DustMoments::default();
+  // a stretched cluster: the mean (the reference grain) near the nucleus, the edges out along x to
+  // the tail's tip (10× the mean's distance)
+  m.mean_flux = [1.0e7, 0.0, 0.0, 1.0];
+  for j in 0..SIZE_EDGES as usize {
+    m.edges[j] = [1.0e6 + 9.9e7 * j as f32 / SIZE_BINS as f32, 0.0, 0.0, 0.0];
+  }
+  let pts = m.tracer_points();
+  assert_eq!(pts.len(), SIZE_EDGES as usize, "a dot per edge");
+  assert_eq!(pts[0], m.edge(0));
+  assert_eq!(pts[SIZE_BINS as usize], m.edge(SIZE_BINS as usize));
+  let reach = pts.iter().map(|p| p[0]).fold(0.0f32, f32::max);
+  assert!(reach >= 9.9 * m.mean()[0], "the dots reach the tail's tip ({reach} m vs the mean {} m)", m.mean()[0]);
+}
