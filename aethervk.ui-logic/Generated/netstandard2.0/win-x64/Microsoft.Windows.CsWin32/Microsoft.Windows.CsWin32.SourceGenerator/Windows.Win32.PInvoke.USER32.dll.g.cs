@@ -42,6 +42,44 @@ namespace Windows.Win32
 		[DllImport("USER32.dll", ExactSpelling = true, EntryPoint = "SetWindowLongW", SetLastError = true),DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
 		public static extern int SetWindowLong(winmdroot.Foundation.HWND hWnd, winmdroot.UI.WindowsAndMessaging.WINDOW_LONG_PTR_INDEX nIndex, int dwNewLong);
 
+		/// <summary>Changes an attribute of the specified window. (Unicode)</summary>
+		/// <param name="hWnd">
+		/// <para>Type: <b>HWND</b> A handle to the window and, indirectly, the class to which the window belongs. The <b>SetWindowLongPtr</b> function fails if the process that owns the window specified by the <i>hWnd</i> parameter is at a higher process privilege in the UIPI hierarchy than the process the calling thread resides in. <b>Windows XP/2000:  </b> The <b>SetWindowLongPtr</b> function fails if the window specified by the <i>hWnd</i> parameter does not belong to the same process as the calling thread.</para>
+		/// <para><see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-setwindowlongptrw#parameters">Read more on learn.microsoft.com</see>.</para>
+		/// </param>
+		/// <param name="nIndex">Type: <b>int</b></param>
+		/// <param name="dwNewLong">
+		/// <para>Type: <b>LONG_PTR</b> The replacement value.</para>
+		/// <para><see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-setwindowlongptrw#parameters">Read more on learn.microsoft.com</see>.</para>
+		/// </param>
+		/// <returns>
+		/// <para>Type: <b>LONG_PTR</b> If the function succeeds, the return value is the previous value of the specified offset. If the function fails, the return value is zero. To get extended error information, call <a href="https://docs.microsoft.com/windows/desktop/api/errhandlingapi/nf-errhandlingapi-getlasterror">GetLastError</a>. If the previous value is zero and the function succeeds, the return value is zero, but the function does not clear the last error information. To determine success or failure, clear the last error information by calling <a href="https://docs.microsoft.com/windows/desktop/api/errhandlingapi/nf-errhandlingapi-setlasterror">SetLastError</a> with 0, then call <b>SetWindowLongPtr</b>. Function failure will be indicated by a return value of zero and a <a href="https://docs.microsoft.com/windows/desktop/api/errhandlingapi/nf-errhandlingapi-getlasterror">GetLastError</a> result that is nonzero.</para>
+		/// </returns>
+		/// <remarks>
+		/// <para>Certain window data is cached, so changes you make using <b>SetWindowLongPtr</b> will not take effect until you call the <a href="https://docs.microsoft.com/windows/desktop/api/winuser/nf-winuser-setwindowpos">SetWindowPos</a> function. If you use <b>SetWindowLongPtr</b> with the <b>GWLP_WNDPROC</b> index to replace the window procedure, the window procedure must conform to the guidelines specified in the description of the <a href="https://docs.microsoft.com/previous-versions/windows/desktop/legacy/ms633573(v=vs.85)">WindowProc</a> callback function. If you use <b>SetWindowLongPtr</b> with the <b>DWLP_MSGRESULT</b> index to set the return value for a message processed by a dialog box procedure, the dialog box procedure should return <b>TRUE</b> directly afterward. Otherwise, if you call any function that results in your dialog box procedure receiving a window message, the nested window message could overwrite the return value you set by using <b>DWLP_MSGRESULT</b>. Calling <b>SetWindowLongPtr</b> with the <b>GWLP_WNDPROC</b> index creates a subclass of the window class used to create the window. An application can subclass a system class, but should not subclass a window class created by another process. The <b>SetWindowLongPtr</b> function creates the window subclass by changing the window procedure associated with a particular window class, causing the system to call the new window procedure instead of the previous one. An application must pass any messages not processed by the new window procedure to the previous window procedure by calling <a href="https://docs.microsoft.com/windows/desktop/api/winuser/nf-winuser-callwindowproca">CallWindowProc</a>. This allows the application to create a chain of window procedures. Reserve extra window memory by specifying a nonzero value in the <b>cbWndExtra</b> member of the <a href="https://docs.microsoft.com/windows/desktop/api/winuser/ns-winuser-wndclassexa">WNDCLASSEX</a> structure used with the <a href="https://docs.microsoft.com/windows/desktop/api/winuser/nf-winuser-registerclassexa">RegisterClassEx</a> function. Do not call <b>SetWindowLongPtr</b> with the <b>GWLP_HWNDPARENT</b> index to change the parent of a child window. Instead, use the <a href="https://docs.microsoft.com/windows/desktop/api/winuser/nf-winuser-setparent">SetParent</a> function. If the window has a class style of <b>CS_CLASSDC</b> or <b>CS_PARENTDC</b>, do not set the extended window styles <b>WS_EX_COMPOSITED</b> or <b>WS_EX_LAYERED</b>. Calling <b>SetWindowLongPtr</b> to set the style on a progressbar will reset its position.</para>
+		/// <para>> [!NOTE] > The winuser.h header defines SetWindowLongPtr as an alias which automatically selects the ANSI or Unicode version of this function based on the definition of the UNICODE preprocessor constant. Mixing usage of the encoding-neutral alias with code that not encoding-neutral can lead to mismatches that result in compilation or runtime errors. For more information, see [Conventions for Function Prototypes](/windows/win32/intl/conventions-for-function-prototypes).</para>
+		/// <para><see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-setwindowlongptrw#">Read more on learn.microsoft.com</see>.</para>
+		/// </remarks>
+		[DllImport("USER32.dll", ExactSpelling = true, EntryPoint = "SetWindowLongPtrW", SetLastError = true),DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+		public static extern nint SetWindowLongPtr(winmdroot.Foundation.HWND hWnd, winmdroot.UI.WindowsAndMessaging.WINDOW_LONG_PTR_INDEX nIndex, nint dwNewLong);
+
+		/// <summary>Retrieves information about the specified window. The function also retrieves the value at a specified offset into the extra window memory. (Unicode)</summary>
+		/// <param name="hWnd">
+		/// <para>Type: <b>HWND</b> A handle to the window and, indirectly, the class to which the window belongs.</para>
+		/// <para><see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-getwindowlongptrw#parameters">Read more on learn.microsoft.com</see>.</para>
+		/// </param>
+		/// <param name="nIndex">Type: <b>int</b></param>
+		/// <returns>
+		/// <para>Type: <b>LONG_PTR</b> If the function succeeds, the return value is the requested value. If the function fails, the return value is zero. To get extended error information, call <a href="https://docs.microsoft.com/windows/desktop/api/errhandlingapi/nf-errhandlingapi-getlasterror">GetLastError</a>. If <a href="https://docs.microsoft.com/windows/desktop/api/winuser/nf-winuser-setwindowlonga">SetWindowLong</a> or <a href="https://docs.microsoft.com/windows/desktop/api/winuser/nf-winuser-setwindowlongptra">SetWindowLongPtr</a> has not been called previously, <b>GetWindowLongPtr</b> returns zero for values in the extra window or class memory.</para>
+		/// </returns>
+		/// <remarks>
+		/// <para>Reserve extra window memory by specifying a nonzero value in the <b>cbWndExtra</b> member of the <a href="https://docs.microsoft.com/windows/desktop/api/winuser/ns-winuser-wndclassexa">WNDCLASSEX</a> structure used with the <a href="https://docs.microsoft.com/windows/desktop/api/winuser/nf-winuser-registerclassexa">RegisterClassEx</a> function.</para>
+		/// <para>> [!NOTE] > The winuser.h header defines GetWindowLongPtr as an alias which automatically selects the ANSI or Unicode version of this function based on the definition of the UNICODE preprocessor constant. Mixing usage of the encoding-neutral alias with code that not encoding-neutral can lead to mismatches that result in compilation or runtime errors. For more information, see [Conventions for Function Prototypes](/windows/win32/intl/conventions-for-function-prototypes).</para>
+		/// <para><see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-getwindowlongptrw#">Read more on learn.microsoft.com</see>.</para>
+		/// </remarks>
+		[DllImport("USER32.dll", ExactSpelling = true, EntryPoint = "GetWindowLongPtrW", SetLastError = true),DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+		public static extern nint GetWindowLongPtr(winmdroot.Foundation.HWND hWnd, winmdroot.UI.WindowsAndMessaging.WINDOW_LONG_PTR_INDEX nIndex);
+
 		/// <summary>Passes message information to the specified window procedure. (Unicode)</summary>
 		/// <param name="lpPrevWndFunc">
 		/// <para>Type: <b>WNDPROC</b> The previous window procedure. If this value is obtained by calling the <a href="https://docs.microsoft.com/windows/desktop/api/winuser/nf-winuser-getwindowlonga">GetWindowLong</a> function with the <i>nIndex</i> parameter set to <b>GWL_WNDPROC</b> or <b>DWL_DLGPROC</b>, it is actually either the address of a window or dialog box procedure, or a special internal value meaningful only to <b>CallWindowProc</b>.</para>
@@ -234,6 +272,21 @@ namespace Windows.Win32
 		/// <remarks>An application calls this function after calling the <a href="https://docs.microsoft.com/windows/desktop/api/winuser/nf-winuser-setcapture">SetCapture</a> function.</remarks>
 		[DllImport("USER32.dll", ExactSpelling = true, SetLastError = true),DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
 		public static extern winmdroot.Foundation.BOOL ReleaseCapture();
+
+		/// <summary>Sets the keyboard focus to the specified window. The window must be attached to the calling thread's message queue.</summary>
+		/// <param name="hWnd">
+		/// <para>Type: **HWND** A handle to the window that will receive the keyboard input. If this parameter is NULL, keystrokes are ignored.</para>
+		/// <para><see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-setfocus#parameters">Read more on learn.microsoft.com</see>.</para>
+		/// </param>
+		/// <returns>
+		/// <para>Type: **HWND** If the function succeeds, the return value is the handle to the window that previously had the keyboard focus. If the *hWnd* parameter is invalid or the window is not attached to the calling thread's message queue, the return value is NULL. To get extended error information, call [GetLastError function](../errhandlingapi/nf-errhandlingapi-getlasterror.md). Extended error ERROR_INVALID_PARAMETER (0x57) means that window is in disabled state.</para>
+		/// </returns>
+		/// <remarks>
+		/// <para>This function sends a [WM_KILLFOCUS](/windows/desktop/inputdev/wm-killfocus) message to the window that loses the keyboard focus and a [WM_SETFOCUS](/windows/desktop/inputdev/wm-setfocus) message to the window that receives the keyboard focus. It also activates either the window that receives the focus or the parent of the window that receives the focus. If a window is active but does not have the focus, any key pressed produces the [WM_SYSCHAR](/windows/desktop/menurc/wm-syschar), [WM_SYSKEYDOWN](/windows/desktop/inputdev/wm-syskeydown), or [WM_SYSKEYUP](/windows/desktop/inputdev/wm-syskeyup) message. If the VK_MENU key is also pressed, bit 30 of the *lParam* parameter of the message is set. Otherwise, the messages produced do not have this bit set. By using the [AttachThreadInput function](nf-winuser-attachthreadinput.md), a thread can attach its input processing to another thread. This allows a thread to call SetFocus to set the keyboard focus to a window attached to another thread's message queue.</para>
+		/// <para><see href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-setfocus#">Read more on learn.microsoft.com</see>.</para>
+		/// </remarks>
+		[DllImport("USER32.dll", ExactSpelling = true, SetLastError = true),DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+		public static extern winmdroot.Foundation.HWND SetFocus([Optional] winmdroot.Foundation.HWND hWnd);
 
 		/// <summary>Moves the cursor to the specified screen coordinates.</summary>
 		/// <param name="X">

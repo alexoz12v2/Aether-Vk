@@ -42,10 +42,10 @@
         <StackPanel Grid.Column="0" Orientation="Vertical" VerticalAlignment="Center" Spacing="4">
           <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
             <TextBlock Text="Start Epoch (TDB):" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" />
-            <TextBox Text="{Binding StartEpoch}" Width="180" Watermark="e.g. 2000-01-01T12:00:00Z" />
+            <TextBox AutomationProperties.AutomationId="StartEpochBox" Text="{Binding StartEpoch}" Width="180" Watermark="e.g. 2000-01-01T12:00:00Z" />
 
             <TextBlock Text="End Epoch (TDB):" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" Margin="8,0,0,0"/>
-            <TextBox Text="{Binding EndEpoch}" Width="180" Watermark="e.g. 2000-02-01T12:00:00Z" />
+            <TextBox AutomationProperties.AutomationId="EndEpochBox" Text="{Binding EndEpoch}" Width="180" Watermark="e.g. 2000-02-01T12:00:00Z" />
 
             <Button Content="Restore" Command="{Binding RestoreCommand}" IsEnabled="{Binding CanRestore}" ToolTip.Tip="Restore Proposed to Last Committed" ToolTip.ShowDelay="1000" />
 
@@ -56,17 +56,17 @@
           <StackPanel Orientation="Horizontal" Spacing="24" Margin="0,8,0,0">
             <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding HasProposedState}">
               <TextBlock Text="Proposed Range:" FontWeight="SemiBold" FontSize="12" Foreground="{DynamicResource Text.Secondary}" />
-              <TextBlock Text="{Binding DisplayProposedRange}" FontSize="12" FontFamily="Cascadia Mono, Consolas, monospace" />
+              <TextBlock AutomationProperties.AutomationId="ProposedRangeText" Text="{Binding DisplayProposedRange}" FontSize="12" FontFamily="Cascadia Mono, Consolas, monospace" />
             </StackPanel>
             
             <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding HasCommittedState}">
               <TextBlock Text="Committed Range:" FontWeight="SemiBold" FontSize="12" Foreground="{DynamicResource Text.Secondary}" />
-              <TextBlock Text="{Binding DisplayCommittedRange}" FontSize="12" FontFamily="Cascadia Mono, Consolas, monospace" />
+              <TextBlock AutomationProperties.AutomationId="CommittedRangeText" Text="{Binding DisplayCommittedRange}" FontSize="12" FontFamily="Cascadia Mono, Consolas, monospace" />
             </StackPanel>
           </StackPanel>
 
           <!-- Error Message -->
-          <TextBlock Text="{Binding ErrorMessage}" Foreground="{DynamicResource Sem.Error}" IsVisible="{Binding HasError}" FontSize="11" />
+          <TextBlock AutomationProperties.AutomationId="TimelineErrorText" Text="{Binding ErrorMessage}" Foreground="{DynamicResource Sem.Error}" IsVisible="{Binding HasError}" FontSize="11" />
         </StackPanel>
 
         <!-- Center: Timeline Progress (Visible only when current session has a committed state) -->
@@ -75,7 +75,7 @@
           <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center" Margin="0,0,0,8">
             <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,0,16,0" VerticalAlignment="Center">
               <TextBlock Text="{Binding StrSpeed}" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" />
-              <ComboBox ItemsSource="{Binding SpeedOptions}"
+              <ComboBox AutomationProperties.AutomationId="SpeedPicker" ItemsSource="{Binding SpeedOptions}"
                         DisplayMemberBinding="{Binding Label, x:DataType=vm:TimelineTabViewModel+SpeedOption}"
                         SelectedValueBinding="{Binding Speed, x:DataType=vm:TimelineTabViewModel+SpeedOption}"
                         SelectedValue="{Binding SelectedSpeed}"
@@ -86,20 +86,20 @@
               <Path Data="M 16,6 L 8,12 L 16,18 Z M 24,6 L 16,12 L 24,18 Z" Fill="{DynamicResource Text.Primary}" Stretch="Uniform" Width="16" Height="12" />
             </Button>
 
-            <Button Command="{Binding PlayPauseCommand}" Classes="playback" ToolTip.Tip="Play/Pause" ToolTip.ShowDelay="1000">
+            <Button AutomationProperties.AutomationId="PlayPauseButton" Command="{Binding PlayPauseCommand}" Classes="playback" ToolTip.Tip="Play/Pause" ToolTip.ShowDelay="1000">
               <Panel Width="14" Height="14">
                 <Path Data="M 6,4 L 18,11 L 6,18 Z" Fill="{DynamicResource Text.Primary}" Stretch="Uniform" IsVisible="{Binding !IsPlaying}" />
                 <Path Data="M 6,4 L 9,4 L 9,18 L 6,18 Z M 15,4 L 18,4 L 18,18 L 15,18 Z" Fill="{DynamicResource Text.Primary}" Stretch="Uniform" IsVisible="{Binding IsPlaying}" />
               </Panel>
             </Button>
 
-            <Button Command="{Binding RunToEndCommand}" Classes="playback" ToolTip.Tip="Run to End" ToolTip.ShowDelay="1000">
+            <Button AutomationProperties.AutomationId="RunToEndButton" Command="{Binding RunToEndCommand}" Classes="playback" ToolTip.Tip="Run to End" ToolTip.ShowDelay="1000">
               <Path Data="M 8,6 L 8,18 L 11,18 L 11,6 Z M 13,6 L 21,12 L 13,18 Z" Fill="{DynamicResource Text.Primary}" Stretch="Uniform" Width="16" Height="12" />
             </Button>
           </StackPanel>
 
           <!-- Progress Bar -->
-          <ProgressBar Minimum="0" Maximum="100" Value="{Binding Progress, FallbackValue=0}" Height="6" CornerRadius="3" Background="{DynamicResource Bg.Subtle}" Foreground="{DynamicResource Accent.Primary}" />
+          <ProgressBar AutomationProperties.AutomationId="TimelineProgress" Minimum="0" Maximum="100" Value="{Binding Progress, FallbackValue=0}" Height="6" CornerRadius="3" Background="{DynamicResource Bg.Subtle}" Foreground="{DynamicResource Accent.Primary}" />
         </StackPanel>
 
       </Grid>

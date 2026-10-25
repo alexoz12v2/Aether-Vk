@@ -176,6 +176,12 @@ internal sealed class FakeSaveFileHost(string root) : ISaveFileHost
 
   public void ApplyBillboards(IReadOnlyList<BillboardDto> billboards) => Billboards = [.. billboards];
 
+  public int ClockSyncs { get; private set; }
+  public void SyncClock() => ClockSyncs++;
+
+  public int DustFeedbackRestarts { get; private set; }
+  public void RestartDustFeedbackWhenSettled() => DustFeedbackRestarts++;
+
   public IObservable<System.Reactive.Unit> ConfigurationChanged => System.Reactive.Linq.Observable.Never<System.Reactive.Unit>();
 
   public bool IsSimulationRunning => Running;

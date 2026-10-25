@@ -423,15 +423,20 @@ void dust_splat_subpacket(uint i, uint sub) {
     DUST_PROF_END(subpk)
     DUST_PROF_BEGIN(tracer)
     if (sub == 0u && dust_emitting && (pc.flags & DUST_VIEW_TRACERS) != 0u && dust_is_tracer(floatBitsToUint(dust_mom.m[mi].cov_b_age_id.w))) {
-        // the tracer dot: a real particle at its exact position (dust::splat_tracer)
+        // the tracer dots: real particles of every grain size at their exact positions, a dot
+        // per size-polyline edge, so a tracer cluster spans its tail from the slow grains to the
+        // fast ones (dust::splat_tracer), in the dust's own colour: the stream colour's hue turned
+        // by the age (dust_age_color), at full strength
         uint counts = uint(max(uintBitsToFloat(pc.pyramid.v[DUST_PYR_TRACER_COUNTS]), 0.0) + 0.5);
-        vec4 clip = pc.mvp * vec4(dust_mom.m[mi].mean_flux.xyz, 1.0);
-        if (counts > 0u && clip.w > 0.0) {
+        uint off = pc.pyramid.v[DUST_PYR_TABLE];
+        uint w = pc.pyramid.v[DUST_PYR_TABLE + 1u];
+        uint h = pc.pyramid.v[DUST_PYR_TABLE + 2u];
+        float r = DUST_TRACER_PX;
+        bool stamped = false;
+        for (uint e = 0u; counts > 0u && e < DUST_SIZE_EDGES; ++e) {
+            vec4 clip = pc.mvp * vec4(dust_mom.m[mi].edges[e].xyz, 1.0);
+            if (clip.w <= 0.0) continue;
             vec2 mu = (clip.xy / clip.w * 0.5 + 0.5) * vec2(W, H);
-            uint off = pc.pyramid.v[DUST_PYR_TABLE];
-            uint w = pc.pyramid.v[DUST_PYR_TABLE + 1u];
-            uint h = pc.pyramid.v[DUST_PYR_TABLE + 2u];
-            float r = DUST_TRACER_PX;
             int x0 = int(max(floor(mu.x - r), 0.0)), x1 = min(int(ceil(mu.x + r)), int(w) - 1);
             int y0 = int(max(floor(mu.y - r), 0.0)), y1 = min(int(ceil(mu.y + r)), int(h) - 1);
             for (int ty = y0; ty <= y1; ++ty) {
@@ -440,11 +445,12 @@ void dust_splat_subpacket(uint i, uint sub) {
                     if (dot(dxy, dxy) > r * r) continue;
                     uint k = off + (uint(ty) * w + uint(tx)) * DUST_PYRAMID_TEXEL_WORDS;
                     dust_atomic_add_sat(pc.pyramid, k, counts);
-                    for (uint c = 1u; c < 4u; ++c) dust_atomic_add_sat(pc.pyramid, k + c, counts * uint(DUST_COLOR_SCALE));
+                    for (uint c = 1u; c < 4u; ++c) dust_atomic_add_sat(pc.pyramid, k + c, dust_tracer_color_word(counts, color[c - 1u]));
                 }
             }
-            atomicOr(pc.pyramid.v[DUST_PYR_LEVEL_MASK], 1u);
+            stamped = true;
         }
+        if (stamped) atomicOr(pc.pyramid.v[DUST_PYR_LEVEL_MASK], 1u);
     }
     DUST_PROF_END(tracer)
 }

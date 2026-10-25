@@ -1163,22 +1163,26 @@ void dust_ra_cov_cone(uint a_, uint P, uint sub, uint t, uint k) {
     else if (kind == DUST_SPK_SWEEP) dust_ra_cov_sweep(a_, P, sub, t, k_); \
     else if (kind == DUST_SPK_CONE) dust_ra_cov_cone(a_, P, sub, t, k_);
 
-// group 11: the tracer dot of the cluster (its first record: the sub-packet 0 the per-cluster
-// thread drew it with, once its records were in the queue), a real particle at its exact position
-// (dust::splat_tracer)
+// group 11: the tracer dots of the cluster (its first record: the sub-packet 0 the per-cluster
+// thread drew them with, once its records were in the queue), real particles of every grain size
+// at their exact positions, a dot per size-polyline edge (dust::splat_tracer)
 void dust_ra_tracer(uint P) {
     uint mi = SP_MI;
     if ((pc.flags & DUST_VIEW_TRACERS) == 0u || !dust_is_tracer(floatBitsToUint(dust_mom.m[mi].cov_b_age_id.w))) return;
     float Wt = float(pc.pyramid.v[DUST_PYR_WIDTH]);
     float Ht = float(pc.pyramid.v[DUST_PYR_HEIGHT]);
     uint counts = uint(max(uintBitsToFloat(pc.pyramid.v[DUST_PYR_TRACER_COUNTS]), 0.0) + 0.5);
-    vec4 clip = pc.mvp * vec4(dust_mom.m[mi].mean_flux.xyz, 1.0);
-    if (counts > 0u && clip.w > 0.0) {
+    uint off = pc.pyramid.v[DUST_PYR_TABLE];
+    uint w = pc.pyramid.v[DUST_PYR_TABLE + 1u];
+    uint h = pc.pyramid.v[DUST_PYR_TABLE + 2u];
+    float r = DUST_TRACER_PX;
+    vec3 stream = vec3(float(pc.color & 0xFFu), float((pc.color >> 8u) & 0xFFu), float((pc.color >> 16u) & 0xFFu)) / 255.0;
+    vec3 color = dust_age_color(stream, dust_mom.m[mi].cov_b_age_id.z, pc.eyeLocal.w);
+    bool stamped = false;
+    for (uint e = 0u; counts > 0u && e < DUST_SIZE_EDGES; ++e) {
+        vec4 clip = pc.mvp * vec4(dust_mom.m[mi].edges[e].xyz, 1.0);
+        if (clip.w <= 0.0) continue;
         vec2 mu = (clip.xy / clip.w * 0.5 + 0.5) * vec2(Wt, Ht);
-        uint off = pc.pyramid.v[DUST_PYR_TABLE];
-        uint w = pc.pyramid.v[DUST_PYR_TABLE + 1u];
-        uint h = pc.pyramid.v[DUST_PYR_TABLE + 2u];
-        float r = DUST_TRACER_PX;
         int x0 = int(max(floor(mu.x - r), 0.0)), x1 = min(int(ceil(mu.x + r)), int(w) - 1);
         int y0 = int(max(floor(mu.y - r), 0.0)), y1 = min(int(ceil(mu.y + r)), int(h) - 1);
         for (int ty = y0; ty <= y1; ++ty) {
@@ -1187,11 +1191,12 @@ void dust_ra_tracer(uint P) {
                 if (dot(dxy, dxy) > r * r) continue;
                 uint k = off + (uint(ty) * w + uint(tx)) * DUST_PYRAMID_TEXEL_WORDS;
                 dust_spa_atomic_add_sat(uvec2(pc.pyramid), k, counts);
-                for (uint cc = 1u; cc < 4u; ++cc) dust_spa_atomic_add_sat(uvec2(pc.pyramid), k + cc, counts * uint(DUST_COLOR_SCALE));
+                for (uint cc = 1u; cc < 4u; ++cc) dust_spa_atomic_add_sat(uvec2(pc.pyramid), k + cc, dust_tracer_color_word(counts, color[cc - 1u]));
             }
         }
-        atomicOr(pc.pyramid.v[DUST_PYR_LEVEL_MASK], 1u);
+        stamped = true;
     }
+    if (stamped) atomicOr(pc.pyramid.v[DUST_PYR_LEVEL_MASK], 1u);
 }
 #if defined(DUST_SP_REC_MONO)
 // perf9_X gate variant: the whole record in one lane, the old per-cluster thread's EMIT body

@@ -616,6 +616,27 @@ pub unsafe extern "C" fn avkSimulationContext_setCameraRenderMask(
   ctx_ref.set_camera_render_mask(scene_id, camera_entity, mask)
 }
 
+/// Sets how `camera_entity` shades meshes (`CameraShadingComponent`): bit 0 physical lighting
+/// (direct sunlight only, (1 AU / r)², unlit fragments in a debug tint). Returns false when the
+/// scene is missing or the entity is not a camera.
+///
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setCameraShading(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  camera_entity: u64,
+  flags: u32,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  ctx_ref.set_camera_shading(scene_id, camera_entity, flags)
+}
+
 /// Sets the native Earth observer (camera posed in every logic commit, see
 /// `simulation_api::earth_observer`): `mode` 0 Free, 1 CometLockIn, 2 CometTracking, 3 SunLockIn,
 /// 4 SunTracking (C# `EarthObserverOrientationMode`), `u32::MAX` clears it (C# poses the camera).
@@ -838,6 +859,26 @@ pub unsafe extern "C" fn avkSimulationContext_setDustReuseTolerance(
   }
   let ctx_ref = unsafe { &*ctx };
   ctx_ref.set_dust_reuse_px(scene_id, px).is_some()
+}
+
+/// Restarts the adaptive dust quality feedback of every view of `scene_id` cold from the next
+/// rendered frame (`SimulationContext::reset_dust_view_feedback`): for a view that settled after
+/// a discontinuity (a reopened save, once its cameras are applied). Returns false without the
+/// scene.
+///
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_resetDustViewFeedback(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  ctx_ref.reset_dust_view_feedback(scene_id).is_some()
 }
 
 /// Sets the dust view aids of `scene_id`: bit 0 tracers (bright dots on a sparse set of real

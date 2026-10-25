@@ -28,6 +28,7 @@ public partial class ModelTabViewModel
   private readonly ISchedulerProvider _schedulerProvider;
   private readonly IUiThreadDispatcher _dispatcher;
   private readonly IPlatformWindowService _platformWindowService;
+  private readonly ICameraServiceRegistry? _cameras;
   private readonly CompositeDisposable _disposables = [];
 
   // Tracks the active session model-change subscription so it can be replaced
@@ -68,6 +69,8 @@ public partial class ModelTabViewModel
 
   partial void OnIsGizmoVisibleIndexChanged(int value)
   {
+    if (CurrentSession is { } session)
+      session.SphereGizmoVisible = value == 0;
     _runtimeService?.SetSphereGizmoVisibility(value == 0);
   }
 
@@ -89,7 +92,8 @@ public partial class ModelTabViewModel
     IUiThreadDispatcher dispatcher,
     ICometMessenger cometMessenger,
     IPlatformWindowService platformWindowService,
-    TimelineService timelineService)
+    TimelineService timelineService,
+    ICameraServiceRegistry? cameras = null)
     : base("Model", sessionService, cometMessenger)
   {
     _translationService = translationService;
@@ -100,6 +104,7 @@ public partial class ModelTabViewModel
     _dispatcher = dispatcher;
     _platformWindowService = platformWindowService;
     _timelineService = timelineService;
+    _cameras = cameras;
     Icon = "⬡"; // hexagon / 3D object — U+2B21
     SubscribeToStrings(schedulerProvider);
 
@@ -284,6 +289,20 @@ public partial class ModelTabViewModel
       _platformWindowService.SetCursorPosition(x, y);
   }
 
+  partial void OnSelectedJetChanged(JetViewModel? value) => FaceJet(value);
+
+  /// <summary>
+  /// Editing a jet: every viewport orbits the nucleus facing its site, so the spawn point and
+  /// whether it is lit are in view. The previous mode is not restored (key 1 returns to the observer).
+  /// </summary>
+  private void FaceJet(JetViewModel? jet)
+  {
+    if (jet is null || !IsCometCommitted || _cameras is null)
+      return;
+    foreach (var camera in _cameras.All)
+      camera.FaceNucleusSite(jet.LatitudeRad, jet.LongitudeRad);
+  }
+
   /// <summary>
   /// Adds a new jet with physically-reasonable random defaults and registers it
   /// with the native particle system runtime.
@@ -390,6 +409,9 @@ public partial class ModelTabViewModel
 
   private void OnSessionRestored()
   {
+    // a savefile open / New replaced the scene: the Play snapshot belongs to the old one, and
+    // restoring it on the next edit would undo the open (back to its pre-open epoch)
+    _snapshotExists = false;
     _dispatcher.Dispatch(() =>
     {
       if (CurrentSession is { } s)
@@ -416,6 +438,7 @@ public partial class ModelTabViewModel
     PushDustViewFlags();
     DustFlowSpeed = session.DustFlowSpeed;
     _runtimeService?.SetDustFlowSpeed((float)DustFlowSpeed);
+    IsGizmoVisibleIndex = session.SphereGizmoVisible ? 0 : 1;
 
     _modelChangeSub.Disposable = Observable
       .FromEventPattern<PropertyChangedEventHandler, PropertyChangedEventArgs>(
@@ -565,6 +588,16 @@ public partial class ModelTabViewModel
 
   private void SubscribeJetChanges(JetViewModel jet, ModelSession session)
   {
+    Observable
+      .FromEventPattern<PropertyChangedEventHandler, PropertyChangedEventArgs>(
+        h => jet.PropertyChanged += h,
+        h => jet.PropertyChanged -= h)
+      .Where(e => e.EventArgs.PropertyName is nameof(JetViewModel.LatitudeDeg) or nameof(JetViewModel.LongitudeDeg))
+      .Throttle(TimeSpan.FromMilliseconds(150), _schedulerProvider.MainThread)
+      .Where(_ => ReferenceEquals(SelectedJet, jet))
+      .Subscribe(_ => FaceJet(jet))
+      .AddDisposableTo(_disposables);
+
     Observable
       .FromEventPattern<PropertyChangedEventHandler, PropertyChangedEventArgs>(
         h => jet.PropertyChanged += h,

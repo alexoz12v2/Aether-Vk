@@ -4201,6 +4201,10 @@ mod utils {
         .active_physics_task
         .store(true, core::sync::atomic::Ordering::Release);
     }
+    // the whole history appeared at once: what the views' feedback learned no longer applies
+    scene_write
+      .dust_feedback_gen
+      .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     mark_all_serializable_as_changed(scene_write);
   }
 
@@ -4306,6 +4310,100 @@ mod utils {
     });
   }
 
+  /// The jet's state at scaled time `t` (s since `start_epoch`), straight from the almanac:
+  /// emission windows are evaluated at their own grid times, so the dust does not depend on when
+  /// the ticks happened. The attitude is the body rotation of the rotational model at `t` (IAU
+  /// `W = W0 + rate·d`) times the jet's local rotation, so the site turns with the nucleus window
+  /// after window; `spin` is the model's pole · ω (`None` without a model).
+  ///
+  /// Outside the SPK coverage (dust history before the start epoch, see
+  /// `dust::DustSystemState`) the comet follows the committed reference orbit (two-body; the
+  /// re-osculated one drifts ~600 km/month, nothing for dust spread over 1e5+ km) and the
+  /// rotational model alone.
+  pub(crate) fn jet_state_at(
+    planet: &crate::scene::AlmanacPlanet,
+    rot_model: Option<&crate::scene::BodyRotationalModel>,
+    jet_local: &TransformComponent,
+    reference: Option<&crate::simulation_api::structs::KeplerianElements>,
+    almanac: &AlmanacPackedData,
+    start_epoch: anise::time::Epoch,
+    t: f64,
+  ) -> Option<crate::scene::dust::JetState> {
+    use crate::scene::dust::JetState;
+    use aethervk_oshal_rlib::math::quaternion::Quaternion as _;
+    // the body below works on the model by value (it is Copy)
+    let rot_model = rot_model.copied();
+    let epoch = start_epoch + anise::time::Duration::from_seconds(t);
+    let from_reference = || {
+      let (r, v) = crate::simulation::orbit_elements::state_from_elements(
+        reference?,
+        crate::simulation::orbit_elements::MU_SUN_KM3_S2,
+        epoch.to_jde_tdb_days(),
+      )?;
+      Some((
+        DVec3::from_components(r[0], r[1], r[2]),
+        DVec3::from_components(v[0], v[1], v[2]),
+        planet.rotation_at(epoch, almanac, rot_model.as_ref()),
+      ))
+    };
+    let (pos_km, vel_kms, body_rot) = if t < 0.0 {
+      from_reference()?
+    } else {
+      planet
+        .step_with_velocity(epoch, almanac, rot_model.as_ref())
+        .ok()
+        .or_else(from_reference)?
+    };
+    // uniform spin about the body z (pole) axis, see `AlmanacPlanet::step_with_velocity`.
+    // Without a rotational model `DustHostState` estimates it from the attitudes.
+    let spin = rot_model.as_ref().map(|m| {
+      let pole = body_rot.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
+      let omega = m.rotation_rate * core::f64::consts::PI / (180.0 * 86400.0);
+      let sgn = if omega < 0.0 { -1.0 } else { 1.0 };
+      [
+        pole.x() as f64 * sgn,
+        pole.y() as f64 * sgn,
+        pole.z() as f64 * sgn,
+        omega.abs(),
+      ]
+    });
+    let off_km = body_rot.rotate_vector(jet_local.position);
+    // the jet sits on the nucleus sphere: its outward normal is its offset direction
+    let site_normal = {
+      let n = [off_km.x() as f64, off_km.y() as f64, off_km.z() as f64];
+      let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+      if l > 0.0 {
+        [n[0] / l, n[1] / l, n[2] / l]
+      } else {
+        [0.0, 0.0, 1.0]
+      }
+    };
+    let rot = (body_rot * jet_local.rotation).0;
+    // the site offset in the particle-system frame (rot = body_rot · jet rotation)
+    let site_offset_m = {
+      let o = jet_local.rotation.conjugate().rotate_vector(jet_local.position);
+      [o.x() * 1000.0, o.y() * 1000.0, o.z() * 1000.0]
+    };
+    Some(JetState {
+      t_s: t,
+      r_m: [
+        (pos_km.x() + off_km.x() as f64) * 1000.0,
+        (pos_km.y() + off_km.y() as f64) * 1000.0,
+        (pos_km.z() + off_km.z() as f64) * 1000.0,
+      ],
+      // the nucleus centre's velocity: emission adds the site's ω × r (`dust::emit_cluster`)
+      v_ms: [
+        vel_kms.x() * 1000.0,
+        vel_kms.y() * 1000.0,
+        vel_kms.z() * 1000.0,
+      ],
+      rot: [rot.x(), rot.y(), rot.z(), rot.w()],
+      site_normal,
+      spin,
+      site_offset_m,
+    })
+  }
+
   /// Dust v3 emission for every particle system of the scene (logic tick, compute queue).
   ///
   /// Jet truth state = comet almanac state of this tick (f64, from the cartesian cache) plus the
@@ -4369,83 +4467,17 @@ mod utils {
       let Some(jet_local) = scene.with_component(ps_id, |t: &TransformComponent| *t) else {
         continue;
       };
-      // Jet state at any scaled time, straight from the almanac: emission windows are evaluated
-      // at their own grid times, so the dust does not depend on when the ticks happened.
-      //
-      // Outside the SPK coverage (dust history before the start epoch, see
-      // `dust::DustSystemState`) the comet follows the committed reference orbit (two-body; the
-      // re-osculated one drifts ~600 km/month, nothing for dust spread over 1e5+ km) and the
-      // rotational model alone.
-      let jet_at = |t: f64| -> Option<JetState> {
-        let epoch = start_epoch + anise::time::Duration::from_seconds(t);
-        let from_reference = || {
-          let (r, v) = crate::simulation::orbit_elements::state_from_elements(
-            reference.as_ref()?,
-            crate::simulation::orbit_elements::MU_SUN_KM3_S2,
-            epoch.to_jde_tdb_days(),
-          )?;
-          Some((
-            DVec3::from_components(r[0], r[1], r[2]),
-            DVec3::from_components(v[0], v[1], v[2]),
-            planet.rotation_at(epoch, almanac, rot_model.as_ref()),
-          ))
-        };
-        let (pos_km, vel_kms, body_rot) = if t < 0.0 {
-          from_reference()?
-        } else {
-          planet
-            .step_with_velocity(epoch, almanac, rot_model.as_ref())
-            .ok()
-            .or_else(from_reference)?
-        };
-        // uniform spin about the body z (pole) axis, see `AlmanacPlanet::step_with_velocity`.
-        // Without a rotational model `DustHostState` estimates it from the attitudes.
-        let spin = rot_model.as_ref().map(|m| {
-          let pole = body_rot.rotate_vector(Vec3f32::from_components(0.0, 0.0, 1.0));
-          let omega = m.rotation_rate * core::f64::consts::PI / (180.0 * 86400.0);
-          let sgn = if omega < 0.0 { -1.0 } else { 1.0 };
-          [
-            pole.x() as f64 * sgn,
-            pole.y() as f64 * sgn,
-            pole.z() as f64 * sgn,
-            omega.abs(),
-          ]
-        });
-        let off_km = body_rot.rotate_vector(jet_local.position);
-        // the jet sits on the nucleus sphere: its outward normal is its offset direction
-        let site_normal = {
-          let n = [off_km.x() as f64, off_km.y() as f64, off_km.z() as f64];
-          let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
-          if l > 0.0 {
-            [n[0] / l, n[1] / l, n[2] / l]
-          } else {
-            [0.0, 0.0, 1.0]
-          }
-        };
-        let rot = (body_rot * jet_local.rotation).0;
-        // the site offset in the particle-system frame (rot = body_rot · jet rotation)
-        let site_offset_m = {
-          let o = jet_local.rotation.conjugate().rotate_vector(jet_local.position);
-          [o.x() * 1000.0, o.y() * 1000.0, o.z() * 1000.0]
-        };
-        Some(JetState {
-          t_s: t,
-          r_m: [
-            (pos_km.x() + off_km.x() as f64) * 1000.0,
-            (pos_km.y() + off_km.y() as f64) * 1000.0,
-            (pos_km.z() + off_km.z() as f64) * 1000.0,
-          ],
-          // the nucleus centre's velocity: emission adds the site's ω × r (`dust::emit_cluster`)
-          v_ms: [
-            vel_kms.x() * 1000.0,
-            vel_kms.y() * 1000.0,
-            vel_kms.z() * 1000.0,
-          ],
-          rot: [rot.x(), rot.y(), rot.z(), rot.w()],
-          site_normal,
-          spin,
-          site_offset_m,
-        })
+      // jet state at any scaled time, see `jet_state_at`
+      let jet_at = |t: f64| {
+        jet_state_at(
+          &planet,
+          rot_model.as_ref(),
+          &jet_local,
+          reference.as_ref(),
+          almanac,
+          start_epoch,
+          t,
+        )
       };
       let Some(jet) = jet_at(t_s) else {
         continue;
@@ -4833,8 +4865,16 @@ mod utils {
         return d;
       }
     }
-    let home = oshal::os::env::var("HOME").unwrap_or_else(|| alloc::string::String::from("/tmp"));
-    let pid = unsafe { libc::getpid() };
+    let home = oshal::os::env::var("HOME")
+      .or_else(|| oshal::os::env::var("USERPROFILE"))
+      .unwrap_or_else(|| alloc::string::String::from("/tmp"));
+    #[cfg(unix)]
+    let pid = unsafe { libc::getpid() } as u32;
+    #[cfg(windows)]
+    #[allow(unused_unsafe)]
+    let pid = unsafe { windows::Win32::System::Threading::GetCurrentProcessId() };
+    #[cfg(not(any(unix, windows)))]
+    let pid = 0u32;
     alloc::format!("{home}/.aethervk/gpu_lost/{pid}")
   }
 

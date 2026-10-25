@@ -163,6 +163,10 @@
   </ItemGroup>
   <PropertyGroup Condition=" '$(RuntimeIdentifier.StartsWith(`win`))' == 'true' Or ( '$(RuntimeIdentifier)' == '' And $([MSBuild]::IsOSPlatform('Windows')) ) ">
     <DefineConstants>$(DefineConstants);TARGET_IS_WINDOWS</DefineConstants>
+    <!-- CsWin32 emits SetWindowLongPtr / GetWindowLongPtr only for a 64-bit platform target (on 32-bit
+         they are macros for SetWindowLong): a RID-less build (dotnet build / dotnet test) is AnyCPU,
+         so pin the platform from the resolved RID -->
+    <PlatformTarget Condition="'$(PlatformTarget)' == '' Or '$(PlatformTarget)' == 'AnyCPU'">$(ResolvedRID.Substring($([MSBuild]::Add($(ResolvedRID.IndexOf('-')), 1))))</PlatformTarget>
   </PropertyGroup>
 
   <!-- Linux/X11 (xlib) Only Dependencies and configuration -->

@@ -116,4 +116,15 @@ public interface IPlatformWindowService
   /// </para>
   /// </summary>
   void SetWindowInputRegion(nint windowHandle, System.Collections.Generic.IReadOnlyList<Utils.RectI> rects);
+
+  /// <summary>
+  /// Dark or light OS-drawn window frame (border, Alt+Tab thumbnail caption, the caption of a
+  /// decorated dialog), following the app theme.
+  /// <para>
+  /// On Windows: <c>DwmSetWindowAttribute(DWMWA_USE_IMMERSIVE_DARK_MODE = 20)</c> (Windows 10 20H1+;
+  /// older builds ignore it).
+  /// On Linux/macOS: no-op (the window manager / NSAppearance follows the system).
+  /// </para>
+  /// </summary>
+  void SetImmersiveDarkMode(nint windowHandle, bool dark);
 }

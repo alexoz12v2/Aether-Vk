@@ -143,6 +143,8 @@ public partial class App : Application
               ServiceProviderServiceExtensions.GetRequiredService<MainWindowViewModel>(
                 Host!.Services
               );
+            UI.WindowFrameTheme.Install(Current!,
+              ServiceProviderServiceExtensions.GetRequiredService<IPlatformWindowService>(Host!.Services));
             var mainWindow = new MainWindow { DataContext = mainWindowViewModel };
 
             // Sync OS theme state for the first-click bug fix
@@ -288,6 +290,7 @@ public class MockNativeRuntimeService : INativeRuntimeService
 
   public bool SetCometIndicatorVisible(bool visible) => true;
   public bool SetCameraRenderMask(ulong cameraEntityId, uint mask) => true;
+  public bool SetCameraShading(ulong cameraEntityId, uint flags) => true;
   public Logic.Models.AssetThumbnail? CopyAssetTexels(ulong assetId) => null;
   public bool DumpSceneToFile(string file) => true;
   public bool RestoreSceneFromFile(string file) => true;
@@ -305,6 +308,7 @@ public class MockNativeRuntimeService : INativeRuntimeService
   public bool SetDustPropagateDetail(int detail) => true;
   public bool SetDustHazeDetail(int detail) => true;
   public bool SetDustReuseTolerance(int px) => true;
+  public bool ResetDustViewFeedback() => true;
   public bool SetDustViewFlags(uint flags) => true;
   public bool SetDustFlowSpeed(float speed) => true;
 

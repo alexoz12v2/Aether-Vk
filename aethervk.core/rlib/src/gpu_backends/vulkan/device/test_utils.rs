@@ -29,6 +29,14 @@ pub fn setup_render_frontend_for_tests(
 ) {
   fn panic_on_validation_error(msg: &str) {
     println!("Vulkan validation error occurred during testing: {}", msg);
+    // GPU-AV's out-of-bounds reports name a raw address: the registered buffer it falls in
+    const AT: &str = "buffer device address 0x";
+    if let Some(i) = msg.find(AT) {
+      let hex: alloc::string::String = msg[i + AT.len()..].chars().take_while(|c| c.is_ascii_hexdigit()).collect();
+      if let Ok(address) = u64::from_str_radix(&hex, 16) {
+        println!("  0x{hex}: {}", super::fault::describe_address(address));
+      }
+    }
   }
 
   use std::sync::mpsc;

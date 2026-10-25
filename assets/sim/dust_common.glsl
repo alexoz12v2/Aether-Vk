@@ -120,6 +120,8 @@ const float DUST_TIME_SWEEP_STEP_PX   = 1.0;   // dust::TIME_SWEEP_STEP_PX
 // (f32 bits, pixels per drawn segment, 0 = off, host-written), the size bins one bin of the loop
 // spans (1 outside a grouped cluster: every function reading edges b and b + 1 reads b + dust_group)
 // and the frame's knob (the sweep step); set per cluster by dust_splat.comp
+const uint  DUST_PYR_EWA_GATE_SCALE   = 60u;   // host-written: the EWA in-frame gate at this many times its budgets (0, 1 = default; a static view's refined frames; dust::PYR_EWA_GATE_SCALE)
+const uint  DUST_EWA_GATE_SCALE_MAX   = 64u;   // dust::DUST_EWA_GATE_SCALE_MAX
 const uint  DUST_PYR_LOD              = 61u;
 uint  dust_group  = 1u;
 float dust_lod_px = 0.0;
@@ -809,6 +811,11 @@ vec3 dust_age_color(vec3 stream, float age, float ttl) {
     float th = DUST_PI_F32 * dust_age_hue_fraction(age, ttl);
     float s = sin(th), c = cos(th);
     return dust_oklab_to_gamut(vec3(lab.x, c * lab.y - s * lab.z, s * lab.y + c * lab.z));
+}
+
+// a tracer dot's colour word: `counts` dots of colour channel c, rounded (dust::tracer_color_word)
+uint dust_tracer_color_word(uint counts, float c) {
+    return uint(float(counts) * clamp(c, 0.0, 1.0) * DUST_COLOR_SCALE + 0.5);
 }
 
 // 32-bit integer hash (lowbias32; dust::dust_hash32)

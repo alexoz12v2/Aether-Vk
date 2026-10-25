@@ -125,11 +125,10 @@ namespace aethervk.logic.tests
       Assert.Contains("MAKE_EPHEM=%27YES%27", url);
       Assert.Contains("EPHEM_TYPE=%27SPK%27", url);
       Assert.Contains("OBJ_DATA=%27NO%27", url);
-      // We expect 2026-05-26 and 2026-06-29 because the JPL Horizons STOP_TIME is exclusive,
-      // and we aggressively pad both bounds to prevent microsecond floating point truncation
-      // panics when the simulation evaluates exactly at the limits.
-      Assert.Contains("START_TIME=%272026-05-26%27", url);
-      Assert.Contains("STOP_TIME=%272026-06-29%27", url);
+      // Both bounds are padded by 30 days: a small-body SPK (type 21) is interpolable only from
+      // its first record, days after the nominal start, and STOP_TIME is exclusive.
+      Assert.Contains("START_TIME=%272026-04-27%27", url);
+      Assert.Contains("STOP_TIME=%272026-07-27%27", url);
     }
   
     private sealed class FixedResponseHandler : HttpMessageHandler
@@ -225,7 +224,7 @@ namespace aethervk.logic.tests
 
       await service.FetchSpkRecordsAsync("2025 A6", "2021-10-25", "2031-10-25");
 
-      Assert.Contains("COMMAND=%27DES%3D2025%20A6%3B%27", handler.LastRequestUrl);
+      Assert.Contains("COMMAND='DES=2025 A6;'", Uri.UnescapeDataString(handler.LastRequestUrl!));
       var record = Assert.Single(service.SpkRecordsData);
       Assert.Equal("DES=2025 A6", record.RecordId);
       Assert.Equal("2025 A6 (SPK 1004054)", record.Name);
@@ -254,7 +253,7 @@ namespace aethervk.logic.tests
 
       var path = await service.DownloadSpkByIdAsync("2025 A6", "DES=2025 A6", savePath, "2025-10-01", "2025-10-20");
 
-      Assert.Contains("COMMAND=%27DES%3D2025%20A6%3B%27", handler.LastRequestUrl);
+      Assert.Contains("COMMAND='DES=2025 A6;'", Uri.UnescapeDataString(handler.LastRequestUrl!));
       Assert.NotNull(path);
       Assert.Equal("DAF/SPK", System.Text.Encoding.ASCII.GetString(System.IO.File.ReadAllBytes(path!), 0, 7));
     }

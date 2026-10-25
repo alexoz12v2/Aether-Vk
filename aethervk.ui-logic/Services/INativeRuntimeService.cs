@@ -234,6 +234,13 @@ public interface INativeRuntimeService : IDisposable
   bool SetCameraRenderMask(ulong cameraEntityId, uint mask);
 
   /// <summary>
+  /// How the camera <paramref name="cameraEntityId"/> shades meshes (bit 0: physical lighting, i.e.
+  /// direct sunlight only at (1 AU / r)², no ambient fill, unlit surface in a debug tint). False: no
+  /// scene or not a camera.
+  /// </summary>
+  bool SetCameraShading(ulong cameraEntityId, uint flags);
+
+  /// <summary>
   /// Native Earth observer: the core poses the Earth-parented camera inside every commit that moves
   /// the Earth and the comet, so no frame shows a stale aim. <paramref name="mode"/> is the
   /// <c>EarthObserverOrientationMode</c> value, or -1 to clear (the UI poses the camera again).
@@ -279,6 +286,12 @@ public interface INativeRuntimeService : IDisposable
   /// fresh, otherwise clamped natively to the largest power of two ≤ min(<paramref name="px"/>, 16).
   /// Visual only.</summary>
   bool SetDustReuseTolerance(int px);
+
+  /// <summary>Restarts the adaptive dust quality feedback of every view cold from the next frame,
+  /// so it is measured on the current, settled view. Called once a reopened save has applied its
+  /// cameras: the feedback otherwise keeps what the restore's transient frames measured (coarse,
+  /// blocky dust).</summary>
+  bool ResetDustViewFeedback();
 
   /// <summary>Dust view aids: bit 0 tracers (bright dots on real particles), bit 1 flow animation
   /// (pulses travelling outward). Visual only.</summary>
@@ -1307,6 +1320,10 @@ internal unsafe static class PInvokeAetherVkCore
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   [return: MarshalAs(UnmanagedType.U1)]
+  public static extern bool avkSimulationContext_resetDustViewFeedback(nint ctx, ulong sceneId);
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.U1)]
   public static extern bool avkSimulationContext_setDustViewFlags(nint ctx, ulong sceneId, uint flags);
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
@@ -1340,6 +1357,15 @@ internal unsafe static class PInvokeAetherVkCore
     double lonDeg,
     double elevM,
     [In] double[] look
+  );
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.U1)]
+  public static extern bool avkSimulationContext_setCameraShading(
+    nint ctx,
+    ulong sceneId,
+    ulong cameraEntity,
+    uint flags
   );
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
@@ -2383,6 +2409,9 @@ public sealed class NativeRuntimeService : INativeRuntimeService
   public bool SetDustReuseTolerance(int px) =>
     _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_setDustReuseTolerance(_ctx, _sceneId, (uint)Math.Max(px, 0));
 
+  public bool ResetDustViewFeedback() =>
+    _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_resetDustViewFeedback(_ctx, _sceneId);
+
   public bool SetDustViewFlags(uint flags) =>
     _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_setDustViewFlags(_ctx, _sceneId, flags);
 
@@ -2395,6 +2424,10 @@ public sealed class NativeRuntimeService : INativeRuntimeService
   public bool SetCameraRenderMask(ulong cameraEntityId, uint mask) =>
     _ctx != 0
     && PInvokeAetherVkCore.avkSimulationContext_setCameraRenderMask(_ctx, _sceneId, cameraEntityId, mask);
+
+  public bool SetCameraShading(ulong cameraEntityId, uint flags) =>
+    _ctx != 0
+    && PInvokeAetherVkCore.avkSimulationContext_setCameraShading(_ctx, _sceneId, cameraEntityId, flags);
 
   public unsafe EarthObserverStatus? EarthObserverStatus()
   {

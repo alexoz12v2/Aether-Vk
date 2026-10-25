@@ -11,7 +11,9 @@
         x:Class="AetherVk.MainWindow"
         MinWidth="600" MinHeight="400"
         Icon="/Assets/icon.ico"
-        Title="{Binding WindowTitle}">
+        Title="{Binding WindowTitle}"
+        ExtendClientAreaToDecorationsHint="{OnPlatform Default=False, Windows=True}"
+        ExtendClientAreaTitleBarHeightHint="32">
   <Design.DataContext>
     <dvm:MainWindowViewModelDesign />
   </Design.DataContext>
@@ -19,7 +21,25 @@
   <!-- TODO: NativeDock property for MacOS when right clicking the icon on dock -->
 
   <Grid RowDefinitions="Auto, *" Background="{DynamicResource Bg.Canvas}">
-    <ContentControl x:Name="MenuContainer" Grid.Row="0" IsVisible="{OnPlatform Default=True, macOS=False}" />
+    <!-- Windows: the client area takes the caption, as in Visual Studio: icon, menu, title on the
+         themed canvas; Avalonia draws the theme-following caption buttons over the right end
+         (kept clear by the last column). Elsewhere the system title bar stays and this row is
+         the menu. -->
+    <Grid x:Name="TitleBar" Grid.Row="0" ColumnDefinitions="Auto,Auto,*,Auto"
+          MinHeight="{OnPlatform Default=0, Windows=32}">
+      <Image Grid.Column="0" Source="/Assets/icon.ico" Width="16" Height="16" Margin="10,0,6,0"
+             VerticalAlignment="Center" IsVisible="{OnPlatform Default=False, Windows=True}" />
+      <ContentControl x:Name="MenuContainer" Grid.Column="1" VerticalAlignment="Center"
+                      IsVisible="{OnPlatform Default=True, macOS=False}" />
+      <!-- the drag area: moves the window, a double click maximizes / restores -->
+      <Border x:Name="TitleDragArea" Grid.Column="2" Background="Transparent"
+              IsVisible="{OnPlatform Default=False, Windows=True}">
+        <TextBlock Text="{Binding WindowTitle}" Foreground="{DynamicResource Text.Secondary}"
+                   FontSize="12" VerticalAlignment="Center" HorizontalAlignment="Center"
+                   TextTrimming="CharacterEllipsis" IsHitTestVisible="False" />
+      </Border>
+      <Border Grid.Column="3" Width="{OnPlatform Default=0, Windows=140}" />
+    </Grid>
     <Border Grid.Row="1">
       <views:DockingManagerView DataContext="{Binding DockingManager}"/>
     </Border>

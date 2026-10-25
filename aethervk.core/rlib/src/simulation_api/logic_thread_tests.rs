@@ -1495,6 +1495,94 @@ fn test_rotation_at_matches_step_rotation() {
   assert_eq!(q, aethervk_oshal_rlib::math::vector::vec4::Quat::identity());
 }
 
+/// The emitting site turns with the nucleus window after window: the attitude `jet_state_at`
+/// hands each emission window is the rotational model's at that time, its spin vector is the
+/// model's pole · ω, and one hour apart the site normal has turned by ω·1 h about that pole. With
+/// a zero rate (the Comet tab default) the site keeps one inertial direction: fixed spawn points
+/// are the still nucleus, not frozen emission. Reference-orbit path (t < 0), no SPK needed.
+#[test]
+fn test_jet_state_site_turns_with_the_rotational_model() {
+  use crate::scene::TransformComponent;
+  use aethervk_oshal_rlib::math::vector::{Vector3, vec3::Vec3f32, vec4::Quat};
+  let almanac = load_planet_almanac();
+  let planet = AlmanacPlanet { naif_id: 1000012 };
+  // 67P, perihelion 2021-11-02 (JD TDB 2459520.5)
+  let reference = KeplerianElements {
+    eccentricity: 0.6402,
+    perihelion_distance_au: 1.2432,
+    inclination_deg: 3.871,
+    longitude_of_ascending_node_deg: 36.33,
+    argument_of_perihelion_deg: 22.15,
+    time_of_perihelion_jd_tdb: 2_459_520.5,
+  };
+  let (lat, lon) = (30.0_f32.to_radians(), 0.0_f32);
+  let jet_local = TransformComponent {
+    position: Vec3f32::from_components(lat.cos() * lon.cos(), lat.cos() * lon.sin(), lat.sin()),
+    rotation: Quat::identity(),
+    scale: Vec3f32::from_components(0.02, 0.02, 0.02),
+  };
+  let start = Epoch::from_gregorian_utc(2022, 1, 11, 20, 0, 0, 0);
+  let model = |rate: f64| crate::scene::BodyRotationalModel {
+    pole_ra: 69.54,
+    pole_dec: 64.11,
+    prime_meridian: 114.69,
+    pole_ra_rate: 0.0,
+    pole_dec_rate: 0.0,
+    rotation_rate: rate,
+    body_fixed_orientation: true,
+  };
+  let state = |m: &crate::scene::BodyRotationalModel, t: f64| {
+    utils::jet_state_at(&planet, Some(m), &jet_local, Some(&reference), &almanac, start, t)
+      .expect("reference-orbit jet state")
+  };
+  let angle = |a: [f64; 3], b: [f64; 3]| {
+    let c = [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt().atan2(a[0] * b[0] + a[1] * b[1] + a[2] * b[2])
+  };
+  // rotate `v` by `angle` about unit `axis` (Rodrigues)
+  let turn = |v: [f64; 3], axis: [f64; 3], angle: f64| {
+    let (s, c) = angle.sin_cos();
+    let d = axis[0] * v[0] + axis[1] * v[1] + axis[2] * v[2];
+    let x = [axis[1] * v[2] - axis[2] * v[1], axis[2] * v[0] - axis[0] * v[2], axis[0] * v[1] - axis[1] * v[0]];
+    [0, 1, 2].map(|i| v[i] * c + x[i] * s + axis[i] * d * (1.0 - c))
+  };
+
+  // 12.40 h (the IAU 67P rate): 1 h turns the site by ~29°
+  let spinning = model(696.543_884);
+  let omega = 696.543_884_f64.to_radians() / 86_400.0;
+  let (t1, t2) = (-86_400.0, -86_400.0 + 3_600.0);
+  let (a, b) = (state(&spinning, t1), state(&spinning, t2));
+  let spin = a.spin.expect("a model gives a spin");
+  assert!((spin[3] - omega).abs() < 1e-12 * omega, "ω {} vs {omega}", spin[3]);
+  let pole = [spin[0], spin[1], spin[2]];
+  let expected = turn(a.site_normal, pole, omega * 3_600.0);
+  let moved = angle(a.site_normal, b.site_normal);
+  assert!(
+    (moved - angle(a.site_normal, expected)).abs() < 1e-4,
+    "the site turned {moved} rad in 1 h"
+  );
+  assert!(moved > 0.1, "the site must sweep: {moved} rad in 1 h");
+  assert!(
+    angle(b.site_normal, expected) < 1e-4,
+    "the site turns about the model pole by ω·Δt: off by {} rad",
+    angle(b.site_normal, expected)
+  );
+  // the attitude handed to the window is the one the site follows (`emit_cluster` spins it on)
+  let rot_b = Quat::from_components(b.rot[0], b.rot[1], b.rot[2], b.rot[3]);
+  let n_b = rot_b.rotate_vector(jet_local.position);
+  let n_b = [n_b.x() as f64, n_b.y() as f64, n_b.z() as f64];
+  assert!(angle(n_b, b.site_normal) < 1e-5, "rot and site normal disagree");
+
+  // the Comet tab default: rate 0, a still nucleus
+  let still = model(0.0);
+  let (a, b) = (state(&still, t1), state(&still, t2));
+  assert_eq!(a.spin.expect("still has a spin vector")[3], 0.0);
+  assert!(
+    angle(a.site_normal, b.site_normal) < 1e-6,
+    "a still nucleus keeps its site direction"
+  );
+}
+
 static ASSET_SENDER: parking_lot::Mutex<
   Option<mpsc::Sender<crate::simulation_api::external_state::CAssetImported>>,
 > = parking_lot::Mutex::new(None);

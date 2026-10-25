@@ -110,6 +110,9 @@ public sealed class SaveFileServiceTests : IDisposable
     Assert.True(r.StateRestored);
     Assert.False(r.Sought);
     Assert.Empty(r.MissingFiles!);
+    // the timeline shows the restored epoch, and the dust feedback restarts on the settled view
+    Assert.Equal(1, host.ClockSyncs);
+    Assert.Equal(1, host.DustFeedbackRestarts);
 
     // meshes first; the embedded texture came with the GLB, so only the png is imported besides it
     var imports = host.Calls.Where(c => c.StartsWith("import", StringComparison.Ordinal)).ToList();
@@ -302,6 +305,20 @@ public sealed class SaveFileServiceTests : IDisposable
     await svc.NewAsync();
     Assert.False(svc.IsDirty);
     Assert.Null(svc.CurrentSaveDir);
+  }
+
+  /// The startup baseline can be taken before the first viewport exists: a fresh viewport appearing
+  /// later is no change (the reopen then asked to save an untouched "Untitled").
+  [Fact]
+  public void Dirty_IgnoresAFreshViewport_AddedAfterTheBaseline()
+  {
+    var host = new FakeSaveFileHost(_root) { Viewports = [] };
+    var svc = new SaveFileService(host, new Clock());
+    Assert.False(svc.IsDirty);
+    host.Viewports = [new ViewportDto { Observer = new ObserverDto() }];
+    Assert.False(svc.IsDirty);
+    host.Viewports[0].Observer!.LatDeg = 45;
+    Assert.True(svc.IsDirty);
   }
 
   /// <summary>Runtime reuse: going back to a saved configuration restores its state; not while playing.</summary>

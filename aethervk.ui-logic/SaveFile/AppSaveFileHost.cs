@@ -100,6 +100,7 @@ public sealed class AppSaveFileHost : ISaveFileHost
     {
       ProposedStart = NullIfEmpty(timeline.ProposedStartEpoch),
       ProposedEnd = NullIfEmpty(timeline.ProposedEndEpoch),
+      Speed = timeline.Speed,
     };
     LiveComet? live = null;
     if (inputs is not null)
@@ -290,6 +291,7 @@ public sealed class AppSaveFileHost : ISaveFileHost
     var session = Timeline;
     if (timeline.ProposedStart is { } ps) session.ProposedStartEpoch = ps;
     if (timeline.ProposedEnd is { } pe) session.ProposedEndEpoch = pe;
+    if (timeline.Speed is { } speed) session.Speed = speed;
     if (committed && timeline.CommittedStart is { } cs && timeline.CommittedEnd is { } ce)
     {
       session.CommittedStartEpoch = EpochText(cs, session.ProposedStartEpoch);
@@ -389,6 +391,25 @@ public sealed class AppSaveFileHost : ISaveFileHost
 
   public void ApplyBillboards(IReadOnlyList<BillboardDto> billboards) =>
     _billboards.Restore(billboards.Select(SaveIndexMapping.FromDto));
+
+  public void SyncClock()
+  {
+    var session = Timeline;
+    if (_runtime.GetSimulationClock(out var c, out var ns))
+      session.CurrentEpochString = ViewModels.TimelineTabViewModel.ClockLabel(c, ns, session.CommittedStartEpoch);
+    // a live tab re-reads the session and polls the clock (its progress)
+    session.NotifyRestored();
+  }
+
+  /// <summary>Past a camera mode switch (2.5 s) with margin: the restored pose has been reached.</summary>
+  internal static readonly TimeSpan DustFeedbackSettle = TimeSpan.FromSeconds(3);
+
+  public void RestartDustFeedbackWhenSettled()
+  {
+    // the engine already restarted it at the restore's seek; this second restart drops what the
+    // frames drawn during the cameras' flight to their saved poses taught it
+    _ = Task.Delay(DustFeedbackSettle).ContinueWith(_ => _runtime.ResetDustViewFeedback(), TaskScheduler.Default);
+  }
 
   public bool IsSimulationRunning => _timeline.IsSimulationRunningValue;
 

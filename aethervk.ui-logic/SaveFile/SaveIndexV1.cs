@@ -49,7 +49,12 @@ public sealed class TimelineDto
   public string? ProposedStart { get; set; }
   public string? ProposedEnd { get; set; }
   public EpochParts? CurrentEpoch { get; set; }
+  /// <summary>Whether the clock is past the committed start. Informative: Open always restores
+  /// paused at <see cref="CurrentEpoch"/>.</summary>
   public bool StartPaused { get; set; }
+  /// <summary>The selected playback speed (<c>TimelineTabViewModel.SimulationSpeed</c> as int);
+  /// absent in older saves and before one was chosen.</summary>
+  public int? Speed { get; set; }
 }
 
 public sealed class SpkDto
@@ -135,6 +140,7 @@ public sealed class ModelDto
   public bool DustTracers { get; set; }
   public bool DustFlow { get; set; }
   public double DustFlowSpeed { get; set; } = 1;
+  public bool SphereGizmoVisible { get; set; } = true;
   public bool ShowReferencePositionError { get; set; }
   /// <summary>The Model tab's manual nucleus radius (used when Horizons has none).</summary>
   public float ManualNucleusRadiusKm { get; set; } = 2;
@@ -164,6 +170,17 @@ public sealed class ViewportDto
   /// <summary>Camera offset from the comet in comet-orbiting mode, AU.</summary>
   public double[] OrbitOffsetAu { get; set; } = [0, 0, 0];
   public ObserverDto? Observer { get; set; }
+  /// <summary>The settings panel's display choices; absent in older saves (defaults kept).</summary>
+  public ViewportDisplayDto? Display { get; set; }
+}
+
+public sealed class ViewportDisplayDto
+{
+  /// <summary>au | km | m: the orthographic extents' and clip planes' unit.</summary>
+  public string OrthoUnit { get; set; } = "au";
+  /// <summary>deg | arcmin | arcsec: the perspective field of view's unit.</summary>
+  public string FovUnit { get; set; } = "deg";
+  public bool OrthoProportionsLocked { get; set; } = true;
 }
 
 public sealed class CameraSnapshotDto

@@ -115,7 +115,7 @@
                 <StackPanel Grid.Column="0" Spacing="2">
                   <TextBlock Classes="status-ok" FontWeight="SemiBold"
                              Text="✓ Committed" FontSize="11" />
-                  <TextBlock Text="{Binding CommittedCometName}"
+                  <TextBlock AutomationProperties.AutomationId="CommittedCometName" Text="{Binding CommittedCometName}"
                              FontSize="11" TextWrapping="Wrap"
                              Foreground="{DynamicResource Text.Primary}" />
                 </StackPanel>
@@ -141,7 +141,7 @@
 
             <!-- Search row -->
             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
-              <TextBox Grid.Column="0"
+              <TextBox Grid.Column="0" AutomationProperties.AutomationId="CometSearchBox"
                        Text="{Binding SearchQuery}"
                        Watermark="Search comets (e.g. 67P, Halley)…"
                        FontSize="12">
@@ -179,7 +179,7 @@
                   </Arc>
                 </TextBox.InnerRightContent>
               </TextBox>
-              <Button Grid.Column="1"
+              <Button Grid.Column="1" AutomationProperties.AutomationId="CometSearchButton"
                       Content="Search"
                       Command="{Binding SearchCometsCommand}"
                       Classes="accent"
@@ -188,7 +188,7 @@
             </Grid>
 
             <!-- Search results -->
-            <ListBox ItemsSource="{Binding FilteredSearchResults}"
+            <ListBox AutomationProperties.AutomationId="CometResultsList" ItemsSource="{Binding FilteredSearchResults}"
                      SelectedItem="{Binding SelectedComet}"
                      MaxHeight="140"
                      IsVisible="{Binding FilteredSearchResults.Count}"
@@ -215,7 +215,7 @@
               <TextBlock Text="Loading records…" FontSize="11"
                          Foreground="{DynamicResource Text.Disabled}"
                          IsVisible="{Binding IsLoadingSpkRecords}" />
-              <ListBox ItemsSource="{Binding SpkRecords}"
+              <ListBox AutomationProperties.AutomationId="SpkRecordsList" ItemsSource="{Binding SpkRecords}"
                        SelectedItem="{Binding SelectedSpkRecord}"
                        MaxHeight="120"
                        IsVisible="{Binding SpkRecords.Count}"
@@ -249,7 +249,7 @@
                   HelpHeader="Reference orbit"
                   HelpContent="The red track is a two-body (Keplerian) reference next to the true SPK path.&#x0A;&#x0A;SBDB solution: the elements JPL publishes, osculating at the solution epoch, which can be years away from your window (67P: 2015-10-10, about 0.12 AU off its 2025 path because of Jupiter).&#x0A;&#x0A;Osculating at start epoch: elements recomputed from the SPK position and velocity at your start epoch. Exact there, and within about 10³ km over a month (planetary perturbations and outgassing forces).&#x0A;&#x0A;Cannot be changed while a comet is committed." />
               </StackPanel>
-              <ComboBox SelectedIndex="{Binding ReferenceOrbitIndex}"
+              <ComboBox AutomationProperties.AutomationId="ReferenceOrbitPicker" SelectedIndex="{Binding ReferenceOrbitIndex}"
                         IsEnabled="{Binding IsReferenceOrbitSelectable}"
                         PlaceholderText="Choose a reference orbit…"
                         HorizontalAlignment="Stretch">
@@ -259,7 +259,7 @@
             </StackPanel>
 
             <!-- Download & Commit button -->
-            <Button Content="Download &amp; Commit"
+            <Button AutomationProperties.AutomationId="DownloadCommitButton" Content="Download &amp; Commit"
                     Command="{Binding DownloadAndCommitCommand}"
                     Classes="accent"
                     HorizontalAlignment="Stretch"
@@ -270,7 +270,7 @@
                     ToolTip.ShowDelay="500" />
 
             <!-- Status text -->
-            <TextBlock Text="{Binding DownloadStatus}"
+            <TextBlock AutomationProperties.AutomationId="DownloadStatusText" Text="{Binding DownloadStatus}"
                        FontSize="11"
                        TextWrapping="Wrap"
                        IsVisible="{Binding DownloadStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
@@ -282,7 +282,7 @@
         <!-- ═══════════════════════════════════════════════════════════════
         SECTION 3: ROTATIONAL MODEL (enabled only when committed)
         ═══════════════════════════════════════════════════════════════ -->
-        <Expander Header="Rotational Model"
+        <Expander Header="Rotational Model" AutomationProperties.AutomationId="RotationalModelSection"
                   IsExpanded="{Binding IsAlmanacCommitted}"
                   IsEnabled="{Binding IsAlmanacCommitted}">
           <StackPanel Spacing="6" Margin="4,4,4,4">
@@ -294,7 +294,7 @@
             <!-- Pole RA -->
             <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
               <TextBlock Grid.Column="0" Classes="label" Text="Pole RA" VerticalAlignment="Center" />
-              <controls:UnboundedSlider Grid.Column="2" Value="{Binding PoleRaDeg}" Step="0.1">
+              <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="PoleRaSlider" Value="{Binding PoleRaDeg}" Step="0.1">
                 <controls:UnboundedSlider.InnerRightContent>
                   <TextBlock Classes="unit-of-measurement" Text="°" />
                 </controls:UnboundedSlider.InnerRightContent>
@@ -304,7 +304,7 @@
             <!-- Pole Dec -->
             <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
               <TextBlock Grid.Column="0" Classes="label" Text="Pole Dec" VerticalAlignment="Center" />
-              <controls:UnboundedSlider Grid.Column="2" Value="{Binding PoleDecDeg}" Step="0.1">
+              <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="PoleDecSlider" Value="{Binding PoleDecDeg}" Step="0.1">
                 <controls:UnboundedSlider.InnerRightContent>
                   <TextBlock Classes="unit-of-measurement" Text="°" />
                 </controls:UnboundedSlider.InnerRightContent>
@@ -314,7 +314,7 @@
             <!-- Prime Meridian -->
             <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
               <TextBlock Grid.Column="0" Classes="label" Text="Prime Meridian" VerticalAlignment="Center" />
-              <controls:UnboundedSlider Grid.Column="2" Value="{Binding PrimeMeridianDeg}" Step="0.1">
+              <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="PrimeMeridianSlider" Value="{Binding PrimeMeridianDeg}" Step="0.1">
                 <controls:UnboundedSlider.InnerRightContent>
                   <TextBlock Classes="unit-of-measurement" Text="°" />
                 </controls:UnboundedSlider.InnerRightContent>
@@ -344,7 +344,7 @@
             <!-- Rotation Rate -->
             <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
               <TextBlock Grid.Column="0" Classes="label" Text="Rotation Rate" VerticalAlignment="Center" />
-              <controls:UnboundedSlider Grid.Column="2" Value="{Binding RotRateDegDay}" Step="0.01" ToolTip.Tip="Sidereal rotation rate. Positive = prograde." ToolTip.ShowDelay="500">
+              <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="RotRateSlider" Value="{Binding RotRateDegDay}" Step="0.01" ToolTip.Tip="Sidereal rotation rate. Positive = prograde." ToolTip.ShowDelay="500">
                 <controls:UnboundedSlider.InnerRightContent>
                   <TextBlock Classes="unit-of-measurement" Text="°/day" />
                 </controls:UnboundedSlider.InnerRightContent>
@@ -354,7 +354,7 @@
             <!-- Body-Fixed Camera -->
             <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
               <TextBlock Grid.Column="0" Classes="label" Text="Camera orientation is body-fixed with respect to camera" VerticalAlignment="Center" TextWrapping="Wrap" />
-              <ComboBox Grid.Column="2" SelectedIndex="{Binding BodyFixedOrientationIndex}" HorizontalAlignment="Center">
+              <ComboBox Grid.Column="2" AutomationProperties.AutomationId="BodyFixedOrientationPicker" SelectedIndex="{Binding BodyFixedOrientationIndex}" HorizontalAlignment="Center">
                 <ComboBoxItem>Yes</ComboBoxItem>
                 <ComboBoxItem>No</ComboBoxItem>
               </ComboBox>

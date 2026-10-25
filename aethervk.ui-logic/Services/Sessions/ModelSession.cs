@@ -24,6 +24,8 @@ public sealed partial class ModelSession : ObservableObject, ITabSession
   public bool DustFlow { get; set; } = false;
   /// <summary>Time-lapse factor of the dust flow marks (Model tab), 1 = real motion, visual only.</summary>
   public double DustFlowSpeed { get; set; } = 1.0;
+  /// <summary>The nucleus sphere gizmo is shown (Model tab), visual only.</summary>
+  public bool SphereGizmoVisible { get; set; } = true;
 
   /// <summary>
   /// The Model tab's manual nucleus radius (km; 0 = use the comet's catalogue radius). Plain

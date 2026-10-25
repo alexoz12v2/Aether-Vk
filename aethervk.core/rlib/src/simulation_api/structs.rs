@@ -1392,6 +1392,10 @@ pub struct SceneContext {
   /// `SimulationContext::set_dust_reuse_px` ("Temporal reuse tolerance" setting,
   /// `AETHERVK_DUST_REUSE_PX` default override)
   pub dust_reuse_px: Arc<core::sync::atomic::AtomicU32>,
+  /// dust feedback generation: bumped on a discontinuity (a restored save, a seek, a settled
+  /// restored camera, `SimulationContext::reset_dust_view_feedback`); every view's adaptive
+  /// quality feedback restarts cold when it changes (`Device::dust_sync_feedback_gen`)
+  pub dust_feedback_gen: Arc<core::sync::atomic::AtomicU32>,
   /// dust view aids (`dust::DUST_VIEW_TRACERS` | `dust::DUST_VIEW_FLOW`), see
   /// `SimulationContext::set_dust_view_flags`
   pub dust_view_flags: Arc<core::sync::atomic::AtomicU32>,
@@ -1513,6 +1517,7 @@ impl SceneContext {
           .unwrap_or(crate::scene::dust::DUST_HAZE_DETAIL_DEFAULT),
       )),
       dust_reuse_px: Arc::new(core::sync::atomic::AtomicU32::new(crate::scene::dust::dust_reuse_px_default())),
+      dust_feedback_gen: Arc::new(core::sync::atomic::AtomicU32::new(0)),
       dust_view_flags: Arc::new(core::sync::atomic::AtomicU32::new(
         crate::scene::dust::dust_view_flags_default(),
       )),

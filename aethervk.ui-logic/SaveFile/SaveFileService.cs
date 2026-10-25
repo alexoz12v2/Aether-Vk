@@ -99,7 +99,9 @@ public sealed class SaveFileService
       Spk = s.Comet is { } c ? [c.Spk] : [],
       Model = s.Model,
       Jets = [.. s.Jets],
-      Viewports = [.. s.Viewports.Select(v => new ViewportDto
+      // a viewport still in its fresh state is no change: the startup baseline may be taken
+      // before the first viewport exists
+      Viewports = [.. s.Viewports.Where(v => !IsFresh(v)).Select(v => new ViewportDto
       {
         Mode = v.Mode,
         Observer = v.Observer is { } o
@@ -111,6 +113,15 @@ public sealed class SaveFileService
       Billboards = [.. s.Billboards],
     };
     return SaveIndexIo.ToJson(index);
+  }
+
+  /// <summary>A viewport as a new one starts: the default mode, the observer not yet placed.</summary>
+  private static bool IsFresh(ViewportDto v)
+  {
+    var fresh = new ViewportDto();
+    return v.Mode == fresh.Mode
+      && (v.Observer is null || (v.Observer.LatDeg == 0 && v.Observer.LonDeg == 0 && v.Observer.ElevationM == 0
+        && v.Observer.Orientation == new ObserverDto().Orientation));
   }
 
   // ── new ────────────────────────────────────────────────────────────────────
@@ -420,6 +431,8 @@ public sealed class SaveFileService
 
     _host.ApplyViewports(index.Viewports);
     _host.ApplyBillboards([.. index.Billboards.Select(b => Remap(b, byKey))]);
+    _host.SyncClock();
+    _host.RestartDustFeedbackWhenSettled();
 
     CurrentSaveDir = dir;
     _index = index;
@@ -543,7 +556,10 @@ public sealed class SaveFileService
       if (hash == _lastReusedHash) return false;
       var state = _index.States.FirstOrDefault(s => s.CompatHash == hash);
       if (state is null) return false;
-      return await TryRestoreAsync(CurrentSaveDir, state, _clock.UtcNow);
+      if (!await TryRestoreAsync(CurrentSaveDir, state, _clock.UtcNow)) return false;
+      _host.SyncClock();
+      _host.RestartDustFeedbackWhenSettled();
+      return true;
     }
     finally
     {

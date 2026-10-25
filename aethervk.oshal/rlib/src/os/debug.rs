@@ -388,6 +388,12 @@ mod windows_debug {
       }
     }
   }
+
+  // The GPU debug console (a terminal tailing the debugPrintf log) is Linux only: as there
+  // without `debug_gpu`, both are no-ops
+  pub fn spawn_dedicated_console() {}
+
+  pub fn append_debug_printf(_msg: &str) {}
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]

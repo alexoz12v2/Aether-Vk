@@ -102,7 +102,19 @@ public sealed record CameraPersistedState(
   /// <summary>Earth observer look in the inertial frame, quaternion x, y, z, w.</summary>
   double[] ObserverInertialLook,
   /// <summary>Earth observer look in the Earth body-fixed frame, quaternion x, y, z, w.</summary>
-  double[] ObserverBodyFixedLook);
+  double[] ObserverBodyFixedLook,
+  /// <summary>The viewport settings' display choices; null in saves that predate them.</summary>
+  ViewportDisplayState? Display = null);
+
+/// <summary>
+/// How a viewport's settings panel shows its camera: the distance unit of the orthographic
+/// extents and clip planes (0 AU, 1 km, 2 m), the field-of-view unit (0 deg, 1 arcmin, 2 arcsec),
+/// and whether the orthographic extents keep the viewport's proportions.
+/// </summary>
+public sealed record ViewportDisplayState(int OrthoUnitIndex, int FovUnitIndex, bool OrthoProportionsLocked)
+{
+  public static readonly ViewportDisplayState Default = new(0, 0, true);
+}
 
 public sealed record CameraTransformState(
   double PosX,
@@ -233,6 +245,11 @@ public sealed class CameraService : IDisposable
   // Observer latitude (degrees): its sign picks the ecliptic pole the view "up" leans towards.
   private float _observerLatDeg;
   private float _observerLonDeg;
+  // Broadcasts (lat, lon) so the Settings tab mirrors sites set elsewhere (e.g. a restored save).
+  private readonly BehaviorSubject<(float LatDeg, float LonDeg)> _observerSiteSubject = new((0f, 0f));
+
+  /// <summary>Fires whenever <see cref="SetEarthObserverLatLon"/> stores a new observer site.</summary>
+  public IObservable<(float LatDeg, float LonDeg)> EarthObserverSiteChanged => _observerSiteSubject.AsObservable();
   /// <summary>Observer height above the WGS84 ellipsoid (m), native observer only (0 by default).</summary>
   private double _observerElevM;
   /// <summary>True while the core poses the Earth observer camera in its commits
@@ -270,7 +287,28 @@ public sealed class CameraService : IDisposable
   /// If true, orthographic projection bounds are constrained to match the viewport aspect ratio.
   /// This also applies during window resize.
   /// </summary>
-  public bool IsOrthoProportionsLocked { get; set; } = true;
+  public bool IsOrthoProportionsLocked
+  {
+    get => DisplayState.OrthoProportionsLocked;
+    set => DisplayState = DisplayState with { OrthoProportionsLocked = value };
+  }
+
+  private readonly BehaviorSubject<ViewportDisplayState> _displaySubject = new(ViewportDisplayState.Default);
+
+  /// <summary>The settings panel's display choices (units, proportions lock): kept here, not in
+  /// the panel, so a savefile records and restores them with the camera.</summary>
+  public ViewportDisplayState DisplayState
+  {
+    get => _displaySubject.Value;
+    set
+    {
+      if (value != _displaySubject.Value)
+        _displaySubject.OnNext(value);
+    }
+  }
+
+  /// <summary>Emits the current <see cref="DisplayState"/>, then each change.</summary>
+  public IObservable<ViewportDisplayState> DisplayStateChanged => _displaySubject.AsObservable();
 
   // ── Mode state memory ────────────────────────────────────────────────────────
   // Saved (transform, projection) per mode — restored via animation on re-entry.
@@ -282,9 +320,10 @@ public sealed class CameraService : IDisposable
   private readonly Dictionary<CameraMode, ModeSnapshot> _modeSnapshots = new();
 
   /// <summary>
-  /// What a savefile records of this viewport camera: the mode, the per-mode remembered
-  /// (transform, projection) snapshots, the current confirmed transform / projection, and the
-  /// Earth observer site and orientation.
+  /// What a savefile records of this viewport camera: the mode, the current confirmed transform /
+  /// projection, the orbit offset, the Earth observer site and orientation, and the settings
+  /// panel's display choices. The per-mode remembered poses of other modes are not saved: after
+  /// an open, entering another mode lands on its default.
   /// </summary>
   public CameraPersistedState GetPersistedState()
   {
@@ -300,7 +339,8 @@ public sealed class CameraService : IDisposable
         _observerElevM,
         _earthOrientationMode,
         [_inertialLookDir.X, _inertialLookDir.Y, _inertialLookDir.Z, _inertialLookDir.W],
-        [_earthFixedLookDir.X, _earthFixedLookDir.Y, _earthFixedLookDir.Z, _earthFixedLookDir.W]);
+        [_earthFixedLookDir.X, _earthFixedLookDir.Y, _earthFixedLookDir.Z, _earthFixedLookDir.W],
+        DisplayState);
     }
   }
 
@@ -315,6 +355,8 @@ public sealed class CameraService : IDisposable
   /// </summary>
   public void RestorePersistedState(CameraPersistedState state)
   {
+    if (state.Display is { } display)
+      DisplayState = display;
     SetEarthObserverLatLon(state.ObserverLatDeg, state.ObserverLonDeg);
     SetEarthObserverElevation(state.ObserverElevationM);
     SetOrbitOffset(state.OrbitOffsetAu);
@@ -561,6 +603,7 @@ public sealed class CameraService : IDisposable
 
     RefreshCometIndicator();
     RefreshRenderMask();
+    RefreshShading();
 
     // World-preserving unparent when leaving a body-anchored mode.
     // Rust reads global_transform_f64 BEFORE removing the parent, then writes
@@ -598,6 +641,37 @@ public sealed class CameraService : IDisposable
       _orbitOffset = offset;
       InitOrbitAnglesFromOffset(offset); // keep spherical angles in sync
     }
+  }
+
+  /// <summary>
+  /// Comet orbiting, facing the nucleus point at body-frame latitude / longitude (the jet site
+  /// convention, <c>(cos φ cos λ, cos φ sin λ, sin φ)</c>; the orbit offset is body-frame while the
+  /// camera rides with the nucleus). Enters the mode at 3 R when not in it, else keeps the distance
+  /// and animates there. Latitude is clamped to the drag limit (±80°): the +Z-up basis degenerates
+  /// at the poles.
+  /// </summary>
+  public void FaceNucleusSite(float latitudeRad, float longitudeRad)
+  {
+    const float MaxElevRad = 80f * (float)Math.PI / 180f;
+    float lat = Math.Max(-MaxElevRad, Math.Min(MaxElevRad, latitudeRad));
+    float cosLat = (float)Math.Cos(lat);
+    var dir = new Vector3(
+      cosLat * (float)Math.Cos(longitudeRad),
+      cosLat * (float)Math.Sin(longitudeRad),
+      (float)Math.Sin(lat));
+
+    bool orbiting = _modeSubject.Value == CameraMode.CometOrbiting;
+    lock (_orbitOffsetLock)
+    {
+      // off-mode only the direction matters: entry rescales the offset to 3 R
+      float mag = orbiting ? _orbitOffset.Length() : 1f;
+      _orbitOffset = dir * (mag > 1e-12f ? mag : 1f);
+      InitOrbitAnglesFromOffset(_orbitOffset);
+    }
+    if (orbiting)
+      SnapCameraToOrbit();
+    else
+      SetCameraMode(CameraMode.CometOrbiting);
   }
 
   /// <summary>Thread-safe read of the current orbit offset.</summary>
@@ -1351,6 +1425,7 @@ public sealed class CameraService : IDisposable
         PushNativeObserver();
       }
     }
+    _observerSiteSubject.OnNext((latDeg, lonDeg));
   }
 
   /// <summary>
@@ -1809,6 +1884,48 @@ public sealed class CameraService : IDisposable
       _renderMaskSent = (cam, mask);
   }
 
+  /// <summary>Shading bit: physical lighting (<c>scene::CAMERA_SHADING_PHYSICAL</c>).</summary>
+  public const uint ShadingPhysical = 1u << 0;
+
+  private bool _physicalLighting;
+
+  /// <summary>
+  /// Comet debug: the nucleus lit physically (direct sunlight at (1 AU / r)², no ambient fill, the
+  /// surface the Sun does not reach in a debug tint) instead of the display shading. Applies in
+  /// <see cref="CameraMode.CometOrbiting"/> only, where the setting is offered.
+  /// </summary>
+  public bool PhysicalLighting
+  {
+    get => _physicalLighting;
+    set
+    {
+      if (_physicalLighting == value)
+        return;
+      _physicalLighting = value;
+      RefreshShading();
+    }
+  }
+
+  /// <summary>The shading flags a camera in <paramref name="mode"/> uses.</summary>
+  internal static uint ShadingFor(CameraMode mode, bool physicalLighting) =>
+    physicalLighting && mode == CameraMode.CometOrbiting ? ShadingPhysical : 0u;
+
+  // last (camera, flags) the runtime accepted (null: unknown, resend)
+  private (ulong Camera, uint Flags)? _shadingSent;
+
+  /// <summary>Sends this viewport camera's shading for the current mode; sends on change.</summary>
+  private void RefreshShading()
+  {
+    ulong cam = CameraEntityId ?? 0;
+    if (cam == 0)
+      return;
+    uint flags = ShadingFor(_modeSubject.Value, _physicalLighting);
+    if (_shadingSent == (cam, flags))
+      return;
+    if (_runtimeService.SetCameraShading(cam, flags))
+      _shadingSent = (cam, flags);
+  }
+
   /// <summary>Modes where the comet is far or small enough to need a label.</summary>
   internal static bool ShowsCometLabel(CameraMode mode) =>
     mode is CameraMode.EarthPosition or CameraMode.UpZenith;
@@ -1994,6 +2111,7 @@ public sealed class CameraService : IDisposable
     RegisterEarthListener();
     RefreshCometIndicator();
     RefreshRenderMask();
+    RefreshShading();
     // Snap immediately on first viewport-ready so the camera starts at the
     // correct mode position from frame 1 rather than animating over 2.5 s.
     TriggerModeTransitionAnimation(_modeSubject.Value, snapImmediate: true);

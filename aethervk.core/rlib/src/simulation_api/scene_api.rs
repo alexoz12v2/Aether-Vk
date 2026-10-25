@@ -444,6 +444,10 @@ impl SimulationContext {
       effective_comet_trajectory,
       crate::scene::TransformComponent::default(),
     );
+    // both comet lines follow the light-time displacement of the Earth observer's view
+    for track in [comet.orbit, effective_comet_trajectory] {
+      crate::simulation_api::earth_observer::mark_light_time_track(&scene, track, comet.body);
+    }
 
     // Comet label (Earth observer mode only): follows the comet body wherever its frame is,
     // spawned hidden.
@@ -727,6 +731,20 @@ impl SimulationContext {
       .dust_haze_detail
       .store(d, core::sync::atomic::Ordering::Relaxed);
     Some(d)
+  }
+
+  /// Restarts every view's adaptive dust quality feedback cold from the next rendered frame
+  /// (`SceneContext::dust_feedback_gen`): the split depth and the volume and EWA biases are
+  /// measured again on the current view. For a view that just settled after a discontinuity (a
+  /// restored save once its cameras are applied). Returns the new generation, or `None` without
+  /// the scene.
+  pub fn reset_dust_view_feedback(&self, scene_id: u64) -> Option<u32> {
+    let scene_arc = self.scenes.read().get_scene(scene_id)?;
+    let g = scene_arc
+      .read()
+      .dust_feedback_gen
+      .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    Some(g.wrapping_add(1))
   }
 
   /// Sets the dust temporal reuse tolerance in px ("Temporal reuse tolerance": 0 = off, every
@@ -1182,6 +1200,31 @@ impl SimulationContext {
     if guard
       .scene
       .with_component_mut(camera, |m: &mut crate::scene::CameraRenderMaskComponent| *m = component)
+      .is_none()
+    {
+      let _ = guard.scene.add_component(camera, component);
+    }
+    true
+  }
+
+  /// Sets how the camera `camera_entity` (FFI id) shades meshes (`CameraShadingComponent`, bits
+  /// `crate::scene::CAMERA_SHADING_*`). Synchronous; false when the scene is missing or the entity
+  /// has no camera.
+  pub fn set_camera_shading(&self, scene_id: u64, camera_entity: u64, flags: u32) -> bool {
+    let Some(scene_arc) = self.scenes.read().get_scene(scene_id) else {
+      return false;
+    };
+    let guard = scene_arc.read();
+    let camera: EntityId = slotmap::KeyData::from_ffi(camera_entity).into();
+    if guard.scene.has_component::<crate::scene::CameraComponent>(camera)
+      != crate::scene::HasComponentResultEnum::EntityHasComponent
+    {
+      return false;
+    }
+    let component = crate::scene::CameraShadingComponent(flags);
+    if guard
+      .scene
+      .with_component_mut(camera, |m: &mut crate::scene::CameraShadingComponent| *m = component)
       .is_none()
     {
       let _ = guard.scene.add_component(camera, component);

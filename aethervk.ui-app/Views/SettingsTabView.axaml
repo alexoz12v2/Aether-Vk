@@ -17,6 +17,15 @@
     <vm:DesignSettingsTabViewModel />
   </Design.DataContext>
 
+  <!-- NumericUpDown has no automation peer: only its text box reaches UI Automation, so it
+  carries the control's AutomationId -->
+  <UserControl.Styles>
+    <Style Selector="NumericUpDown /template/ TextBox">
+      <Setter Property="AutomationProperties.AutomationId"
+              Value="{Binding $parent[NumericUpDown].(AutomationProperties.AutomationId)}" />
+    </Style>
+  </UserControl.Styles>
+
   <!-- Inject theme resources so DynamicResource keys resolve in the previewer.
   Uses a relative path (not avares://) because the designer host resolves
   from disk — avares:// is only available in the fully running assembly. -->
@@ -177,7 +186,7 @@
       <!-- Comet Appearance: aesthetic only (simulation unaffected). Display mode, mesh and
            texture wiring lock while the simulation plays; the placement offset stays live. -->
       <Border Classes="accordion">
-        <Expander Header="{Binding StrCometAppearance}">
+        <Expander Header="{Binding StrCometAppearance}" AutomationProperties.AutomationId="CometAppearanceSection">
           <StackPanel Spacing="12" Margin="12,8,12,12">
             <TextBlock Text="{Binding StrAppearanceLockedHint}"
                        IsVisible="{Binding CometAppearance.IsWiringLocked}"
@@ -192,7 +201,7 @@
                           IsEnabled="{Binding CometAppearance.IsWiringEnabled}">
                 <RadioButton Content="{Binding StrDisplayModeDefault}"
                              IsChecked="{Binding CometAppearance.IsDefaultMode}" />
-                <RadioButton Content="{Binding StrDisplayModeCustom}"
+                <RadioButton Content="{Binding StrDisplayModeCustom}" AutomationProperties.AutomationId="CometDisplayModeCustom"
                              IsChecked="{Binding CometAppearance.IsCustomMode}"
                              IsEnabled="{Binding CometAppearance.IsCustomModeAvailable}"
                              ToolTip.Tip="{Binding StrNoMeshesHint}"
@@ -213,6 +222,7 @@
                       IsEnabled="{Binding CometAppearance.IsWiringEnabled}">
                   <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding StrMesh}" />
                   <ComboBox Grid.Row="0" Grid.Column="2" HorizontalAlignment="Stretch"
+                            AutomationProperties.AutomationId="CometMeshPicker"
                             ItemsSource="{Binding CometAppearance.MeshOptions}"
                             SelectedItem="{Binding CometAppearance.SelectedMesh}">
                     <ComboBox.ItemTemplate>
@@ -300,7 +310,7 @@
       <!-- Billboards: imported textures in their own desktop windows (compare a real image with the
            simulated dust). Edits here and drags of the windows go through DesktopBillboardService. -->
       <Border Classes="accordion">
-        <Expander Header="{Binding StrBillboards}">
+        <Expander Header="{Binding StrBillboards}" AutomationProperties.AutomationId="BillboardsSection">
           <StackPanel Spacing="12" Margin="12,8,12,12">
             <TextBlock Text="{Binding StrBillboardsHint}" TextWrapping="Wrap" />
             <TextBlock Text="{Binding StrBillboardsNoTextures}" TextWrapping="Wrap"
@@ -355,16 +365,16 @@
                       <TextBlock Grid.Row="2" Grid.Column="0"
                                  Text="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrBillboardPosition}" />
                       <UniformGrid Grid.Row="2" Grid.Column="2" Columns="2" ColumnSpacing="6">
-                        <NumericUpDown Value="{Binding X}" Increment="1" FormatString="F0" ToolTip.Tip="X" />
-                        <NumericUpDown Value="{Binding Y}" Increment="1" FormatString="F0" ToolTip.Tip="Y" />
+                        <NumericUpDown AutomationProperties.AutomationId="BillboardX" Value="{Binding X}" Increment="1" FormatString="F0" ToolTip.Tip="X" />
+                        <NumericUpDown AutomationProperties.AutomationId="BillboardY" Value="{Binding Y}" Increment="1" FormatString="F0" ToolTip.Tip="Y" />
                       </UniformGrid>
 
                       <TextBlock Grid.Row="4" Grid.Column="0"
                                  Text="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrBillboardSize}" />
                       <StackPanel Grid.Row="4" Grid.Column="2" Spacing="4">
                         <UniformGrid Columns="2" ColumnSpacing="6">
-                          <NumericUpDown Value="{Binding Width}" Minimum="16" Increment="1" FormatString="F0" ToolTip.Tip="W" />
-                          <NumericUpDown Value="{Binding Height}" Minimum="16" Increment="1" FormatString="F0" ToolTip.Tip="H" />
+                          <NumericUpDown AutomationProperties.AutomationId="BillboardWidth" Value="{Binding Width}" Minimum="16" Increment="1" FormatString="F0" ToolTip.Tip="W" />
+                          <NumericUpDown AutomationProperties.AutomationId="BillboardHeight" Value="{Binding Height}" Minimum="16" Increment="1" FormatString="F0" ToolTip.Tip="H" />
                         </UniformGrid>
                         <CheckBox IsChecked="{Binding IsAspectLocked}"
                                   Content="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrBillboardAspectLock}" />
@@ -372,7 +382,7 @@
 
                       <TextBlock Grid.Row="6" Grid.Column="0"
                                  Text="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrBillboardAlpha}" />
-                      <Slider Grid.Row="6" Grid.Column="2" Minimum="0" Maximum="1" Value="{Binding Alpha}" />
+                      <Slider Grid.Row="6" Grid.Column="2" AutomationProperties.AutomationId="BillboardAlpha" Minimum="0" Maximum="1" SmallChange="0.05" LargeChange="0.1" Value="{Binding Alpha}" />
 
                       <TextBlock Grid.Row="8" Grid.Column="0"
                                  Text="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrBillboardRotation}" />
@@ -380,7 +390,7 @@
                                                 IsWrapped="True" WrapMin="-180" WrapMax="180"
                                                 Step="1" DragSensitivity="2.0" DisplayFormat="F1" />
 
-                      <CheckBox Grid.Row="10" Grid.Column="2" IsChecked="{Binding IsVisible}"
+                      <CheckBox Grid.Row="10" Grid.Column="2" AutomationProperties.AutomationId="BillboardVisible" IsChecked="{Binding IsVisible}"
                                 Content="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrBillboardVisible}" />
 
                       <Button Grid.Row="12" Grid.Column="2" HorizontalAlignment="Right"
@@ -493,9 +503,9 @@
         <ItemsControl.ItemTemplate>
           <DataTemplate DataType="vm:ViewportSettingsViewModel">
             <Border Classes="accordion" Margin="0,0,0,16">
-              <Expander Header="{Binding ViewportName}">
+              <Expander Header="{Binding ViewportName}" AutomationProperties.AutomationId="ViewportSettingsSection">
                 <StackPanel Spacing="12" Margin="12,8,12,12">
-                  <TextBlock Text="{ReflectionBinding $parent[UserControl].DataContext.CameraModeName, StringFormat='Mode: {0}'}"
+                  <TextBlock AutomationProperties.AutomationId="CameraModeText" Text="{ReflectionBinding $parent[UserControl].DataContext.CameraModeName, StringFormat='Mode: {0}'}"
                              Foreground="{DynamicResource Accent.Primary}"
                              FontWeight="SemiBold" />
 
@@ -503,9 +513,9 @@
                   <Grid ColumnDefinitions="Auto,16,*">
                     <TextBlock Grid.Column="0" Text="Type" />
                     <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="16">
-                      <RadioButton Content="Perspective"
+                      <RadioButton AutomationProperties.AutomationId="ProjectionPerspective" Content="Perspective"
                                    IsChecked="{Binding IsPerspective}" />
-                      <RadioButton Content="Orthographic"
+                      <RadioButton AutomationProperties.AutomationId="ProjectionOrthographic" Content="Orthographic"
                                    IsChecked="{Binding IsOrthographic}" />
                     </StackPanel>
                   </Grid>
@@ -515,7 +525,7 @@
                         RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto"
                         IsVisible="{Binding IsPerspective}">
                     <TextBlock Grid.Row="0" Grid.Column="0" Text="FOV" VerticalAlignment="Center" />
-                    <controls:UnboundedSlider Grid.Row="0" Grid.Column="2"
+                    <controls:UnboundedSlider Grid.Row="0" Grid.Column="2" AutomationProperties.AutomationId="FovSlider"
                                               Value="{Binding PerspFovDisplay}"
                                               HasBounds="True"
                                               MinBound="{Binding PerspFovMin}"
@@ -525,7 +535,7 @@
                                               HorizontalAlignment="Stretch" />
 
                     <TextBlock Grid.Row="2" Grid.Column="0" Text="Units" VerticalAlignment="Center" />
-                    <ComboBox Grid.Row="2" Grid.Column="2"
+                    <ComboBox Grid.Row="2" Grid.Column="2" AutomationProperties.AutomationId="FovUnitPicker"
                               HorizontalAlignment="Stretch"
                               ItemsSource="{Binding FovUnits}"
                               SelectedIndex="{Binding FovUnitIndex}" />
@@ -566,7 +576,7 @@
                         RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto"
                         IsVisible="{Binding IsOrthographic}">
                     <TextBlock Grid.Row="0" Grid.Column="0" Text="Half-Width" VerticalAlignment="Center" />
-                    <controls:UnboundedSlider Grid.Row="0" Grid.Column="2"
+                    <controls:UnboundedSlider Grid.Row="0" Grid.Column="2" AutomationProperties.AutomationId="OrthoHalfWidthSlider"
                                               Value="{Binding OrthoHalfWidthDisplay}"
                                               HasBounds="True"
                                               MinBound="{Binding OrthoExtentMin}"
@@ -578,7 +588,7 @@
                                               HorizontalAlignment="Stretch" />
 
                     <TextBlock Grid.Row="2" Grid.Column="0" Text="Half-Height" VerticalAlignment="Center" />
-                    <controls:UnboundedSlider Grid.Row="2" Grid.Column="2"
+                    <controls:UnboundedSlider Grid.Row="2" Grid.Column="2" AutomationProperties.AutomationId="OrthoHalfHeightSlider"
                                               Value="{Binding OrthoHalfHeightDisplay}"
                                               HasBounds="True"
                                               MinBound="{Binding OrthoExtentMin}"
@@ -590,7 +600,7 @@
                                               HorizontalAlignment="Stretch" />
 
                     <TextBlock Grid.Row="4" Grid.Column="0" Text="Units" VerticalAlignment="Center" />
-                    <ComboBox Grid.Row="4" Grid.Column="2"
+                    <ComboBox Grid.Row="4" Grid.Column="2" AutomationProperties.AutomationId="OrthoUnitPicker"
                               HorizontalAlignment="Stretch"
                               ItemsSource="{Binding DistanceUnits}"
                               SelectedIndex="{Binding OrthoUnitIndex}" />
@@ -620,10 +630,17 @@
                                               HorizontalAlignment="Stretch" />
 
                     <StackPanel Grid.Row="10" Grid.Column="0" Grid.ColumnSpan="3" Orientation="Vertical" Spacing="8">
-                      <CheckBox Content="Keep Proportions Locked" IsChecked="{Binding IsOrthoProportionsLocked}" />
-                      <Button Content="Restore Proportions" Command="{Binding RestoreOrthoProportionsCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                      <CheckBox AutomationProperties.AutomationId="OrthoProportionsLock" Content="Keep Proportions Locked" IsChecked="{Binding IsOrthoProportionsLocked}" />
+                      <Button AutomationProperties.AutomationId="RestoreOrthoProportionsButton" Content="Restore Proportions" Command="{Binding RestoreOrthoProportionsCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
                     </StackPanel>
                   </Grid>
+
+                  <!-- ── CometOrbiting (comet debug): physical nucleus lighting ── -->
+                  <CheckBox AutomationProperties.AutomationId="PhysicalLightingToggle"
+                            Content="Physical lighting"
+                            IsVisible="{Binding IsCometOrbitingMode}"
+                            IsChecked="{Binding IsPhysicalLighting}"
+                            ToolTip.Tip="Direct sunlight only, at the comet's heliocentric distance ((1 AU / r)², exposed so a white surface facing the Sun at 1 AU is white); no ambient fill. The surface the Sun does not reach is drawn in dark indigo." />
 
                   <!-- ── UpZenith: snap above a body (animation only, no tracking) ── -->
                   <StackPanel Spacing="6" IsVisible="{Binding IsUpZenithMode}">
@@ -652,7 +669,7 @@
                     <!-- Latitude -->
                     <Grid ColumnDefinitions="Auto,16,*">
                       <TextBlock Grid.Column="0" Text="Latitude (°N)" />
-                      <controls:UnboundedSlider Grid.Column="2"
+                      <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="ObserverLatSlider"
                                                 Value="{Binding EarthObserverLatDeg}"
                                                 HasBounds="True" MinBound="-90" MaxBound="90"
                                                 Step="0.1"
@@ -662,7 +679,7 @@
                     <!-- Longitude -->
                     <Grid ColumnDefinitions="Auto,16,*">
                       <TextBlock Grid.Column="0" Text="Longitude (°E)" />
-                      <controls:UnboundedSlider Grid.Column="2"
+                      <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="ObserverLonSlider"
                                                 Value="{Binding EarthObserverLonDeg}"
                                                 HasBounds="True" MinBound="-180" MaxBound="180"
                                                 Step="0.1"
@@ -672,32 +689,32 @@
                     <!-- Look Direction -->
                     <TextBlock Text="Look Direction" FontWeight="SemiBold" />
                     <Grid RowDefinitions="Auto, Auto, Auto, Auto, Auto, 8, Auto">
-                      <RadioButton Grid.Row="0" Content="Free look"
+                      <RadioButton Grid.Row="0" AutomationProperties.AutomationId="OrientFree" Content="Free look"
                                    ToolTip.Tip="Drag to look around; the direction stays fixed in space"
                                    IsChecked="{Binding EarthObserverOrientationMode,
                                    Converter={StaticResource EnumToBool},
                                    ConverterParameter=Free}" />
-                      <RadioButton Grid.Row="1" Content="Comet lock-in (telescope)"
+                      <RadioButton Grid.Row="1" AutomationProperties.AutomationId="OrientCometLockIn" Content="Comet lock-in (telescope)"
                                    ToolTip.Tip="Aims at the comet, then turns with the Earth like a telescope on the ground"
                                    IsChecked="{Binding EarthObserverOrientationMode,
                                    Converter={StaticResource EnumToBool},
                                    ConverterParameter=CometLockIn}" />
-                      <RadioButton Grid.Row="2" Content="Comet tracking"
+                      <RadioButton Grid.Row="2" AutomationProperties.AutomationId="OrientCometTracking" Content="Comet tracking"
                                    ToolTip.Tip="Follows the comet; faces the horizon where it will rise while it is below it"
                                    IsChecked="{Binding EarthObserverOrientationMode,
                                    Converter={StaticResource EnumToBool},
                                    ConverterParameter=CometTracking}" />
-                      <RadioButton Grid.Row="3" Content="Sun lock-in (telescope)"
+                      <RadioButton Grid.Row="3" AutomationProperties.AutomationId="OrientSunLockIn" Content="Sun lock-in (telescope)"
                                    ToolTip.Tip="Aims at the Sun, then turns with the Earth like a telescope on the ground"
                                    IsChecked="{Binding EarthObserverOrientationMode,
                                    Converter={StaticResource EnumToBool},
                                    ConverterParameter=SunLockIn}" />
-                      <RadioButton Grid.Row="4" Content="Sun tracking"
+                      <RadioButton Grid.Row="4" AutomationProperties.AutomationId="OrientSunTracking" Content="Sun tracking"
                                    ToolTip.Tip="Follows the Sun; faces the horizon where it will rise while it is below it"
                                    IsChecked="{Binding EarthObserverOrientationMode,
                                    Converter={StaticResource EnumToBool},
                                    ConverterParameter=SunTracking}" />
-                      <Button Grid.Row="6" Content="Restore preset projection"
+                      <Button Grid.Row="6" AutomationProperties.AutomationId="RestorePresetButton" Content="Restore preset projection"
                               Command="{Binding RestoreEarthPresetProjectionCommand}"
                               ToolTip.Tip="Re-applies the lock-in / tracking projection where the target spans 10% of the view"
                               HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />

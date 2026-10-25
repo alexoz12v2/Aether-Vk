@@ -611,6 +611,34 @@ public class CameraServiceTests
   }
 
   /// <summary>
+  /// Jet editing: the camera enters CometOrbiting facing the site's body-frame direction, and a
+  /// later site (already orbiting) turns it there keeping the distance.
+  /// </summary>
+  [Fact]
+  public void FaceNucleusSite_EntersCometOrbiting_FacingTheSite()
+  {
+    var (service, _, _) = BuildService();
+    const System.Reflection.BindingFlags Private =
+      System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+    var cometConfig = (CometConfigService)typeof(CameraService).GetField("_cometConfigService", Private)!.GetValue(service)!;
+    ((System.Reactive.Subjects.BehaviorSubject<bool>)typeof(CometConfigService)
+      .GetField("_isCommittedSubject", Private)!.GetValue(cometConfig)!).OnNext(true);
+
+    float lat = 30f * (float)Math.PI / 180f, lon = 45f * (float)Math.PI / 180f;
+    service.FaceNucleusSite(lat, lon);
+    Assert.Equal(CameraMode.CometOrbiting, service.CurrentMode);
+    var expected = new Vector3((float)(Math.Cos(lat) * Math.Cos(lon)), (float)(Math.Cos(lat) * Math.Sin(lon)), (float)Math.Sin(lat));
+    var offset = service.GetOrbitOffset();
+    Assert.True(Vector3.Distance(Vector3.Normalize(offset), expected) < 1e-5f, $"offset {offset}, expected along {expected}");
+
+    float distance = offset.Length();
+    service.FaceNucleusSite(0f, (float)Math.PI);
+    offset = service.GetOrbitOffset();
+    Assert.Equal(distance, offset.Length(), 6);
+    Assert.True(Vector3.Distance(Vector3.Normalize(offset), -Vector3.UnitX) < 1e-5f, $"offset {offset}, expected along -X");
+  }
+
+  /// <summary>
   /// When entering CometOrbiting (deferred projection fires after ModeSwitchAnimationSeconds),
   /// the ortho window must have halfHeight = 3 × nucleusRadius.
   /// With nucleus radius = 0 (unknown), the 50 km default is used → halfHeight = 150 km / AuToKm.
@@ -1232,6 +1260,35 @@ public class CameraServiceTests
     Assert.Equal(2, calls);
   }
 
+  /// Physical lighting reaches the runtime only in CometOrbiting, and is sent on change.
+  [Fact]
+  public void Shading_PhysicalOnlyInCometOrbiting()
+  {
+    Assert.Equal(0u, CameraService.ShadingFor(CameraMode.CometOrbiting, false));
+    Assert.Equal(CameraService.ShadingPhysical, CameraService.ShadingFor(CameraMode.CometOrbiting, true));
+    Assert.Equal(0u, CameraService.ShadingFor(CameraMode.UpZenith, true));
+    Assert.Equal(0u, CameraService.ShadingFor(CameraMode.EarthPosition, true));
+
+    var (service, runtime, _) = BuildService();
+    var sent = new List<(ulong, uint)>();
+    runtime
+      .Setup(r => r.SetCameraShading(It.IsAny<ulong>(), It.IsAny<uint>()))
+      .Callback<ulong, uint>((c, f) => sent.Add((c, f)))
+      .Returns(true);
+    var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+    var cometConfig = (CometConfigService)typeof(CameraService).GetField("_cometConfigService", flags)!.GetValue(service)!;
+    ((System.Reactive.Subjects.BehaviorSubject<bool>)typeof(CometConfigService)
+      .GetField("_isCommittedSubject", flags)!.GetValue(cometConfig)!).OnNext(true);
+
+    service.PhysicalLighting = true; // UpZenith: flags stay 0 (resent: the loose mock refused the first send)
+    service.SetCameraMode(CameraMode.CometOrbiting);
+    service.PhysicalLighting = false;
+    service.PhysicalLighting = true;
+    service.SetCameraMode(CameraMode.UpZenith);
+    var p = CameraService.ShadingPhysical;
+    Assert.Equal(new List<(ulong, uint)> { (100UL, 0u), (100UL, p), (100UL, 0u), (100UL, p), (100UL, 0u) }, sent);
+  }
+
   /// The savefile's view of a viewport camera: mode, observer site and orientation.
   [Fact]
   public void PersistedState_ReportsModeAndObserverSettings()
@@ -1263,7 +1320,11 @@ public class CameraServiceTests
       EarthObserverOrientationMode.Free,
       [0, 0, 0, 1], [0, 0, 0, 1]);
     runtime.Invocations.Clear();
+    (float LatDeg, float LonDeg) site = default;
+    using var _site = service.EarthObserverSiteChanged.Subscribe(s => site = s);
     service.RestorePersistedState(saved);
+    // the Settings tab mirrors the restored site instead of keeping its stale slider values
+    Assert.Equal((-33.5f, 151.25f), site);
     runtime.Verify(r => r.AddCameraAnimation(100UL, It.Is<AnimationTarget>(t =>
       Math.Abs(t.PosX - 0.25) < 1e-12 && Math.Abs(t.PosY + 0.5) < 1e-12 && Math.Abs(t.PosZ - 0.125) < 1e-12
       && t.PivotEntityId == null)), Times.Once);
@@ -1277,6 +1338,29 @@ public class CameraServiceTests
     runtime.Invocations.Clear();
     service.SetCameraMode(CameraMode.UpZenith);
     runtime.Verify(r => r.AddCameraAnimation(100UL, It.Is<AnimationTarget>(t => Math.Abs(t.PosX - 0.25) < 1e-12)), Times.Never);
+  }
+
+  /// The settings panel's units and proportions lock live on the camera: a savefile records and
+  /// restores them (the reopened N2 save showed its 217 400 km half-width as 0.00145 AU).
+  [Fact]
+  public void DisplayState_IsPersisted_AndRestored()
+  {
+    var (service, _, _) = BuildService();
+    Assert.Equal(ViewportDisplayState.Default, service.GetPersistedState().Display);
+    var seen = new List<ViewportDisplayState>();
+    using var _sub = service.DisplayStateChanged.Subscribe(seen.Add);
+    service.IsOrthoProportionsLocked = false;
+    Assert.Equal(new ViewportDisplayState(0, 0, false), service.GetPersistedState().Display);
+
+    var (reopened, _, _) = BuildService();
+    var saved = service.GetPersistedState() with { Display = new ViewportDisplayState(1, 2, false) };
+    reopened.RestorePersistedState(saved);
+    Assert.Equal(new ViewportDisplayState(1, 2, false), reopened.DisplayState);
+    Assert.False(reopened.IsOrthoProportionsLocked);
+    // an older save without the display choices keeps the current ones
+    reopened.RestorePersistedState(saved with { Display = null });
+    Assert.Equal(new ViewportDisplayState(1, 2, false), reopened.DisplayState);
+    Assert.Equal([ViewportDisplayState.Default, new ViewportDisplayState(0, 0, false)], seen);
   }
 
   /// Decommitting the comet while snapped above it in UpZenith flies back above the Sun.

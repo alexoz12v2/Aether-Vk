@@ -174,6 +174,69 @@ namespace AetherVk.Logic.ViewModels.Debug
             }
         }
 
+        /// <inheritdoc cref="_dustGpuMs"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public double DustGpuMs
+        {
+            get => _dustGpuMs;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<double>.Default.Equals(_dustGpuMs, value))
+                {
+                    OnDustGpuMsChanging(value);
+                    OnDustGpuMsChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.DustGpuMs);
+                    _dustGpuMs = value;
+                    OnDustGpuMsChanged(value);
+                    OnDustGpuMsChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.DustGpuMs);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_dustSplatMs"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public double DustSplatMs
+        {
+            get => _dustSplatMs;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<double>.Default.Equals(_dustSplatMs, value))
+                {
+                    OnDustSplatMsChanging(value);
+                    OnDustSplatMsChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.DustSplatMs);
+                    _dustSplatMs = value;
+                    OnDustSplatMsChanged(value);
+                    OnDustSplatMsChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.DustSplatMs);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_dustPropagateMs"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public double DustPropagateMs
+        {
+            get => _dustPropagateMs;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<double>.Default.Equals(_dustPropagateMs, value))
+                {
+                    OnDustPropagateMsChanging(value);
+                    OnDustPropagateMsChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.DustPropagateMs);
+                    _dustPropagateMs = value;
+                    OnDustPropagateMsChanged(value);
+                    OnDustPropagateMsChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.DustPropagateMs);
+                }
+            }
+        }
+
         /// <inheritdoc cref="_dotNetHeapMb"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
@@ -434,6 +497,72 @@ namespace AetherVk.Logic.ViewModels.Debug
         /// <remarks>This method is invoked right after the value of <see cref="GpuExecMs"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnGpuExecMsChanged(double oldValue, double newValue);
+        /// <summary>Executes the logic for when <see cref="DustGpuMs"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="DustGpuMs"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnDustGpuMsChanging(double value);
+        /// <summary>Executes the logic for when <see cref="DustGpuMs"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="DustGpuMs"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnDustGpuMsChanging(double oldValue, double newValue);
+        /// <summary>Executes the logic for when <see cref="DustGpuMs"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="DustGpuMs"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnDustGpuMsChanged(double value);
+        /// <summary>Executes the logic for when <see cref="DustGpuMs"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="DustGpuMs"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnDustGpuMsChanged(double oldValue, double newValue);
+        /// <summary>Executes the logic for when <see cref="DustSplatMs"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="DustSplatMs"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnDustSplatMsChanging(double value);
+        /// <summary>Executes the logic for when <see cref="DustSplatMs"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="DustSplatMs"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnDustSplatMsChanging(double oldValue, double newValue);
+        /// <summary>Executes the logic for when <see cref="DustSplatMs"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="DustSplatMs"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnDustSplatMsChanged(double value);
+        /// <summary>Executes the logic for when <see cref="DustSplatMs"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="DustSplatMs"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnDustSplatMsChanged(double oldValue, double newValue);
+        /// <summary>Executes the logic for when <see cref="DustPropagateMs"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="DustPropagateMs"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnDustPropagateMsChanging(double value);
+        /// <summary>Executes the logic for when <see cref="DustPropagateMs"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="DustPropagateMs"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnDustPropagateMsChanging(double oldValue, double newValue);
+        /// <summary>Executes the logic for when <see cref="DustPropagateMs"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="DustPropagateMs"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnDustPropagateMsChanged(double value);
+        /// <summary>Executes the logic for when <see cref="DustPropagateMs"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="DustPropagateMs"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnDustPropagateMsChanged(double oldValue, double newValue);
         /// <summary>Executes the logic for when <see cref="DotNetHeapMb"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="DotNetHeapMb"/> is changed.</remarks>

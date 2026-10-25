@@ -5,6 +5,7 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using AetherVk.Logic.Services;
 using AetherVk.Logic.Tests.Mocks;
+using AetherVk.Logic.Utils;
 using AetherVk.Logic.ViewModels;
 using Moq;
 using Xunit;
@@ -58,6 +59,39 @@ public class SessionRestoredTabTests
     session.ProposedStartEpoch = "2027-01-01T00:00:00Z";
     session.NotifyRestored();
     Assert.Equal("2026-01-01T00:00:00Z", vm.StartEpoch);
+  }
+
+  /// A reopened save sits at its saved epoch, paused: the restored timeline shows the engine's
+  /// clock (progress, the viewport's date) and the saved speed, so Play is enabled.
+  [Fact]
+  public void TimelineTab_ShowsTheClockAndTheSavedSpeed_OnRestored()
+  {
+    var schedulers = new TestSchedulerProvider();
+    var runtime = new Mock<INativeRuntimeService>();
+    var config = new CometConfigService(runtime.Object, schedulers);
+    var timeline = new TimelineService(runtime.Object, schedulers, config, new BreadcrumbService());
+    var session = new TimelineSession();
+    var vm = new TimelineTabViewModel(Translation().Object, schedulers, SessionService(session).Object,
+      SessionService(new CometSession()).Object, timeline, runtime.Object, new Mock<ICometMessenger>().Object);
+    Assert.Null(vm.SelectedSpeed);
+    Assert.Equal(0.0, vm.Progress);
+
+    // the save: committed 2024-07-15 .. 2024-08-15, the clock at the end, 1 day/s
+    session.CommittedStartEpoch = "2024-07-15T00:00:00Z";
+    session.CommittedEndEpoch = "2024-08-15T00:00:00Z";
+    session.Speed = (int)TimelineTabViewModel.SimulationSpeed.OneDayPerSec;
+    TimeUtils.TryParseIso8601(session.CommittedEndEpoch, out var end);
+    var (cent, ns) = TimeUtils.ToTaiParts(end);
+    runtime.Setup(r => r.GetSimulationClock(out cent, out ns)).Returns(true);
+    session.NotifyRestored();
+
+    Assert.Equal(TimelineTabViewModel.SimulationSpeed.OneDayPerSec, vm.SelectedSpeed);
+    Assert.True(vm.PlayPauseCommand.CanExecute(null));
+    Assert.Equal(100.0, vm.Progress, 6);
+    Assert.StartsWith("2024-08-1", session.CurrentEpochString);
+    // a speed the user picks is kept in the session (the next save records it)
+    vm.SelectedSpeed = TimelineTabViewModel.SimulationSpeed.OneHourPerSec;
+    Assert.Equal((int)TimelineTabViewModel.SimulationSpeed.OneHourPerSec, session.Speed);
   }
 
   [Fact]

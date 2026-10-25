@@ -186,6 +186,23 @@ void main() {
     }
 
     vec3 diffuse = orenNayar(V, lightDir, N, albedo, roughness);
+
+    // Physical shading (sunColor.w = 2, the view's CAMERA_SHADING_PHYSICAL): direct sunlight only,
+    // sunColor.rgb the irradiance relative to 1 AU, (1 AU / r)², exposed so that a white
+    // Lambertian surface facing the Sun at 1 AU is white (the BRDF's 1/pi cancelled); no ambient
+    // or sky fill. Fragments the Sun does not reach are drawn in a debug tint, not black on black.
+    if (scene.sunColor.w > 1.5) {
+        vec3 emissionP = mat.emissiveColor.rgb * max(mat.emissiveColor.a, 0.0);
+        if (useEmissive) emissionP *= texture(emissivePaintMap, inUV).rgb;
+        vec3 lit = dot(lightDir, N) > 0.0
+            ? diffuse * 3.14159265 * scene.sunColor.xyz * ao
+            : vec3(0.03, 0.01, 0.10);
+        outColor = vec4(lit + emissionP, 1.0);
+        float localDistP = rteDistanceOffset(push.object.centerDist, push.object.invCenterLen, inLocalOffset);
+        outGlobalDepth = vec2(float(push.layerIndex), localDistP);
+        return;
+    }
+
     vec3 R = reflect(-V, N);
 
     vec3 irradiance = texture(skyMap, octEncode(N)).rgb * 0.02;

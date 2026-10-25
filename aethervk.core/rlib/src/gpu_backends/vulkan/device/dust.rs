@@ -382,6 +382,24 @@ pub struct DustViewHost {
   pub white: f32,
   /// median dust texel of the last measured frame (same units), 0 = none
   pub p50: f32,
+  /// the white point last logged (`[Dust exposure]`, on a quarter-stop move)
+  white_logged: f32,
+  /// the readback being absorbed: (its regime, it reused the previous image), for that log
+  absorb_tag: (u8, bool),
+  /// the readback being absorbed shows a refined image (`dust::dust_refine_factor`): its EWA work
+  /// is over the budget by design and does not move the EWA bias
+  pub absorb_refined: bool,
+  /// static refinement: EWA bias levels below the feedback's this view draws at while its draw
+  /// inputs stay unchanged (0 = the budget's bias)
+  pub refine: u32,
+  /// frames since the inputs last changed or the refinement last stepped
+  refine_static: u32,
+  /// the newest readback's `(EWA bias, texels)`: what the image the view now shows cost
+  pub refine_seen: Option<(u32, u64)>,
+  /// the last drawn image was refined (a reused frame shows it)
+  image_refined: bool,
+  /// per readback slot: that frame showed a refined image
+  slot_refined: [bool; DUST_READBACK_SLOTS],
   /// largest packet peak optical depth per px² of the last measured frame (raw exposure units,
   /// `dust::PYR_TAU_MAX`): the fixed-point unit follows it, so no view measures as empty
   pub tau_max: f32,
@@ -511,6 +529,9 @@ pub struct DustViewHost {
   pub targets: Option<TargetCounters>,
   /// full-draw frames whose biases were restored ([`Device::dust_budget_frame_kind`])
   pub restored: u32,
+  /// the scene's dust feedback generation this host's feedback was measured under
+  /// (`SceneContext::dust_feedback_gen`, [`Device::dust_sync_feedback_gen`])
+  pub feedback_gen: u32,
 }
 
 /// One regime's feedback state ([`DustViewHost::absorb`]: the split depth and its over-budget
@@ -888,6 +909,59 @@ impl DustViewHost {
   pub fn budget_shift(&self) -> u32 {
     self.budget.as_ref().map_or(0, |b| b.knobs().budget_shift)
   }
+
+  /// Forgets what the feedback learned: the split depth, the volume and EWA biases and their
+  /// memory return to a cold start, the readbacks in flight are dropped and the next frame draws.
+  /// After a discontinuity (a restored save, a seek) the feedback otherwise keeps what a transient
+  /// frame measured: the whole history appears in one tick, while the camera still moves to its
+  /// restored pose, the EWA bias climbed 0 → 5 against the live session's 3, and the band's
+  /// hysteresis kept it there (blocky dust after Open). The white point, the unit and the queue
+  /// estimates stay: they follow each readback.
+  pub fn reset_feedback(&mut self) {
+    let cold = FeedbackSet::default();
+    self.split_depth = cold.split_depth;
+    self.split_depth_over = cold.split_depth_over;
+    self.volume_bias = cold.volume_bias;
+    self.ewa_bias = cold.ewa_bias;
+    self.fb_memory = cold;
+    self.fb_full = cold;
+    self.fb_cad = None;
+    self.budget = None;
+    self.build_rate = None;
+    self.slot_valid = [false; DUST_READBACK_SLOTS];
+    self.drawn = None;
+    self.refine = 0;
+    self.refine_static = 0;
+    self.refine_seen = None;
+  }
+
+  /// Static refinement's step for a frame about to begin: `same_inputs` (its draw inputs equal the
+  /// previous frame's) and the knob `factor` (`dust::dust_refine_factor`, 0 = off). A changed
+  /// frame returns to the budget's bias at once. After [`dust::DUST_REFINE_AFTER_FRAMES`] unchanged
+  /// frames, once a readback of the image now shown is in, one level finer when that image's
+  /// texels × 4 (a level's step, at most) stay within `factor` EWA budgets. Returns whether it
+  /// stepped (the frame then draws).
+  pub fn refine_update(&mut self, same_inputs: bool, factor: u32) -> bool {
+    if !same_inputs || factor == 0 {
+      self.refine = 0;
+      self.refine_static = 0;
+      return false;
+    }
+    self.refine_static = self.refine_static.saturating_add(1);
+    let shown = self.ewa_bias.saturating_sub(self.refine);
+    if self.refine_static < dust::DUST_REFINE_AFTER_FRAMES || shown == 0 {
+      return false;
+    }
+    let budget = dust::DUST_EWA_FRAME_BUDGET as u64;
+    match self.refine_seen {
+      Some((bias, texels)) if bias == shown && texels.saturating_mul(4) <= factor as u64 * budget => {
+        self.refine += 1;
+        self.refine_static = 0;
+        true
+      }
+      _ => false,
+    }
+  }
 }
 
 /// how long the pyramid download (diagnostics, `download_dust_pyramid`) waits for the graphics
@@ -908,6 +982,14 @@ impl Default for DustViewHost {
     Self {
       white: dust::mag_arcsec2_to_white(dust::DUST_WHITE_SEED_MAG),
       p50: 0.0,
+      white_logged: 0.0,
+      absorb_tag: (0, false),
+      absorb_refined: false,
+      refine: 0,
+      refine_static: 0,
+      refine_seen: None,
+      image_refined: false,
+      slot_refined: [false; DUST_READBACK_SLOTS],
       tau_max: 0.0,
       frame: 0,
       slot_unit: [0.0; DUST_READBACK_SLOTS],
@@ -972,6 +1054,7 @@ impl Default for DustViewHost {
       last_regime: 0,
       targets: None,
       restored: 0,
+      feedback_gen: 0,
     }
   }
 }
@@ -992,9 +1075,47 @@ impl DustViewHost {
   /// Folds one frame's header and white-point level (recorded with `unit`) into the white
   /// point, the median and the unit.
   pub fn absorb(&mut self, header: &[u32], level: &[u32], texel_px: u32, unit: f32) {
-    if let Some((p99, p50)) = dust::white_point_from_level(level, texel_px, unit) {
+    // a flat field (`dust::level_is_flat`) measures no white point: the exposure keeps its own
+    let measured = if dust::level_is_flat(level) {
+      None
+    } else {
+      dust::white_point_from_level(level, texel_px, unit)
+    };
+    if let Some((p99, p50)) = measured {
       self.white = dust::adapt_white(self.white, p99);
       self.p50 = dust::adapt_white(self.p50, p50);
+      let moved = !(self.white_logged > 0.0)
+        || (dust::exposure_ev(self.white) - dust::exposure_ev(self.white_logged)).abs() >= 0.25;
+      if moved {
+        self.white_logged = self.white;
+        // the raw fixed-point counts behind the percentiles (p99, p50, max, lit texels)
+        let counts = {
+          let mut v: alloc::vec::Vec<u32> =
+            level.chunks_exact(dust::PYRAMID_TEXEL_WORDS as usize).map(|t| t[0]).filter(|&c| c > 0).collect();
+          v.sort_unstable();
+          let at = |q: f32| v.get(((v.len().max(1) - 1) as f32 * q).round() as usize).copied().unwrap_or(0);
+          (at(dust::WHITE_TILE_PERCENTILE), at(0.5), v.last().copied().unwrap_or(0), v.len())
+        };
+        aethervk_oshal_rlib::log!(
+          "[Dust exposure] white {:.3e} ({:.2} mag/arcsec², EV {:+.2}), p50 {:.3e} (p50/white {:.3}), measured p99 {:.3e}, softening {:.3e} | counts p99 {} p50 {} max {} of {} lit texels, unit {:.3e}, texel {} px, tau_max {:.3e} | regime {} reused {}",
+          self.white,
+          dust::white_to_mag_arcsec2(self.white),
+          dust::exposure_ev(self.white),
+          self.p50,
+          self.p50 / self.white,
+          p99,
+          dust::auto_softening(self.p50, self.white),
+          counts.0,
+          counts.1,
+          counts.2,
+          counts.3,
+          unit,
+          texel_px,
+          f32::from_bits(header[dust::PYR_TAU_MAX as usize]),
+          self.absorb_tag.0,
+          self.absorb_tag.1
+        );
+      }
     }
     let v = f32::from_bits(header[dust::PYR_TAU_MAX as usize]);
     if v.is_finite() && v > 0.0 {
@@ -1110,6 +1231,13 @@ impl DustViewHost {
     }
     self.volume_bias = bias;
     let ewa = dust::EwaStats::load(header);
+    self.refine_seen = Some((ewa.bias, ewa.texels));
+    if self.absorb_refined {
+      // a refined image (static refinement): over the budget by design, it teaches the budget's
+      // bias nothing
+      self.absorb_shell(header);
+      return;
+    }
     FeedbackSet::feedback_remember(&mut self.fb_memory.ewa_step_q8, &mut self.fb_memory.ewa_prev, ewa.bias, ewa.texels);
     let ewa_budget = (dust::DUST_EWA_FRAME_BUDGET as u64) >> self.budget_shift();
     // inside the band [budget / 8, budget]: the state stays (as the split depth's); below it,
@@ -1135,6 +1263,11 @@ impl DustViewHost {
       );
     }
     self.ewa_bias = ewa_bias;
+    self.absorb_shell(header);
+  }
+
+  /// [`Self::absorb`]'s speck shell update
+  fn absorb_shell(&mut self, header: &[u32]) {
     // the speck shell: the density at the eye → the next radius; inward on a budget overflow,
     // outward toward half of it under a quarter, from DUST_SPECKS_START_M before any (a cold start
     // inside the coma cannot overflow)
@@ -2024,6 +2157,32 @@ impl Device {
     self.frame_begin(cmd, pe, extent, flags, flow, Some(inputs))
   }
 
+  /// Resets `pe`'s feedback ([`DustViewHost::reset_feedback`]) when the scene's dust feedback
+  /// generation `generation` differs from the one it was measured under; a no-op without a view.
+  /// Returns whether it reset.
+  pub fn dust_sync_feedback_gen(&self, pe: gpu::PresentationEngineHandle, generation: u32) -> bool {
+    let res = self.res.read();
+    let Some(view) = res.dust_manager.as_ref().and_then(|m| m.views.get(&pe)) else {
+      return false;
+    };
+    let mut host = view.host.lock();
+    if host.feedback_gen == generation {
+      return false;
+    }
+    host.feedback_gen = generation;
+    host.reset_feedback();
+    aethervk_oshal_rlib::log!("[Dust] view {}: feedback reset (generation {generation})", pe.0);
+    true
+  }
+
+  /// Whether `pe` draws refined (static refinement, `dust::dust_refine_factor`): a frame that draws
+  /// then draws everything fresh, without the cadence's retained class images (drawn at the
+  /// budget's bias)
+  pub fn dust_refining(&self, pe: gpu::PresentationEngineHandle) -> bool {
+    let res = self.res.read();
+    res.dust_manager.as_ref().and_then(|m| m.views.get(&pe)).is_some_and(|v| v.host.lock().refine > 0)
+  }
+
   /// Forgets `pe`'s last drawn frame: the next [`Self::cmd_dust_frame_begin_reusable`] draws
   pub fn dust_forget_drawn(&self, pe: gpu::PresentationEngineHandle) {
     let res = self.res.read();
@@ -2298,6 +2457,8 @@ impl Device {
         }
         host.feedback_load(regime_rb);
         host.readback_haze = host.slot_haze[slot];
+        host.absorb_tag = (regime_rb, host.ts_reused[slot]);
+        host.absorb_refined = host.slot_refined[slot];
         host.absorb(estimate.as_deref().unwrap_or(header), level, 1 << lvl, unit);
         host.feedback_store(regime_rb);
         host.last_regime = regime_rb;
@@ -2510,6 +2671,20 @@ impl Device {
         .filter(|v| v.is_finite() && *v >= 0.0)
         .unwrap_or(budget_knobs.map_or(dust::DUST_LOD_PX_DEFAULT, |k| k.lod_px))
     });
+    // static refinement (`dust::dust_refine_factor`): unchanged draw inputs since the last frame
+    // step the EWA bias below the budget's; a changed frame returns to it
+    let refine_factor = if cpu { 0 } else { dust::dust_refine_factor() };
+    let same_inputs = inputs.is_some() && host.drawn.as_ref().is_some_and(|(i, _)| Some(*i) == inputs);
+    if host.refine_update(same_inputs, refine_factor) {
+      aethervk_oshal_rlib::log!(
+        "[Dust refine] view {}: static, EWA bias {} for the next frames (budget's {}, image of the last readback {:?})",
+        pe.0,
+        host.ewa_bias.saturating_sub(host.refine),
+        host.ewa_bias,
+        host.refine_seen
+      );
+    }
+    let refine = host.refine;
     let split_depth = host.split_depth.min(split_depth_cap());
     // `AETHERVK_DUST_VOLUME_BIAS=<n>`: a fixed volumetric level bias (diagnostics: measures what the
     // frame budget's coarsening costs in accuracy; the per-packet evaluation cap still bounds work)
@@ -2523,7 +2698,7 @@ impl Device {
     // `AETHERVK_DUST_EWA_BIAS=<n>`: a fixed EWA bias (diagnostics)
     let ewa_bias = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_EWA_BIAS")
       .and_then(|v| v.trim().parse::<u32>().ok())
-      .unwrap_or(host.ewa_bias)
+      .unwrap_or(host.ewa_bias.saturating_sub(refine))
       .min(dust::DUST_EWA_BIAS_MAX);
     let (queue_mode, queue_capacity) = (host.queue_mode, host.queue_capacity);
     let gates_hook = host.frame_gates_off;
@@ -2615,6 +2790,9 @@ impl Device {
     // the cluster level of detail (`dust::PYR_LOD`: pixels per drawn segment, 0 = off; the word is
     // in the reuse fingerprint, so a changed knob redraws)
     header[dust::PYR_LOD as usize] = lod_px.to_bits();
+    // a refined frame is over the EWA budget by design: its in-frame gate moves out of the way
+    // (half the refinement's factor in hard-gate units: twice the work it plans)
+    header[dust::PYR_EWA_GATE_SCALE as usize] = if refine > 0 { (refine_factor / 2).max(1) } else { 0 };
     // the unit this frame's counts are written with, for dump readers (`download_dust_pyramid`)
     header[dust::PYR_UNIT as usize] = unit.to_bits();
     // where the queues start, for the shaders (`dust_queue_base`): with no class images the
@@ -2633,6 +2811,10 @@ impl Device {
         && host.drawn.as_ref().is_some_and(|(i, h)| Some(*i) == inputs && *h == compared);
       host.drawn = if cpu { None } else { inputs.map(|i| (i, compared)) };
       host.ts_reused[slot] = reuse;
+      if !reuse {
+        host.image_refined = refine > 0;
+      }
+      host.slot_refined[slot] = host.image_refined;
       host.queue_pending = !cpu && !reuse;
       reuse
     };
@@ -2842,7 +3024,7 @@ impl Device {
       n = (n & !(0xFF << 8)) | (f.volume_bias.min(255) << 8);
     }
     if env_u32("AETHERVK_DUST_EWA_BIAS").is_none() {
-      n = (n & !(0xF << 18)) | (f.ewa_bias.min(dust::DUST_EWA_BIAS_MAX) << 18);
+      n = (n & !(0xF << 18)) | (f.ewa_bias.saturating_sub(host.refine).min(dust::DUST_EWA_BIAS_MAX) << 18);
     }
     if n == w {
       return;

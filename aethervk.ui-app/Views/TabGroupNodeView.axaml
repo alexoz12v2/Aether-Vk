@@ -82,7 +82,7 @@
                                    Padding="0,6,2,6" VerticalAlignment="Center"
                                    FontSize="13"
                                    IsVisible="{Binding Icon, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                        <TextBlock Text="{Binding Title}" Padding="4,6,4,6" VerticalAlignment="Center" Foreground="{DynamicResource Text.Primary}" />
+                        <TextBlock Text="{Binding Title}" AutomationProperties.AutomationId="{Binding AutomationKey}" Padding="4,6,4,6" VerticalAlignment="Center" Foreground="{DynamicResource Text.Primary}" />
                         <Button Content="✕"
                                 Width="20" Height="20" Padding="0"
                                 Margin="0,0,4,0"

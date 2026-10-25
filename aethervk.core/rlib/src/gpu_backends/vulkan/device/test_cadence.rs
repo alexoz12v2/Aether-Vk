@@ -620,6 +620,7 @@ fn gpu_dust_cadence_state_matches_reference() {
         dust::PYR_TRACER_COUNTS,
         dust::PYR_LOD,
         dust::PYR_SPLIT_DEPTH,
+        dust::PYR_EWA_GATE_SCALE,
         dust::specks::PYR_SPECKS_DMAX,
         dust::specks::PYR_SPECKS_BUDGET,
       ] {
@@ -1075,6 +1076,7 @@ fn handover_parity(id: u64, pe_off: u64, light: Option<fn(u32) -> f64>) {
         dust::PYR_TRACER_COUNTS,
         dust::PYR_LOD,
         dust::PYR_SPLIT_DEPTH,
+        dust::PYR_EWA_GATE_SCALE,
         dust::specks::PYR_SPECKS_DMAX,
         dust::specks::PYR_SPECKS_BUDGET,
       ] {
@@ -2174,6 +2176,172 @@ fn the_feedback_band_keeps_the_state() {
   // over the budget: coarser than the frame's own bias
   host.absorb(&header_at(0, DUST_EWA_FRAME_BUDGET as u64 * 2, 11, DUST_VOLUME_FRAME_BUDGET * 2), &level, 1, 1.0);
   assert_eq!((host.ewa_bias, host.volume_bias), (1, 12));
+}
+
+/// the feedback after a savefile open (`DustViewHost::reset_feedback`): the reopened N2 run read
+/// back one transient frame per bias while its cameras flew to their saved poses (1.07e10 texels
+/// at EWA bias 0 → 3, 8.3e8 at 3 → 4, 2.9e8 at 4 → 5), then the settled view, whose texels at
+/// bias 5 sit under budget / 8 but whose remembered step (×28) refuses every lower: bias 5 for
+/// good, where the live session that grew the same dust settled at 3 (blocky dust after Open).
+/// A reset once the view settled measures it cold and lands where the live session did.
+#[test]
+fn the_feedback_reset_forgets_a_transient() {
+  use crate::scene::dust::{DUST_EWA_FRAME_BUDGET, DUST_EWA_TEXEL_UNIT, DUST_VOLUME_FRAME_BUDGET, EwaStats};
+  let header_at = |ewa_bias: u32, ewa_texels: u64| {
+    let mut h = alloc::vec![0u32; dust::PYRAMID_HEADER_WORDS as usize];
+    EwaStats::store_bias(ewa_bias, &mut h);
+    h[dust::PYR_EWA_TEXELS as usize] = (ewa_texels / DUST_EWA_TEXEL_UNIT as u64) as u32;
+    let w = &mut h[dust::PYR_SPLIT_DEPTH as usize];
+    *w = (*w & !(0xFF << 8)) | (2 << 8);
+    // the volume and the split inside their bands: only the EWA side moves
+    h[dust::PYR_VOLUME_EVALS as usize] = DUST_VOLUME_FRAME_BUDGET / 4;
+    h[dust::PYR_SPLIT_CHILDREN as usize] = dust::DUST_SPLIT_BUDGET / 2;
+    h
+  };
+  let level = alloc::vec![0u32; 16];
+  let eb = DUST_EWA_FRAME_BUDGET as u64;
+  // the settled view: 40 budgets at bias 0, a level quarters it
+  let settled = |bias: u32| eb * 40 / 4u64.pow(bias);
+  let settle = |host: &mut DustViewHost| {
+    for _ in 0..12 {
+      let b = host.ewa_bias;
+      host.absorb(&header_at(b, settled(b)), &level, 1, 1.0);
+    }
+  };
+  // the live session: the dust grows over many frames, the view the same
+  let mut live = DustViewHost::default();
+  live.volume_bias = 2;
+  for k in 1..=40u64 {
+    let b = live.ewa_bias;
+    live.absorb(&header_at(b, eb * k / 4u64.pow(b)), &level, 1, 1.0);
+  }
+  settle(&mut live);
+  assert_eq!(live.ewa_bias, 3, "the live session's level");
+  // the reopen: the whole history at once, read back during the flight
+  let mut reopened = DustViewHost::default();
+  reopened.volume_bias = 2;
+  for (b, texels) in [(0, 10_690_000_000u64), (3, 828_700_000), (4, 292_900_000)] {
+    assert_eq!(reopened.ewa_bias, b);
+    reopened.absorb(&header_at(b, texels), &level, 1, 1.0);
+  }
+  settle(&mut reopened);
+  assert_eq!(reopened.ewa_bias, 5, "the premise: the transient's memory keeps the coarse level");
+  // the view settled: a cold start measures it again
+  reopened.drawn = Some((1, alloc::vec![0]));
+  reopened.reset_feedback();
+  assert_eq!((reopened.ewa_bias, reopened.volume_bias), (0, 0));
+  assert_eq!(reopened.split_depth, dust::DUST_SPLIT_DEPTH_MAX);
+  assert_eq!(reopened.split_depth_over, u32::MAX);
+  assert_eq!(reopened.fb_memory, FeedbackSet::default());
+  assert_eq!(reopened.fb_full, FeedbackSet::default());
+  assert!(reopened.fb_cad.is_none() && reopened.budget.is_none());
+  assert!(reopened.drawn.is_none(), "the next frame draws (and is read back), even paused");
+  reopened.volume_bias = 2;
+  settle(&mut reopened);
+  assert_eq!(reopened.ewa_bias, live.ewa_bias, "path independent after the reset");
+}
+
+/// the EWA feedback stops at `DUST_EWA_BIAS_FEEDBACK_MAX` (5): the 67P Earth view (1.9·10⁵ km
+/// half-width) read 5.4e8 texels at 5, twice the budget, and went to 6, where the frame collapsed
+/// to a flat field and the exposure turned it into a grey wall. 6 stays for the override only.
+#[test]
+fn the_ewa_feedback_stops_at_bias_5() {
+  use crate::scene::dust::{DUST_EWA_BIAS_FEEDBACK_MAX, DUST_EWA_FRAME_BUDGET, DUST_EWA_TEXEL_UNIT, EwaStats};
+  assert_eq!(DUST_EWA_BIAS_FEEDBACK_MAX, 5);
+  let cold = EwaStats { texels: 16_820_000_000, bias: 0 };
+  assert_eq!(cold.suggested_bias(), 3);
+  let at3 = EwaStats { texels: 1_792_000_000, bias: 3 };
+  assert_eq!(at3.suggested_bias(), 5, "⌈log₄ 6.7⌉ = 2 levels");
+  let at5 = EwaStats { texels: 544_900_000, bias: 5 };
+  assert_eq!(at5.suggested_bias(), 5, "over the budget at 5: no 6");
+  let mut h = alloc::vec![0u32; dust::PYRAMID_HEADER_WORDS as usize];
+  EwaStats::store_bias(5, &mut h);
+  h[dust::PYR_EWA_TEXELS as usize] = (544_900_000u64 / DUST_EWA_TEXEL_UNIT as u64) as u32;
+  h[dust::PYR_SPLIT_CHILDREN as usize] = dust::DUST_SPLIT_BUDGET / 2;
+  let mut host = DustViewHost::default();
+  host.ewa_bias = 5;
+  host.absorb(&h, &alloc::vec![0u32; 16], 1, 1.0);
+  assert_eq!(host.ewa_bias, 5);
+  assert!(544_900_000 > DUST_EWA_FRAME_BUDGET as u64, "the premise: over the budget");
+}
+
+/// A flat white-point level (every lit texel the same count: the EWA bias 6 frame of the 67P Earth
+/// view, 262 143 or 582 841 counts) moves no white point; a dust image (its densest texels ×4–×8
+/// above the 99th percentile) does.
+#[test]
+fn a_flat_level_moves_no_white_point() {
+  let words = dust::PYRAMID_TEXEL_WORDS as usize;
+  let level_of = |counts: &[u32]| {
+    let mut l = alloc::vec![0u32; counts.len() * words];
+    for (i, &c) in counts.iter().enumerate() {
+      l[i * words] = c;
+    }
+    l
+  };
+  let flat = level_of(&[582_841; 3124]);
+  let image: alloc::vec::Vec<u32> = (0..3124u32).map(|i| 90_000 + i * i * 6).collect();
+  let image = level_of(&image);
+  assert!(dust::level_is_flat(&flat));
+  assert!(!dust::level_is_flat(&image));
+  assert!(!dust::level_is_flat(&level_of(&[582_841; 10])), "a few texels are no field");
+  let h = alloc::vec![0u32; dust::PYRAMID_HEADER_WORDS as usize];
+  let mut host = DustViewHost::default();
+  let seed = host.white;
+  host.absorb(&h, &flat, 16, 1e-13);
+  assert_eq!(host.white, seed, "flat: the exposure keeps its own");
+  host.absorb(&h, &image, 16, 1e-13);
+  assert_ne!(host.white, seed, "an image adapts it");
+}
+
+/// Static refinement (`dust::dust_refine_factor`): after `DUST_REFINE_AFTER_FRAMES` unchanged
+/// frames and a readback of the image shown, one EWA level finer while that image's texels × 4
+/// stay within the factor's budgets; refined readbacks never move the budget's bias; a changed
+/// frame returns to it at once. The 67P Earth view's measured costs (5.4e8 at 5, ×1.7 a level).
+#[test]
+fn static_refinement_steps_within_its_factor() {
+  use crate::scene::dust::{DUST_EWA_FRAME_BUDGET, DUST_EWA_TEXEL_UNIT, DUST_REFINE_AFTER_FRAMES, EwaStats};
+  let header_at = |ewa_bias: u32, texels: u64| {
+    let mut h = alloc::vec![0u32; dust::PYRAMID_HEADER_WORDS as usize];
+    EwaStats::store_bias(ewa_bias, &mut h);
+    h[dust::PYR_EWA_TEXELS as usize] = (texels / DUST_EWA_TEXEL_UNIT as u64) as u32;
+    h[dust::PYR_SPLIT_CHILDREN as usize] = dust::DUST_SPLIT_BUDGET / 2;
+    h
+  };
+  let level = alloc::vec![0u32; 16];
+  let factor = 16;
+  let wait = |host: &mut DustViewHost| -> bool {
+    let mut stepped = false;
+    for _ in 0..DUST_REFINE_AFTER_FRAMES {
+      stepped |= host.refine_update(true, factor);
+    }
+    stepped
+  };
+  let mut host = DustViewHost::default();
+  host.ewa_bias = 5;
+  assert!(!wait(&mut host), "no readback of the shown image yet");
+  host.absorb(&header_at(5, 544_900_000), &level, 1, 1.0);
+  assert!(wait(&mut host));
+  assert_eq!(host.refine, 1);
+  // the refined image's readback: over the budget, yet the budget's bias stays
+  host.absorb_refined = true;
+  host.absorb(&header_at(4, 930_000_000), &level, 1, 1.0);
+  assert_eq!(host.ewa_bias, 5);
+  assert!(wait(&mut host), "9.3e8 × 4 ≤ 16 budgets");
+  assert_eq!(host.refine, 2);
+  host.absorb(&header_at(3, 1_600_000_000), &level, 1, 1.0);
+  assert!(1_600_000_000u64 * 4 > factor as u64 * DUST_EWA_FRAME_BUDGET as u64);
+  assert!(!wait(&mut host), "the next level would pass the factor");
+  assert_eq!((host.refine, host.ewa_bias), (2, 5));
+  // the view moves: the budget's bias at once
+  assert!(!host.refine_update(false, factor));
+  assert_eq!(host.refine, 0);
+  // off: never refines
+  host.absorb_refined = false;
+  host.absorb(&header_at(5, 544_900_000), &level, 1, 1.0);
+  for _ in 0..3 * DUST_REFINE_AFTER_FRAMES {
+    assert!(!host.refine_update(true, 0));
+  }
+  assert_eq!(host.refine, 0);
 }
 
 /// the feedback's memory (round 8 step B): the 5000 km, 1 d/s, volume detail 1 oscillation

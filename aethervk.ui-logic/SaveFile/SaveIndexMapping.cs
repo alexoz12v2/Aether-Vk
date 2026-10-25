@@ -86,7 +86,24 @@ public static class SaveIndexMapping
       InertialLook = [.. s.ObserverInertialLook],
       BodyFixedLook = [.. s.ObserverBodyFixedLook],
     },
+    Display = s.Display is { } d
+      ? new ViewportDisplayDto
+      {
+        OrthoUnit = UnitName(OrthoUnits, d.OrthoUnitIndex),
+        FovUnit = UnitName(FovUnits, d.FovUnitIndex),
+        OrthoProportionsLocked = d.OrthoProportionsLocked,
+      }
+      : null,
   };
+
+  private static readonly string[] OrthoUnits = ["au", "km", "m"];
+  private static readonly string[] FovUnits = ["deg", "arcmin", "arcsec"];
+
+  private static string UnitName(string[] names, int index) =>
+    index >= 0 && index < names.Length ? names[index] : names[0];
+
+  private static int UnitIndex(string[] names, string? name) =>
+    Math.Max(0, Array.IndexOf(names, name));
 
   public static CameraPersistedState FromDto(ViewportDto d)
   {
@@ -112,7 +129,11 @@ public static class SaveIndexMapping
       o.ElevationM,
       ParseSnake(o.Orientation, EarthObserverOrientationMode.Free),
       Quat(o.InertialLook),
-      Quat(o.BodyFixedLook));
+      Quat(o.BodyFixedLook),
+      d.Display is { } disp
+        ? new ViewportDisplayState(UnitIndex(OrthoUnits, disp.OrthoUnit), UnitIndex(FovUnits, disp.FovUnit),
+          disp.OrthoProportionsLocked)
+        : null);
   }
 
   private static double[] Quat(double[]? q) => q is { Length: 4 } ? [.. q] : [0, 0, 0, 1];
@@ -135,6 +156,7 @@ public static class SaveIndexMapping
     DustTracers = m.DustTracers,
     DustFlow = m.DustFlow,
     DustFlowSpeed = m.DustFlowSpeed,
+    SphereGizmoVisible = m.SphereGizmoVisible,
     ShowReferencePositionError = m.ShowReferencePositionError,
     ManualNucleusRadiusKm = m.ManualNucleusRadiusKm,
   };
@@ -156,6 +178,7 @@ public static class SaveIndexMapping
     m.DustTracers = d.DustTracers;
     m.DustFlow = d.DustFlow;
     m.DustFlowSpeed = d.DustFlowSpeed;
+    m.SphereGizmoVisible = d.SphereGizmoVisible;
     m.ShowReferencePositionError = d.ShowReferencePositionError;
     m.ManualNucleusRadiusKm = d.ManualNucleusRadiusKm;
   }

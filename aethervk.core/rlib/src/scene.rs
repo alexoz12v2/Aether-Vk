@@ -783,6 +783,17 @@ impl Component for RenderLayerComponent {}
 pub struct CameraRenderMaskComponent(pub u32);
 impl Component for CameraRenderMaskComponent {}
 
+/// [`CameraShadingComponent`] bit: meshes lit physically (direct sunlight only, irradiance
+/// (1 AU / r)², no ambient fill, unlit fragments in a debug tint) instead of the display shading
+/// (constant sunlight, ambient fill).
+pub const CAMERA_SHADING_PHYSICAL: u32 = 1 << 0;
+
+/// How a camera shades meshes (`CAMERA_SHADING_*` bits). A camera without it uses the display
+/// shading.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct CameraShadingComponent(pub u32);
+impl Component for CameraShadingComponent {}
+
 /// A component that stores debug render states for BVH nodes
 #[derive(Clone, Debug)]
 pub struct BvhDebugComponent {
@@ -1682,6 +1693,7 @@ impl Scene {
     self.register_component::<HiddenComponent>(&[]);
     self.register_component::<RenderLayerComponent>(&[]);
     self.register_component::<CameraRenderMaskComponent>(&[]);
+    self.register_component::<CameraShadingComponent>(&[]);
 
     // TODO remove
     self.register_component::<BvhDebugComponent>(&transform_type_id);
