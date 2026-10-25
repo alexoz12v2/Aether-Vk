@@ -11,5 +11,12 @@ public partial class DesignTimelineTabViewModel : ITimelineTabViewModel
     public bool   CanClose { get; set; } = true;
 
     public string StrTitle { get; set; } = "Timeline";
+    public string StrSpeed { get; set; } = "Speed:";
+    public string StrSpeed10s { get; set; } = "10 s/s";
+    public string StrSpeed1min { get; set; } = "1 min/s";
+    public string StrSpeed1h { get; set; } = "1 h/s";
+    public string StrSpeed3h { get; set; } = "3 h/s";
+    public string StrSpeed1d { get; set; } = "1 day/s";
+    public string StrSelectSpeed { get; set; } = "Select speed";
 }
 #endif

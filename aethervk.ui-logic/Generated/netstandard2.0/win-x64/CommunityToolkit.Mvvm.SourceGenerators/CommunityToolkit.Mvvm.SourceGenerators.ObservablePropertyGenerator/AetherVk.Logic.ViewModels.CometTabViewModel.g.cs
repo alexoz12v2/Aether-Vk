@@ -69,6 +69,29 @@ namespace AetherVk.Logic.ViewModels
             }
         }
 
+        /// <inheritdoc cref="_referenceOrbitIndex"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public int ReferenceOrbitIndex
+        {
+            get => _referenceOrbitIndex;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<int>.Default.Equals(_referenceOrbitIndex, value))
+                {
+                    OnReferenceOrbitIndexChanging(value);
+                    OnReferenceOrbitIndexChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.ReferenceOrbitIndex);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.ReferenceOrbitMode);
+                    _referenceOrbitIndex = value;
+                    OnReferenceOrbitIndexChanged(value);
+                    OnReferenceOrbitIndexChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.ReferenceOrbitIndex);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.ReferenceOrbitMode);
+                }
+            }
+        }
+
         /// <inheritdoc cref="_searchQuery"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
@@ -426,6 +449,27 @@ namespace AetherVk.Logic.ViewModels
             }
         }
 
+        /// <inheritdoc cref="_bodyFixedOrientationIndex"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public int BodyFixedOrientationIndex
+        {
+            get => _bodyFixedOrientationIndex;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<int>.Default.Equals(_bodyFixedOrientationIndex, value))
+                {
+                    OnBodyFixedOrientationIndexChanging(value);
+                    OnBodyFixedOrientationIndexChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.BodyFixedOrientationIndex);
+                    _bodyFixedOrientationIndex = value;
+                    OnBodyFixedOrientationIndexChanged(value);
+                    OnBodyFixedOrientationIndexChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.BodyFixedOrientationIndex);
+                }
+            }
+        }
+
         /// <inheritdoc cref="_filteredSearchResults"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
@@ -534,6 +578,28 @@ namespace AetherVk.Logic.ViewModels
         /// <remarks>This method is invoked right after the value of <see cref="HasProposedTimeline"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnHasProposedTimelineChanged(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="ReferenceOrbitIndex"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="ReferenceOrbitIndex"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnReferenceOrbitIndexChanging(int value);
+        /// <summary>Executes the logic for when <see cref="ReferenceOrbitIndex"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="ReferenceOrbitIndex"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnReferenceOrbitIndexChanging(int oldValue, int newValue);
+        /// <summary>Executes the logic for when <see cref="ReferenceOrbitIndex"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="ReferenceOrbitIndex"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnReferenceOrbitIndexChanged(int value);
+        /// <summary>Executes the logic for when <see cref="ReferenceOrbitIndex"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="ReferenceOrbitIndex"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnReferenceOrbitIndexChanged(int oldValue, int newValue);
         /// <summary>Executes the logic for when <see cref="SearchQuery"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="SearchQuery"/> is changed.</remarks>
@@ -908,6 +974,28 @@ namespace AetherVk.Logic.ViewModels
         /// <remarks>This method is invoked right after the value of <see cref="RotRateDegDay"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnRotRateDegDayChanged(double oldValue, double newValue);
+        /// <summary>Executes the logic for when <see cref="BodyFixedOrientationIndex"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="BodyFixedOrientationIndex"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnBodyFixedOrientationIndexChanging(int value);
+        /// <summary>Executes the logic for when <see cref="BodyFixedOrientationIndex"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="BodyFixedOrientationIndex"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnBodyFixedOrientationIndexChanging(int oldValue, int newValue);
+        /// <summary>Executes the logic for when <see cref="BodyFixedOrientationIndex"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="BodyFixedOrientationIndex"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnBodyFixedOrientationIndexChanged(int value);
+        /// <summary>Executes the logic for when <see cref="BodyFixedOrientationIndex"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="BodyFixedOrientationIndex"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnBodyFixedOrientationIndexChanged(int oldValue, int newValue);
         /// <summary>Executes the logic for when <see cref="FilteredSearchResults"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="FilteredSearchResults"/> is changed.</remarks>

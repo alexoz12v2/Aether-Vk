@@ -491,6 +491,9 @@ mono_crash.*
 
 # Build results
 [Dd]ebug/
+# ...but not source folders named Debug (the build-output rule above hid these view models
+# from every commit, so a fresh clone could not compile aethervk.ui-logic)
+!**/[Vv]iew[Mm]odels/[Dd]ebug/
 [Dd]ebugPublic/
 [Rr]elease/
 [Rr]eleases/

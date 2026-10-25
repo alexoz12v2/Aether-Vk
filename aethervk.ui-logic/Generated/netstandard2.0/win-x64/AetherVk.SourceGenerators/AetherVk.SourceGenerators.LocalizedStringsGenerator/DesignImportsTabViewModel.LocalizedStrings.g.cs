@@ -11,5 +11,20 @@ public partial class DesignImportsTabViewModel : IImportsTabViewModel
     public bool   CanClose { get; set; } = true;
 
     public string StrTitle { get; set; } = "Imports";
+    public string StrMeshes { get; set; } = "Meshes";
+    public string StrTextures { get; set; } = "Textures";
+    public string StrImport { get; set; } = "Import…";
+    public string StrDialogTitle { get; set; } = "Import mesh or texture";
+    public string StrHint { get; set; } = "Meshes: OBJ, PLY, glTF, GLB · Textures: PNG, JPEG, KTX2. Textures embedded in a mesh are listed separately.";
+    public string StrEmptyMeshes { get; set; } = "No meshes imported yet";
+    public string StrEmptyTextures { get; set; } = "No textures imported yet";
+    public string StrImporting { get; set; } = "Importing…";
+    public string StrStatusImported { get; set; } = "Imported";
+    public string StrStatusAlreadyImported { get; set; } = "Already imported";
+    public string StrStatusFailed { get; set; } = "Import failed (see console)";
+    public string StrStatusUnsupported { get; set; } = "Unsupported file type";
+    public string StrUnload { get; set; } = "Unload";
+    public string StrStatusUnloaded { get; set; } = "Unloaded";
+    public string StrStatusUnloadFailed { get; set; } = "Unload refused (pause the simulation first)";
 }
 #endif

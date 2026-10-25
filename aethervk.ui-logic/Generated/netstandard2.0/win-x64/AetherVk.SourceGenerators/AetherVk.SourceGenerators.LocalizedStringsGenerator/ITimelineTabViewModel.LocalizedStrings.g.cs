@@ -6,4 +6,11 @@ namespace AetherVk.Logic.ViewModels;
 public partial interface ITimelineTabViewModel
 {
     string StrTitle { get; set; }
+    string StrSpeed { get; set; }
+    string StrSpeed10s { get; set; }
+    string StrSpeed1min { get; set; }
+    string StrSpeed1h { get; set; }
+    string StrSpeed3h { get; set; }
+    string StrSpeed1d { get; set; }
+    string StrSelectSpeed { get; set; }
 }

@@ -6,6 +6,22 @@ namespace AetherVk.Logic.ViewModels;
 public partial interface ISettingsTabViewModel
 {
     string StrGeneral { get; set; }
+    string StrCometAppearance { get; set; }
+    string StrDisplayMode { get; set; }
+    string StrDisplayModeDefault { get; set; }
+    string StrDisplayModeCustom { get; set; }
+    string StrCustomMesh { get; set; }
+    string StrMesh { get; set; }
+    string StrChannelAlbedo { get; set; }
+    string StrChannelNormal { get; set; }
+    string StrChannelRoughness { get; set; }
+    string StrChannelAo { get; set; }
+    string StrTextureNone { get; set; }
+    string StrRotation { get; set; }
+    string StrTranslation { get; set; }
+    string StrResetPlacement { get; set; }
+    string StrAppearanceLockedHint { get; set; }
+    string StrNoMeshesHint { get; set; }
     string StrCometName { get; set; }
     string StrStartDate { get; set; }
     string StrEndDate { get; set; }
@@ -22,4 +38,33 @@ public partial interface ISettingsTabViewModel
     string StrHelpContentArgumentOfPerihelion { get; set; }
     string StrHelpHeaderInclination { get; set; }
     string StrHelpContentInclination { get; set; }
+    string StrBillboards { get; set; }
+    string StrBillboardsHint { get; set; }
+    string StrBillboardsNoTextures { get; set; }
+    string StrBillboardTexture { get; set; }
+    string StrCreateBillboard { get; set; }
+    string StrBillboardPosition { get; set; }
+    string StrBillboardSize { get; set; }
+    string StrBillboardAspectLock { get; set; }
+    string StrBillboardAlpha { get; set; }
+    string StrBillboardRotation { get; set; }
+    string StrBillboardVisible { get; set; }
+    string StrBillboardDelete { get; set; }
+    string StrBillboardMissing { get; set; }
+    string StrInputBindings { get; set; }
+    string StrInputBindingsHint { get; set; }
+    string StrAddChord { get; set; }
+    string StrRebind { get; set; }
+    string StrRemoveChord { get; set; }
+    string StrResetBindings { get; set; }
+    string StrParticleRendering { get; set; }
+    string StrVolumeDetail { get; set; }
+    string StrVolumeDetailHint { get; set; }
+    string StrPropagateDetail { get; set; }
+    string StrPropagateDetailHint { get; set; }
+    string StrHazeDetail { get; set; }
+    string StrHazeDetailHint { get; set; }
+    string StrReuseTolerance { get; set; }
+    string StrReuseToleranceHint { get; set; }
+    string StrReuseToleranceOff { get; set; }
 }

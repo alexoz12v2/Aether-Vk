@@ -504,7 +504,9 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
 
       // Build download path (OS Downloads directory)
       string sanitized = SelectedComet.PrimaryDesignation.Replace("/", "_").Replace(" ", "_");
-      string fileName = string.Concat("spk_", sanitized, "_", SelectedSpkRecord.RecordId, ".bsp");
+      // a single-record comet's id is "DES=<pdes>" (see HorizonJplService.ParseSpkRecordsText)
+      string recordPart = SelectedSpkRecord.RecordId.Replace("=", "_").Replace("/", "_").Replace(" ", "_");
+      string fileName = string.Concat("spk_", sanitized, "_", recordPart, ".bsp");
       string savePath = _storage.GetDownloadsPath(fileName);
 
       // Use stored display strings for date parsing (ISO prefix)

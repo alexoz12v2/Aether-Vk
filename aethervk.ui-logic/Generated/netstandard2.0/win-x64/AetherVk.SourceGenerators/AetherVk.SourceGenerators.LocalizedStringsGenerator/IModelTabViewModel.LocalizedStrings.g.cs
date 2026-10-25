@@ -5,6 +5,11 @@ namespace AetherVk.Logic.ViewModels;
 
 public partial interface IModelTabViewModel
 {
+    string StrDustVisibility { get; set; }
+    string StrDustFlow { get; set; }
+    string StrDustTracers { get; set; }
+    string StrDustFlowSpeed { get; set; }
+    string StrShowReferenceError { get; set; }
     string StrSun { get; set; }
     string StrDistance { get; set; }
     string StrSTO { get; set; }
@@ -20,6 +25,10 @@ public partial interface IModelTabViewModel
     string StrDustDensity { get; set; }
     string StrDustDiameter { get; set; }
     string StrAlbedo { get; set; }
+    string StrScatteringEfficiency { get; set; }
+    string StrGeometricAlbedo { get; set; }
+    string StrSizeQ { get; set; }
+    string StrSizeRange { get; set; }
     string StrBeta { get; set; }
     string StrAcceleration { get; set; }
     string StrSpeed { get; set; }
