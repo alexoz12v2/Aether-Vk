@@ -1,0 +1,7 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="AetherVk.Views.Debug.ShaderDebugWindow"
+        Title="Vulkan Shader Printf" Width="800" Height="600">
+    <TextBox x:Name="LogText" AcceptsReturn="True" TextWrapping="Wrap" IsReadOnly="True" 
+             FontFamily="Monospace" Background="#1E1E1E" Foreground="#D4D4D4" />
+</Window>
