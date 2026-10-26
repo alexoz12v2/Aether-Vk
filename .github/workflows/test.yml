@@ -32,11 +32,6 @@ jobs:
       if: runner.os == 'Windows'
       run: git config --global core.longpaths true
 
-    - name: Enable git long paths (Windows)
-      if: runner.os == 'Windows'
-      run: git config --system core.longpaths true
-      shell: bash
-
     - uses: actions/checkout@v4
       with:
         submodules: recursive
@@ -59,7 +54,6 @@ jobs:
         targets: ${{ matrix.target }}
 
     - name: Setup Vulkan SDK
-      if: runner.os != 'Linux'
       uses: jakoch/install-vulkan-sdk-action@v1.5.5
       with:
         vulkan_version: '1.4.321.0'
@@ -79,11 +73,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Enable git long paths (Windows)
-      if: runner.os == 'Windows'
-      run: git config --system core.longpaths true
-      shell: bash
-
     - uses: actions/checkout@v4
       with:
         submodules: recursive
