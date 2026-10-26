@@ -5,6 +5,12 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch:
+    inputs:
+      run_tests:
+        description: Run the test job
+        type: boolean
+        default: true
 
 jobs:
   compile:
@@ -66,9 +72,10 @@ jobs:
         CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
 
   test:
-    # Opt-in: runs only when the repository variable RUN_TESTS is set to 'true'
+    # Opt-in: runs only when the repository variable RUN_TESTS is set to 'true', or on a manual
+    # dispatch with run_tests checked (`gh workflow run Test -f run_tests=true`)
     # (Settings > Secrets and variables > Actions > Variables, or `gh variable set RUN_TESTS --body true`)
-    if: vars.RUN_TESTS == 'true'
+    if: vars.RUN_TESTS == 'true' || (github.event_name == 'workflow_dispatch' && inputs.run_tests)
     needs: compile
     runs-on: ubuntu-latest
 
