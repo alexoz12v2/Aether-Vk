@@ -7,6 +7,7 @@ on:
   push:
     tags:
       - 'v*'
+      - '[0-9]*'
   workflow_dispatch:
 
 jobs:
@@ -80,7 +81,7 @@ jobs:
     - name: Determine Release Mode
       id: mode
       run: |
-        if [[ "${{ github.ref }}" == *"-sxs" ]]; then
+        if [[ "${{ github.ref_name }}" == *"-sxs" ]]; then
           echo "MODE=SideBySide" >> $GITHUB_ENV
         else
           echo "MODE=Normal" >> $GITHUB_ENV
@@ -119,7 +120,7 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         files: |
-          bin/publish/AetherVk_1.0.0_${{ matrix.dotnet_arch }}.zip
-          bin/publish/AetherVk_1.0.0_${{ matrix.dotnet_arch }}.tar.gz
+          bin/publish/AetherVk*_${{ matrix.dotnet_arch }}.zip
+          bin/publish/AetherVk*_${{ matrix.dotnet_arch }}.tar.gz
           bin/publish/*.msix
           bin/publish/*.deb
