@@ -5,7 +5,7 @@ param (
 )
 
 $BaseAppName = "AetherVk"
-$AppVersion = "1.0.0.0"
+$AppVersion = "1.0.1.0"
 $Publisher = "CN=AetherVkTeam"
 $DotnetArch = if ($Arch -eq "x64") { "win-x64" } else { "win-$Arch" }
 

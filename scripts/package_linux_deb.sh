@@ -11,7 +11,7 @@ if [ "$ARCH" == "linux-arm64" ]; then
 fi
 
 BASE_APP_NAME="AetherVk"
-APP_VERSION="1.0.0"
+APP_VERSION="1.0.1"
 PUBLISH_DIR="aethervk.ui-app/bin/$CONFIG/net10.0/$ARCH/publish"
 
 if [ "$MODE" = "SideBySide" ]; then

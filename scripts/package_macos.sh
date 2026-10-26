@@ -6,7 +6,7 @@ ARCH=${1:-osx-arm64} # default to osx-arm64
 CONFIG=${2:-Release}
 MODE=${3:-Normal} # Normal or SideBySide
 
-APP_VERSION="1.0"
+APP_VERSION="1.0.1"
 BASE_APP_NAME="AetherVk"
 
 if [ "$MODE" = "SideBySide" ]; then
