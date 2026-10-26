@@ -79,10 +79,30 @@ jobs:
         toolchain: nightly-2026-09-26 # keep in sync with rust-toolchain.toml
         targets: ${{ matrix.target }}
 
+    - name: Cache Rust build
+      uses: Swatinem/rust-cache@v2
+      with:
+        key: ${{ matrix.target }}
+
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Build.props', '**/packages.lock.json') }}
+        restore-keys: nuget-${{ runner.os }}-
+
+    - name: Cache SPICE kernels
+      id: spice
+      uses: actions/cache@v4
+      with:
+        path: assets/planets/de442.bsp
+        key: spice-de442
+
     - name: Restore .NET local tools
       run: dotnet tool restore
 
     - name: Download Core SPICE Kernels
+      if: steps.spice.outputs.cache-hit != 'true'
       run: |
         mkdir -p assets/planets
         curl -# -L -o assets/planets/de442.bsp https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/de442.bsp
