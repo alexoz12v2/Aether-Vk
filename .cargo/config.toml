@@ -8,6 +8,10 @@ rustflags = [
   "-C", "link-arg=-mmacosx-version-min=15.5"
 ]
 
+# Statically link the MSVC CRT so the shipped DLL doesn't need VCRUNTIME140/MSVCP140 installed
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]
+
 [alias]
 nt = "nextest run"
 

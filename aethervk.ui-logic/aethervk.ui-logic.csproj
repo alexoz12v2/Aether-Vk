@@ -518,36 +518,55 @@
     <!-- TODO Touch file on completion -->
   </Target>
 
-  <Target Name="InjectNativeLibraryContent" BeforeTargets="AssignTargetPaths">
+  <!-- Resolve the cargo output folder at execution time: when building from a clean checkout
+       (CI), target/<triple>/<profile> only exists after BuildNativeLibrary has run, so the
+       evaluation-time CargoTargetBaseDirectory above can point at a stale/non-existent path. -->
+  <Target
+    Name="InjectNativeLibraryContent"
+    AfterTargets="BuildNativeLibrary"
+    BeforeTargets="AssignTargetPaths"
+  >
+    <PropertyGroup>
+      <ResolvedCargoDir Condition="'$(CargoTarget)' != '' And Exists('$(MSBuildProjectDirectory)/../target/$(CargoTarget)/$(CargoTargetProfile)')"
+        >$(MSBuildProjectDirectory)/../target/$(CargoTarget)/$(CargoTargetProfile)</ResolvedCargoDir
+      >
+      <ResolvedCargoDir Condition="'$(ResolvedCargoDir)' == ''"
+        >$(MSBuildProjectDirectory)/../target/$(CargoTargetProfile)</ResolvedCargoDir
+      >
+    </PropertyGroup>
     <ItemGroup>
       <Content
-        Include="$(CargoTargetBaseDirectory)/aethervk_core_cdylib.dll"
+        Include="$(ResolvedCargoDir)/aethervk_core_cdylib.dll"
         Link="aethervk_core_cdylib.dll"
-        Condition="Exists('$(CargoTargetBaseDirectory)/aethervk_core_cdylib.dll')"
+        Condition="Exists('$(ResolvedCargoDir)/aethervk_core_cdylib.dll')"
       >
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       </Content>
       <Content
-        Include="$(CargoTargetBaseDirectory)/aethervk_core_cdylib.dll.lib"
+        Include="$(ResolvedCargoDir)/aethervk_core_cdylib.dll.lib"
         Link="aethervk_core_cdylib.dll.lib"
-        Condition="Exists('$(CargoTargetBaseDirectory)/aethervk_core_cdylib.dll.lib')"
+        Condition="Exists('$(ResolvedCargoDir)/aethervk_core_cdylib.dll.lib')"
       >
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       </Content>
       <Content
-        Include="$(CargoTargetBaseDirectory)/libaethervk_core_cdylib.so"
+        Include="$(ResolvedCargoDir)/libaethervk_core_cdylib.so"
         Link="libaethervk_core_cdylib.so"
-        Condition="Exists('$(CargoTargetBaseDirectory)/libaethervk_core_cdylib.so')"
+        Condition="Exists('$(ResolvedCargoDir)/libaethervk_core_cdylib.so')"
       >
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       </Content>
       <Content
-        Include="$(CargoTargetBaseDirectory)/libaethervk_core_cdylib.dylib"
+        Include="$(ResolvedCargoDir)/libaethervk_core_cdylib.dylib"
         Link="libaethervk_core_cdylib.dylib"
-        Condition="Exists('$(CargoTargetBaseDirectory)/libaethervk_core_cdylib.dylib')"
+        Condition="Exists('$(ResolvedCargoDir)/libaethervk_core_cdylib.dylib')"
       >
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       </Content>
     </ItemGroup>
+    <Error
+      Condition="'$(SkipNativeBuild)' != 'true' And '$(Configuration)' == 'Release' And !Exists('$(ResolvedCargoDir)/aethervk_core_cdylib.dll') And !Exists('$(ResolvedCargoDir)/libaethervk_core_cdylib.so') And !Exists('$(ResolvedCargoDir)/libaethervk_core_cdylib.dylib')"
+      Text="Native library aethervk_core_cdylib not found in $(ResolvedCargoDir) after cargo build."
+    />
   </Target>
 </Project>
