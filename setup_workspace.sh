@@ -15,6 +15,6 @@ SATELLITES_URL="https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/satellite
 
 # Download planet kernels
 echo "Downloading de442.bsp..."
-curl -# -L -o "$TARGET_DIR/de442.bsp" "$PLANETS_URL/de442.bsp"
+curl -# -L --fail --connect-timeout 30 --retry 8 --retry-delay 15 --retry-all-errors -o "$TARGET_DIR/de442.bsp" "$PLANETS_URL/de442.bsp"
 
 echo "Download complete!"
