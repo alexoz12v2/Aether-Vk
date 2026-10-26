@@ -112,7 +112,8 @@ FLOAT16_VARIANT_SHADERS=(
 
 is_float16_variant() {
     local base="$1"
-    for s in "${FLOAT16_VARIANT_SHADERS[@]}"; do
+    # ${arr[@]+...} form: empty array + set -u is an error on bash 3.2 (macOS)
+    for s in ${FLOAT16_VARIANT_SHADERS[@]+"${FLOAT16_VARIANT_SHADERS[@]}"}; do
         [ "$s" = "$base" ] && return 0
     done
     return 1
