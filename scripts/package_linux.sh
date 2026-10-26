@@ -3,7 +3,7 @@ set -e
 
 ARCH=${1:-linux-x64}
 APP_NAME="AetherVk"
-APP_VERSION="1.0.0"
+APP_VERSION="1.0.1"
 PUBLISH_DIR="aethervk.ui-app/bin/Release/net10.0/$ARCH/publish"
 TAR_FILE="bin/publish/${APP_NAME}_${APP_VERSION}_${ARCH}.tar.gz"
 

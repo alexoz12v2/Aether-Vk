@@ -1,0 +1,14 @@
+﻿<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:AetherVk.Logic.ViewModels"
+             mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
+             x:DataType="vm:DebugUiViewModel"
+             x:Class="AetherVk.Views.DebugUiView">
+    <StackPanel Spacing="10" Margin="10">
+        <TextBlock Text="Debug UI" FontSize="18" FontWeight="Bold"/>
+        <TextBox Watermark="Enter message for console" Text="{Binding MessageToSend, Mode=TwoWay}" />
+        <Button Content="Send Message" Command="{Binding SendConsoleMessageCommand}" Classes="accent"/>
+    </StackPanel>
+</UserControl>

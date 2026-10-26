@@ -1,0 +1,116 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:AetherVk.Logic.ViewModels"
+             mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="600"
+             x:DataType="vm:UITestPanelViewModel"
+             x:Class="AetherVk.Views.UITestPanelView">
+
+    <ScrollViewer>
+        <StackPanel Margin="20" Spacing="20">
+            <TextBlock Text="UI Components Test Panel" FontSize="24" FontWeight="Bold" Margin="0,0,0,10" Foreground="{DynamicResource Text.Primary}"/>
+
+            <!-- Buttons -->
+            <Border Background="{DynamicResource Bg.Surface}" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1" CornerRadius="8" Padding="16">
+                <StackPanel Spacing="10">
+                    <TextBlock Text="Buttons" FontWeight="Bold" Foreground="{DynamicResource Text.Secondary}" />
+                    <WrapPanel Orientation="Horizontal">
+                        <WrapPanel.Styles>
+                            <Style Selector="Button">
+                                <Setter Property="Margin" Value="0,0,10,10" />
+                            </Style>
+                        </WrapPanel.Styles>
+                        <Button Content="Default Button" />
+                        <Button Content="Accent Button" Classes="accent" />
+                        <Button Content="Disabled Button" IsEnabled="False" />
+                    </WrapPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- TextBoxes -->
+            <Border Background="{DynamicResource Bg.Surface}" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1" CornerRadius="8" Padding="16">
+                <StackPanel Spacing="10">
+                    <TextBlock Text="TextBoxes" FontWeight="Bold" Foreground="{DynamicResource Text.Secondary}" />
+                    <StackPanel Spacing="10" MaxWidth="400" HorizontalAlignment="Left">
+                        <TextBox Watermark="Default TextBox" />
+                        <TextBox Text="Filled TextBox" />
+                        <TextBox Text="Disabled TextBox" IsEnabled="False" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- Toggles & Checks -->
+            <Border Background="{DynamicResource Bg.Surface}" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1" CornerRadius="8" Padding="16">
+                <StackPanel Spacing="10">
+                    <TextBlock Text="Toggles &amp; Checkboxes" FontWeight="Bold" Foreground="{DynamicResource Text.Secondary}" />
+                    <WrapPanel Orientation="Horizontal">
+                        <WrapPanel.Styles>
+                            <Style Selector="CheckBox">
+                                <Setter Property="Margin" Value="0,0,20,10" />
+                            </Style>
+                            <Style Selector="ToggleButton">
+                                <Setter Property="Margin" Value="0,0,10,10" />
+                            </Style>
+                        </WrapPanel.Styles>
+                        <CheckBox Content="Unchecked Box" />
+                        <CheckBox Content="Checked Box" IsChecked="True" />
+                        <CheckBox Content="Disabled Box" IsEnabled="False" />
+
+                        <ToggleButton Content="Toggle Off" />
+                        <ToggleButton Content="Toggle On" IsChecked="True" />
+                    </WrapPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- Radio Buttons -->
+            <Border Background="{DynamicResource Bg.Surface}" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1" CornerRadius="8" Padding="16">
+                <StackPanel Spacing="10">
+                    <TextBlock Text="Radio Buttons" FontWeight="Bold" Foreground="{DynamicResource Text.Secondary}" />
+                    <WrapPanel Orientation="Horizontal">
+                        <WrapPanel.Styles>
+                            <Style Selector="RadioButton">
+                                <Setter Property="Margin" Value="0,0,20,10" />
+                            </Style>
+                        </WrapPanel.Styles>
+                        <RadioButton Content="Option A" GroupName="RadioGroup1" />
+                        <RadioButton Content="Option B" GroupName="RadioGroup1" IsChecked="True" />
+                        <RadioButton Content="Disabled Option" GroupName="RadioGroup1" IsEnabled="False" />
+                    </WrapPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- ComboBox -->
+            <Border Background="{DynamicResource Bg.Surface}" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1" CornerRadius="8" Padding="16">
+                <StackPanel Spacing="10">
+                    <TextBlock Text="ComboBox" FontWeight="Bold" Foreground="{DynamicResource Text.Secondary}" />
+                    <ComboBox SelectedIndex="0" MaxWidth="200" HorizontalAlignment="Left">
+                        <ComboBoxItem Content="Option 1" />
+                        <ComboBoxItem Content="Option 2" />
+                        <ComboBoxItem Content="Option 3" />
+                        <ComboBoxItem Content="Option 4" />
+                    </ComboBox>
+                </StackPanel>
+            </Border>
+
+            <!-- Sliders -->
+            <Border Background="{DynamicResource Bg.Surface}" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1" CornerRadius="8" Padding="16">
+                <StackPanel Spacing="10">
+                    <TextBlock Text="Sliders" FontWeight="Bold" Foreground="{DynamicResource Text.Secondary}" />
+                    <Slider Minimum="0" Maximum="100" Value="50" MaxWidth="400" HorizontalAlignment="Left" />
+                </StackPanel>
+            </Border>
+
+            <!-- Progress Bar -->
+            <Border Background="{DynamicResource Bg.Surface}" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1" CornerRadius="8" Padding="16">
+                <StackPanel Spacing="10">
+                    <TextBlock Text="Progress Bar" FontWeight="Bold" Foreground="{DynamicResource Text.Secondary}" />
+                    <ProgressBar Value="75" Maximum="100" Width="400" HorizontalAlignment="Left" />
+                    <ProgressBar IsIndeterminate="True" Width="400" HorizontalAlignment="Left" />
+                </StackPanel>
+            </Border>
+
+        </StackPanel>
+    </ScrollViewer>
+
+</UserControl>

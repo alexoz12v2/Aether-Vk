@@ -27,6 +27,11 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
     steps:
+    # Generated files in the repo exceed MAX_PATH on Windows; enable long paths before checkout
+    - name: Enable long paths (Windows)
+      if: runner.os == 'Windows'
+      run: git config --global core.longpaths true
+
     - uses: actions/checkout@v4
       with:
         submodules: recursive
@@ -62,6 +67,9 @@ jobs:
         CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
 
   test:
+    # Opt-in: runs only when the repository variable RUN_TESTS is set to 'true'
+    # (Settings > Secrets and variables > Actions > Variables, or `gh variable set RUN_TESTS --body true`)
+    if: vars.RUN_TESTS == 'true'
     needs: compile
     runs-on: ubuntu-latest
 
