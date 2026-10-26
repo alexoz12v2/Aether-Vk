@@ -105,7 +105,7 @@ jobs:
       if: steps.spice.outputs.cache-hit != 'true'
       run: |
         mkdir -p assets/planets
-        curl -# -L -o assets/planets/de442.bsp https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/de442.bsp
+        curl -# -L --fail --connect-timeout 30 --retry 8 --retry-delay 15 --retry-all-errors -o assets/planets/de442.bsp https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/de442.bsp
       shell: bash
 
     - name: Determine Release Mode
