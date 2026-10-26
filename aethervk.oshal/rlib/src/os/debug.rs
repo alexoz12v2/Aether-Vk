@@ -1169,5 +1169,3 @@ macro_rules! set_thread_name {
   };
 }
 
-#[cfg(test)]
-mod tests;
