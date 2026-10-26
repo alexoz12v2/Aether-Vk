@@ -27,7 +27,9 @@ echo " Packaging Aether-Vk for macOS ($ARCH) - $MODE ($CONFIG)"
 echo "=========================================="
 
 echo "[1/4] Publishing project..."
-dotnet publish aethervk.ui-app/aethervk.ui-app.csproj -c "$CONFIG" -r "$ARCH" --self-contained true
+# ui-logic skips the native build by default, and (being netstandard) does not receive -r:
+# force the cargo build and pass the target RID explicitly
+dotnet publish aethervk.ui-app/aethervk.ui-app.csproj -c "$CONFIG" -r "$ARCH" --self-contained true -p:SkipNativeBuild=false -p:ResolvedRID="$ARCH"
 
 echo "[2/4] Creating App Bundle structure..."
 mkdir -p "$BUNDLE_DIR/Contents/MacOS"
