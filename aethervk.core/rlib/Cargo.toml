@@ -39,7 +39,7 @@ aethervk-oshal-rlib = { path = "../../aethervk.oshal/rlib", default-features = f
 image = "0.25.10"
 ntest = "0.9.5"
 approx = "0.5.1"
-reqwest = { version = "0.11", features = ["blocking"] }
+reqwest = { version = "0.11", default-features = false, features = ["blocking", "rustls-tls"] }
 base64 = "0.21"
 
 [dependencies]

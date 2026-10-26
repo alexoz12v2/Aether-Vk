@@ -206,6 +206,7 @@ impl Instance {
         aethervk_oshal_rlib::os::env::var("AETHERVK_DISABLE_GPU_AV").is_some();
       let enable_requested = aethervk_oshal_rlib::os::env::var("AETHERVK_ENABLE_GPU_AV").is_some();
 
+      #[cfg(not(target_vendor = "apple"))]
       if aethervk_oshal_rlib::os::env::var("AETHERVK_ENABLE_PRINTF").is_some() {
         crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS
           .store(true, core::sync::atomic::Ordering::Relaxed);
@@ -402,7 +403,7 @@ impl Instance {
           Ok(inst) => {
             // RenderDoc layer is now loaded into the process. We can safely unmute it (the
             // renderdoc module is debug-only: a release test build has no layer to unmute).
-            #[cfg(debug_assertions)]
+            #[cfg(all(debug_assertions, not(target_vendor = "apple")))]
             if crate::gpu_backends::vulkan::physics::USE_PRINTF_SHADERS
               .load(core::sync::atomic::Ordering::Relaxed)
             {
