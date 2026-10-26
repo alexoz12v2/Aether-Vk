@@ -3,7 +3,7 @@ param (
 )
 
 $AppName = "AetherVk"
-$AppVersion = "1.0.0"
+$AppVersion = "1.0.1"
 $PublishDir = "aethervk.ui-app\bin\Release\net10.0\$Arch\publish"
 $OutZip = "bin\publish\${AppName}_${AppVersion}_${Arch}.zip"
 
