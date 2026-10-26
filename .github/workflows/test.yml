@@ -130,6 +130,8 @@ jobs:
     - name: Execute Tests
       run: xvfb-run -a ./execute_tests.sh
       env:
+        # .config/nextest.toml: no fail-fast, skip tests that need real GPU throughput
+        NEXTEST_PROFILE: ci
         # Force Vulkan to use lavapipe for headless environments
         VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.json
         # TODO: We will remove this when we figure out why it acts out

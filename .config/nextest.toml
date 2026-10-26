@@ -30,3 +30,11 @@ threads-required = "num-test-threads"
 # still lost to the driver (a device lost mid-test while the previous process tears down) is
 # retried after a pause and reported as FLAKY, not FAIL.
 retries = { backoff = "exponential", count = 2, delay = "2s", jitter = true }
+
+# CI (headless, Vulkan on lavapipe): run every test instead of stopping at the first failure,
+# and leave out tests that need real GPU throughput.
+[profile.ci]
+fail-fast = false
+# Renders a full dust ring at 1280 x 800 for 2 x 240 frames: ~10 s per frame on lavapipe, so it
+# cannot finish inside the 5 min limit.
+default-filter = 'not (package(aethervk-core-rlib) & test(=gpu_backends::vulkan::device::dust::cadence::tests::gpu_dust_budget_loop_keeps_the_ladder_order))'
