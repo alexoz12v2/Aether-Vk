@@ -27,12 +27,14 @@ done
 echo "========================================"
 echo "         Running Rust Tests             "
 echo "========================================"
+# Keep going on a Rust failure so the C# suite still runs; the exit status reports both
+RUST_STATUS=0
 if [ $SINGLE_THREAD -eq 1 ]; then
     echo "Mode: Single-threaded, No Capture"
-    cargo llvm-cov nextest --locked --no-capture --test-threads 1
+    cargo llvm-cov nextest --locked --no-capture --test-threads 1 || RUST_STATUS=$?
 else
     echo "Mode: Default"
-    cargo llvm-cov nextest --locked
+    cargo llvm-cov nextest --locked || RUST_STATUS=$?
 fi
 
 echo ""
@@ -53,3 +55,8 @@ echo ""
 echo "========================================"
 echo "  Tests and Coverage Generation Done!   "
 echo "========================================"
+
+if [ $RUST_STATUS -ne 0 ]; then
+    echo "Rust tests failed (exit $RUST_STATUS)"
+    exit $RUST_STATUS
+fi
