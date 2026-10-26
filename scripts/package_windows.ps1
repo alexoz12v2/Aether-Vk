@@ -12,7 +12,9 @@ Write-Host " Packaging Aether-Vk for Windows ($Arch)"
 Write-Host "=========================================="
 
 Write-Host "[1/3] Publishing project..."
-dotnet publish aethervk.ui-app\aethervk.ui-app.csproj -c Release -r $Arch --self-contained true
+# ui-logic skips the native build by default, and (being netstandard) does not receive -r:
+# force the cargo build and pass the target RID explicitly
+dotnet publish aethervk.ui-app\aethervk.ui-app.csproj -c Release -r $Arch --self-contained true -p:SkipNativeBuild=false -p:ResolvedRID=$Arch
 
 Write-Host "[2/3] Creating ZIP archive directory..."
 $OutDir = Split-Path $OutZip
