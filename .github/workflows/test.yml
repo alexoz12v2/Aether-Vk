@@ -32,6 +32,11 @@ jobs:
       if: runner.os == 'Windows'
       run: git config --global core.longpaths true
 
+    - name: Enable git long paths (Windows)
+      if: runner.os == 'Windows'
+      run: git config --system core.longpaths true
+      shell: bash
+
     - uses: actions/checkout@v4
       with:
         submodules: recursive
@@ -74,6 +79,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+    - name: Enable git long paths (Windows)
+      if: runner.os == 'Windows'
+      run: git config --system core.longpaths true
+      shell: bash
+
     - uses: actions/checkout@v4
       with:
         submodules: recursive
