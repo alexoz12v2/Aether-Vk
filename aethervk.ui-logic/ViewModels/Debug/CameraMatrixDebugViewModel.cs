@@ -91,8 +91,8 @@ public sealed partial class CameraMatrixDebugViewModel : ObservableObject, IDisp
         bool tracking = s.Mode == (int)EarthObserverOrientationMode.CometTracking
                      || s.Mode == (int)EarthObserverOrientationMode.SunTracking;
         if (tracking && elevDeg < 0.0)
-            return $"{mode} · target {elevDeg:+0.0;-0.0}° below horizon: facing its azimuth";
-        return $"{mode} · aim {s.AimErrorRad:0.0e+0} rad · target {elevDeg:+0.0;-0.0}°";
+            return FormattableString.Invariant($"{mode} · target {elevDeg:+0.0;-0.0}° below horizon: facing its azimuth");
+        return FormattableString.Invariant($"{mode} · aim {s.AimErrorRad:0.0e+0} rad · target {elevDeg:+0.0;-0.0}°");
     }
 
     public static string FormatDustHistory(System.Collections.Generic.IReadOnlyList<DustTierStats>? tiers)

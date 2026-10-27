@@ -45,6 +45,13 @@ layout(push_constant, std430) uniform PushConstants {
     vec4  eyeLocal;             // 112
 } pc;                           // 128 bytes
 
+#ifdef DUST_LEAF_WG
+// The list's count and entry and the entry's leaf record through a coherent view: a workgroup's
+// reads of them are uniform (scalar loads on AMD RDNA), and amdvlk served some of them stale (a
+// large leaf of the chunk never drawn: the pyramid nondeterministic, gpu_dust_index_lists_*)
+layout(buffer_reference, std430, buffer_reference_align = 4) coherent buffer DustLeafListC { uint v[]; };
+#endif
+
 void main() {
     DUST_PROF_BEGIN(qthread)
 #ifdef DUST_LEAF_WG
@@ -54,8 +61,9 @@ void main() {
     uint g = gl_WorkGroupID.y * DUST_LQUEUE_DISPATCH_MAX_X + gl_WorkGroupID.x;
     // (the chunk's large leaves into the leaf queue header's frame-wide word: the host's chunk feedback)
     if (g == 0u && gl_LocalInvocationID.x == 0u) atomicAdd(pc.pyramid.v[dust_lqueue_base_o(uvec2(pc.pyramid)) + DUST_LQUEUE_FRAME_LARGE], pc.pyramid.v[lb + 3u]);
-    bool mine = g < dust_lqueue_held_o(uvec2(pc.pyramid), lb);
-    uint entry = mine ? pc.pyramid.v[lb + DUST_VQUEUE_HEADER_WORDS + g] : 0u;
+    DustLeafListC lc = DustLeafListC(uvec2(pc.pyramid));
+    bool mine = g < min(lc.v[lb + 3u], dust_lqueue_capacity_o(uvec2(pc.pyramid), lb));
+    uint entry = mine ? lc.v[lb + DUST_VQUEUE_HEADER_WORDS + g] : 0u;
     uint lbase = dust_leaf_slot_base_o(uvec2(pc.pyramid), entry);
     uint r = entry & ~DUST_LQUEUE_SPILL_BIT;
 #else
@@ -68,7 +76,11 @@ void main() {
     uint cap = dust_lqueue_capacity_o(uvec2(pc.pyramid), lbase);
     uint seed = 0u, rec = 0u, level = 0u, levelValve = 0u, cslot = 0u;
     if (mine) {
+#ifdef DUST_LEAF_WG
+        DUST_LQUEUE_GET(lc, lbase, cap, r, seed, rec, level, levelValve, cslot)
+#else
         DUST_LQUEUE_GET(pc.pyramid, lbase, cap, r, seed, rec, level, levelValve, cslot)
+#endif
 #ifdef DUST_LEAF_WG
         level &= ~DUST_LQUEUE_SPILL_BIT;
 #else
@@ -85,14 +97,19 @@ void main() {
         uint h = pc.pyramid.v[DUST_PYR_TABLE + 3u * level + 2u];
         float s = float(1u << level);
 #ifdef DUST_LEAF_WG
-        // (perf9_O) the level into the slot's walk word 39 (the walk's s and the flag's bit read it)
-        if (gl_LocalInvocationID.x == 0u) pc.pyramid.v[pbase + cslot * DUST_PQUEUE_RECORD_WORDS + 39u] = level;
+        // (perf9_O) the level into the walk word 39 (the walk's s reads it), a shared word here
+        // (dust_scatter.glsl dust_l_ws: published by lane 0 before the walk's first barrier)
+        if (gl_LocalInvocationID.x == 0u) dust_l_ws[39u - 33u] = level;
         bool any_ = dust_scatter_rows_wg_pq(uvec2(pc.pyramid), pc.invUnit, pbase, pcap, cslot, rec, s, off, w, h, seed, 0, int(h) - 1, 64u, gl_LocalInvocationID.x);
 #else
         pc.pyramid.v[pbase + cslot * DUST_PQUEUE_RECORD_WORDS + 39u] = level;
         bool any_ = dust_scatter_rows_pq(uvec2(pc.pyramid), pc.invUnit, pbase, pcap, cslot, rec, s, off, w, h, seed, 0, int(h) - 1);
 #endif
+#ifdef DUST_LEAF_WG
+        if (any_) atomicOr(pc.pyramid.v[DUST_PYR_LEVEL_MASK], 1u << level);
+#else
         if (any_) atomicOr(pc.pyramid.v[DUST_PYR_LEVEL_MASK], 1u << DustLRowV(dust_l_slot).v[39u]);
+#endif
     }
     // every lane reaches this (the subgroup reductions need them all)
     DUST_PROF_END(qthread)
