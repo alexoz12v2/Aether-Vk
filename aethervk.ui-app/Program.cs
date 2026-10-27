@@ -55,12 +55,22 @@ class Program
       logSink.Write($"[ERROR] Unobserved task exception: {e.Exception}");
     };
 
+    // A startup that goes silent (a driver stalling in shader compilation, say) gets a dump after
+    // this many seconds. AETHERVK_WATCHDOG_SECONDS=0 turns it off.
+    var watchdogSeconds = 45;
+    if (int.TryParse(Environment.GetEnvironmentVariable("AETHERVK_WATCHDOG_SECONDS"), out var configured))
+      watchdogSeconds = configured;
+    var watchdog = new StartupWatchdog(logSink, TimeSpan.FromSeconds(watchdogSeconds));
+    if (watchdogSeconds > 0)
+      watchdog.Start();
+
     // 1. Setup Microsoft Hosting
     var host = Host.CreateDefaultBuilder(args)
       .ConfigureServices(
         (context, services) =>
         {
           services.AddSingleton(logSink);
+          services.AddSingleton(watchdog);
           services.AddCommonServices(skipNative);
           services.AddViewModels();
         }
