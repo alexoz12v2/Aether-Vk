@@ -4801,7 +4801,8 @@ mod utils {
     file: &str,
   ) -> EngineResult<()> {
     let bytes = encode_scene_dump(scenes, scene_id, scene_ctx)?;
-    if let Some((dir, _)) = file.rsplit_once('/') {
+    // either separator: Windows callers pass backslashed paths
+    if let Some((dir, _)) = file.rsplit_once(['/', '\\']) {
       if !dir.is_empty() {
         fs::create_dir_all(dir)
           .map_err(|_| EngineError::InvalidOperation("DumpScene: cannot create directory"))?;
@@ -4910,7 +4911,7 @@ mod utils {
       out.push((scene_id, r));
     }
     if out.iter().any(|(_, r)| r.is_ok()) {
-      if let Some(parent) = base_dir.rsplit_once('/').map(|(p, _)| p) {
+      if let Some(parent) = base_dir.rsplit_once(['/', '\\']).map(|(p, _)| p) {
         let _ = fs::create_dir_all(parent)
           .and_then(|_| fs::write(alloc::format!("{parent}/latest"), base_dir.as_bytes()));
       }
