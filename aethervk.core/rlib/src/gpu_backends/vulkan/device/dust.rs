@@ -3550,7 +3550,7 @@ impl Device {
     } else {
       match self.kernels.pipelines.dust_split_mono_prof {
         Some(p) if profiling => Some(p),
-        _ => Some(self.kernels.pipelines.dust_split_mono),
+        _ => self.kernels.pipelines.dust_split_mono,
       }
     };
     // the splitter family (perf9 steps Z / O): PREP → walk → project passes 1-3 → SEQ order →
@@ -3619,15 +3619,16 @@ impl Device {
       (consumer, staged_stages, edge_pass)
     } else {
       (
+        // (`dust_draw_staged` is true wherever the family is not built: the fallbacks never run)
         match (self.kernels.pipelines.dust_draw_volume_mono_prof, self.kernels.pipelines.dust_draw_volume_mono_plain) {
           (Some(p), _) if profiling => p,
           (_, Some(p)) if volume_plain => p,
-          _ => self.kernels.pipelines.dust_draw_volume_mono,
+          _ => self.kernels.pipelines.dust_draw_volume_mono.unwrap_or(consumer),
         },
         None,
         match self.kernels.pipelines.dust_draw_small_edge_mono_prof {
           Some(p) if profiling => p,
-          _ => self.kernels.pipelines.dust_draw_small_edge_mono,
+          _ => self.kernels.pipelines.dust_draw_small_edge_mono.unwrap_or(edge_pass),
         },
       )
     };
@@ -4166,7 +4167,7 @@ impl Device {
       } else {
         match self.kernels.pipelines.dust_draw_queue_mono_prof {
           Some(p) if crate::gpu_backends::vulkan::physics::dust_profile_requested() => p,
-          _ => self.kernels.pipelines.dust_draw_queue_mono,
+          _ => self.kernels.pipelines.dust_draw_queue_mono.unwrap_or(pipeline),
         }
       };
       self.kernels.pipelines.assert_pc_size(pipeline, core::mem::size_of_val(&qpc));
@@ -4642,19 +4643,22 @@ impl Device {
   }
 
   /// perf9_K: whether this device's frames draw with the staged family (the test hook's choice,
-  /// else [`Self::dust_draw_staged_wanted`], resolved once and logged)
+  /// else [`Self::dust_draw_staged_wanted`], resolved once and logged); always the staged family
+  /// where the mono pipelines are not built
   pub fn dust_draw_staged(&self) -> bool {
     use core::sync::atomic::Ordering;
-    let mode = &self.kernels.pipelines.dust_draw_mode;
+    let p = &self.kernels.pipelines;
+    let built = p.dust_draw_volume_mono.is_some() && p.dust_draw_small_edge_mono.is_some() && p.dust_draw_queue_mono.is_some();
+    let mode = &p.dust_draw_mode;
     match mode.load(Ordering::Relaxed) {
-      1 | 3 => false,
+      1 | 3 => !built,
       2 | 4 => true,
       _ => {
         let vendor = self.query_result.physical_device_properties.vendor_id;
-        let staged = Self::dust_draw_staged_wanted(vendor);
+        let staged = !built || Self::dust_draw_staged_wanted(vendor);
         let _ = mode.compare_exchange(0, if staged { 4 } else { 3 }, Ordering::Relaxed, Ordering::Relaxed);
         aethervk_oshal_rlib::log!(
-          "[dust] draw family: {} (vendor {vendor:#X}, AETHERVK_DUST_DRAW_STAGED={:?})",
+          "[dust] draw family: {} (vendor {vendor:#X}, AETHERVK_DUST_DRAW_STAGED={:?}, mono built {built})",
           if staged { "staged (perf9_O)" } else { "mono (pre-perf9_O)" },
           aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_DRAW_STAGED")
         );
@@ -4739,19 +4743,21 @@ impl Device {
   }
 
   /// perf9_K: whether this device's frames split with the staged family (the test hook's choice,
-  /// else [`Self::dust_split_staged_wanted`], resolved once and logged)
+  /// else [`Self::dust_split_staged_wanted`], resolved once and logged); always the staged family
+  /// where the pre-split splitter is not built
   pub fn dust_split_staged(&self) -> bool {
     use core::sync::atomic::Ordering;
+    let built = self.kernels.pipelines.dust_split_mono.is_some();
     let mode = &self.kernels.pipelines.dust_split_mode;
     match mode.load(Ordering::Relaxed) {
-      1 | 3 => false,
+      1 | 3 => !built,
       2 | 4 => true,
       _ => {
         let vendor = self.query_result.physical_device_properties.vendor_id;
-        let staged = Self::dust_split_staged_wanted(vendor);
+        let staged = !built || Self::dust_split_staged_wanted(vendor);
         let _ = mode.compare_exchange(0, if staged { 4 } else { 3 }, Ordering::Relaxed, Ordering::Relaxed);
         aethervk_oshal_rlib::log!(
-          "[dust] split family: {} (vendor {vendor:#X}, AETHERVK_DUST_SPLIT_STAGED={:?})",
+          "[dust] split family: {} (vendor {vendor:#X}, AETHERVK_DUST_SPLIT_STAGED={:?}, mono built {built})",
           if staged { "staged (perf9 Z/O leaf queue)" } else { "mono (pre-split splitter)" },
           aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_SPLIT_STAGED")
         );

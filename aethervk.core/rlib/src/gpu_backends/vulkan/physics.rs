@@ -61,15 +61,17 @@ pub struct PhysicsPipelineConfig {
 }
 
 /// Round 9 step O: the devices whose shader compiler rejects the dust monoliths (Qualcomm's
-/// Adreno 619 driver: the propagate / emit solves and the speck walk as one program) load the
-/// staged blob sets instead (`dust_propagate.comp.pass*`, `dust_emit.comp.pass*`); the others
-/// keep the monoliths. `AETHERVK_DUST_STAGED=1` / `0` overrides the vendor rule (the 1070's
-/// byte gate runs both).
+/// Adreno 619 driver: the propagate / emit solves and the speck walk as one program; AMD's
+/// amdvlk (0x1002, 31.0.21924.61 on a Radeon iGPU): `vkCreateComputePipelines` never returns on
+/// `dust_splat_mono.comp` and `dust_draw_volume_mono.comp`) load the staged blob sets instead
+/// (`dust_propagate.comp.pass*`, `dust_emit.comp.pass*`) and build none of the `*_mono.comp`
+/// pipelines; the others keep the monoliths. `AETHERVK_DUST_STAGED=1` / `0` overrides the vendor
+/// rule (the 1070's byte gate runs both).
 pub fn dust_staged_passes(vendor_id: u32) -> bool {
   match aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_STAGED").as_deref().map(str::trim) {
     Some("1") => true,
     Some("0") => false,
-    _ => vendor_id == 0x5143,
+    _ => matches!(vendor_id, 0x5143 | 0x1002),
   }
 }
 
@@ -195,13 +197,14 @@ pub struct PhysicsPipelines {
   /// perf9_K: the mono draw family, the pre-perf9_O blobs (`dust_draw_volume_mono.comp`: `.sg` as
   /// `dust_draw_volume`, `_plain` the plain blob beside it, `.prof`; `dust_draw_small_edge_mono.comp`
   /// and `dust_draw_queue_mono.comp` with their `.prof`), dispatched when `Device::dust_draw_staged`
-  /// is false (the GTX 1070 default); always built, as before perf9_O
-  pub dust_draw_volume_mono: vk::Pipeline,
+  /// is false (the GTX 1070 default); `None` where the monoliths are not built
+  /// ([`dust_staged_passes`])
+  pub dust_draw_volume_mono: Option<vk::Pipeline>,
   pub dust_draw_volume_mono_prof: Option<vk::Pipeline>,
   pub dust_draw_volume_mono_plain: Option<vk::Pipeline>,
-  pub dust_draw_small_edge_mono: vk::Pipeline,
+  pub dust_draw_small_edge_mono: Option<vk::Pipeline>,
   pub dust_draw_small_edge_mono_prof: Option<vk::Pipeline>,
-  pub dust_draw_queue_mono: vk::Pipeline,
+  pub dust_draw_queue_mono: Option<vk::Pipeline>,
   pub dust_draw_queue_mono_prof: Option<vk::Pipeline>,
   /// perf9_K: the draw family's mode (`Device::dust_draw_staged` / `dust_set_draw_staged`): 0 not
   /// resolved yet, 1 mono / 2 staged (the test hook's), 3 mono / 4 staged (the vendor rule's)
@@ -212,9 +215,9 @@ pub struct PhysicsPipelines {
   pub dust_split_prof: Option<vk::Pipeline>,
   /// perf9_K: the pre-split splitter (`dust_split_mono.comp`: the old dust_split.comp and
   /// dust_leaf.glsl, one dispatch per chunk, a workgroup per cluster) and its profiler variant,
-  /// dispatched when `Device::dust_split_staged` is false (the GTX 1070 default); always built,
-  /// as `dust_split` was before the split family
-  pub dust_split_mono: vk::Pipeline,
+  /// dispatched when `Device::dust_split_staged` is false (the GTX 1070 default); `None` where
+  /// the monoliths are not built ([`dust_staged_passes`])
+  pub dust_split_mono: Option<vk::Pipeline>,
   pub dust_split_mono_prof: Option<vk::Pipeline>,
   /// perf9_K: the split family's mode (`Device::dust_split_staged` / `dust_set_split_staged`): 0
   /// not resolved yet, 1 mono / 2 staged (the test hook's), 3 mono / 4 staged (the vendor rule's)
@@ -854,30 +857,31 @@ impl PhysicsPipelines {
           None
         },
         dust_draw_small_edge: mk!("dust_draw_small_edge.comp.spv"),
-        // (perf9_K) the mono draw family: the pre-perf9_O blobs, chosen as the originals were
-        dust_draw_volume_mono: if has_subgroup_arithmetic {
-          mk!("dust_draw_volume_mono.comp.sg.spv")
-        } else {
-          mk!("dust_draw_volume_mono.comp.spv")
+        // (perf9_K) the mono draw family: the pre-perf9_O blobs, chosen as the originals were;
+        // none where the monoliths are not built (`staged_dust`)
+        dust_draw_volume_mono: match (staged_dust, has_subgroup_arithmetic) {
+          (true, _) => None,
+          (false, true) => Some(mk!("dust_draw_volume_mono.comp.sg.spv")),
+          (false, false) => Some(mk!("dust_draw_volume_mono.comp.spv")),
         },
-        dust_draw_volume_mono_prof: if has_shader_clock && dust_profile_requested() {
+        dust_draw_volume_mono_prof: if !staged_dust && has_shader_clock && dust_profile_requested() {
           Some(mk!("dust_draw_volume_mono.comp.prof.spv"))
         } else {
           None
         },
-        dust_draw_volume_mono_plain: if has_subgroup_arithmetic {
+        dust_draw_volume_mono_plain: if !staged_dust && has_subgroup_arithmetic {
           Some(mk!("dust_draw_volume_mono.comp.spv"))
         } else {
           None
         },
-        dust_draw_small_edge_mono: mk!("dust_draw_small_edge_mono.comp.spv"),
-        dust_draw_small_edge_mono_prof: if has_shader_clock && dust_profile_requested() {
+        dust_draw_small_edge_mono: if staged_dust { None } else { Some(mk!("dust_draw_small_edge_mono.comp.spv")) },
+        dust_draw_small_edge_mono_prof: if !staged_dust && has_shader_clock && dust_profile_requested() {
           Some(mk!("dust_draw_small_edge_mono.comp.prof.spv"))
         } else {
           None
         },
-        dust_draw_queue_mono: mk!("dust_draw_queue_mono.comp.spv"),
-        dust_draw_queue_mono_prof: if has_shader_clock && dust_profile_requested() {
+        dust_draw_queue_mono: if staged_dust { None } else { Some(mk!("dust_draw_queue_mono.comp.spv")) },
+        dust_draw_queue_mono_prof: if !staged_dust && has_shader_clock && dust_profile_requested() {
           Some(mk!("dust_draw_queue_mono.comp.prof.spv"))
         } else {
           None
@@ -889,9 +893,9 @@ impl PhysicsPipelines {
           None
         },
         dust_split: mk!("dust_split.comp.spv"),
-        // (perf9_K) the pre-split splitter
-        dust_split_mono: mk!("dust_split_mono.comp.spv"),
-        dust_split_mono_prof: if has_shader_clock && dust_profile_requested() {
+        // (perf9_K) the pre-split splitter; none where the monoliths are not built
+        dust_split_mono: if staged_dust { None } else { Some(mk!("dust_split_mono.comp.spv")) },
+        dust_split_mono_prof: if !staged_dust && has_shader_clock && dust_profile_requested() {
           Some(mk!("dust_split_mono.comp.prof.spv"))
         } else {
           None
@@ -1058,10 +1062,10 @@ impl PhysicsPipelines {
     }
     discard_pool.discard_pipeline(self.dust_draw_small_edge, timeline);
     // (perf9_K) the mono draw family
-    for p in [self.dust_draw_volume_mono, self.dust_draw_small_edge_mono, self.dust_draw_queue_mono] {
-      discard_pool.discard_pipeline(p, timeline);
-    }
     for p in [
+      self.dust_draw_volume_mono,
+      self.dust_draw_small_edge_mono,
+      self.dust_draw_queue_mono,
       self.dust_draw_volume_mono_prof,
       self.dust_draw_volume_mono_plain,
       self.dust_draw_small_edge_mono_prof,
@@ -1077,7 +1081,9 @@ impl PhysicsPipelines {
     }
     discard_pool.discard_pipeline(self.dust_split, timeline);
     // (perf9_K) the pre-split splitter
-    discard_pool.discard_pipeline(self.dust_split_mono, timeline);
+    if let Some(p) = self.dust_split_mono {
+      discard_pool.discard_pipeline(p, timeline);
+    }
     if let Some(p) = self.dust_split_mono_prof {
       discard_pool.discard_pipeline(p, timeline);
     }
@@ -1137,7 +1143,7 @@ impl PhysicsPipelines {
       ("dust_splat_prof", self.dust_splat_prof),
       ("dust_split", Some(self.dust_split)),
       ("dust_split_prof", self.dust_split_prof),
-      ("dust_split_mono", Some(self.dust_split_mono)),
+      ("dust_split_mono", self.dust_split_mono),
       ("dust_split_mono_prof", self.dust_split_mono_prof),
       ("dust_draw_queue", Some(self.dust_draw_queue)),
       ("dust_draw_queue_prof", self.dust_draw_queue_prof),
@@ -1153,12 +1159,12 @@ impl PhysicsPipelines {
       ("dust_draw_volume_s5", self.dust_draw_volume_stages.map(|s| s[6])),
       ("dust_draw_small_edge", Some(self.dust_draw_small_edge)),
       ("dust_draw_small_edge_prof", self.dust_draw_small_edge_prof),
-      ("dust_draw_volume_mono", Some(self.dust_draw_volume_mono)),
+      ("dust_draw_volume_mono", self.dust_draw_volume_mono),
       ("dust_draw_volume_mono_prof", self.dust_draw_volume_mono_prof),
       ("dust_draw_volume_mono_plain", self.dust_draw_volume_mono_plain),
-      ("dust_draw_small_edge_mono", Some(self.dust_draw_small_edge_mono)),
+      ("dust_draw_small_edge_mono", self.dust_draw_small_edge_mono),
       ("dust_draw_small_edge_mono_prof", self.dust_draw_small_edge_mono_prof),
-      ("dust_draw_queue_mono", Some(self.dust_draw_queue_mono)),
+      ("dust_draw_queue_mono", self.dust_draw_queue_mono),
       ("dust_draw_queue_mono_prof", self.dust_draw_queue_mono_prof),
       ("dust_specks", Some(self.dust_specks)),
       ("dust_specks_walk", Some(self.dust_specks_walk)),
