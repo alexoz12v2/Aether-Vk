@@ -32,7 +32,55 @@ static HOST_CAPTURED: core::sync::atomic::AtomicBool = core::sync::atomic::Atomi
 /// NVIDIA driver and every thread's gdb backtrace. Everything goes to
 /// `/tmp/aethervk_gpu_lost_<pid>.txt`; the Xid lines, a few `nvidia-smi` fields and the
 /// backtraces are also logged.
+///
+/// Windows: on by default (`AETHERVK_GPU_LOST_DUMP=0` turns it off). The report goes to
+/// `%LOCALAPPDATA%\Aether-Vk\logs\gpu_lost_<pid>.txt` with a minidump beside it, the TDR events
+/// and `nvidia-smi -q`.
 pub fn capture_host_diagnostics(origin: &str, engine_state: &str) {
+  #[cfg(target_os = "windows")]
+  {
+    use aethervk_oshal_rlib::os::debug::crash_dump::{
+      append_text, capture_gpu_lost, log_dir, process_id,
+    };
+    use alloc::format;
+    if aethervk_oshal_rlib::os::env::var("AETHERVK_GPU_LOST_DUMP").as_deref().map(str::trim)
+      == Some("0")
+    {
+      return;
+    }
+    let pid = process_id();
+    let Some(dir) = log_dir() else {
+      aethervk_oshal_rlib::log!("[GPU lost] LOCALAPPDATA unset: host capture skipped");
+      return;
+    };
+    let out = format!("{dir}\\gpu_lost_{pid}.txt");
+    if HOST_CAPTURED.swap(true, core::sync::atomic::Ordering::AcqRel) {
+      // a later report (typically `report_device_lost` after the result mapping) adds its state
+      if !engine_state.is_empty() {
+        append_text(&out, &format!("== engine state ({origin})\n{engine_state}\n"));
+        for l in engine_state.lines() {
+          aethervk_oshal_rlib::log!("[GPU lost] {l}");
+        }
+      }
+      return;
+    }
+    let early = EARLY_RECYCLES.load(core::sync::atomic::Ordering::Relaxed);
+    aethervk_oshal_rlib::log!("[GPU lost] host capture ({origin}) → {out}");
+    append_text(
+      &out,
+      &format!(
+        "== device lost: pid {pid}, origin {origin}\n== engine state\n{engine_state}\nearly command-buffer recycles: {early}\n"
+      ),
+    );
+    for l in engine_state.lines() {
+      aethervk_oshal_rlib::log!("[GPU lost] {l}");
+    }
+    let dump = format!("{dir}\\aethervk-gpu-lost-{pid}.dmp");
+    for l in capture_gpu_lost(&out, &dump) {
+      aethervk_oshal_rlib::log!("{l}");
+    }
+    aethervk_oshal_rlib::log!("[GPU lost] host capture complete → {out}");
+  }
   #[cfg(target_os = "linux")]
   {
     use aethervk_oshal_rlib::os::debug::{
@@ -164,7 +212,7 @@ pub fn capture_host_diagnostics(origin: &str, engine_state: &str) {
     unsafe { libc::unlink(format!("{scratch}\0").as_ptr().cast()) };
     aethervk_oshal_rlib::log!("[GPU lost] host capture complete → {out}");
   }
-  #[cfg(not(target_os = "linux"))]
+  #[cfg(not(any(target_os = "linux", target_os = "windows")))]
   let _ = (origin, engine_state);
 }
 

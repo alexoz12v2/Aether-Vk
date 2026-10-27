@@ -1,5 +1,8 @@
 //! Debugging utilities.
 
+#[cfg(target_os = "windows")]
+pub mod crash_dump;
+
 #[macro_export]
 macro_rules! log {
   ($($arg:tt)*) => {

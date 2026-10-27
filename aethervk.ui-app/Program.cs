@@ -1,8 +1,13 @@
 using System;
+using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Threading.Tasks;
+using AetherVk.Logic.Services;
 using AetherVk.Utils;
 using Avalonia;
 using Avalonia.ReactiveUI;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
 namespace AetherVk;
@@ -37,11 +42,25 @@ class Program
     skipNative = Array.IndexOf(args, "--skip-native") >= 0;
 #endif
 
+    // Log file first, so the session header and any crash below are recorded even in release
+    var logSink = LogFileSink.CreateDefault();
+    WriteSessionHeader(logSink, args);
+    AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+    {
+      logSink.Write($"[FATAL] Unhandled exception (terminating: {e.IsTerminating}): {e.ExceptionObject}");
+      logSink.Flush(TimeSpan.FromSeconds(2));
+    };
+    TaskScheduler.UnobservedTaskException += (_, e) =>
+    {
+      logSink.Write($"[ERROR] Unobserved task exception: {e.Exception}");
+    };
+
     // 1. Setup Microsoft Hosting
     var host = Host.CreateDefaultBuilder(args)
       .ConfigureServices(
         (context, services) =>
         {
+          services.AddSingleton(logSink);
           services.AddCommonServices(skipNative);
           services.AddViewModels();
         }
@@ -65,6 +84,27 @@ class Program
       host.StopAsync().Wait();
       host.Dispose();
     }
+  }
+
+  private static void WriteSessionHeader(LogFileSink logSink, string[] args)
+  {
+    var version =
+      typeof(Program).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+      ?? typeof(Program).Assembly.GetName().Version?.ToString()
+      ?? "unknown";
+#if DEBUG
+    var build = "Debug";
+#else
+    var build = "Release";
+#endif
+    logSink.Write(
+      $"[INFO] Aether-Vk {version} ({build}) started {DateTime.Now:O}, pid {Process.GetCurrentProcess().Id}"
+    );
+    logSink.Write(
+      $"[INFO] OS: {RuntimeInformation.OSDescription} {RuntimeInformation.ProcessArchitecture}, {RuntimeInformation.FrameworkDescription}"
+    );
+    logSink.Write($"[INFO] Args: {string.Join(" ", args)}");
+    logSink.Write($"[INFO] Log file: {logSink.FilePath}");
   }
 
   // Avalonia configuration, don't remove; also used by visual designer.

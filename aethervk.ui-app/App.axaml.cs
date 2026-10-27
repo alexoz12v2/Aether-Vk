@@ -29,6 +29,11 @@ public partial class App : Application
         System.Runtime.InteropServices.Marshal.PtrToStringAnsi(messagePtr, (int)length) ?? errorMsg;
     }
 
+    // The core aborts the process after this returns, so the panic must be on disk first
+    var logSink = Host?.Services.GetService<LogFileSink>();
+    logSink?.Write($"[FATAL] Rust core panicked: {errorMsg}");
+    logSink?.Flush(TimeSpan.FromSeconds(2));
+
     Avalonia.Threading.Dispatcher.UIThread.Post(() =>
     {
       if (Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
