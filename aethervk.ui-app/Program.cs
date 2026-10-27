@@ -137,15 +137,17 @@ class Program
           ],
         }
       )
-      // TODO: test on windows
       .With(
         new Win32PlatformOptions
         {
           RenderingMode =
           [
-            Win32RenderingMode.Vulkan, // 1. Try vulkan first
-            Win32RenderingMode.AngleEgl, // 2. then go to default, angle translates to Direct3D 11
-            Win32RenderingMode.Software, // 3. CPU
+            // black screen / crash on hybrid-GPU laptops (RTX dGPU + iGPU) with Vulkan: a second
+            // Vulkan device next to the core's, possibly on the other adapter. The UI is light
+            // enough for the CPU, and the 3D viewport is drawn by the core, so software only
+            // Win32RenderingMode.Vulkan,
+            // Win32RenderingMode.AngleEgl,
+            Win32RenderingMode.Software,
           ],
         }
       )
