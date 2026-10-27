@@ -1105,6 +1105,21 @@ impl WindowedPresentationState {
     }?;
     let (extent, transform, image_count) =
       self.extent_transform_imagecount(&surf_caps, present_mode);
+    let current = surf_caps.surface_capabilities.current_extent;
+    let min = surf_caps.surface_capabilities.min_image_extent;
+    let max = surf_caps.surface_capabilities.max_image_extent;
+    aethervk_oshal_rlib::log!(
+      "[Swapchain] create {}x{} images={} (surface current {}x{}, min {}x{}, max {}x{})",
+      extent.width,
+      extent.height,
+      image_count,
+      current.width,
+      current.height,
+      min.width,
+      min.height,
+      max.width,
+      max.height,
+    );
     let composite_alpha = Self::get_supported_composite_alpha(&surf_caps)?;
 
     Self::can_swapchain_image_be_transfer(&surf_caps)?;
@@ -1363,6 +1378,7 @@ impl WindowedPresentationState {
     rollback: &mut crate::gpu_backends::vulkan::utils::RollbackContext<'_>,
   ) -> GpuResult<AcquireResult> {
     if let Some((w, h)) = self.pending_resize.take() {
+      aethervk_oshal_rlib::log!("[Swapchain] applying pending resize {w}x{h}");
       // Defer swapchain recreation during an active RenderDoc capture to avoid
       // deadlocking against RenderDoc's GL overlay thread via the nvidia GL/VK
       // internal mutex (vkCreateSwapchainKHR holds it; glXMakeContextCurrent waits).
