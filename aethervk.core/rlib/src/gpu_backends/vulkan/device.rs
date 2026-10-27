@@ -2002,6 +2002,18 @@ impl Device {
     query_input: &utils::PhysicalDeviceQueryInput,
   ) -> GpuResult<Self> {
     let eligible_physical_devices = instance.get_eligible_devices(query_input)?;
+    // Laptops with an iGPU and a dGPU list both: the index picks which one renders
+    for (i, eligible) in eligible_physical_devices.iter().enumerate() {
+      let props = &eligible.physical_device_properties;
+      let name = unsafe { core::ffi::CStr::from_ptr(props.device_name.as_ptr()) }.to_string_lossy();
+      aethervk_oshal_rlib::log!(
+        "[Device] eligible GPU {i}: \"{name}\" type={:?} vendor=0x{:04x} device=0x{:04x} driver=0x{:08x}",
+        props.device_type,
+        props.vendor_id,
+        props.device_id,
+        props.driver_version,
+      );
+    }
 
     let chosen_physical_device_query_result = match eligible_physical_devices.get(index) {
       Some(chosen_physical_device_query_result) => Ok(chosen_physical_device_query_result),

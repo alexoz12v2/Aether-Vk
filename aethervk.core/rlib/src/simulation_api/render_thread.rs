@@ -721,7 +721,14 @@ fn process_command(
           acquire_result.image_index as usize,
           acquire_result.frame_index as usize,
         ) {
-          Ok(crate::gpu::SwapchainStatus::Optimal) => {}
+          Ok(crate::gpu::SwapchainStatus::Optimal) => {
+            // Milestones only (the first present, then every 600th), so a black window is visible in the log
+            static PRESENTED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+            let n = PRESENTED.fetch_add(1, core::sync::atomic::Ordering::Relaxed) + 1;
+            if n == 1 || n % 600 == 0 {
+              oshal::log!("[Render Thread] presented frame {} on PE {:?}", n, pe_handle);
+            }
+          }
           Ok(status) => {
             oshal::log!(
               "[Render Thread] Warning: present status={:?} for PE {:?} — may need resize",
