@@ -1120,6 +1120,11 @@ impl PipelinePool {
     }
 
     // Heavy Vulkan creation executed purely lock-free
+    aethervk_oshal_rlib::log!(
+      "[PipelinePool] Creating compute pipeline: module=0x{:x} layout=0x{:x}",
+      ash::vk::Handle::as_raw(info.shader_module),
+      ash::vk::Handle::as_raw(info.pipeline_layout),
+    );
     let raw_info = RawComputeInfo::from(info);
     let mut pipeline = vk::Pipeline::null();
     let res = unsafe {

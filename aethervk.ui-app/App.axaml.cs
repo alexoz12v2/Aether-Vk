@@ -124,6 +124,9 @@ public partial class App : Application
 
         splashViewModel.OnInitializationCompleted += () =>
         {
+          // Startup is over: from here a silent log is not a hang
+          Host?.Services.GetService<StartupWatchdog>()?.Disarm();
+
           Avalonia.Threading.Dispatcher.UIThread.Post(() =>
           {
             var inputRegistry =

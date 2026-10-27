@@ -24,7 +24,27 @@ public sealed class LogFileSink : IDisposable
   private readonly BlockingCollection<Action<StreamWriter>> _work = new();
   private readonly Thread _writer;
 
+  // What the startup watchdog reads: when the last line was written, and what it said
+  private long _lastWriteTicks = DateTime.UtcNow.Ticks;
+  private readonly object _lastLineLock = new object();
+  private string _lastLine = string.Empty;
+
   public string FilePath { get; }
+
+  public string FolderPath => Path.GetDirectoryName(FilePath) ?? string.Empty;
+
+  public DateTime LastWriteUtc => new DateTime(Interlocked.Read(ref _lastWriteTicks), DateTimeKind.Utc);
+
+  public string LastLine
+  {
+    get
+    {
+      lock (_lastLineLock)
+      {
+        return _lastLine;
+      }
+    }
+  }
 
   public LogFileSink(string directory)
   {
@@ -90,6 +110,11 @@ public sealed class LogFileSink : IDisposable
   /// <summary>Queues one line. Never blocks the caller.</summary>
   public void Write(string line)
   {
+    Interlocked.Exchange(ref _lastWriteTicks, DateTime.UtcNow.Ticks);
+    lock (_lastLineLock)
+    {
+      _lastLine = line;
+    }
     Enqueue(w => w.WriteLine(line));
   }
 

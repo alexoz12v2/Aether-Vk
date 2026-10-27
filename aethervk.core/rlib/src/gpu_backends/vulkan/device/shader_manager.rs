@@ -217,6 +217,8 @@ impl Shader {
         entry_point
       ))))?;
 
+    // Logged before the driver call: if the driver stalls here, the log's last line names the shader
+    aethervk_oshal_rlib::log!("[Shader] creating module \"{}\" ({} words)", path, patched_code.len());
     let module = unsafe { device.create_shader_module(&shader_create_info, None) }?;
     let module = unsafe { NonZeroHandle::new_unchecked(module) };
 
