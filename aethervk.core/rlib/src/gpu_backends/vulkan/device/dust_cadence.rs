@@ -1949,7 +1949,7 @@ impl Device {
     } else {
       match self.kernels.pipelines.dust_draw_queue_mono_prof {
         Some(p) if crate::gpu_backends::vulkan::physics::dust_profile_requested() => p,
-        _ => self.kernels.pipelines.dust_draw_queue_mono,
+        _ => self.kernels.pipelines.dust_draw_queue_mono.unwrap_or(pipeline),
       }
     };
     self.kernels.pipelines.assert_pc_size(pipeline, core::mem::size_of_val(&qpc));
