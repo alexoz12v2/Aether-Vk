@@ -34,6 +34,7 @@ pub fn panic_handler_impl() -> ! {
   #[cfg(windows)]
   {
     // TODO: on debug_assertions, use WinDbg to print stacktrace
+    debug::crash_dump::write_panic_dump();
     unsafe {
       let handle: HANDLE = GetCurrentProcess();
       let exit_code: u32 = 1;

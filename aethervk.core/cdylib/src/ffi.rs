@@ -33,6 +33,9 @@ pub unsafe extern "C" fn avkRegisterPanicCallback(cb: PanicCallback) {
   unsafe {
     PANIC_CALLBACK = Some(cb);
   }
+  // Runs once at startup: an unhandled native exception then leaves a minidump next to the log
+  #[cfg(target_os = "windows")]
+  aethervk_oshal_rlib::os::debug::crash_dump::install_crash_dump_handler();
 }
 
 /// Startup Parameters

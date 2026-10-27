@@ -23,9 +23,13 @@ public class ConsoleService : ObservableObject, IDisposable
 
   private readonly IUiThreadDispatcher? _uiThreadDispatcher;
 
-  public ConsoleService(IUiThreadDispatcher? uiThreadDispatcher = null)
+  // Owned by the host: every line also goes to the run's log file, so release builds keep it
+  private readonly LogFileSink? _fileSink;
+
+  public ConsoleService(IUiThreadDispatcher? uiThreadDispatcher = null, LogFileSink? fileSink = null)
   {
     _uiThreadDispatcher = uiThreadDispatcher;
+    _fileSink = fileSink;
     _flushTimer = new Timer(FlushMessages, null, 100, 100);
   }
 
@@ -34,6 +38,7 @@ public class ConsoleService : ObservableObject, IDisposable
   {
     var msg = $"[{DateTime.Now:HH:mm:ss}] {message.TrimEnd('\n', '\r')}";
     Console.WriteLine(msg);
+    _fileSink?.Write(msg);
     _messageQueue.Enqueue(msg);
   }
 
