@@ -71,10 +71,16 @@ public static class SkyMath
   /// on the sky, at position angle ψ. With east to the left of north on screen (the sky seen from
   /// inside), position angles grow counter-clockwise, so image +Y sits (θ − ψ) counter-clockwise from
   /// screen up and the clockwise rotation is ψ − θ.</para>
+  /// <para>With <paramref name="viewUpIsCelestialNorth"/> (the observer's north-up view) the view
+  /// up is celestial north, ψ = 0, and the rotation is the image's sky position angle alone, −θ
+  /// (<paramref name="viewUpIsEclipticSouth"/> is then ignored).</para>
   /// A mirrored image (east right) cannot be matched by a rotation; its +Y still lines up.
   /// </summary>
-  public static double BillboardRotationDeg(double raDeg, double decDeg, double imageRotationDeg, bool viewUpIsEclipticSouth)
+  public static double BillboardRotationDeg(
+    double raDeg, double decDeg, double imageRotationDeg, bool viewUpIsEclipticSouth, bool viewUpIsCelestialNorth = false)
   {
+    if (viewUpIsCelestialNorth)
+      return DesktopBillboardGeometry.NormalizeDeg(-imageRotationDeg);
     var up = viewUpIsEclipticSouth ? -Vector3d.UnitZ : Vector3d.UnitZ;
     double psi = PositionAngleDeg(raDeg, decDeg, up);
     return DesktopBillboardGeometry.NormalizeDeg(psi - imageRotationDeg);

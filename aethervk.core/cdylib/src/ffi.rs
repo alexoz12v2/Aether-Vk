@@ -681,6 +681,9 @@ pub unsafe extern "C" fn avkSimulationContext_setCameraShading(
 /// The camera is at the Earth's centre, or with `topocentric` at geodetic `lat_deg` / `lon_deg`
 /// (east positive) on the WGS84 ellipsoid, `elev_m` metres above it; the Earth's rotation never
 /// turns the look. With a comet, the comet and its dust are drawn at the light-time retarded epoch.
+/// `up` (C# `ObserverUp`): 0 Ecliptic (screen right in the ecliptic plane, up towards the ecliptic
+/// pole on the latitude's side), 1 CelestialNorth (up towards the J2000 celestial north pole
+/// `(0, sin ε, cos ε)`, whatever the latitude: north up, east left); unknown values read as 0.
 ///
 /// # Safety
 /// FFI Contract: `look` is null or points to 4 readable f64
@@ -698,6 +701,7 @@ pub unsafe extern "C" fn avkSimulationContext_setEarthObserver(
   lon_deg: f64,
   elev_m: f64,
   look: *const f64,
+  up: u32,
 ) -> bool {
   if ctx.is_null() {
     return false;
@@ -709,9 +713,20 @@ pub unsafe extern "C" fn avkSimulationContext_setEarthObserver(
     let l = unsafe { core::slice::from_raw_parts(look, 4) };
     [l[0], l[1], l[2], l[3]]
   };
-  let mode = aethervk_core_rlib::simulation_api::earth_observer::EarthObserverMode::from_u32(mode);
+  use aethervk_core_rlib::simulation_api::earth_observer::{EarthObserverMode, ObserverUp};
+  let mode = EarthObserverMode::from_u32(mode);
   ctx_ref.set_earth_observer(
-    scene_id, camera_id, mode, earth_id, comet_id, topocentric, lat_deg, lon_deg, elev_m, look,
+    scene_id,
+    camera_id,
+    mode,
+    earth_id,
+    comet_id,
+    topocentric,
+    lat_deg,
+    lon_deg,
+    elev_m,
+    look,
+    ObserverUp::from_u32(up),
   )
 }
 

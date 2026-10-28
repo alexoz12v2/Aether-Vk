@@ -85,8 +85,8 @@ pub unsafe extern "C" fn avkSimulationContext_getFitsMetadataJson(
 /// `p1` white, data units); `transfer` 0 linear, 1 log, 2 asinh. A later
 /// `avkSimulationContext_copyAssetTexels` / `copyAssetThumbnail` returns the new image.
 /// `out_black` / `out_white` (nullable) receive the points used. `false` for an unknown or
-/// non-FITS asset, invalid codes / parameters, a cache write failure, or while an import holds
-/// the library (retry).
+/// non-FITS asset, invalid codes / parameters or a cache write failure. Waits for the library's
+/// write lock (an import, a texel copy): call it off the UI thread.
 ///
 /// # Safety
 /// FFI contract: `ctx` valid; `out_black` / `out_white` null or writable.
@@ -111,9 +111,7 @@ pub unsafe extern "C" fn avkSimulationContext_setFitsStretch(
   };
   let ctx_ref = unsafe { &*ctx };
   let library = alloc::sync::Arc::clone(&ctx_ref.scenes.read().asset_library);
-  let Some(mut library) = library.try_write() else {
-    return false;
-  };
+  let mut library = library.write();
   match library.set_fits_stretch(asset_id, stretch) {
     Ok((b, w)) => {
       unsafe {

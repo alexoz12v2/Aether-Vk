@@ -258,9 +258,10 @@ public interface INativeRuntimeService : IDisposable
   /// camera is at the Earth's centre, or with <paramref name="topocentric"/> at geodetic
   /// <paramref name="latDeg"/> / <paramref name="lonDeg"/> on the WGS84 ellipsoid,
   /// <paramref name="elevM"/> metres above it. With a comet, the core draws the comet and its dust
-  /// at the light-time retarded epoch.
+  /// at the light-time retarded epoch. <paramref name="up"/>: the up hint every look is levelled to
+  /// (the ecliptic pole of the latitude's side, or J2000 celestial north).
   /// </summary>
-  bool SetEarthObserver(ulong cameraId, int mode, ulong earthId, ulong cometId, bool topocentric, double latDeg, double lonDeg, double elevM, Quaterniond look);
+  bool SetEarthObserver(ulong cameraId, int mode, ulong earthId, ulong cometId, bool topocentric, double latDeg, double lonDeg, double elevM, Quaterniond look, ObserverUp up);
 
   /// <summary>Radius (km) of the visible dust coma (0 without dust): frames the comet in Earth
   /// observer tracking.</summary>
@@ -1403,7 +1404,8 @@ internal unsafe static class PInvokeAetherVkCore
     double latDeg,
     double lonDeg,
     double elevM,
-    [In] double[] look
+    [In] double[] look,
+    uint up
   );
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
@@ -2523,10 +2525,10 @@ public sealed class NativeRuntimeService : INativeRuntimeService
   public double DustComaRadiusKm() =>
     _ctx != 0 ? PInvokeAetherVkCore.avkSimulationContext_dustComaRadiusKm(_ctx, _sceneId) : 0.0;
 
-  public bool SetEarthObserver(ulong cameraId, int mode, ulong earthId, ulong cometId, bool topocentric, double latDeg, double lonDeg, double elevM, Quaterniond look) =>
+  public bool SetEarthObserver(ulong cameraId, int mode, ulong earthId, ulong cometId, bool topocentric, double latDeg, double lonDeg, double elevM, Quaterniond look, ObserverUp up) =>
     _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_setEarthObserver(
       _ctx, _sceneId, cameraId, mode < 0 ? uint.MaxValue : (uint)mode, earthId, cometId, topocentric, latDeg, lonDeg, elevM,
-      new[] { look.X, look.Y, look.Z, look.W });
+      new[] { look.X, look.Y, look.Z, look.W }, (uint)up);
 
   public bool SetJetPreviewVisibility(ulong jetEntityId, bool isVisible) =>
     PInvokeAetherVkCore.avkSimulationContext_setJetPreviewVisibility(
@@ -2833,13 +2835,19 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     uint needed;
     if (!PInvokeAetherVkCore.avkSimulationContext_getFitsMetadataJson(_ctx, assetId, null, 0, &needed))
       return null;
-    var buf = new byte[needed + 1];
-    fixed (byte* p = buf)
+    // a re-stretch between the calls can lengthen the JSON (the black / white digits): size again
+    for (int attempt = 0; attempt < 4; attempt++)
     {
-      if (!PInvokeAetherVkCore.avkSimulationContext_getFitsMetadataJson(_ctx, assetId, p, (uint)buf.Length, &needed))
-        return null;
+      var buf = new byte[needed + 1];
+      fixed (byte* p = buf)
+      {
+        if (!PInvokeAetherVkCore.avkSimulationContext_getFitsMetadataJson(_ctx, assetId, p, (uint)buf.Length, &needed))
+          return null;
+      }
+      if (needed < buf.Length)
+        return Encoding.UTF8.GetString(buf, 0, (int)needed);
     }
-    return Encoding.UTF8.GetString(buf, 0, (int)Math.Min(needed, (uint)buf.Length - 1));
+    return null;
   }
 
   public unsafe Models.FitsStretchResult? SetFitsStretch(ulong assetId, uint mode, uint transfer, double p0, double p1)

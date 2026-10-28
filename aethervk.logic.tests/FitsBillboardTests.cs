@@ -60,16 +60,24 @@ public class FitsBillboardTests
     public bool IsEarthObserver { get; set; } = true;
     public PointD? ViewportCenterDesktopPx { get; set; } = new PointD(960, 540);
     public bool ViewUpIsEclipticSouth { get; set; }
+    public bool ViewUpIsCelestialNorth { get; set; } = true;
+    public double? CometDistanceKm { get; set; } = 0.47 * 149_597_870.7;
+    public double ViewportHeightPx { get; set; } = 1000;
     public Vector3d? Locked;
     public (double Lat, double Lon, double? Elev)? Site;
     private bool _locked;
 
-    public bool MatchArcsecPerPx(double arcsecPerPx)
+    /// Logs the field as the image's angular height in arcsec ("match 364.416″" for 1200 px at
+    /// 0.30368″/px); perspective: the viewport's height px then show that angle.
+    public bool MatchField(double heightKm, double angleRad)
     {
-      Log.Add(FormattableString.Invariant($"match {arcsecPerPx:G6}"));
-      ArcsecPerPx = arcsecPerPx;
+      Log.Add(FormattableString.Invariant($"match {angleRad / DesktopBillboardGeometry.ArcsecToRad:G6}″"));
+      MatchedKm = heightKm;
+      ArcsecPerPx = angleRad / ViewportHeightPx / DesktopBillboardGeometry.ArcsecToRad;
       return true;
     }
+
+    public double MatchedKm;
 
     public bool EnterEarthObserver()
     {
@@ -160,6 +168,20 @@ public class FitsBillboardTests
     { IsDisplayable = true };
 
   // ── metadata ──
+
+  /// ROWORDER = 'TOP-DOWN' is not flipped by the engine: texture up is pixel −j, so the facts'
+  /// rotation turns half a turn and the handedness swaps.
+  [Fact]
+  public void Metadata_UnflippedTexture_TurnsTheRotationAndSwapsTheHandedness()
+  {
+    var m = FitsMetadata.Parse(LtJson.Replace("\"flipped\": true", "\"flipped\": false"))!;
+    Assert.False(m.Flipped);
+    Near(-170.0, m.Facts.RotationDeg!.Value);
+    Assert.True(m.Facts.Mirrored);
+    var standard = FitsMetadata.Parse(LtJson)!;
+    Near(10.0, standard.Facts.RotationDeg!.Value);
+    Assert.False(standard.Facts.Mirrored);
+  }
 
   [Fact]
   public void Metadata_ParsesCardsFactsAndTheExactTdbParts()
@@ -335,7 +357,7 @@ public class FitsBillboardTests
     var want = SkyMath.EclipticDirection(135.6, 28.1);
     Assert.Equal(want, rig.Probe.Locked);
     var b = rig.Svc.Find(row.Id)!;
-    Near(SkyMath.BillboardRotationDeg(135.6, 28.1, 10.0, false), b.RotationDeg);
+    Near(-10.0, b.RotationDeg); // north up: the WCS sky position angle alone
     Near(960, b.CenterX);
     Near(540, b.CenterY);
     Assert.Equal(string.Empty, fits.StatusMessage);
@@ -348,11 +370,16 @@ public class FitsBillboardTests
     var row = rig.Create("/data/lt_67p.fits");
     Assert.Same(row.MatchCameraToImageCommand, row.Fits!.MatchCameraToImageCommand);
     row.Fits.MatchCameraToImageCommand.Execute(null);
-    Assert.Equal(["match 0.30368"], rig.Probe.Log);
+    Assert.Equal(["match 364.416″"], rig.Probe.Log); // 1200 px × 0.30368″/px
+    // the field's height at the comet: 2·D·tan(α / 2)
+    double angle = 1200 * 0.30368 * DesktopBillboardGeometry.ArcsecToRad;
+    Near(2 * rig.Probe.CometDistanceKm!.Value * Math.Tan(angle / 2), rig.Probe.MatchedKm, 1e-6);
   }
 
-  /// Set up comparison: Earth observer → seek → site → orient → match → centre → lock, in order;
-  /// the billboard ends 1:1 on the viewport centre (where the image centre is once oriented).
+  /// Set up comparison: Earth observer → seek → site → match → orient → centre → lock, in order
+  /// (match aims at the comet; orient then looks at the WCS centre with the field kept); the
+  /// billboard fills the viewport's height, on the viewport centre (the image centre once oriented),
+  /// turned by the sky position angle alone (north up).
   [Fact]
   public async Task SetUpComparison_RunsEveryStepInOrder_AndLocksTheViewport()
   {
@@ -365,14 +392,15 @@ public class FitsBillboardTests
     await row.Fits.SetUpComparisonCommand.ExecuteAsync(null);
     rig.Fake.Drain();
 
-    Assert.Equal(["enter", "seek", "site", "orient", "match 0.30368", "lock True"], rig.Probe.Log);
+    Assert.Equal(["enter", "seek", "site", "match 364.416″", "orient", "lock True"], rig.Probe.Log);
     Assert.True(rig.Probe.IsComparisonLocked);
     var b = rig.Svc.Find(row.Id)!;
-    Near(1200, b.WidthPx); // 1:1: the viewport now has the image's plate scale
+    Near(1000, b.HeightPx); // the viewport's height (not 1:1 any more: a big FITS overflowed)
+    Near(1000, b.WidthPx);
     Assert.True(b.PhysicalSizeBound);
     Near(960, b.CenterX);
     Near(540, b.CenterY);
-    Near(SkyMath.BillboardRotationDeg(135.6, 28.1, 10.0, false), b.RotationDeg);
+    Near(-10.0, b.RotationDeg);
     Assert.Equal("Comparison set up; the viewport is locked.", row.Fits.StatusMessage);
   }
 
@@ -406,6 +434,9 @@ public class FitsBillboardTests
     Near(-eps, SkyMath.BillboardRotationDeg(0, 0, 0, false), 1e-9);
     Near(-eps - 10, SkyMath.BillboardRotationDeg(0, 0, 10, false), 1e-9);
     Near(180 - eps, SkyMath.BillboardRotationDeg(0, 0, 0, true), 1e-9);
+    // north up: the view up is celestial north (ψ = 0) whatever the site, the rotation is −θ
+    Near(-10, SkyMath.BillboardRotationDeg(0, 0, 10, false, viewUpIsCelestialNorth: true), 1e-12);
+    Near(-10, SkyMath.BillboardRotationDeg(135.6, 28.1, 10, true, viewUpIsCelestialNorth: true), 1e-12);
     // at the solstice (RA 90°) the ecliptic pole is due north
     Near(0, SkyMath.PositionAngleDeg(90, 23.44, Vector3d.UnitZ), 1e-9);
   }

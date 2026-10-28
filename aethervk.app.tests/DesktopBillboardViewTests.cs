@@ -110,6 +110,51 @@ public class DesktopBillboardViewTests
     window.Close();
   }
 
+  /// The projection sliders sit in each viewport's collapsed "Advanced: projection" expander (Match
+  /// camera to image sets the field from the image); the projection type and the comparison lock
+  /// stay outside it. A billboard row has the "image height at the comet (km)" input next to the
+  /// plate scale, and it reaches the service.
+  [AvaloniaFact]
+  public void Settings_ProjectionSlidersAreAdvanced_AndTheRowHasTheKmInput()
+  {
+    var vm = new DesignSettingsTabViewModel();
+    var view = new SettingsTabView { DataContext = vm };
+    var window = new Window { Content = view, Width = 520, Height = 2400 };
+    window.Show();
+    Dispatcher.UIThread.RunJobs();
+    foreach (var e in view.GetVisualDescendants().OfType<Expander>()
+               .Where(e => AutomationProperties.GetAutomationId(e) == "ViewportSettingsSection"))
+      e.IsExpanded = true;
+    var section = view.GetLogicalDescendants().OfType<Expander>().Single(e => Equals(e.Header, vm.StrBillboards));
+    section.IsExpanded = true;
+    vm.Billboards.CreateCommand.Execute(null);
+    Dispatcher.UIThread.RunJobs();
+    window.UpdateLayout();
+    Dispatcher.UIThread.RunJobs();
+
+    var advanced = view.GetVisualDescendants().Concat(view.GetLogicalDescendants().OfType<Visual>()).Distinct()
+      .OfType<Expander>().Where(e => AutomationProperties.GetAutomationId(e) == "ProjectionAdvancedExpander").ToList();
+    Assert.Equal(vm.ActiveViewports.Count, advanced.Count);
+    foreach (var e in advanced)
+    {
+      Assert.False(e.IsExpanded);
+      var inside = e.GetLogicalDescendants().OfType<Control>().Select(AutomationProperties.GetAutomationId).ToList();
+      Assert.Contains("FovSlider", inside);
+      Assert.Contains("OrthoHalfWidthSlider", inside);
+      Assert.DoesNotContain("ProjectionPerspective", inside);
+      Assert.DoesNotContain("ProjectionOrthographic", inside);
+      Assert.DoesNotContain("ComparisonLockCheckBox", inside);
+    }
+
+    var list = view.FindControl<ItemsControl>("BillboardList")!;
+    var km = list.GetVisualDescendants().OfType<TextBox>()
+      .Single(t => AutomationProperties.GetAutomationId(t) == "BillboardImageHeightKm");
+    km.Text = "120000";
+    Dispatcher.UIThread.RunJobs();
+    Assert.Equal(120000.0, vm.Billboards.Service.Current.Single().ImageHeightKm);
+    window.Close();
+  }
+
   private static (DesktopBillboardWindow Window, Func<DesktopBillboard?> Last) ShowBillboard(DesktopBillboard b)
   {
     DesktopBillboard? last = null;

@@ -225,6 +225,9 @@ public sealed class ObserverDto
   /// <summary>The observer's projection remembered while the viewport is in another mode (absent:
   /// entering the observer starts from its defaults).</summary>
   public ProjectionDto? Projection { get; set; }
+  /// <summary>The view's up: ecliptic | celestial_north (ObserverUp, snake_case). Older saves have
+  /// none and read as ecliptic.</summary>
+  public string Up { get; set; } = "ecliptic";
 }
 
 public sealed class AssetDto
@@ -265,6 +268,8 @@ public sealed class BillboardDto
   public bool Visible { get; set; } = true;
   /// <summary>Physical size: arcsec per image pixel (absent: not set).</summary>
   public double? ImageArcsecPerPx { get; set; }
+  /// <summary>Physical size: the image's height at the comet, km (absent / null: not set, older saves).</summary>
+  public double? ImageHeightKm { get; set; }
   public int ImageWidthPx { get; set; }
   public int ImageHeightPx { get; set; }
   /// <summary>The size follows the Earth observer's viewport scale.</summary>

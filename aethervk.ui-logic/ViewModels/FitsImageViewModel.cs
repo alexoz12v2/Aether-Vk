@@ -80,6 +80,7 @@ public partial class FitsImageViewModel : ObservableObject
 
   [ObservableProperty]
   [NotifyPropertyChangedFor(nameof(HasStretchParams), nameof(Param0Label), nameof(Param1Label))]
+  [NotifyCanExecuteChangedFor(nameof(ApplyStretchCommand))]
   private FitsStretchMode _stretchMode;
 
   [ObservableProperty]
@@ -130,7 +131,13 @@ public partial class FitsImageViewModel : ObservableObject
     {
       StretchMode = s.Mode;
       Transfer = s.Transfer;
-      if (s.Mode != FitsStretchMode.ZScale)
+      if (s.Mode == FitsStretchMode.Percentile && !(s.P0 < s.P1))
+      {
+        // the engine echoes no percentiles (a new billboard on a re-stretched texture): the defaults
+        Param0Text = "0.5";
+        Param1Text = "99.5";
+      }
+      else if (s.Mode != FitsStretchMode.ZScale)
       {
         Param0Text = Num(s.P0);
         Param1Text = Num(s.P1);
@@ -274,7 +281,7 @@ public partial class FitsImageViewModel : ObservableObject
     if (!v.LockToDirection(SkyMath.EclipticDirection(c.RaDeg, c.DecDeg)))
       return false;
     double? rotation = FactsData.RotationDeg is { } pa
-      ? SkyMath.BillboardRotationDeg(c.RaDeg, c.DecDeg, pa, v.ViewUpIsEclipticSouth)
+      ? SkyMath.BillboardRotationDeg(c.RaDeg, c.DecDeg, pa, v.ViewUpIsEclipticSouth, v.ViewUpIsCelestialNorth)
       : null;
     var centre = v.ViewportCenterDesktopPx;
     _row.Service.Update(_row.Id, b => b with
@@ -292,9 +299,11 @@ public partial class FitsImageViewModel : ObservableObject
   private bool CanSetUpComparison() => Viewport is not null;
 
   /// <summary>
-  /// Everything in order: Earth observer → seek → site → orient → match the scale (billboard 1:1)
-  /// → centre (on the viewport centre once oriented, else on the comet) → lock the viewport for
-  /// comparison. Steps without header facts are skipped and listed in <see cref="StatusMessage"/>.
+  /// Everything in order: Earth observer → seek → site → match the field (the image's height fills
+  /// the viewport's, aimed at the comet; the billboard fills it, bound) → orient (a free look at the
+  /// WCS centre, the sky turned like the image) → centre (on the viewport centre once oriented, else
+  /// on the comet) → lock the viewport for comparison. Steps without header facts are skipped and
+  /// listed in <see cref="StatusMessage"/>.
   /// </summary>
   [RelayCommand(CanExecute = nameof(CanSetUpComparison))]
   private async Task SetUpComparisonAsync()
@@ -311,12 +320,14 @@ public partial class FitsImageViewModel : ObservableObject
       skipped.Add("seek");
     if (!ApplySite())
       skipped.Add("site");
+    owner.Probe();
+    // match aims at the comet (tracking), so orient comes after it: the free look at the WCS centre
+    // keeps the matched field
+    if (!owner.MatchCameraToImage(_row.Id))
+      skipped.Add("match");
     bool oriented = Orient();
     if (!oriented)
       skipped.Add("orient");
-    owner.Probe();
-    if (!owner.MatchCameraToImage(_row.Id))
-      skipped.Add("match");
     // match centres on the comet; oriented, the image centre is the viewport centre
     if (oriented && v.ViewportCenterDesktopPx is { } centre)
       _row.Service.Update(_row.Id, b => b with { CenterX = centre.X, CenterY = centre.Y });
