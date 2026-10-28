@@ -153,10 +153,12 @@ public partial class DesktopBillboardsViewModel : ObservableObject, IDisposable
   private readonly IScreenInfoProvider _screens;
   private readonly CompositeDisposable _disposables = [];
   private readonly ISchedulerProvider? _schedulerProvider;
+  private readonly AssetLibraryService? _assets;
   private ImmutableArray<ImportedAsset> _textures = ImmutableArray<ImportedAsset>.Empty;
   private IBillboardViewportProbe? _probe;
   private IDisposable? _probeTimer;
   private readonly Func<short, ulong, Task<bool>>? _seekTdb;
+  private readonly Action<DateTimeOffset>? _requestModelRange;
 
   /// <summary>How often the viewport's scale and the comet's position are read.</summary>
   public static readonly TimeSpan ProbeInterval = TimeSpan.FromMilliseconds(250);
@@ -188,13 +190,16 @@ public partial class DesktopBillboardsViewModel : ObservableObject, IDisposable
     IScreenInfoProvider screens,
     ISchedulerProvider schedulerProvider,
     FitsImageService? fits = null,
-    Func<short, ulong, Task<bool>>? seekTdb = null)
+    Func<short, ulong, Task<bool>>? seekTdb = null,
+    Action<DateTimeOffset>? requestModelRange = null)
   {
     _service = service;
     _screens = screens;
     _schedulerProvider = schedulerProvider;
+    _assets = assetLibrary;
     Fits = fits;
     _seekTdb = seekTdb;
+    _requestModelRange = requestModelRange;
     assetLibrary.Textures
       .ObserveOn(schedulerProvider.MainThread)
       .Subscribe(OnTextures)
@@ -225,6 +230,12 @@ public partial class DesktopBillboardsViewModel : ObservableObject, IDisposable
 
   /// <summary>A timeline seek to a TDB epoch is available ("Seek to observation").</summary>
   internal bool CanSeek => _seekTdb is not null;
+
+  /// <summary>The Timeline tab's "model range" can be asked for.</summary>
+  internal bool CanRequestModelRange => _requestModelRange is not null;
+
+  /// <summary>Asks the Timeline tab for its model range (N rotations) ending at <paramref name="endUtc"/>.</summary>
+  internal void RequestModelRange(DateTimeOffset endUtc) => _requestModelRange?.Invoke(endUtc);
 
   /// <summary>Seeks the timeline to a TDB epoch (the engine's centuries / nanoseconds parts).</summary>
   internal Task<bool> SeekTdbAsync(short centuries, ulong nanoseconds) =>
@@ -262,8 +273,28 @@ public partial class DesktopBillboardsViewModel : ObservableObject, IDisposable
       item.RefreshPilot();
   }
 
+  /// <summary>Moves the billboard so its nucleus pixel (the image's centre when unset) lies on the
+  /// comet as the viewport draws it (<see cref="DesktopBillboardGeometry.CenterForNucleusAt"/>).</summary>
   internal bool CenterOnComet(Guid id) =>
-    CometDesktopPx is { } c && _service.Update(id, b => b with { CenterX = c.X, CenterY = c.Y });
+    CometDesktopPx is { } c && _service.Update(id, b =>
+    {
+      var centre = DesktopBillboardGeometry.CenterForNucleusAt(b, c);
+      return b with { CenterX = centre.X, CenterY = centre.Y };
+    });
+
+  /// <summary>
+  /// The billboard's nucleus pixel from its image (<see cref="NucleusDetector"/>): a FITS texture's
+  /// physical raster, else the luminance of its texels. False when the texture or its pixels are
+  /// not available (the library busy) or no nucleus stands out.
+  /// </summary>
+  internal bool DetectNucleus(Guid id)
+  {
+    if (_assets is not { } assets || _service.Find(id) is not { } b || Lookup(b.TextureKey) is not { } texture
+        || assets.ReadIntensity(texture.Id) is not { } image
+        || NucleusDetector.Detect(image) is not { } nucleus)
+      return false;
+    return _service.Update(id, x => x with { ImageNucleusPx = nucleus });
+  }
 
   internal bool ApplyPhysicalSize(Guid id) =>
     ViewportArcsecPerPx is { } scale && _service.ApplyPhysicalSize(id, scale, CometDistanceKm);
@@ -271,9 +302,11 @@ public partial class DesktopBillboardsViewModel : ObservableObject, IDisposable
   /// <summary>
   /// "Match camera to image": the viewport's height becomes the image's field (aimed at the comet,
   /// <see cref="IBillboardViewportProbe.MatchField"/>): the image's height at the comet (km input,
-  /// or the plate-scale angle at the comet's distance) and its angle. The billboard then fills the
-  /// viewport's height (aspect kept), bound so it keeps filling it on zoom and resize, centred on
-  /// the comet.
+  /// or the plate-scale angle at the comet's distance) and its angle. The billboard is then sized
+  /// by the explicit conversion (image angle ÷ the matched viewport's ″/px,
+  /// <see cref="ApplyPhysicalSize"/>), which comes to the viewport's height, never forced to it,
+  /// bound so it follows zoom and resize, and its nucleus pixel put on the comet. False when the field or the
+  /// size could not be applied.
   /// </summary>
   internal bool MatchCameraToImage(Guid id)
   {
@@ -286,9 +319,9 @@ public partial class DesktopBillboardsViewModel : ObservableObject, IDisposable
     if (!p.MatchField(heightKm, angle))
       return false;
     Probe(); // the comet's place and the scale as the matched view reports them
-    _service.ApplyViewportHeight(id, p.ViewportHeightPx);
+    bool sized = ApplyPhysicalSize(id);
     CenterOnComet(id);
-    return true;
+    return sized;
   }
 
   private bool CanCreate() => SelectedTexture is not null;
@@ -378,6 +411,12 @@ public partial class DesktopBillboardItemViewModel : ObservableObject, IDisposab
   [ObservableProperty]
   private string _physicalSizeLabel = string.Empty;
 
+  /// <summary>How the billboard's size follows from the image (″/px × px = angle → viewport ″/px →
+  /// px), plus desktop px per image px (<see cref="DesktopBillboardGeometry.ConversionText"/>).
+  /// Empty without an image angle.</summary>
+  [ObservableProperty]
+  private string _conversionLabel = string.Empty;
+
   /// <summary>The size follows the viewport's scale.</summary>
   [ObservableProperty]
   private bool _isPhysicalSizeBound;
@@ -438,6 +477,22 @@ public partial class DesktopBillboardItemViewModel : ObservableObject, IDisposab
   [ObservableProperty]
   private string _displayLabel = string.Empty;
 
+  /// <summary>The nucleus pixel's x (image px, <see cref="DesktopBillboard.ImageNucleusPx"/>); null
+  /// with <see cref="NucleusY"/>: the image's centre.</summary>
+  [ObservableProperty]
+  private double? _nucleusX;
+
+  [ObservableProperty]
+  private double? _nucleusY;
+
+  /// <summary>
+  /// The geometry at full precision, invariant dot decimals (the boxes round to whole px):
+  /// "centre 960.000, 540.000 px · size 600.000 × 600.000 px · rotation -0.1360° · image 1200 × 1200
+  /// px · nucleus 593.100, 604.300 px → desktop 956.800, 542.400 px". Read by the end-to-end test.
+  /// </summary>
+  [ObservableProperty]
+  private string _geometryLabel = string.Empty;
+
   public DesktopBillboardItemViewModel(
     DesktopBillboard b, DesktopBillboardService service, IScreenInfoProvider screens,
     DesktopBillboardsViewModel? owner = null)
@@ -469,6 +524,9 @@ public partial class DesktopBillboardItemViewModel : ObservableObject, IDisposab
       var (display, local) = DesktopBillboardGeometry.ToDisplayLocal(_screens.Screens, new PointD(b.CenterX, b.CenterY));
       DisplayLabel = display < 0 ? "off screen" : $"Display {display + 1} · {local.X:F0}, {local.Y:F0}";
       IsPhysicalSizeBound = b.PhysicalSizeBound;
+      NucleusX = b.ImageNucleusPx?.X;
+      NucleusY = b.ImageNucleusPx?.Y;
+      GeometryLabel = FormatGeometry(b);
       if (ParseScale(ImageArcsecPerPxText) != b.ImageArcsecPerPx)
         ImageArcsecPerPxText = b.ImageArcsecPerPx is { } a ? a.ToString("G6", CultureInfo.InvariantCulture) : string.Empty;
       if (ParseScale(ImageHeightKmText) != b.ImageHeightKm)
@@ -486,10 +544,24 @@ public partial class DesktopBillboardItemViewModel : ObservableObject, IDisposab
   public void RefreshPilot()
   {
     PhysicalSizeLabel = FormatPhysicalSize(_current, _owner?.CometDistanceKm); // the distance moves
+    ConversionLabel = DesktopBillboardGeometry.ConversionText(
+      _current, _owner?.ViewportArcsecPerPx, _owner?.CometDistanceKm) ?? string.Empty;
     CenterOnCometCommand.NotifyCanExecuteChanged();
     ApplyPhysicalSizeCommand.NotifyCanExecuteChanged();
     MatchCameraToImageCommand.NotifyCanExecuteChanged();
     Fits?.RefreshPilot();
+  }
+
+  /// <summary>See <see cref="GeometryLabel"/>.</summary>
+  internal static string FormatGeometry(DesktopBillboard b)
+  {
+    var ci = CultureInfo.InvariantCulture;
+    var text = string.Format(ci, "centre {0:F3}, {1:F3} px · size {2:F3} × {3:F3} px · rotation {4:F4}° · image {5} × {6} px",
+      b.CenterX, b.CenterY, b.WidthPx, b.HeightPx, b.RotationDeg, b.ImageWidthPx, b.ImageHeightPx);
+    var n = b.ImageNucleusPx ?? new PointD((b.ImageWidthPx - 1) / 2.0, (b.ImageHeightPx - 1) / 2.0);
+    var d = DesktopBillboardGeometry.NucleusDesktop(b);
+    return text + string.Format(ci, " · nucleus {0:F3}, {1:F3} px{2} → desktop {3:F3}, {4:F3} px",
+      n.X, n.Y, b.ImageNucleusPx is null ? " (image centre)" : string.Empty, d.X, d.Y);
   }
 
   private static double? ParseScale(string text) =>
@@ -554,6 +626,21 @@ public partial class DesktopBillboardItemViewModel : ObservableObject, IDisposab
   [RelayCommand(CanExecute = nameof(CanCenterOnComet))]
   private void CenterOnComet() => _owner?.CenterOnComet(Id);
 
+  private bool CanDetectNucleus() => _owner is not null && !IsMissing;
+
+  /// <summary>Finds the nucleus in the image (<see cref="NucleusDetector"/>) and fills the nucleus
+  /// pixel.</summary>
+  [RelayCommand(CanExecute = nameof(CanDetectNucleus))]
+  private void DetectNucleus() => _owner?.DetectNucleus(Id);
+
+  // one box typed while the nucleus is unset takes the image centre's other coordinate; clearing
+  // either box clears the nucleus (the image's centre again)
+  partial void OnNucleusXChanged(double? value) =>
+    Send(b => b with { ImageNucleusPx = value is { } x ? new PointD(x, b.ImageNucleusPx?.Y ?? (b.ImageHeightPx - 1) / 2.0) : null });
+
+  partial void OnNucleusYChanged(double? value) =>
+    Send(b => b with { ImageNucleusPx = value is { } y ? new PointD(b.ImageNucleusPx?.X ?? (b.ImageWidthPx - 1) / 2.0, y) : null });
+
   private bool CanApplyPhysicalSize() =>
     !_current.PhysicalSizeBound && _owner?.ViewportArcsecPerPx is { } s
     && DesktopBillboardGeometry.PhysicalSize(_current, s, _owner.CometDistanceKm) is not null;
@@ -582,6 +669,7 @@ public partial class DesktopBillboardItemViewModel : ObservableObject, IDisposab
         ImageHeightPx = (int)Math.Min(int.MaxValue, texture.B),
       });
     IsMissing = texture is null;
+    DetectNucleusCommand.NotifyCanExecuteChanged();
     TextureLabel = texture?.Label ?? TextureKey;
     Thumbnail = texture?.Thumbnail;
     UpdateFits(texture);
@@ -619,7 +707,13 @@ public partial class DesktopBillboardItemViewModel : ObservableObject, IDisposab
     if (!_scaleAutoFilled && _current.ImageArcsecPerPx is null && meta.Facts.PixelScaleArcsec is { } scale && scale > 0)
       _service.Update(Id, b => b with { ImageArcsecPerPx = scale });
     _scaleAutoFilled = true;
+    // a comet image stacked on the comet: its nucleus, not the image centre, goes on the comet
+    if (!_nucleusAutoDetected && _current.ImageNucleusPx is null)
+      _owner?.DetectNucleus(Id);
+    _nucleusAutoDetected = true;
   }
+
+  private bool _nucleusAutoDetected;
 
   private bool _scaleAutoFilled;
 

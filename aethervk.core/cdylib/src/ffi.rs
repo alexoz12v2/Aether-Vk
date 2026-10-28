@@ -674,6 +674,48 @@ pub unsafe extern "C" fn avkSimulationContext_setCameraShading(
   ctx_ref.set_camera_shading(scene_id, camera_entity, flags)
 }
 
+/// Sets the linear factor `camera_entity` multiplies the sunlight on meshes by
+/// (`CameraExposureComponent`, finite and > 0). Returns false when the scene is missing, the entity
+/// is not a camera or the factor is invalid.
+///
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setCameraExposure(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  camera_entity: u64,
+  factor: f32,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  ctx_ref.set_camera_exposure(scene_id, camera_entity, factor)
+}
+
+/// Sets which parts of the sphere gizmo on `entity` are drawn (`SPHERE_GIZMO_PART_*` bits: 1 grid,
+/// 2 body X/Y axes, 4 spin axis, 8 Sun direction, 16 velocity direction). Returns false when the
+/// scene is missing or the entity has no sphere gizmo.
+///
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setSphereGizmoParts(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  entity: u64,
+  parts: u32,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  ctx_ref.set_sphere_gizmo_parts(scene_id, entity, parts)
+}
+
 /// Sets the native Earth observer (camera posed in every logic commit, see
 /// `simulation_api::earth_observer`): `mode` 0 Free, 2 CometTracking, 4 SunTracking (C#
 /// `EarthObserverOrientationMode`; the retired lock-in values 1 / 3 read as Free), `u32::MAX`
@@ -1629,45 +1671,6 @@ pub unsafe extern "C" fn avkSimulationContext_startSimulation(
   ctx_ref.start_simulation(scene_id, sim_speed)
 }
 
-/// Propagates the "Jet Common Parameters" from `ps_dto` to all sibling jet entities
-/// (other children of `parent_entity` that have a `ParticleSystemComponent`), excluding
-/// `skip_entity` (the jet just created or currently being modified).
-///
-/// Common params: diametre_um, density_gcm3, scattering_efficiency, geometric_albedo, size_q,
-/// size_range, afrho_0_cm, afrho_power, afrho_cutoff_au, afrho_max_value_cm.
-fn propagate_common_params(
-  scene: &aethervk_core_rlib::scene::Scene,
-  parent_entity: aethervk_core_rlib::scene::EntityId,
-  ps_dto: &ParticleSystemDTO,
-  skip_entity: aethervk_core_rlib::scene::EntityId,
-) {
-  let children = match scene.get_children(parent_entity) {
-    Some(c) => c,
-    None => return,
-  };
-  for child in children {
-    if child == skip_entity {
-      continue;
-    }
-    scene.with_component_mut(
-      child,
-      |ps: &mut aethervk_core_rlib::scene::particles::ParticleSystemComponent| {
-        let ep = &mut ps.emission_params;
-        ep.diametre_um = ps_dto.diametre_um;
-        ep.density_gcm3 = ps_dto.density_gcm3;
-        ep.scattering_efficiency = ps_dto.scattering_efficiency;
-        ep.geometric_albedo = ps_dto.geometric_albedo;
-        ep.size_q = ps_dto.size_q;
-        ep.size_range = ps_dto.size_range;
-        ep.afrho_0_cm = ps_dto.afrho_0_cm;
-        ep.afrho_power = ps_dto.afrho_power;
-        ep.afrho_cutoff_au = ps_dto.afrho_cutoff_au;
-        ep.afrho_max_value_cm = ps_dto.afrho_max_value_cm;
-      },
-    );
-  }
-}
-
 /// # Safety
 /// FFI Contract
 #[unsafe(no_mangle)]
@@ -1757,8 +1760,8 @@ pub unsafe extern "C" fn avkSimulationContext_removeParticleSystem(
   false
 }
 
-/// Helper FFI Function: adds a comet jets particle system to an entity. Note how it automatically
-/// picks up "Jet Common Parameters" to sibling particle systems if present.
+/// Helper FFI Function: adds a comet jets particle system to an entity. Every jet owns its grain
+/// and activity parameters: sibling particle systems are left untouched.
 ///
 /// Returns computed properties only if you ask for them, by giving a non-null out pointer to a
 /// computed DTO
@@ -1840,30 +1843,13 @@ pub unsafe extern "C" fn avkSimulationContext_addParticleSystem(
     },
   );
 
-  let emit_params = aethervk_core_rlib::scene::particles::ParticleSystemEmitParams {
-    diametre_um: ps_dto.diametre_um,
-    density_gcm3: ps_dto.density_gcm3,
-    scattering_efficiency: ps_dto.scattering_efficiency,
-    geometric_albedo: ps_dto.geometric_albedo,
-    size_q: ps_dto.size_q,
-    size_range: ps_dto.size_range,
-    afrho_0_cm: ps_dto.afrho_0_cm,
-    afrho_power: ps_dto.afrho_power,
-    afrho_cutoff_au: ps_dto.afrho_cutoff_au,
-    afrho_max_value_cm: ps_dto.afrho_max_value_cm,
-    latitude_rad: ps_dto.latitude_rad,
-    longitude_rad: ps_dto.longitude_rad,
-    aperture_rad: ps_dto.aperture_rad,
-    start_velocity_mean: ps_dto.start_velocity_mean,
-    start_velocity_std: ps_dto.start_velocity_std,
-    seed: ps_dto.seed,
-  };
+  let emit_params = aethervk_core_rlib::scene::particles::ParticleSystemEmitParams::from_dto(ps_dto);
 
   let draw_params = aethervk_core_rlib::scene::particles::ParticleSystemDrawParams {
     stream_color: ps_dto.stream_color,
   };
 
-  // TODO Add this as a function parameter in the jet common area
+  // TODO Add this as a per-jet parameter (or a model-wide one in the Model tab)
   // Dust v3: lifetime of a cluster (scaled). A tail needs weeks: at 5 AU radiation pressure moves
   // a β = 0.2 grain ~90 km in 17 h but ~10⁶ km in 30 days. Cost is independent of it (the ring
   // budget spreads over the TTL).
@@ -1938,13 +1924,12 @@ pub unsafe extern "C" fn avkSimulationContext_addParticleSystem(
     }
   }
 
-  propagate_common_params(&scene_guard.scene, comet.body, ps_dto, jet_entity);
   true
 }
 
-/// Why isn't thid included in modifyComponent? Because this also propagates changes in
-/// "Jet Common Parameters" to sibling particle systems if present. Doesn't return new value of
-/// common parameters cause if they come from Avalonia, then UI update is caller responsiblity
+/// Why isn't this included in modifyComponent? Because it also moves the jet site, recolours the
+/// direction line and asks the jet to re-emit its dust history. Only `ps_id` changes: grain and
+/// activity parameters are per jet, so sibling particle systems keep their own
 ///
 /// # Safety
 /// FFI Contract
@@ -1972,7 +1957,7 @@ pub unsafe extern "C" fn avkSimulationContext_modifyParticleSystem(
 
   let jet_eid = aethervk_core_rlib::scene::EntityId::from_ffi(ps_id);
   let comet = scene_guard.comet.as_ref().unwrap();
-  // emission inputs before the change (jet site, emission and common parameters)
+  // emission inputs before the change (jet site and emission parameters)
   let emission_inputs = |scene: &aethervk_core_rlib::scene::Scene| {
     let mut v = alloc::vec::Vec::new();
     scene.query1(
@@ -2022,24 +2007,7 @@ pub unsafe extern "C" fn avkSimulationContext_modifyParticleSystem(
     },
   );
 
-  let emit_params = aethervk_core_rlib::scene::particles::ParticleSystemEmitParams {
-    diametre_um: ps_dto.diametre_um,
-    density_gcm3: ps_dto.density_gcm3,
-    scattering_efficiency: ps_dto.scattering_efficiency,
-    geometric_albedo: ps_dto.geometric_albedo,
-    size_q: ps_dto.size_q,
-    size_range: ps_dto.size_range,
-    afrho_0_cm: ps_dto.afrho_0_cm,
-    afrho_power: ps_dto.afrho_power,
-    afrho_cutoff_au: ps_dto.afrho_cutoff_au,
-    afrho_max_value_cm: ps_dto.afrho_max_value_cm,
-    latitude_rad: ps_dto.latitude_rad,
-    longitude_rad: ps_dto.longitude_rad,
-    aperture_rad: ps_dto.aperture_rad,
-    start_velocity_mean: ps_dto.start_velocity_mean,
-    start_velocity_std: ps_dto.start_velocity_std,
-    seed: ps_dto.seed,
-  };
+  let emit_params = aethervk_core_rlib::scene::particles::ParticleSystemEmitParams::from_dto(ps_dto);
 
   scene_guard.scene.with_component_mut(
     jet_eid,
@@ -2057,9 +2025,6 @@ pub unsafe extern "C" fn avkSimulationContext_modifyParticleSystem(
     }
   }
 
-  if let Some(comet) = scene_guard.comet {
-    propagate_common_params(&scene_guard.scene, comet.body, ps_dto, jet_eid);
-  }
   // a jet whose emission changed re-emits its dust history (next emission tick)
   let inputs_after = emission_inputs(&scene_guard.scene);
   for after in &inputs_after {

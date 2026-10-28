@@ -808,6 +808,16 @@ fn process_command_internal(
           }
         }
       }
+      // the Earth jumped to the start: re-aim the native Earth observer (scene lock before the
+      // almanac's, as in the commit closures)
+      drop(scene_guard);
+      {
+        let mut scene_write = scene_arc.write();
+        let logic_state = ctx.logic_state.read();
+        let v = utils::observer_comet_velocity(&scene_write, &logic_state.almanac_data, start);
+        utils::repose_earth_observer(&mut scene_write, v);
+      }
+      let scene_guard = scene_arc.read();
 
       // ── Earth trajectory coverage ────────────────────────────────────────────────────────
       // Rebuild the Earth orbit trajectory when the committed range is not inside the span it
@@ -1017,6 +1027,14 @@ fn process_command_internal(
       let cam_int = scene.get_entity(camera_id).ok_or(EngineError::InvalidOperation(
         "AnimateCameraTo | camera entity not found",
       ))?;
+      // The native Earth observer owns its camera (posed synchronously by `set_earth_observer`,
+      // then in every commit). An animation queued by the UI before it handed the camera over
+      // lands here after that pose: it flew the camera to the UI's own (geometric, spherical-site)
+      // aim, and, paused, no commit ever re-posed it (the reopened 67P save: the nucleus 50 px off
+      // centre, `comet_67p_reopen_offset_is_the_light_time_aim`).
+      if utils::earth_observer_owns(&scene, cam_int) {
+        return Ok(());
+      }
 
       // If an animation is already in flight, retarget it — no snap, speed preserved.
       let retargeted = scene.scene.with_component_mut(
@@ -1095,6 +1113,9 @@ fn process_command_internal(
         "SetCameraTransform | camera entity not found",
       ))?;
 
+      // the native Earth observer owns its camera's pose (see `AnimateCameraTo`); a projection
+      // still applies
+      let transform = transform.filter(|_| !utils::earth_observer_owns(&scene, cam_int));
       if let Some((pos, rot)) = transform {
         scene.scene.set_global_transform_f64(cam_int, pos, rot)?;
         let _ = scene
@@ -1234,6 +1255,13 @@ fn process_command_internal(
             if let Some(ts) = scene_write.time_snapshot.take() {
               let time_mgr = scenes.time_managers.get(&scene_id).unwrap();
               *time_mgr.state.write() = *ts;
+            }
+            // the snapshot's transforms (camera included) belong to its instant: re-aim the native
+            // Earth observer at its bodies (paused after a restore, no commit would)
+            if let Some(epoch) = scenes.time_managers.get(&scene_id).map(|t| t.current_epoch()) {
+              let logic_state = ctx.logic_state.read();
+              let v = utils::observer_comet_velocity(scene_write, &logic_state.almanac_data, epoch);
+              utils::repose_earth_observer(scene_write, v);
             }
 
             // 4 empty the cartesian cache
@@ -1425,6 +1453,9 @@ fn process_command_internal(
                 );
               }
             }
+            // the Earth and the comet jumped back to the start: re-aim (a reset leaves it paused)
+            let v = utils::observer_comet_velocity(scene_write, &logic_state.almanac_data, start_epoch);
+            utils::repose_earth_observer(scene_write, v);
 
             utils::mark_all_serializable_as_changed(scene_write);
           },
@@ -2368,8 +2399,10 @@ fn process_command_internal(
       );
 
       // Force reposition using SPK data (body position only, not track), stepped above
+      let mut comet_vel_km_s = None;
       match start_state {
-        Ok((position_km, _velocity, rotation)) => {
+        Ok((position_km, velocity, rotation)) => {
+          comet_vel_km_s = Some([velocity[0], velocity[1], velocity[2]]);
           crate::simulation_api::reposition::apply_reposition(
             &scene_guard.scene,
             comet.subtree,
@@ -2409,6 +2442,8 @@ fn process_command_internal(
       }
 
       drop(scene_guard);
+      // the comet moved to its committed position: re-aim a native Earth observer tracking it
+      utils::repose_earth_observer(&mut scene_ctx.write(), comet_vel_km_s);
 
       aethervk_oshal_rlib::log!(
         "[BuildCometTrajectory] Emitting CometInitialized(true) for SPK {}",
@@ -3887,11 +3922,14 @@ mod utils {
   /// it changed. Call inside the scene write that committed the Earth / comet transforms.
   /// The comet's heliocentric velocity of this commit (light time, see `earth_observer`) comes
   /// from `cache`, the SPK states just committed.
+  /// Also refreshes the comet gizmo's velocity arrow (`refresh_comet_gizmo_velocity`): both read
+  /// the states this commit stepped.
   pub fn apply_earth_observer(
     scene: &mut SceneContext,
     scene_id: u64,
     cache: &dashmap::DashMap<crate::simulation_api::structs::SceneEntityId, CartesianState>,
   ) {
+    refresh_comet_gizmo_velocity(scene, scene_id, cache);
     let Some(mut obs) = scene.earth_observer else {
       return;
     };
@@ -3901,6 +3939,71 @@ mod utils {
       check_earth_observer_invariant(&scene.scene, &obs);
       mark_component_changed::<crate::scene::HighResTransformComponent>(scene, obs.camera);
     }
+  }
+
+  /// Whether `camera` is the native Earth observer's: its pose then belongs to
+  /// [`crate::simulation_api::earth_observer::apply`] alone.
+  pub fn earth_observer_owns(scene: &SceneContext, camera: EntityId) -> bool {
+    scene.earth_observer.is_some_and(|o| o.camera == camera)
+  }
+
+  /// Re-poses the native Earth observer (if set) after the Earth or the comet moved **outside a
+  /// commit** (reset, snapshot restore, comet commit, epoch range): commits re-pose it, but while
+  /// paused or at the end epoch none follows, and the camera kept the previous instant's aim. The
+  /// comet's velocity (light time) becomes `comet_vel_km_s` when given (an epoch jump changes it,
+  /// [`observer_comet_velocity`]), else is kept.
+  pub fn repose_earth_observer(scene: &mut SceneContext, comet_vel_km_s: Option<[f64; 3]>) {
+    let Some(mut obs) = scene.earth_observer else {
+      return;
+    };
+    if comet_vel_km_s.is_some() {
+      obs.comet_vel_km_s = comet_vel_km_s;
+    }
+    if crate::simulation_api::earth_observer::apply(&scene.scene, &mut obs).is_some() {
+      scene.earth_observer = Some(obs);
+      mark_component_changed::<crate::scene::HighResTransformComponent>(scene, obs.camera);
+    }
+  }
+
+  /// The native Earth observer's comet velocity at `epoch` from the almanac (km/s, world axes),
+  /// `None` without an observer comet or SPK coverage.
+  pub fn observer_comet_velocity(
+    scene: &SceneContext,
+    almanac: &crate::simulation::almanac::AlmanacPackedData,
+    epoch: anise::time::Epoch,
+  ) -> Option<[f64; 3]> {
+    let comet = scene.earth_observer?.comet?;
+    let naif = scene.scene.with_component(comet, |p: &crate::scene::AlmanacPlanet| p.naif_id)?;
+    crate::simulation_api::earth_observer::comet_velocity_at(almanac, naif, epoch)
+  }
+
+  /// Writes the comet's heliocentric velocity direction (world axes, the SPK state in `cache`) into
+  /// the nucleus' `SphereGizmoPartsComponent`, when it has one (the gizmo parts were set) and the
+  /// comet was stepped.
+  pub fn refresh_comet_gizmo_velocity(
+    scene: &SceneContext,
+    scene_id: u64,
+    cache: &dashmap::DashMap<crate::simulation_api::structs::SceneEntityId, CartesianState>,
+  ) {
+    let Some(body) = scene.comet.as_ref().map(|c| c.body) else {
+      return;
+    };
+    let Some((_, v)) = cache
+      .get(&crate::simulation_api::structs::SceneEntityId::new(scene_id, body))
+      .and_then(|c| c.comet_state.as_ref().and_then(|b| b.helio_state_km))
+    else {
+      return;
+    };
+    let v: [f64; 3] = v.into();
+    let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    if !(len > 0.0 && len.is_finite()) {
+      return;
+    }
+    let dir = [(v[0] / len) as f32, (v[1] / len) as f32, (v[2] / len) as f32];
+    let _ = scene.scene.with_component_mut(
+      body,
+      |p: &mut crate::scene::SphereGizmoPartsComponent| p.velocity_dir = dir,
+    );
   }
 
   /// Orders a change stream `(external entity id, component id, data)` parents before children

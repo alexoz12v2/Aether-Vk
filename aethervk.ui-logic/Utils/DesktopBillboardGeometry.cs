@@ -131,6 +131,43 @@ public static class DesktopBillboardGeometry
   /// <summary>Billboard-local → desktop point.</summary>
   public static PointD ToDesktop(DesktopBillboard b, PointD local) => Center(b) + Rotate(local, b.RotationDeg);
 
+  /// <summary>
+  /// An image pixel coordinate (x right, y down, the centre of pixel (i, j) at (i, j):
+  /// <see cref="NucleusDetector"/>) → billboard-local desktop px (unrotated, origin at the
+  /// billboard's centre). The image fills the billboard, so its edge at −0.5 lands on the side
+  /// −WidthPx / 2 and each image px spans kx = WidthPx / ImageWidthPx desktop px (ky likewise):
+  /// local = ((u − (W − 1) / 2) · kx, (v − (H − 1) / 2) · ky). Null without the image's native size.
+  /// </summary>
+  public static PointD? ImagePxToLocal(DesktopBillboard b, PointD imagePx)
+  {
+    if (b.ImageWidthPx <= 0 || b.ImageHeightPx <= 0)
+      return null;
+    double kx = b.WidthPx / b.ImageWidthPx, ky = b.HeightPx / b.ImageHeightPx;
+    return new PointD(
+      (imagePx.X - (b.ImageWidthPx - 1) / 2.0) * kx,
+      (imagePx.Y - (b.ImageHeightPx - 1) / 2.0) * ky);
+  }
+
+  /// <summary>The nucleus pixel (<see cref="DesktopBillboard.ImageNucleusPx"/>) in billboard-local
+  /// px; the origin (the image's centre) when it is unset or the native size is unknown.</summary>
+  public static PointD NucleusLocal(DesktopBillboard b) =>
+    b.ImageNucleusPx is { } n && ImagePxToLocal(b, n) is { } l ? l : new PointD(0, 0);
+
+  /// <summary>Where the billboard draws its nucleus pixel on the desktop: centre + the local
+  /// offset turned clockwise by the rotation (<see cref="ToDesktop"/>).</summary>
+  public static PointD NucleusDesktop(DesktopBillboard b) => ToDesktop(b, NucleusLocal(b));
+
+  /// <summary>
+  /// The billboard centre that puts its nucleus pixel on <paramref name="target"/> (desktop px):
+  /// target − R(θ) · local, R(θ) the clockwise-on-screen rotation of <see cref="Rotate"/> (for a
+  /// local offset (dx, dy): (dx cos θ − dy sin θ, dx sin θ + dy cos θ), y down). Size and rotation
+  /// stay. Everything is in desktop physical px (the comet's position, the billboard's geometry),
+  /// so the display's scaling does not enter: the billboard window divides by it when it lays the
+  /// image out.
+  /// </summary>
+  public static PointD CenterForNucleusAt(DesktopBillboard b, PointD target) =>
+    target - Rotate(NucleusLocal(b), b.RotationDeg);
+
   /// <summary>Image corners on the desktop: top-left, top-right, bottom-right, bottom-left.</summary>
   public static PointD[] Corners(DesktopBillboard b)
   {
@@ -341,13 +378,40 @@ public static class DesktopBillboardGeometry
 
   /// <summary>
   /// Size of a new billboard for a <paramref name="texW"/>×<paramref name="texH"/> texture: native,
-  /// shrunk (aspect kept) to fit half the display.
+  /// 1 image px = 1 desktop (physical) px, never shrunk, so the physical sizes add up (an image
+  /// loaded at half its resolution halved every scale read off it). Larger than the display it
+  /// overflows; "Apply physical size" / "Match camera to image" size it explicitly.
   /// </summary>
-  public static (double W, double H) InitialSize(int texW, int texH, ScreenInfo screen)
+  public static (double W, double H) InitialSize(int texW, int texH, ScreenInfo screen) =>
+    (Math.Max(1, texW), Math.Max(1, texH));
+
+  /// <summary>
+  /// The billboard's scale against its image: desktop px per image px (height). Null without the
+  /// image's native size.
+  /// </summary>
+  public static double? DesktopPxPerImagePx(DesktopBillboard b) =>
+    b.ImageHeightPx > 0 ? b.HeightPx / b.ImageHeightPx : null;
+
+  /// <summary>
+  /// The image → sky → viewport conversion that sizes a billboard, as text: the image's plate scale
+  /// (given, or derived from the km height) × its px = the angle (and km at the comet), then the
+  /// viewport's scale and the px that angle covers there, then the billboard's actual desktop px
+  /// per image px. Null without an image angle.
+  /// </summary>
+  public static string? ConversionText(DesktopBillboard b, double? viewportArcsecPerPx, double? cometDistanceKm)
   {
-    double w = Math.Max(1, texW), h = Math.Max(1, texH);
-    double k = Math.Min(1.0, Math.Min(screen.Bounds.Width * 0.5 / w, screen.Bounds.Height * 0.5 / h));
-    return (w * k, h * k);
+    if (b.ImageHeightPx <= 0 || ImageAngularHeightRad(b, cometDistanceKm) is not { } angle)
+      return null;
+    var ci = System.Globalization.CultureInfo.InvariantCulture;
+    double arcsec = angle / ArcsecToRad;
+    string text = string.Format(ci, "image {0:0.####}″/px × {1} px = {2:0.#}″", arcsec / b.ImageHeightPx, b.ImageHeightPx, arcsec);
+    if (ImageHeightAtCometKm(b, cometDistanceKm) is { } km)
+      text += string.Format(ci, " ({0:0} km)", km);
+    if (Usable(viewportArcsecPerPx))
+      text += string.Format(ci, " → viewport {0:0.####}″/px → {1:0} px", viewportArcsecPerPx, arcsec / viewportArcsecPerPx!.Value);
+    if (DesktopPxPerImagePx(b) is { } k)
+      text += string.Format(ci, " · 1 image px = {0:0.###} desktop px", k);
+    return text;
   }
 
   /// <summary>

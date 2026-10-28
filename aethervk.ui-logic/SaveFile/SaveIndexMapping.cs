@@ -166,6 +166,7 @@ public static class SaveIndexMapping
     DustFlow = m.DustFlow,
     DustFlowSpeed = m.DustFlowSpeed,
     SphereGizmoVisible = m.SphereGizmoVisible,
+    SphereGizmoParts = m.SphereGizmoParts,
     ShowJetAngles = m.ShowJetAngles,
     ShowReferencePositionError = m.ShowReferencePositionError,
     ManualNucleusRadiusKm = m.ManualNucleusRadiusKm,
@@ -189,6 +190,7 @@ public static class SaveIndexMapping
     m.DustFlow = d.DustFlow;
     m.DustFlowSpeed = d.DustFlowSpeed;
     m.SphereGizmoVisible = d.SphereGizmoVisible;
+    m.SphereGizmoParts = d.SphereGizmoParts;
     m.ShowJetAngles = d.ShowJetAngles;
     m.ShowReferencePositionError = d.ShowReferencePositionError;
     m.ManualNucleusRadiusKm = d.ManualNucleusRadiusKm;
@@ -204,13 +206,34 @@ public static class SaveIndexMapping
     StreamColor = [j.StreamColor.X, j.StreamColor.Y, j.StreamColor.Z, j.StreamColor.W],
     PreviewVisible = j.IsPreviewVisible,
     Seed = j.Seed,
+    DiametreUm = j.DiametreUm,
+    DensityGCm3 = j.DensityGCm3,
+    ScatteringEfficiency = j.ScatteringEfficiency,
+    GeometricAlbedo = j.GeometricAlbedo,
+    SizeQ = j.SizeQ,
+    SizeRange = j.SizeRange,
+    Afrho0Cm = j.Afrho0Cm,
   };
 
-  public static JetViewModel FromDto(JetDto d)
+  /// <summary>
+  /// The jet of <paramref name="d"/>; a grain or activity value the save lacks (written before
+  /// jets had their own) comes from <paramref name="modelGrain"/>, the model's value of that save
+  /// (the built-in defaults when null).
+  /// </summary>
+  public static JetViewModel FromDto(JetDto d, JetGrain? modelGrain = null)
   {
     var c = d.StreamColor is { Length: 4 } s ? s : [1, 1, 1, 1];
+    var m = modelGrain ?? JetGrain.Default;
+    var grain = new JetGrain(
+      d.DiametreUm ?? m.DiametreUm,
+      d.DensityGCm3 ?? m.DensityGCm3,
+      d.ScatteringEfficiency ?? m.ScatteringEfficiency,
+      d.GeometricAlbedo ?? m.GeometricAlbedo,
+      d.SizeQ ?? m.SizeQ,
+      d.SizeRange ?? m.SizeRange,
+      d.Afrho0Cm ?? m.Afrho0Cm);
     return new JetViewModel(d.LatitudeDeg, d.LongitudeDeg, d.ApertureDeg, d.VelocityMeanMs, d.VelocityStdMs,
-      new Vector4(c[0], c[1], c[2], c[3]), d.PreviewVisible, d.Seed);
+      new Vector4(c[0], c[1], c[2], c[3]), d.PreviewVisible, d.Seed, grain);
   }
 
   // ── comet ──────────────────────────────────────────────────────────────────
@@ -304,6 +327,8 @@ public static class SaveIndexMapping
     FitsStretch = b.FitsStretch is { } s && !s.SameAs(FitsStretch.Default)
       ? new FitsStretchDto { Mode = Snake(s.Mode), Transfer = Snake(s.Transfer), P0 = s.P0, P1 = s.P1 }
       : null,
+    ImageNucleusX = b.ImageNucleusPx?.X,
+    ImageNucleusY = b.ImageNucleusPx?.Y,
   };
 
   public static DesktopBillboard FromDto(BillboardDto d) =>
@@ -318,6 +343,7 @@ public static class SaveIndexMapping
         ? new FitsStretch(
           ParseSnake(s.Mode, FitsStretchMode.ZScale), ParseSnake(s.Transfer, FitsTransfer.Linear), s.P0, s.P1)
         : null,
+      ImageNucleusPx = d.ImageNucleusX is { } nx && d.ImageNucleusY is { } ny ? new Utils.PointD(nx, ny) : null,
     };
 
   // ── appearance ─────────────────────────────────────────────────────────────

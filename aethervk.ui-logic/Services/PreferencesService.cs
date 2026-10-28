@@ -38,6 +38,12 @@ public sealed class PreferencesFile
   /// custom (the four dust values above as edited); missing = 1, the app starts on the lowest.</summary>
   [JsonPropertyName("particle_quality")]
   public int? ParticleQuality { get; set; }
+  /// <summary>Camera-coordinates HUD panel expanded; missing = expanded.</summary>
+  [JsonPropertyName("hud_camera_expanded")]
+  public bool? HudCameraExpanded { get; set; }
+  /// <summary>Orbit-debug HUD panel expanded; missing = expanded.</summary>
+  [JsonPropertyName("hud_orbit_expanded")]
+  public bool? HudOrbitExpanded { get; set; }
 }
 
 public sealed class BindingDto
@@ -121,6 +127,10 @@ public sealed class PreferencesService
   public int DustReuseTolerance => Preset?.ReuseTolerance ??
     ParticleRenderingViewModel.ClampReuseTolerance(_file.DustReuseTolerance ?? ParticleRenderingViewModel.ReuseToleranceDefault);
 
+  public bool HudCameraExpanded => _file.HudCameraExpanded ?? true;
+
+  public bool HudOrbitExpanded => _file.HudOrbitExpanded ?? true;
+
   /// <summary>What <see cref="Load"/> did: "defaults", "loaded", "corrupt", "newer".</summary>
   public string LoadOutcome { get; private set; } = "defaults";
 
@@ -199,6 +209,18 @@ public sealed class PreferencesService
   public void SetParticleQuality(int quality)
   {
     _file.ParticleQuality = Math.Min(Math.Max(quality, 0), ParticleRenderingViewModel.QualityMax);
+    Save();
+  }
+
+  public void SetHudCameraExpanded(bool expanded)
+  {
+    _file.HudCameraExpanded = expanded;
+    Save();
+  }
+
+  public void SetHudOrbitExpanded(bool expanded)
+  {
+    _file.HudOrbitExpanded = expanded;
     Save();
   }
 

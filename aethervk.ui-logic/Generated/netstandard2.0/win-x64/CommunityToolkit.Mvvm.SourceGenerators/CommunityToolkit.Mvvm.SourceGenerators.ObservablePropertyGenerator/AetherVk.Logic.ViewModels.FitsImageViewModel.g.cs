@@ -75,6 +75,7 @@ namespace AetherVk.Logic.ViewModels
                     OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.HasStretchParams);
                     OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.Param0Label);
                     OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.Param1Label);
+                    ApplyStretchCommand.NotifyCanExecuteChanged();
                 }
             }
         }

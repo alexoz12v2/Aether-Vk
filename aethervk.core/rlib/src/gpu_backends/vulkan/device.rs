@@ -6738,14 +6738,14 @@ impl RenderDevice for Device {
     let data_ptr = self.stage_for_device_read(data.as_ptr() as *const u8, data_size, 16)?;
 
     // Always allocate enough vertices for the maximum LOD (36 subdivisions).
-    // 4 axes: X(red), Y(green), Z(blue), Sun(yellow). Each axis: 2 vertices.
+    // 5 axes: X(red), Y(green), Z(blue), Sun(yellow), velocity(magenta). Each axis: 2 vertices.
     // Each arrowhead: 4 lines × 2 vertices = 8 vertices.
     let sub_divs = 36u32;
     let lat_segments = sub_divs;
     let lon_segments = sub_divs;
     let total_sphere_vertices = lon_segments * (2 * lat_segments - 1) * 2; // = 5112
-    let total_axes_vertices = 8; // 4 axes × 2 vertices (added sun axis)
-    let total_arrowhead_vertices = 4 * 2 * 4; // 4 lines × 2 verts × 4 arrowheads
+    let total_axes_vertices = 10; // 5 axes × 2 vertices
+    let total_arrowhead_vertices = 4 * 2 * 5; // 4 lines × 2 verts × 5 arrowheads
     let total_vertices = total_sphere_vertices + total_axes_vertices + total_arrowhead_vertices;
 
     Ok(Some(crate::gpu::frame::SphereGizmoBatchCall {

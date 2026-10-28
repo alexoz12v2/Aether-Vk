@@ -1864,6 +1864,8 @@ pub struct RenderScene {
   pub layer_ref_dist: [f64; 8],
   /// how the view's camera shades meshes (`scene::CAMERA_SHADING_*`, `CameraShadingComponent`)
   pub mesh_shading: u32,
+  /// linear factor on the sunlight that lights meshes (`CameraExposureComponent`, 1 = none)
+  pub mesh_exposure: f32,
 }
 
 impl RenderScene {
@@ -1896,6 +1898,7 @@ impl RenderScene {
       dust_view: Default::default(),
       layer_ref_dist: [0.0; 8],
       mesh_shading: 0,
+      mesh_exposure: 1.0,
     }
   }
 
@@ -2722,6 +2725,10 @@ fn draw_layer_content(
           let r_au = if layer.layer_index > 0 && fs > 0.0 && fs < 1.0 { len * fs } else { len };
           let irradiance = (1.0 / (r_au * r_au)) as f32;
           draw_sun_color = [irradiance, irradiance, irradiance, 2.0];
+        }
+        // the view's exposure scales the sunlight of either shading (not the ambient fill)
+        for channel in &mut draw_sun_color[..3] {
+          *channel *= render_scene.mesh_exposure;
         }
         if len > 1e-30 {
           Vec3f32::from_components((dx / len) as f32, (dy / len) as f32, (dz / len) as f32)

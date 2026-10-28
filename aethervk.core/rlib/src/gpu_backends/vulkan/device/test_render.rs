@@ -210,7 +210,8 @@ fn test_render_all_archetypes_windowless() {
           style: 0.0,
           dash_count: 0.0,
           center_clip: [0.0; 4],
-          color: [1.0; 4],
+          // style 0: no velocity, the default parts
+          color: [0.0, 0.0, 0.0, crate::scene::SPHERE_GIZMO_PARTS_DEFAULT as f32],
         },
       )];
 

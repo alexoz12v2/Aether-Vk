@@ -45,7 +45,10 @@ public sealed class ThesisScenarioTests(ITestOutputHelper output)
       SetRotation(s, sc.Spin);
       Step("jets");
       AddJets(s, sc);
-      AssertCameraMode(s, "CometOrbiting", "jet editing orbits the nucleus");
+      // jet editing no longer moves the camera (plan S5): orbit the nucleus with row key 3
+      s.Find("ViewportHost").RealClick();
+      Win32.PressKey(0x33); // VK '3'
+      AssertCameraMode(s, "CometOrbiting", "key 3 on the viewport");
       s.App.SaveScreenshot(Path.Combine(artifacts, "jets.png"));
       var buildLog = Path.Combine(artifacts, "app-build.log");
       if (sc.NucleusMesh is { } mesh)
@@ -63,15 +66,32 @@ public sealed class ThesisScenarioTests(ITestOutputHelper output)
       Step("observer");
       EnterObserver(s, sc);
       AssertCometInView(s);
+      AssertCometCentred(s, 3.0);
       s.App.SaveScreenshot(Path.Combine(artifacts, "observer-early.png"));
       WaitForDustSettled(buildLog);
       s.App.SaveScreenshot(Path.Combine(artifacts, "observer.png"));
       AssertNotWashedOut(s.Find("ViewportHost"), "the settled observer view (observer.png)");
       AssertNotFlat(s.Find("ViewportHost"), "the settled observer view (observer.png)");
+      if (sc.Fan is { } fan)
+      {
+        Step("fan ridges");
+        AssertFan(s, sc, fan, artifacts);
+      }
       Step("tracers");
       ShowTracers(s, Path.Combine(artifacts, "tracers.png"));
-      Step("billboard");
-      ImportAndShowBillboard(s, image);
+      if (sc.Fan is not null)
+      {
+        // the juxtaposition: the FITS (comparison set up from its header) and its JPEG made alike
+        Step("FITS and JPEG comparison");
+        FitsComparisonSteps.Run(s);
+        s.Desktop.SaveScreenshot(Path.Combine(artifacts, "comparison.png"));
+        AssertCometCentred(s, 3.0);
+      }
+      else
+      {
+        Step("billboard");
+        ImportAndShowBillboard(s, image);
+      }
 
       s.Desktop.SaveScreenshot(Path.Combine(artifacts, "desktop.png"));
       s.App.SaveScreenshot(Path.Combine(artifacts, "main-window.png"));
@@ -100,6 +120,9 @@ public sealed class ThesisScenarioTests(ITestOutputHelper output)
       AssertRestored(s, sc);
       // the dust feedback restarts 3 s after Open and re-climbs against the final view
       Thread.Sleep(5000);
+      // the reopened, paused tracking view drew the nucleus 50 px off centre (UI pose after the
+      // core's light-time aim)
+      AssertCometCentred(s, 3.0);
       s.App.SaveScreenshot(Path.Combine(artifacts, "reopened.png"));
       s.Desktop.SaveScreenshot(Path.Combine(artifacts, "desktop-reopened.png"));
       AssertDustDetailNotCoarser(Path.Combine(artifacts, "app-build.log"), Path.Combine(artifacts, "app-reopen.log"));
@@ -235,6 +258,11 @@ public sealed class ThesisScenarioTests(ITestOutputHelper output)
     var add = s.Find("AddJetButton");
     if (!add.Enabled)
       s.SetSlider("NucleusRadiusSlider", sc.FallbackNucleusRadiusKm);
+    if (sc.GrainSizeRange is { } f)
+    {
+      s.Expand("SizeDistributionAdvancedExpander", "SizeRangeBox");
+      s.TypeInto(s.Find("SizeRangeBox"), Ui.Num(f));
+    }
     for (int k = 0; k < sc.Jets.Count; k++)
     {
       s.Click("AddJetButton");
@@ -251,6 +279,17 @@ public sealed class ThesisScenarioTests(ITestOutputHelper output)
       {
         s.TypeInto(s.Find("JetVelocityBox"), Ui.Num(speed));
         s.TypeInto(s.Find("JetVelocityStdBox"), Ui.Num(sc.Jets[k].SpeedStdFraction * speed));
+      }
+      // the jet's own grain and activity (else the defaults it was added with)
+      if (sc.Jets[k].DiametreUm is { } diametre)
+      {
+        s.Expand("JetGrainExpander", "JetDiametreUm");
+        s.TypeInto(s.Find("JetDiametreUm"), Ui.Num(diametre));
+      }
+      if (sc.Jets[k].Afrho0Cm is { } afrho0)
+      {
+        s.Expand("JetActivityExpander", "JetAfrho0");
+        s.TypeInto(s.Find("JetAfrho0"), Ui.Num(afrho0));
       }
     }
   }
@@ -324,11 +363,29 @@ public sealed class ThesisScenarioTests(ITestOutputHelper output)
   }
 
   /// <summary>
+  /// Makes sure the camera HUD panel is expanded (the collapse icon shows "✕" when it is, "☰" when
+  /// folded to the icon): collapsed state is persisted in the preferences, so a previous run may
+  /// have left it folded. The panel body, EarthObserverStatus included, is gone from the tree then.
+  /// </summary>
+  private static void EnsureHudExpanded(AppSession s)
+  {
+    var toggle = Ui.WaitFor(() => s.Desktop.FindElementsByAccessibilityId("CameraHudCollapseButton").FirstOrDefault(),
+      TimeSpan.FromSeconds(30), "the camera HUD collapse icon");
+    if (toggle.Text.Contains('☰'))
+    {
+      toggle.Click();
+      Ui.WaitUntil(() => s.Desktop.FindElementsByAccessibilityId("CameraHudCollapseButton")
+        .Any(b => b.Text.Contains('✕')), what: "the camera HUD expanded");
+    }
+  }
+
+  /// <summary>
   /// The camera HUD's observer line ("CometTracking · aim 2.1e-10 rad · target +34.2°", in the
   /// overlay window: the desktop session): the view axis is on the comet and it is above the horizon.
   /// </summary>
   private static void AssertCometInView(AppSession s)
   {
+    EnsureHudExpanded(s);
     var line = Ui.WaitFor(() => s.Desktop.FindElementsByAccessibilityId("EarthObserverStatus")
         .Select(e => e.Text).FirstOrDefault(t => t.Contains("aim", StringComparison.Ordinal)),
       TimeSpan.FromSeconds(30), "the HUD observer status");
@@ -338,6 +395,82 @@ public sealed class ThesisScenarioTests(ITestOutputHelper output)
     double elevation = Ui.ParseNum(m.Groups[2].Value);
     Assert.True(aim < 1e-3, $"the telescope is {aim} rad off the comet ({line})");
     Assert.True(elevation > 0, $"the comet is below the horizon ({line})");
+  }
+
+  /// <summary>
+  /// The tracked comet is drawn within <paramref name="maxPx"/> physical pixels of the viewport's
+  /// centre: the HUD's <c>screen (x, y) px of W×H</c> (the core's projection of the drawn, light-time
+  /// retarded comet), not a pixel search.
+  /// </summary>
+  private static void AssertCometCentred(AppSession s, double maxPx)
+  {
+    EnsureHudExpanded(s);
+    var line = Ui.WaitFor(() => s.Desktop.FindElementsByAccessibilityId("EarthObserverStatus")
+        .Select(e => e.Text).FirstOrDefault(t => t.Contains("screen (", StringComparison.Ordinal)),
+      TimeSpan.FromSeconds(30), "the HUD comet screen position");
+    var m = System.Text.RegularExpressions.Regex.Match(line, @"screen \((\S+), (\S+)\) px of (\d+)×(\d+)( off-screen)?");
+    Assert.True(m.Success, $"unexpected HUD line \"{line}\"");
+    Assert.False(m.Groups[5].Success, $"the comet is off screen ({line})");
+    double dx = Ui.ParseNum(m.Groups[1].Value) - Ui.ParseNum(m.Groups[3].Value) / 2.0;
+    double dy = Ui.ParseNum(m.Groups[2].Value) - Ui.ParseNum(m.Groups[4].Value) / 2.0;
+    Assert.True(Math.Sqrt(dx * dx + dy * dy) <= maxPx,
+      $"the comet is drawn ({dx:+0.0;-0.0}, {dy:+0.0;-0.0}) px off the centre ({line})");
+  }
+
+  /// <summary>
+  /// The fan's ridges in the settled observer view, at full resolution about the drawn comet
+  /// (km/px from the orthographic half-width): each expected ridge must have a measured one within
+  /// the tolerance. The camera HUD is collapsed for the capture (it covers the viewport's corner);
+  /// the profiles and the observation's ridges are written to fan.txt for the juxtaposition.
+  /// </summary>
+  private static void AssertFan(AppSession s, Scenario sc, FanCheck fan, string artifacts)
+  {
+    var (cx, cy) = FitsComparisonSteps.CometScreenPx(s);
+    var toggle = s.Desktop.FindElementsByAccessibilityId("CameraHudCollapseButton").FirstOrDefault();
+    if (toggle is not null && toggle.Text.Contains('✕'))
+    {
+      toggle.Click();
+      Thread.Sleep(600);
+    }
+    var vp = s.Find("ViewportHost");
+    int w = vp.Size.Width, h = vp.Size.Height;
+    var lum = Win32.CaptureLuminance(vp.Location.X, vp.Location.Y, w, h);
+    EnsureHudExpanded(s);
+    double kmPerPx = 2.0 * sc.OrthoHalfWidthKm / w;
+    var report = new System.Text.StringBuilder();
+    report.AppendLine($"{sc.Id}: comet at ({cx - vp.Location.X:F1}, {cy - vp.Location.Y:F1}) of {w}x{h}, {kmPerPx:F2} km/px");
+    var failures = new List<string>();
+    foreach (var (ring, expected, observed) in new[] { (fan.InnerRing, fan.Inner, fan.ObservedInner),
+               (fan.OuterRing, fan.Outer, fan.ObservedOuter) })
+    {
+      var profile = FanRidges.Profile(lum, w, h, cx - vp.Location.X, cy - vp.Location.Y, kmPerPx, ring.LoKm, ring.HiKm);
+      Assert.True(profile is not null, $"ring {ring.LoKm}–{ring.HiKm} km is outside the viewport");
+      var peaks = FanRidges.Peaks(profile!);
+      report.AppendLine($"  ring {ring.LoKm / 1000:F0}–{ring.HiKm / 1000:F0} kkm: render {FanRidges.Describe(profile!)}");
+      if (FanRidges.IsSaturated(profile!))
+      {
+        var (lo, hi) = FanRidges.Edges(profile!);
+        report.AppendLine($"    clipped: half-level edges {lo:F0}° / {hi:F0}°, cone edges " +
+          $"{fan.ConeEdges[0]:F0}° / {fan.ConeEdges[1]:F0}° ±{fan.TolDeg:F0}");
+        foreach (var (got, want) in new[] { (lo, fan.ConeEdges[0]), (hi, fan.ConeEdges[1]) })
+          if (FanRidges.AngleBetween(got, want) > fan.TolDeg)
+            failures.Add($"edge {want:F0}° in {ring.LoKm / 1000:F0}–{ring.HiKm / 1000:F0} kkm: {got:F0}°");
+        continue;
+      }
+      foreach (var (pa, obs) in expected.Zip(observed))
+      {
+        var near = FanRidges.Nearest(peaks, pa);
+        double off = near is { } p ? FanRidges.AngleBetween(p.Pa, pa) : double.PositiveInfinity;
+        string got = near is { } q ? $"{q.Pa:F0}°" : "none";
+        report.AppendLine($"    expected {pa:F0}° ±{fan.TolDeg:F0}: render {got}; observation {obs:F0}°" +
+          (near is { } r ? $" (render − observation {r.Pa - obs:+0;-0}°)" : ""));
+        if (off > fan.TolDeg)
+          failures.Add($"ridge {pa:F0}° in {ring.LoKm / 1000:F0}–{ring.HiKm / 1000:F0} kkm: nearest {got}");
+      }
+    }
+    File.WriteAllText(Path.Combine(artifacts, "fan.txt"), report.ToString());
+    Console.WriteLine(report);
+    Assert.True(failures.Count == 0, string.Join("; ", failures) + Environment.NewLine + report);
   }
 
   /// <summary>Tracking and the run must not have replaced the projection the user set.</summary>

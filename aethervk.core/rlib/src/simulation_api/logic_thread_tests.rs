@@ -981,9 +981,17 @@ fn test_effective_trajectory_recorded_and_cleared_on_reset() {
 
 /// Downloads the 67P SPK (2025-10-01 .. 2025-11-02) from Horizons; `None` when offline.
 fn fetch_67p_spk(file_name: &str) -> Option<std::path::PathBuf> {
-  use std::io::Write;
   // Query Horizons API for 67P (spk id 1000012)
-  let url = "https://ssd.jpl.nasa.gov/api/horizons.api?format=text&COMMAND=%2790000703%3B%27&MAKE_EPHEM=%27YES%27&EPHEM_TYPE=%27SPK%27&OBJ_DATA=%27NO%27&START_TIME=%272025-10-01%27&STOP_TIME=%272025-11-02%27";
+  fetch_horizons_spk(
+    file_name,
+    "https://ssd.jpl.nasa.gov/api/horizons.api?format=text&COMMAND=%2790000703%3B%27&MAKE_EPHEM=%27YES%27&EPHEM_TYPE=%27SPK%27&OBJ_DATA=%27NO%27&START_TIME=%272025-10-01%27&STOP_TIME=%272025-11-02%27",
+  )
+}
+
+/// A Horizons SPK (`EPHEM_TYPE='SPK'` query `url`) written to the temp dir as `file_name`; `None`
+/// when Horizons is unreachable.
+fn fetch_horizons_spk(file_name: &str, url: &str) -> Option<std::path::PathBuf> {
+  use std::io::Write;
   let resp = match reqwest::blocking::get(url) {
     Ok(r) => r,
     Err(e) => {
@@ -2154,6 +2162,210 @@ fn test_earth_observer_aims_at_the_sun_on_the_real_scene() {
   );
 }
 
+/// The app's real scene (almanac Earth with its BPC rotation, the camera parented to the Earth)
+/// with a light-time "comet": a root-level body on the Mars barycentre's SPK (de442, naif 4) at the
+/// scene's epoch (Δ ≈ 2.4 AU, τ ≈ 20 min: the astrometric and geometric aims differ by ~1e-4 rad),
+/// seen from the site below it (high above the horizon, from the Earth's real rotation). Returns
+/// `(ctx, scene, camera, earth, comet, (lat, lon) deg)` with nothing stepped.
+fn light_time_observer_fixture()
+-> (Box<SimulationContext>, u64, EntityId, EntityId, EntityId, (f64, f64)) {
+  use crate::simulation_api::earth_observer::{qinverse, qnormalize, rotate};
+  use aethervk_oshal_rlib::math::vector::{vec3f64::Vec3f64, vec4f64::Quat64};
+  let ctx = startup_with_planets();
+  let start = Epoch::from_gregorian_utc(2021, 12, 27, 0, 14, 47, 0);
+  let scene_id = ctx
+    .create_empty_scene2(true, start, start + Duration::from_days(1.0))
+    .unwrap()
+    .scene_id;
+  let planet = AlmanacPlanet { naif_id: 4 };
+  let (pos_km, _, _) = planet
+    .step_with_velocity(start, &ctx.logic_state.read().almanac_data, None)
+    .expect("Mars barycentre in de442");
+  let p_km: [f64; 3] = pos_km.into();
+  let au = crate::simulation_api::astrometry::AU_KM;
+  let scenes = ctx.scenes.read();
+  let g = scenes.get_scene(scene_id).unwrap();
+  let g = g.read();
+  let cam = g.scene.get_entity_by_name("camera").expect("scene camera");
+  let earth = g.earth.unwrap().body;
+  g.scene.set_parent(cam, Some(earth));
+  let comet = g.scene.spawn_entity("light-time comet");
+  g.scene
+    .add_component(comet, crate::scene::HighResTransformComponent::default())
+    .unwrap();
+  g.scene.add_component(comet, planet).unwrap();
+  g.scene
+    .set_global_transform_f64(
+      comet,
+      Vec3f64::from_array([p_km[0] / au, p_km[1] / au, p_km[2] / au]),
+      Quat64::identity(),
+    )
+    .unwrap();
+  let e = g.scene.global_transform_f64(earth).unwrap();
+  let ep: [f64; 3] = e.position.into();
+  let er = qnormalize([e.rotation[0], e.rotation[1], e.rotation[2], e.rotation[3]]);
+  let d = [0, 1, 2].map(|i| p_km[i] / au - ep[i]);
+  let n = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+  let bf = rotate(qinverse(er), d.map(|x| x / n));
+  let site = (bf[2].asin().to_degrees(), bf[1].atan2(bf[0]).to_degrees());
+  drop(g);
+  drop(scenes);
+  (ctx, scene_id, cam, earth, comet, site)
+}
+
+/// Topocentric comet tracking from `(lat, lon)`, celestial north up (the reopened save's setup).
+fn set_light_time_observer(
+  ctx: &SimulationContext,
+  scene_id: u64,
+  cam: EntityId,
+  earth: EntityId,
+  comet: EntityId,
+  (lat, lon): (f64, f64),
+) -> bool {
+  ctx.set_earth_observer(
+    scene_id,
+    cam.as_ffi(),
+    Some(crate::simulation_api::earth_observer::EarthObserverMode::CometTracking),
+    earth.as_ffi(),
+    comet.as_ffi(),
+    true,
+    lat,
+    lon,
+    0.0,
+    [0.0, 0.0, 0.0, 1.0],
+    crate::simulation_api::earth_observer::ObserverUp::CelestialNorth,
+  )
+}
+
+/// `(astrometric, geometric)` world positions (AU) of the fixture's comet: the committed position
+/// with / without the observer's light-time offset (what the renderer draws / where it is now).
+fn observer_comet_targets(
+  ctx: &SimulationContext,
+  scene_id: u64,
+  comet: EntityId,
+) -> ([f64; 3], [f64; 3], f64) {
+  let scenes = ctx.scenes.read();
+  let g = scenes.get_scene(scene_id).unwrap();
+  let g = g.read();
+  let c: [f64; 3] = g.scene.global_transform_f64(comet).unwrap().position.into();
+  let lt = g
+    .earth_observer
+    .and_then(|o| o.light_time)
+    .expect("observer light time");
+  (
+    [0, 1, 2].map(|i| c[i] + lt.offset_au[i]),
+    c,
+    lt.delay_s,
+  )
+}
+
+/// `SetEarthObserver` alone poses the camera on the **astrometric** comet (light time from the
+/// almanac velocity at the scene's epoch), with no commit: a restored, paused scene has none.
+/// The HUD's aim error is measured on that pose.
+#[test]
+fn set_earth_observer_poses_the_camera_without_a_commit() {
+  let (ctx, scene_id, cam, earth, comet, site) = light_time_observer_fixture();
+  assert!(set_light_time_observer(&ctx, scene_id, cam, earth, comet, site));
+  let (astrometric, geometric, delay) = observer_comet_targets(&ctx, scene_id, comet);
+  let (aim, aim_geometric) = {
+    let scenes = ctx.scenes.read();
+    let g = scenes.get_scene(scene_id).unwrap();
+    let g = g.read();
+    (
+      camera_aim_error(&g, cam, astrometric),
+      camera_aim_error(&g, cam, geometric),
+    )
+  };
+  let (_, status_aim, _) = ctx.earth_observer_status(scene_id).expect("observer status");
+  ctx.threads.logic_thread.tx().try_send(LogicCommand::Shutdown).unwrap();
+  println!(
+    "aim {aim:.3e} rad (geometric comet {aim_geometric:.3e} rad off), HUD {status_aim:.3e}, τ {delay:.1} s"
+  );
+  assert!(delay > 100.0, "light time {delay} s");
+  assert!(
+    aim_geometric > 1e-5,
+    "the test must tell the two aims apart ({aim_geometric} rad)"
+  );
+  assert!(aim < 1e-9, "astrometric comet {aim} rad off the view axis without a commit");
+  assert!(status_aim < 1e-9, "HUD aim {status_aim} rad");
+}
+
+/// The reopened save (`comet_67p_reopen_offset_is_the_light_time_aim`): the UI queued an
+/// `AnimateCameraTo` (and a transform write) towards its own pose, the geometric comet, before
+/// handing the camera to the native observer, and the logic thread ran them after the hand-over;
+/// paused, no commit re-posed the camera. The observer's camera now ignores queued UI poses and
+/// keeps the astrometric aim while paused, and the HUD reports what the camera shows: a write the
+/// observer did not make is not hidden behind the last pose's "aim 0".
+#[test]
+fn restore_then_pause_keeps_the_astrometric_aim() {
+  use aethervk_oshal_rlib::math::vector::{vec3f64::Vec3f64, vec4f64::Quat64};
+  let (ctx, scene_id, cam, earth, comet, site) = light_time_observer_fixture();
+  assert!(set_light_time_observer(&ctx, scene_id, cam, earth, comet, site));
+  let (astrometric, geometric, _) = observer_comet_targets(&ctx, scene_id, comet);
+  // the UI's pose: the camera's world position, looking at the geometric comet
+  let (cam_pos, ui_rot) = {
+    let scenes = ctx.scenes.read();
+    let g = scenes.get_scene(scene_id).unwrap();
+    let g = g.read();
+    let p: [f64; 3] = g.scene.global_transform_f64(cam).unwrap().position.into();
+    let q = crate::simulation_api::earth_observer::look_at_up(
+      [0, 1, 2].map(|i| geometric[i] - p[i]),
+      crate::simulation_api::earth_observer::ObserverUp::CelestialNorth,
+      site.0,
+    );
+    (Vec3f64::from_array(p), Quat64::from_components(q[0], q[1], q[2], q[3]))
+  };
+  let tx = ctx.threads.logic_thread.tx();
+  tx.try_send(LogicCommand::AnimateCameraTo {
+    scene_id,
+    camera_id: cam.as_ffi(),
+    target_pos: cam_pos,
+    target_rot: ui_rot,
+    duration_s: 0.4,
+    orbit_pivot: None,
+  })
+  .unwrap();
+  tx.try_send(LogicCommand::SetCameraTransform {
+    scene_id,
+    camera_id: cam.as_ffi(),
+    transform: Some((cam_pos, ui_rot)),
+    projection: None,
+  })
+  .unwrap();
+  // paused: only the update phase (animations) runs, well past the animation's 0.4 s
+  std::thread::sleep(std::time::Duration::from_millis(1500));
+  let (aim, aim_geometric) = {
+    let scenes = ctx.scenes.read();
+    let g = scenes.get_scene(scene_id).unwrap();
+    let g = g.read();
+    (
+      camera_aim_error(&g, cam, astrometric),
+      camera_aim_error(&g, cam, geometric),
+    )
+  };
+  let (_, status_aim, _) = ctx.earth_observer_status(scene_id).unwrap();
+  println!(
+    "after the stale UI pose: aim {aim:.3e} rad (geometric {aim_geometric:.3e}), HUD {status_aim:.3e}"
+  );
+  assert!(aim < 1e-9, "a queued UI pose moved the observer's camera: comet {aim} rad off");
+  assert!(status_aim < 1e-9, "HUD aim {status_aim} rad");
+
+  // the HUD is the camera's real aim: a write the observer did not make is reported
+  {
+    let scenes = ctx.scenes.read();
+    let g = scenes.get_scene(scene_id).unwrap();
+    let g = g.read();
+    g.scene.set_global_transform_f64(cam, cam_pos, ui_rot).unwrap();
+  }
+  let (_, status_aim, _) = ctx.earth_observer_status(scene_id).unwrap();
+  ctx.threads.logic_thread.tx().try_send(LogicCommand::Shutdown).unwrap();
+  println!("after a foreign write: HUD {status_aim:.3e} rad (expected {aim_geometric:.3e})");
+  assert!(
+    status_aim > 1e-5 && (status_aim - aim_geometric).abs() < 1e-7,
+    "HUD aim {status_aim} rad for a camera {aim_geometric} rad off the drawn comet"
+  );
+}
+
 /// Device loss: every scene's CPU state is dumped without any GPU synchronisation, the dump is
 /// the `DumpScene` format (restorable), and `latest` names the directory for the host.
 #[test]
@@ -2875,4 +3087,128 @@ fn only_a_day_long_seek_resets_the_dust_feedback() {
   assert!(!utils::seek_resets_dust_feedback(Some(1.0e6), 1.0e6 - day));
   assert!(utils::seek_resets_dust_feedback(Some(1.0e6), 1.0e6 + day + 1.0));
   assert!(utils::seek_resets_dust_feedback(Some(1.0e6), 1.0e6 - 30.0 * day));
+}
+
+/// Network-gated (the 67P SPK of the 2021 apparition comes from Horizons). The proof of the
+/// "comet not centred after reopening" report (`TestResults/e2e/67p-2021-12-27/reopened.png`):
+/// the e2e save (Liverpool Telescope, 28.7624° N 17.8792° W, 0 m; 2021-12-27T00:14:47 UTC;
+/// CometTracking, celestial north up; orthographic half-width 61 650 km on a 1123 px wide view)
+/// was reopened with the camera posed by the **UI** (`CameraService.SnapCameraToEarth`: the
+/// geometric comet, the site on a 6372.9 km sphere) while the comet and its dust were drawn light-time
+/// retarded (`LightTimeViewComponent`). Two independent measurements of the screenshot:
+/// - the HUD camera position of the reopened view differs from the one of the live observer view
+///   (same epoch) by (1.375, 1.890, −17.875) km, |·| = 18.027 km: exactly the WGS84-site vs UI
+///   sphere-site offset printed here (the native observer stands on WGS84);
+/// - the nucleus (where its orbit lines start) is at (+49, −20) px from the view centre.
+///
+/// The prediction from the engine's own pieces: projecting the astrometric comet into the camera
+/// aimed at the geometric one gives the same offset (screen x right, y down).
+#[test]
+fn comet_67p_reopen_offset_is_the_light_time_aim() {
+  use crate::simulation_api::{astrometry, earth_observer};
+  use aethervk_oshal_rlib::math::vector::vec4f64::Quat64;
+  const URL: &str = "https://ssd.jpl.nasa.gov/api/horizons.api?format=text&COMMAND=%27DES%3D1000012%3BCAP%3BNOFRAG%27&MAKE_EPHEM=%27YES%27&EPHEM_TYPE=%27SPK%27&OBJ_DATA=%27NO%27&START_TIME=%272021-12-20%27&STOP_TIME=%272022-01-03%27";
+  // reopened.png: nucleus (1144, 425.3) px, view centre (534 + 1123/2, 99 + 694/2) px
+  const MEASURED_PX: [f64; 2] = [1144.0 - 1095.5, 425.3 - 446.0];
+  const KM_PER_PX: f64 = 61_650.0 / (1123.0 / 2.0);
+  let (lat_deg, lon_deg, elev_m) = (28.7624, -17.8792, 0.0);
+
+  let Some(spk) = fetch_horizons_spk("1000012_2021_reopen.bsp", URL) else {
+    println!("Skipping: Horizons unreachable");
+    return;
+  };
+  let mut almanac = load_planet_almanac();
+  almanac.load_almanac(spk.to_str().unwrap()).expect("load 67P SPK");
+  let naif_id = almanac
+    .almanac
+    .spk_domains()
+    .ok()
+    .and_then(|d| d.into_iter().map(|(id, _)| id).find(|&id| id != 0 && !(1..=999).contains(&id)))
+    .expect("small-body segment in the SPK");
+  let comet = AlmanacPlanet { naif_id };
+  let earth = AlmanacPlanet { naif_id: 399 };
+  let au = astrometry::AU_KM;
+  let v3 = |v: aethervk_oshal_rlib::math::vector::vec3f64::DVec3| [v.x(), v.y(), v.z()];
+  let sub = |a: [f64; 3], b: [f64; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+
+  let t = Epoch::from_gregorian_utc(2021, 12, 27, 0, 14, 47, 0);
+  let (earth_km, _, earth_rot) = earth.step_with_velocity(t, &almanac, None).unwrap();
+  let q = Quat64::from_quat(earth_rot);
+  let earth_rot = earth_observer::qnormalize([q[0], q[1], q[2], q[3]]);
+  let earth_au = v3(earth_km).map(|c| c / au);
+  // the native site (WGS84) and the UI's (geodetic latitude on a sphere of EarthRadiusAu)
+  let native_site = earth_observer::observer_position(
+    earth_au,
+    earth_rot,
+    astrometry::wgs84_surface_point_bf(lat_deg, lon_deg, elev_m),
+  );
+  let (la, lo) = (lat_deg.to_radians(), lon_deg.to_radians());
+  let ui_site = earth_observer::observer_position(
+    earth_au,
+    earth_rot,
+    [la.cos() * lo.cos(), la.cos() * lo.sin(), la.sin()].map(|c| c * earth_observer::EARTH_RADIUS_AU),
+  );
+  let site_offset_km = sub(native_site, ui_site).map(|c| c * au);
+  let site_offset = dot(site_offset_km, site_offset_km).sqrt();
+
+  let (comet_km, comet_vel, _) = comet.step_with_velocity(t, &almanac, None).unwrap();
+  let geometric = v3(comet_km).map(|c| c / au);
+  let lt = earth_observer::comet_light_time(native_site, geometric, v3(comet_vel));
+  let astrometric = [0, 1, 2].map(|i| geometric[i] + lt.offset_au[i]);
+  let delta_au = dot(sub(astrometric, native_site), sub(astrometric, native_site)).sqrt();
+
+  let up = earth_observer::ObserverUp::CelestialNorth;
+  let ui_rot = earth_observer::look_at_up(sub(geometric, ui_site), up, lat_deg);
+  let native_rot = earth_observer::look_at_up(sub(astrometric, native_site), up, lat_deg);
+  // orthographic screen offset (px, x right, y down) of the drawn (astrometric) comet; screen
+  // axes as `gpu::frame::camera_screen_axes`: right = local −X, up = local +Z
+  let screen_px = |rot: [f64; 4], site: [f64; 3]| {
+    let d = sub(astrometric, site).map(|c| c * au);
+    let right = earth_observer::rotate(rot, [-1.0, 0.0, 0.0]);
+    let up = earth_observer::rotate(rot, [0.0, 0.0, 1.0]);
+    [dot(d, right) / KM_PER_PX, -dot(d, up) / KM_PER_PX]
+  };
+  let ui_px = screen_px(ui_rot, ui_site);
+  let native_px = screen_px(native_rot, native_site);
+  // north up, east left: PA = atan2(east, north) = atan2(−x, −y)
+  let pa = |p: [f64; 2]| (-p[0]).atan2(-p[1]).to_degrees().rem_euclid(360.0);
+  let v_perp = {
+    let los = sub(astrometric, native_site);
+    let n = dot(los, los).sqrt();
+    let u = los.map(|c| c / n);
+    let v = v3(comet_vel);
+    let along = dot(v, u);
+    let p = [v[0] - along * u[0], v[1] - along * u[1], v[2] - along * u[2]];
+    dot(p, p).sqrt()
+  };
+  println!(
+    "Δ {delta_au:.6} au, τ {:.2} s, |v⊥| {v_perp:.3} km/s → v⊥τ {:.1} km; site WGS84 − UI sphere \
+     {site_offset:.3} km {site_offset_km:?}",
+    lt.delay_s,
+    v_perp * lt.delay_s
+  );
+  println!(
+    "UI geometric camera: comet at ({:.1}, {:.1}) px = {:.1} km, PA {:.1}° | native astrometric \
+     camera: ({:.2e}, {:.2e}) px | measured ({:.1}, {:.1}) px, PA {:.1}°",
+    ui_px[0],
+    ui_px[1],
+    ui_px[0].hypot(ui_px[1]) * KM_PER_PX,
+    pa(ui_px),
+    native_px[0],
+    native_px[1],
+    MEASURED_PX[0],
+    MEASURED_PX[1],
+    pa(MEASURED_PX)
+  );
+  assert!(native_px[0].hypot(native_px[1]) < 1e-3, "the native camera centres the drawn comet");
+  assert!(
+    (site_offset - 18.027).abs() < 0.05,
+    "the UI site is {site_offset} km from the native one, the HUD showed 18.027 km"
+  );
+  let miss = (ui_px[0] - MEASURED_PX[0]).hypot(ui_px[1] - MEASURED_PX[1]);
+  assert!(
+    miss < 3.0,
+    "the light-time aim predicts {ui_px:?} px, the screenshot shows {MEASURED_PX:?} px"
+  );
 }

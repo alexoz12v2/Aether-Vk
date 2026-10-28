@@ -206,9 +206,9 @@ public interface INativeRuntimeService : IDisposable
   // ==========================================
   // Particle Systems
   // ==========================================
-  // TODO: Should we separate model modification, which affects all particle systems, or not?
-  //       we are now reflecting Native side, in which model properties are stored separately, and
-  //       we are actively synchronizing them
+  // Every particle system owns its grain and activity parameters (ParticleSystemModel, built per
+  // jet by JetNativeSync.BuildModel): add / modify write the one system only. AddFirstParticleSystem
+  // also returns the computed β and production rate.
   bool AddParticleSystem(ParticleSystemModel psModel, ParticleSystemJet psJet, out ulong outPsId);
   ParticleSystemComputedProperties? AddFirstParticleSystem(
     ParticleSystemModel psModel,
@@ -241,6 +241,12 @@ public interface INativeRuntimeService : IDisposable
   /// scene or not a camera.
   /// </summary>
   bool SetCameraShading(ulong cameraEntityId, uint flags);
+
+  /// <summary>
+  /// The linear factor the camera <paramref name="cameraEntityId"/> multiplies the sunlight on
+  /// meshes by (either shading; finite, &gt; 0). False: no scene, not a camera or invalid factor.
+  /// </summary>
+  bool SetCameraExposure(ulong cameraEntityId, float factor);
 
   /// <summary>
   /// Where the Earth observer camera <paramref name="cameraEntityId"/> draws its comet on a
@@ -395,6 +401,12 @@ public interface INativeRuntimeService : IDisposable
   /// </summary>
   bool SetSphereGizmoVisibility(bool isVisible);
 
+  /// <summary>
+  /// Which parts of the comet's sphere gizmo are drawn (<see cref="Models.SphereGizmoPart"/> bits).
+  /// False: no comet.
+  /// </summary>
+  bool SetSphereGizmoParts(uint parts);
+
   // Async: completion is signalled by a one-shot (transient) handler registered via the
   // `ExternalStateDispatcher` utility inside the implementation. Permanent subscriptions
   // (companion services) use `RegisterExternalStateListener` instead.
@@ -441,6 +453,14 @@ public interface INativeRuntimeService : IDisposable
   /// draw them). Null when the asset is unknown, block-compressed, or the library is busy.
   /// </summary>
   Models.AssetThumbnail? CopyAssetTexels(ulong assetId);
+
+  /// <summary>
+  /// The physical f32 raster of FITS texture <paramref name="assetId"/> (blank = NaN), texture row
+  /// order (row 0 = the displayed image's top, like <see cref="CopyAssetTexels"/>), for
+  /// measurements on the data rather than the stretched texels. Null when the asset is unknown,
+  /// not FITS, or the library is busy.
+  /// </summary>
+  Models.IntensityImage? CopyFitsRaster(ulong assetId);
 
   /// <summary>
   /// Header metadata of a FITS texture as UTF-8 JSON (<c>docs/fits_ffi_contract.md</c>; parse with
@@ -1092,6 +1112,16 @@ internal unsafe static class PInvokeAetherVkCore
   );
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern unsafe int avkSimulationContext_copyFitsRaster(
+    nint ctx,
+    ulong assetId,
+    float* outValues,
+    ulong outLen,
+    uint* outWidth,
+    uint* outHeight
+  );
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   public static extern bool avkSimulationContext_copyAssetThumbnail(
     nint ctx,
     ulong assetId,
@@ -1426,6 +1456,24 @@ internal unsafe static class PInvokeAetherVkCore
     ulong sceneId,
     ulong cameraEntity,
     uint flags
+  );
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.U1)]
+  public static extern bool avkSimulationContext_setCameraExposure(
+    nint ctx,
+    ulong sceneId,
+    ulong cameraEntity,
+    float factor
+  );
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.U1)]
+  public static extern bool avkSimulationContext_setSphereGizmoParts(
+    nint ctx,
+    ulong sceneId,
+    ulong entity,
+    uint parts
   );
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
@@ -2465,6 +2513,11 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     );
   }
 
+  public bool SetSphereGizmoParts(uint parts) =>
+    _ctx != 0
+    && CometEntityId is { } comet
+    && PInvokeAetherVkCore.avkSimulationContext_setSphereGizmoParts(_ctx, _sceneId, comet, parts);
+
   public bool SetReferenceErrorVisible(bool visible) =>
     _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_setReferenceErrorVisible(_ctx, _sceneId, visible);
 
@@ -2502,6 +2555,10 @@ public sealed class NativeRuntimeService : INativeRuntimeService
   public bool SetCameraShading(ulong cameraEntityId, uint flags) =>
     _ctx != 0
     && PInvokeAetherVkCore.avkSimulationContext_setCameraShading(_ctx, _sceneId, cameraEntityId, flags);
+
+  public bool SetCameraExposure(ulong cameraEntityId, float factor) =>
+    _ctx != 0
+    && PInvokeAetherVkCore.avkSimulationContext_setCameraExposure(_ctx, _sceneId, cameraEntityId, factor);
 
   public CometScreenPosition? GetCometScreenPosition(ulong cameraEntityId, uint widthPx, uint heightPx)
   {
@@ -2829,6 +2886,22 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     return new Models.AssetThumbnail((int)w, (int)h, rgba);
   }
 
+  public unsafe Models.IntensityImage? CopyFitsRaster(ulong assetId)
+  {
+    if (_ctx == 0) return null;
+    uint w, h;
+    if (PInvokeAetherVkCore.avkSimulationContext_copyFitsRaster(_ctx, assetId, null, 0, &w, &h) != 0)
+      return null;
+    var values = new float[checked((int)(w * h))];
+    fixed (float* p = values)
+    {
+      if (PInvokeAetherVkCore.avkSimulationContext_copyFitsRaster(
+            _ctx, assetId, p, (ulong)values.Length, &w, &h) != 0)
+        return null;
+    }
+    return new Models.IntensityImage((int)w, (int)h, values);
+  }
+
   public unsafe string? GetFitsMetadataJson(ulong assetId)
   {
     if (_ctx == 0) return null;
@@ -3118,7 +3191,8 @@ public record AnimationTarget(
 }
 
 /// <summary>
-/// Common members among all dust jets
+/// Grain and activity parameters of one dust jet (its own: no jet shares them). The Afρ law's
+/// shape (power, cutoff, max) is model-wide in the UI and copied into every jet's record.
 /// </summary>
 public record ParticleSystemModel(
   float DiametreUm,
@@ -3254,7 +3328,7 @@ internal readonly struct AnimationTargetDTO
 [StructLayout(LayoutKind.Sequential)]
 internal readonly struct ParticleSystemDTO(ParticleSystemModel model, ParticleSystemJet jet)
 {
-  // -- start of jet common properties --
+  // -- grain and activity properties (per jet) --
   public readonly float DiametreUm = model.DiametreUm;
   public readonly float DensityGCm3 = model.DensityGCm3;
   public readonly float ScatteringEfficiency = model.ScatteringEfficiency;

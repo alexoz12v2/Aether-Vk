@@ -240,6 +240,14 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
     RunToEndCommand = new AsyncRelayCommand(RunToEndAsync);
     SeekToEpochCommand = new AsyncRelayCommand(SeekToEpochAsync);
 
+    _timelineService.ModelRangeRequests
+      .Subscribe(end =>
+      {
+        ModelEndEpoch = end.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
+        ApplyModelRange();
+      })
+      .AddDisposableTo(_disposables);
+
     // any seek (this tab, a FITS observation epoch): show where the clock now is
     _timelineService.Seeked
       .Subscribe(_ => PollSimulationClock())
@@ -578,7 +586,69 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
 
   private TimeRange? _confirmedRange;
 
+  // ── "Model" preset (feedback #20): N rotations ending at the image epoch ─────────────────
+
+  /// <summary>End of the model range (the image's epoch); empty: the end box.</summary>
+  [ObservableProperty]
+  private string _modelEndEpoch = string.Empty;
+
+  /// <summary>Nucleus rotations the model range spans.</summary>
+  [ObservableProperty]
+  private int _modelRotations = 3;
+
+  /// <summary>
+  /// The range <paramref name="rotations"/> sidereal periods of <paramref name="periodHours"/>
+  /// long ending at <paramref name="end"/>, at least <see cref="MinRangeDays"/>. Null for no
+  /// rotation (period ≤ 0) or rotations &lt; 1.
+  /// </summary>
+  internal static (DateTimeOffset Start, DateTimeOffset End)? ModelRange(DateTimeOffset end, int rotations, double periodHours)
+  {
+    if (rotations < 1 || !(periodHours > 0) || double.IsInfinity(periodHours))
+      return null;
+    double hours = Math.Max(rotations * periodHours, MinRangeDays * 24.0);
+    return (end - TimeSpan.FromHours(hours), end);
+  }
+
+  /// <summary>
+  /// Proposes <see cref="ModelRotations"/> rotations ending at <see cref="ModelEndEpoch"/> (or the
+  /// end box), the period from the committed comet's rotation rate. Commit as usual.
+  /// </summary>
+  [RelayCommand]
+  private void ApplyModelRange()
+  {
+    string endText = string.IsNullOrWhiteSpace(ModelEndEpoch) ? EndEpoch : ModelEndEpoch;
+    if (!TimeUtils.TryParseIso8601(endText, out var end))
+    {
+      SetProposalError("Model range: the end epoch is not a date (yyyy-MM-ddTHH:mm:ss).");
+      return;
+    }
+    double rate = _cometSessionService.ActiveSessionIds.Count == 0
+      ? 0
+      : _cometSessionService.GetSession(_cometSessionService.ActiveSessionIds[0]).RotRateDegDay;
+    double periodHours = rate == 0 ? 0 : 360.0 * 24.0 / Math.Abs(rate);
+    if (ModelRange(end, ModelRotations, periodHours) is not { } r)
+    {
+      SetProposalError(ModelRotations < 1
+        ? "Model range: at least one rotation."
+        : "Model range: the comet has no rotation period (Comet tab).");
+      return;
+    }
+    const string Fmt = "yyyy-MM-ddTHH:mm:ss";
+    var ci = System.Globalization.CultureInfo.InvariantCulture;
+    StartEpoch = r.Start.UtcDateTime.ToString(Fmt, ci);
+    EndEpoch = r.End.UtcDateTime.ToString(Fmt, ci);
+  }
+
+  /// <summary>The shortest range the timeline accepts, days.</summary>
+  public const double MinRangeDays = 1;
+
   private bool _isProposing;
+  /// <summary>
+  /// Proposes the boxes' range as soon as it is valid. Invalid or half-typed text is left as it
+  /// is, with the reason in <see cref="ErrorMessage"/>, and the last valid proposal stays: the
+  /// boxes run this on every keystroke, and snapping them back to the old proposal made a date
+  /// impossible to type (feedback #19, "it picks an end date four years away").
+  /// </summary>
   private void TryPropose()
   {
     if (_isProposing) return;
@@ -589,19 +659,23 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
       ErrorMessage = string.Empty;
       if (CurrentSession == null) return;
 
-      if (!TimeUtils.TryParseIso8601(StartEpoch, out var startDt) ||
-          !TimeUtils.TryParseIso8601(EndEpoch, out var endDt))
+      bool startOk = TimeUtils.TryParseIso8601(StartEpoch, out var startDt);
+      bool endOk = TimeUtils.TryParseIso8601(EndEpoch, out var endDt);
+      if (!startOk || !endOk)
       {
-        StartEpoch = CurrentSession.ProposedStartEpoch;
-        EndEpoch = CurrentSession.ProposedEndEpoch;
+        SetProposalError(string.Concat(
+          !startOk ? "Start" : "End",
+          " epoch: use yyyy-MM-dd or yyyy-MM-ddTHH:mm:ss (UTC unless an offset is given)."));
         return;
       }
 
       var diff = endDt - startDt;
-      if (diff.TotalDays < 0 || diff.TotalDays < 28)
+      if (diff.TotalDays < MinRangeDays)
       {
-        StartEpoch = CurrentSession.ProposedStartEpoch;
-        EndEpoch = CurrentSession.ProposedEndEpoch;
+        SetProposalError(diff.TotalDays <= 0
+          ? "The end epoch must come after the start epoch."
+          : string.Format(System.Globalization.CultureInfo.InvariantCulture,
+              "The range must span at least {0} days (now {1:0.##}).", MinRangeDays, diff.TotalDays));
         return;
       }
 
@@ -615,6 +689,12 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
     {
       _isProposing = false;
     }
+  }
+
+  private void SetProposalError(string message)
+  {
+    ErrorMessage = message;
+    HasError = true;
   }
 
   /// <summary>

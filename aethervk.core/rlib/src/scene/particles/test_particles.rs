@@ -20,75 +20,47 @@ fn beta_computation() {
   approx::assert_abs_diff_eq!(actual_beta, expected_beta, epsilon = tol);
 }
 
+/// Every grain and activity parameter of the FFI record reaches the jet's emission parameters
+/// unchanged (no hidden unit conversion): they are the jet's own, not model-wide values.
 #[test]
-fn propagate_common_params_field_count() {
-  // Documents the exact set of 10 "Jet Common Parameters" that propagate_common_params
-  // applies to sibling particle systems. If this list changes, the FFI propagation
-  // function in ffi.rs must be updated in lockstep.
-  let expected_common_fields: &[&str] = &[
-    "diametre_um",
-    "density_gcm3",
-    "scattering_efficiency",
-    "geometric_albedo",
-    "size_q",
-    "size_range",
-    "afrho_0_cm",
-    "afrho_power",
-    "afrho_cutoff_au",
-    "afrho_max_value_cm",
-  ];
-  assert_eq!(
-    expected_common_fields.len(),
-    10,
-    "there must be exactly 10 common (model-level) particle system parameters"
-  );
-}
-
-#[test]
-fn particle_system_emit_params_common_field_roundtrip() {
+fn emit_params_from_dto_copies_every_grain_and_activity_field() {
   use super::v2::*;
-  // Given a set of common-param values, copying them to ParticleSystemEmitParams
-  // must preserve each value exactly (no hidden unit conversion for common params).
-  let mut ep = ParticleSystemEmitParams::zeroed();
-  ep.diametre_um = 20.0;
-  ep.density_gcm3 = 0.8;
-  ep.scattering_efficiency = 1.1;
-  ep.geometric_albedo = 0.05;
-  ep.size_q = 3.25;
-  ep.size_range = 30.0;
-  ep.afrho_0_cm = 800.0;
-  ep.afrho_power = 2.2;
-  ep.afrho_cutoff_au = 5.5;
-  ep.afrho_max_value_cm = 150_000.0;
+  let mut dto = crate::scene::ParticleSystemDTO::zeroed();
+  dto.diametre_um = 20.0;
+  dto.density_gcm3 = 0.8;
+  dto.scattering_efficiency = 1.1;
+  dto.geometric_albedo = 0.05;
+  dto.size_q = 3.25;
+  dto.size_range = 30.0;
+  dto.afrho_0_cm = 800.0;
+  dto.afrho_power = 2.2;
+  dto.afrho_cutoff_au = 5.5;
+  dto.afrho_max_value_cm = 150_000.0;
+  dto.latitude_rad = -1.08;
+  dto.longitude_rad = 0.25;
+  dto.aperture_rad = 0.17;
+  dto.start_velocity_mean = 60.0;
+  dto.start_velocity_std = 5.0;
+  dto.seed = 7;
 
-  // Re-apply same values (mirrors what propagate_common_params does)
-  let ep2 = ParticleSystemEmitParams {
-    diametre_um: ep.diametre_um,
-    density_gcm3: ep.density_gcm3,
-    scattering_efficiency: ep.scattering_efficiency,
-    geometric_albedo: ep.geometric_albedo,
-    size_q: ep.size_q,
-    size_range: ep.size_range,
-    afrho_0_cm: ep.afrho_0_cm,
-    afrho_power: ep.afrho_power,
-    afrho_cutoff_au: ep.afrho_cutoff_au,
-    afrho_max_value_cm: ep.afrho_max_value_cm,
-    ..ParticleSystemEmitParams::zeroed()
-  };
+  let ep = ParticleSystemEmitParams::from_dto(&dto);
 
-  assert_eq!(ep2.diametre_um, 20.0);
-  assert_eq!(ep2.density_gcm3, 0.8);
-  assert_eq!(ep2.scattering_efficiency, 1.1);
-  assert_eq!(ep2.geometric_albedo, 0.05);
-  assert_eq!(ep2.size_q, 3.25);
-  assert_eq!(ep2.size_range, 30.0);
-  assert_eq!(ep2.afrho_0_cm, 800.0);
-  assert_eq!(ep2.afrho_power, 2.2);
-  assert_eq!(ep2.afrho_cutoff_au, 5.5);
-  assert_eq!(ep2.afrho_max_value_cm, 150_000.0);
-  // jet-specific fields left zeroed
-  assert_eq!(ep2.latitude_rad, 0.0);
-  assert_eq!(ep2.longitude_rad, 0.0);
+  assert_eq!(ep.diametre_um, 20.0);
+  assert_eq!(ep.density_gcm3, 0.8);
+  assert_eq!(ep.scattering_efficiency, 1.1);
+  assert_eq!(ep.geometric_albedo, 0.05);
+  assert_eq!(ep.size_q, 3.25);
+  assert_eq!(ep.size_range, 30.0);
+  assert_eq!(ep.afrho_0_cm, 800.0);
+  assert_eq!(ep.afrho_power, 2.2);
+  assert_eq!(ep.afrho_cutoff_au, 5.5);
+  assert_eq!(ep.afrho_max_value_cm, 150_000.0);
+  assert_eq!(ep.latitude_rad, -1.08);
+  assert_eq!(ep.longitude_rad, 0.25);
+  assert_eq!(ep.aperture_rad, 0.17);
+  assert_eq!(ep.start_velocity_mean, 60.0);
+  assert_eq!(ep.start_velocity_std, 5.0);
+  assert_eq!(ep.seed, 7);
 }
 
 /// `EMISSION_START_NOW` resolves to the scene clock's current epoch and is refused without a

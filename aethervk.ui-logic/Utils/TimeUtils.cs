@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 
 namespace AetherVk.Logic.Utils;
 
@@ -7,11 +8,14 @@ public static class TimeUtils
   private static readonly DateTimeOffset J2000 = new DateTimeOffset(2000, 1, 1, 12, 0, 0, TimeSpan.Zero);
 
   /// <summary>
-  /// Parses an ISO 8601 string to a DateTimeOffset.
+  /// Parses an ISO 8601 string to a DateTimeOffset. Culture-invariant, and a time without an
+  /// offset is UTC: the OS culture and time zone used to decide both, so "2021-12-27 00:14:47"
+  /// was an hour off on a UTC+1 machine and "12/27/2021"-style input depended on the locale.
   /// </summary>
   public static bool TryParseIso8601(string isoString, out DateTimeOffset result)
   {
-    return DateTimeOffset.TryParse(isoString, out result);
+    return DateTimeOffset.TryParse(isoString, CultureInfo.InvariantCulture,
+      DateTimeStyles.AssumeUniversal | DateTimeStyles.AllowWhiteSpaces, out result);
   }
 
   /// <summary>

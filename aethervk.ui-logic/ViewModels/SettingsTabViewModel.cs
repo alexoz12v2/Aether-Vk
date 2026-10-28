@@ -76,7 +76,8 @@ public partial class SettingsTabViewModel
       screenInfoProvider,
       schedulerProvider,
       fitsImageService,
-      timelineService.SeekAsync);
+      timelineService.SeekAsync,
+      timelineService.RequestModelRange);
 
     Icon = "⚙";
 

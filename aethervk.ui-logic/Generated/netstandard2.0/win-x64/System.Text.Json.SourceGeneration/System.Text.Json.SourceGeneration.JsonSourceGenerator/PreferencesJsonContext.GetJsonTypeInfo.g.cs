@@ -23,6 +23,10 @@ namespace AetherVk.Logic.Services
             {
                 return Create_Boolean(options);
             }
+            if (type == typeof(bool?))
+            {
+                return Create_NullableBoolean(options);
+            }
             if (type == typeof(global::AetherVk.Logic.Services.BindingDto))
             {
                 return Create_BindingDto(options);

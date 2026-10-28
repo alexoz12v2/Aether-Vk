@@ -243,7 +243,7 @@ public sealed class CameraService : IDisposable
   // Azimuth 0 → offset along +X; elevation +π/2 → offset along +Z (straight above comet).
   // Both fields are guarded by _orbitOffsetLock (written together with _orbitOffset).
   private float _orbitAzimuthRad   = 0f;   // horizontal orbit angle, radians, [0, 2π)
-  private float _orbitElevationRad = 0f;   // vertical orbit angle,   radians, (−π/2, +π/2)
+  private float _orbitElevationRad = 0f;   // vertical orbit angle,   radians, (−π, +π]: past ±π/2 the view is upside down
 
 
   // Earth position cache — updated via SIMULATION_CALLBACK for the earth entity.
@@ -1065,9 +1065,14 @@ public sealed class CameraService : IDisposable
         if (earthId != 0)
         {
           _runtimeService.SetCameraParent(camId.Value, earthId, enabled: true);
-          RotoTranslateDirect(targetPos.X, targetPos.Y, targetPos.Z, targetRot, pivotEntityId.Value);
           _bodyCameraParented = true;
-          lock (_earthPosLock) { PushNativeObserver(); }
+          lock (_earthPosLock)
+          {
+            // the core poses the camera (astrometric aim, WGS84 site); the UI's pose only if refused
+            PushNativeObserver();
+            if (!_nativeObserverActive)
+              RotoTranslateDirect(targetPos.X, targetPos.Y, targetPos.Z, targetRot, pivotEntityId.Value);
+          }
         }
       }
     }
@@ -1109,9 +1114,8 @@ public sealed class CameraService : IDisposable
               if (earthId2 != 0)
               {
                 _runtimeService.SetCameraParent(camIdVal, earthId2, enabled: true);
-                lock (_earthPosLock) { SnapCameraToEarth(_lastEarthPos); }
                 _bodyCameraParented = true;
-                lock (_earthPosLock) { PushNativeObserver(); }
+                lock (_earthPosLock) { RePoseEarthObserver(); }
               }
             }
           }
@@ -1284,17 +1288,17 @@ public sealed class CameraService : IDisposable
       lock (_orbitOffsetLock)
       {
         // Step 2 — Accumulate azimuth and elevation from scaled delta (no quaternion chaining →
-        // no drift). Azimuth is kept in [0, 2π); elevation is clamped to ±80° so cosElev ≥ 0.174
-        // everywhere, which keeps horizontal drag responsive even near the poles.
+        // no drift). Azimuth is kept in [0, 2π); elevation is free (feedback #16): it wraps in
+        // (−π, π], and past a pole the camera's up follows the elevation tangent, so the view
+        // goes over the pole and continues upside down instead of stopping.
         const float PI          = (float)Math.PI;
-        const float MaxElevRad  = 80f * (float)Math.PI / 180f;
 
         // Drag right → camera moves clockwise seen from +Z (towards its screen left), so the comet
-        // turns with the cursor (turntable feel).
-        _orbitAzimuthRad    = (_orbitAzimuthRad - scaledDelta.X) % (2f * PI);
+        // turns with the cursor (turntable feel); upside down the screen's left is the other way.
+        float azimuthDelta = Math.Cos(_orbitElevationRad) < 0.0 ? -scaledDelta.X : scaledDelta.X;
+        _orbitAzimuthRad    = (_orbitAzimuthRad - azimuthDelta) % (2f * PI);
         if (_orbitAzimuthRad < 0f) _orbitAzimuthRad += 2f * PI;
-        _orbitElevationRad  = Math.Max(-MaxElevRad,
-                              Math.Min( MaxElevRad, _orbitElevationRad + scaledDelta.Y));
+        _orbitElevationRad  = WrapElevation(_orbitElevationRad + scaledDelta.Y);
 
         // Step 3 — Orbit radius = 3× nucleus radius from the comet radius subject.
         // Reading _lastKnownNucleusRadiusKm (cached from subject) means a UI slider change
@@ -1554,8 +1558,7 @@ public sealed class CameraService : IDisposable
       _observerLonDeg = lonDeg;
       if (_modeSubject.Value == CameraMode.EarthPosition)
       {
-        SnapCameraToEarth(_lastEarthPos);
-        PushNativeObserver();
+        RePoseEarthObserver();
       }
     }
     _observerSiteSubject.OnNext((latDeg, lonDeg));
@@ -1575,8 +1578,7 @@ public sealed class CameraService : IDisposable
       _observerTopocentricSubject.OnNext(topocentric);
       if (_modeSubject.Value == CameraMode.EarthPosition)
       {
-        SnapCameraToEarth(_lastEarthPos);
-        PushNativeObserver();
+        RePoseEarthObserver();
       }
     }
   }
@@ -1596,8 +1598,7 @@ public sealed class CameraService : IDisposable
       _inertialLookDir = EarthObserverOrient(_inertialLookDir, UpHint);
       if (_modeSubject.Value == CameraMode.EarthPosition)
       {
-        SnapCameraToEarth(_lastEarthPos);
-        PushNativeObserver();
+        RePoseEarthObserver();
       }
     }
   }
@@ -1659,8 +1660,7 @@ public sealed class CameraService : IDisposable
 
       if (_modeSubject.Value == CameraMode.EarthPosition)
       {
-        SnapCameraToEarth(_lastEarthPos);
-        PushNativeObserver();
+        RePoseEarthObserver();
       }
     }
   }
@@ -1681,10 +1681,23 @@ public sealed class CameraService : IDisposable
       _inertialLookDir = aimed;
       _earthOrientationMode = EarthObserverOrientationMode.Free;
       _earthOrientationModeSubject.OnNext(_earthOrientationMode);
-      SnapCameraToEarth(_lastEarthPos);
-      PushNativeObserver();
+      RePoseEarthObserver();
       return true;
     }
+  }
+
+  /// <summary>
+  /// Re-poses the Earth observer after a setting change (call under <c>_earthPosLock</c>): the core
+  /// first (<see cref="PushNativeObserver"/> poses the camera synchronously: the astrometric comet
+  /// from the WGS84 site), then <see cref="SnapCameraToEarth"/>, which only refreshes the UI's look
+  /// caches while the core owns the camera and writes the UI's own pose (geometric comet, spherical
+  /// site) only when the core refused. The reverse order wrote that pose first, and a queued write
+  /// of it could land after the core's: the reopened 67P save drew the nucleus 50 px off centre.
+  /// </summary>
+  private void RePoseEarthObserver()
+  {
+    PushNativeObserver();
+    SnapCameraToEarth(_lastEarthPos);
   }
 
   /// <summary>
@@ -1987,6 +2000,57 @@ public sealed class CameraService : IDisposable
     return RequestOrthographicProjection(-halfW, halfW, -(float)halfH, (float)halfH, near, far);
   }
 
+  /// <summary>
+  /// The "Model" view (feedback #20): the Earth observer tracking the comet with J2000 celestial
+  /// north up, the orientation of a telescope image. False without a comet (the mode or the
+  /// tracking was refused, with its toast).
+  /// </summary>
+  public bool EnterModelView()
+  {
+    SetCameraMode(CameraMode.EarthPosition);
+    if (_modeSubject.Value != CameraMode.EarthPosition)
+      return false;
+    SetEarthObserverUp(ObserverUp.CelestialNorth);
+    if (_earthOrientationMode != EarthObserverOrientationMode.CometTracking)
+      SetEarthObserverOrientationMode(EarthObserverOrientationMode.CometTracking);
+    return _earthOrientationMode == EarthObserverOrientationMode.CometTracking;
+  }
+
+  /// <summary>Nucleus diameters the "nucleus from Earth" field spans vertically.</summary>
+  public const double NucleusFromEarthDiameters = 4.0;
+
+  /// <summary>
+  /// The nucleus as seen from Earth (feedback #17): <see cref="EnterModelView"/>, then a field
+  /// <see cref="NucleusFromEarthDiameters"/> nucleus diameters tall at the comet — the same Earth
+  /// observer (and Sun phase) as the rest of the comparison work, unlike the body-fixed comet orbit
+  /// camera. Entering the mode, the field waits for the mode switch's own projection.
+  /// </summary>
+  public bool ViewNucleusFromEarth()
+  {
+    bool switching = _modeSubject.Value != CameraMode.EarthPosition;
+    if (!EnterModelView())
+      return false;
+    if (!switching)
+      return ApplyNucleusFromEarthField();
+    _ = Task.Delay(TimeSpan.FromSeconds(ModeSwitchAnimationSeconds + 0.1)).ContinueWith(
+      _ => _schedulerProvider.MainThread.Schedule(() =>
+      {
+        if (_modeSubject.Value == CameraMode.EarthPosition)
+          ApplyNucleusFromEarthField();
+      }),
+      CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+    return true;
+  }
+
+  private bool ApplyNucleusFromEarthField()
+  {
+    if (GetEarthObserverCometDistanceKm() is not { } dKm)
+      return false;
+    double rKm = _lastKnownNucleusRadiusKm > 0f ? _lastKnownNucleusRadiusKm : 5.0;
+    double heightKm = 2.0 * rKm * NucleusFromEarthDiameters;
+    return SetEarthObserverField(heightKm, 2.0 * Math.Atan(heightKm * 0.5 / dKm));
+  }
+
   /// <summary>See <see cref="GetEarthObserverScale"/>: the scale of a projection on a
   /// <paramref name="widthPx"/> × <paramref name="heightPx"/> target, the comet at
   /// <paramref name="cometDistanceAu"/> (null: unknown).</summary>
@@ -2258,18 +2322,58 @@ public sealed class CameraService : IDisposable
   // last (camera, flags) the runtime accepted (null: unknown, resend)
   private (ulong Camera, uint Flags)? _shadingSent;
 
-  /// <summary>Sends this viewport camera's shading for the current mode; sends on change.</summary>
+  /// <summary>Sends this viewport camera's shading and exposure for the current mode; sends on
+  /// change.</summary>
   private void RefreshShading()
   {
     ulong cam = CameraEntityId ?? 0;
     if (cam == 0)
       return;
     uint flags = ShadingFor(_modeSubject.Value, _physicalLighting, DisplayState.ShowBehindCamera);
-    if (_shadingSent == (cam, flags))
-      return;
-    if (_runtimeService.SetCameraShading(cam, flags))
+    if (_shadingSent != (cam, flags) && _runtimeService.SetCameraShading(cam, flags))
       _shadingSent = (cam, flags);
+    float exposure = ExposureFor(_modeSubject.Value, _physicalLighting, _nucleusExposureEv);
+    if (_exposureSent != (cam, exposure) && _runtimeService.SetCameraExposure(cam, exposure))
+      _exposureSent = (cam, exposure);
   }
+
+  /// <summary>Lowest / highest <see cref="NucleusExposureEv"/>, stops.</summary>
+  public const float MinNucleusExposureEv = -4f;
+  public const float MaxNucleusExposureEv = 6f;
+
+  private float _nucleusExposureEv;
+
+  // last (camera, factor) the runtime accepted (null: unknown, resend)
+  private (ulong Camera, float Factor)? _exposureSent;
+
+  /// <summary>
+  /// Exposure of the nucleus in the comet and Earth observer views, stops (2^EV on the sunlight;
+  /// 0 = a sunlit white surface facing the Sun is white). Clamped to
+  /// [<see cref="MinNucleusExposureEv"/>, <see cref="MaxNucleusExposureEv"/>].
+  /// </summary>
+  public float NucleusExposureEv
+  {
+    get => _nucleusExposureEv;
+    set
+    {
+      float v = float.IsNaN(value) ? 0f : Math.Max(MinNucleusExposureEv, Math.Min(MaxNucleusExposureEv, value));
+      if (v == _nucleusExposureEv)
+        return;
+      _nucleusExposureEv = v;
+      RefreshShading();
+    }
+  }
+
+  /// <summary>
+  /// The sunlight factor a camera in <paramref name="mode"/> uses: 1 (unchanged) in UpZenith; else
+  /// 2^<paramref name="ev"/>, times π for the display shading, whose Oren–Nayar term keeps the BRDF's
+  /// 1/π under a unit sun and so drew a sunlit white surface at 1/π grey (the "black" nucleus,
+  /// feedback #17). The physical shading already cancels it.
+  /// </summary>
+  internal static float ExposureFor(CameraMode mode, bool physicalLighting, float ev) =>
+    mode == CameraMode.UpZenith
+      ? 1f
+      : (float)(Math.Pow(2.0, ev) * (physicalLighting && mode == CameraMode.CometOrbiting ? 1.0 : Math.PI));
 
   /// <summary>Modes where the comet is far or small enough to need a label.</summary>
   internal static bool ShowsCometLabel(CameraMode mode) =>
@@ -2388,8 +2492,13 @@ public sealed class CameraService : IDisposable
       return;
 
     Vector3 offset;
+    float azimuth, elevation;
     lock (_orbitOffsetLock)
+    {
       offset = _orbitOffset;
+      azimuth = _orbitAzimuthRad;
+      elevation = _orbitElevationRad;
+    }
 
     // The target is the local offset
     double targetX = offset.X;
@@ -2398,10 +2507,7 @@ public sealed class CameraService : IDisposable
 
     ulong pivotId = _runtimeService.CometEntityId ?? 0;
 
-    var worldFwd   = Vector3.Normalize(-offset);
-    var worldRight = Vector3.Normalize(Vector3.Cross(Vector3.UnitZ, worldFwd));
-    var worldUp    = Vector3.Cross(worldFwd, worldRight);
-    var rot = EngineQuatFromBasis(worldRight, -worldFwd, worldUp);
+    var rot = OrbitCameraRotation(offset, azimuth, elevation);
 
     if (snapImmediate)
       RotoTranslateDirect(targetX, targetY, targetZ, rot, pivotId);
@@ -2410,6 +2516,37 @@ public sealed class CameraService : IDisposable
         camId.Value,
         new AnimationTarget(targetX, targetY, targetZ, rot, animSeconds, pivotId));
   }
+  /// <summary>Wraps an orbit elevation into (−π, π].</summary>
+  internal static float WrapElevation(float elevationRad)
+  {
+    const double TwoPi = 2.0 * Math.PI;
+    double e = elevationRad % TwoPi; // (−2π, 2π)
+    if (e > Math.PI) e -= TwoPi;
+    else if (e <= -Math.PI) e += TwoPi;
+    return (float)e;
+  }
+
+  /// <summary>
+  /// The orbit camera's rotation at <paramref name="offset"/> (looking at the nucleus): up is the
+  /// tangent of increasing elevation, (−sin e cos a, −sin e sin a, cos e), which equals +Z projected
+  /// off the view for |e| &lt; π/2 and keeps turning past the poles (upside down beyond). Angles
+  /// that do not match the offset (set without them) fall back to +Z up.
+  /// </summary>
+  internal static Quaternion OrbitCameraRotation(Vector3 offset, float azimuthRad, float elevationRad)
+  {
+    var fwd = Vector3.Normalize(-offset);
+    float sinE = (float)Math.Sin(elevationRad);
+    var up = new Vector3(
+      -sinE * (float)Math.Cos(azimuthRad),
+      -sinE * (float)Math.Sin(azimuthRad),
+      (float)Math.Cos(elevationRad));
+    if (Math.Abs(Vector3.Dot(up, fwd)) > 1e-3f)
+      up = Vector3.UnitZ;
+    var right = Vector3.Normalize(Vector3.Cross(up, fwd));
+    up = Vector3.Cross(fwd, right);
+    return EngineQuatFromBasis(right, -fwd, up);
+  }
+
   /// <summary>
   /// Initialises the spherical coordinate angles (<see cref="_orbitAzimuthRad"/> and
   /// <see cref="_orbitElevationRad"/>) from the current <see cref="_orbitOffset"/> direction.

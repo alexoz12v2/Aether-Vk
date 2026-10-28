@@ -91,7 +91,8 @@ public class Viewport3DViewModelTests
         vm,
         new AetherVk.Logic.Tests.Mocks.TestSchedulerProvider(),
         timeline,
-        new Mock<ITabStateService<ModelSession>>().Object
+        new Mock<ITabStateService<ModelSession>>().Object,
+        (PreferencesService?)null
       ).Object;
 
     var platformWindowService = new Mock<IPlatformWindowService>().Object;

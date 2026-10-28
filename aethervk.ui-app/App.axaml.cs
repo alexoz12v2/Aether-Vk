@@ -316,8 +316,10 @@ public class MockNativeRuntimeService : INativeRuntimeService
   public bool SetCometIndicatorVisible(bool visible) => true;
   public bool SetCameraRenderMask(ulong cameraEntityId, uint mask) => true;
   public bool SetCameraShading(ulong cameraEntityId, uint flags) => true;
+  public bool SetCameraExposure(ulong cameraEntityId, float factor) => true;
   public CometScreenPosition? GetCometScreenPosition(ulong cameraEntityId, uint widthPx, uint heightPx) => null;
   public Logic.Models.AssetThumbnail? CopyAssetTexels(ulong assetId) => null;
+  public Logic.Models.IntensityImage? CopyFitsRaster(ulong assetId) => null;
   public string? GetFitsMetadataJson(ulong assetId) => null;
   public Logic.Models.FitsStretchResult? SetFitsStretch(ulong assetId, uint mode, uint transfer, double p0, double p1) => null;
   public bool DumpSceneToFile(string file) => true;
@@ -477,6 +479,7 @@ public class MockNativeRuntimeService : INativeRuntimeService
   public bool UpdateCometNucleusRadius(float radiusKm) => true;
 
   public bool SetSphereGizmoVisibility(bool isVisible) => true;
+  public bool SetSphereGizmoParts(uint parts) => true;
 
   public Task<ulong> LoadAlmanacFileAsync(string path) => Task.FromResult(4UL);
 

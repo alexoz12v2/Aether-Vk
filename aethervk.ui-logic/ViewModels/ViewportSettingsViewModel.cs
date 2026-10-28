@@ -248,6 +248,22 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
   [NotifyPropertyChangedFor(nameof(IsEarthObserverMode), nameof(IsUpZenithMode), nameof(IsCometOrbitingMode))]
   private CameraMode _currentCameraMode = CameraMode.UpZenith;
 
+  /// <summary>
+  /// Nucleus exposure in the comet and Earth observer views, stops (0 = a white surface facing the
+  /// Sun is white). Writes to <see cref="CameraService.NucleusExposureEv"/>.
+  /// </summary>
+  [ObservableProperty]
+  private double _nucleusExposureEv;
+
+  partial void OnNucleusExposureEvChanged(double value)
+  {
+    if (_cameraService is not null)
+      _cameraService.NucleusExposureEv = (float)value;
+  }
+
+  public double MinNucleusExposureEv => CameraService.MinNucleusExposureEv;
+  public double MaxNucleusExposureEv => CameraService.MaxNucleusExposureEv;
+
   /// <summary>True in CometOrbiting mode (comet debug): shows the lighting switch.</summary>
   public bool IsCometOrbitingMode => CurrentCameraMode == CameraMode.CometOrbiting;
 
@@ -268,8 +284,12 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
 
   /// <summary>Whether a comet is committed (enables the comet snap target).</summary>
   [ObservableProperty]
-  [NotifyCanExecuteChangedFor(nameof(SnapAboveCometCommand))]
+  [NotifyCanExecuteChangedFor(nameof(SnapAboveCometCommand), nameof(ViewNucleusFromEarthCommand))]
   private bool _isCometCommitted;
+
+  /// <summary>The nucleus seen from Earth, framed to a few diameters (feedback #17).</summary>
+  [RelayCommand(CanExecute = nameof(IsCometCommitted))]
+  private void ViewNucleusFromEarth() => _cameraService.ViewNucleusFromEarth();
 
   [RelayCommand]
   private void SnapAboveSun() => _cameraService.SnapAbove(SnapTarget.Sun);

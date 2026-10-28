@@ -35,6 +35,33 @@ internal static class NativeInputConverter
   };
 
   /// <summary>
+  /// With NumLock off, Windows reports the keypad keys as the navigation keys they double as
+  /// (keypad 1 → VK_END, 5 → VK_CLEAR, . → VK_DELETE…), but without the extended-key flag
+  /// (lParam bit 24) that the dedicated navigation keys carry. Maps those back to VK_NUMPAD0–9 /
+  /// VK_DECIMAL so the keypad shortcuts work whatever the NumLock state; every other key, and any
+  /// extended one, is returned unchanged.
+  /// </summary>
+  internal static uint NormalizeWin32NumPad(uint virtualKey, bool isExtended)
+  {
+    if (isExtended) return virtualKey;
+    return virtualKey switch
+    {
+      0x2D => 0x60, // VK_INSERT → VK_NUMPAD0
+      0x23 => 0x61, // VK_END    → VK_NUMPAD1
+      0x28 => 0x62, // VK_DOWN   → VK_NUMPAD2
+      0x22 => 0x63, // VK_NEXT   → VK_NUMPAD3
+      0x25 => 0x64, // VK_LEFT   → VK_NUMPAD4
+      0x0C => 0x65, // VK_CLEAR  → VK_NUMPAD5
+      0x27 => 0x66, // VK_RIGHT  → VK_NUMPAD6
+      0x24 => 0x67, // VK_HOME   → VK_NUMPAD7
+      0x26 => 0x68, // VK_UP     → VK_NUMPAD8
+      0x21 => 0x69, // VK_PRIOR  → VK_NUMPAD9
+      0x2E => 0x6E, // VK_DELETE → VK_DECIMAL
+      _ => virtualKey,
+    };
+  }
+
+  /// <summary>
   /// Converts a <see cref="ComposedKeystroke"/> into an <see cref="InputChord"/>.
   /// Policy: modifier flags and key name are taken from the <em>last</em> event in the
   /// sequence, matching the mental model of "hold modifier, press key".

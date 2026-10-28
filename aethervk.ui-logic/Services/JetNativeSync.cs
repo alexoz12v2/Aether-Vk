@@ -9,14 +9,18 @@ namespace AetherVk.Logic.Services;
 /// </summary>
 public static class JetNativeSync
 {
-  public static ParticleSystemModel BuildModel(ModelSession s) => new(
-    DiametreUm: s.DiametreUm,
-    DensityGCm3: s.DensityGCm3,
-    ScatteringEfficiency: s.ScatteringEfficiency,
-    GeometricAlbedo: s.GeometricAlbedo,
-    SizeQ: s.SizeQ,
-    SizeRange: s.SizeRange,
-    Afrho0Cm: s.Afrho0Cm,
+  /// <summary>
+  /// The native grain and activity parameters of <paramref name="j"/>: its own grain and Afρ₀, and
+  /// the model-wide shape of the Afρ law (exponent, cutoff, max) from <paramref name="s"/>.
+  /// </summary>
+  public static ParticleSystemModel BuildModel(ModelSession s, JetViewModel j) => new(
+    DiametreUm: j.DiametreUm,
+    DensityGCm3: j.DensityGCm3,
+    ScatteringEfficiency: j.ScatteringEfficiency,
+    GeometricAlbedo: j.GeometricAlbedo,
+    SizeQ: j.SizeQ,
+    SizeRange: j.SizeRange,
+    Afrho0Cm: j.Afrho0Cm,
     AfrhoPower: s.AfrhoPower,
     AfrhoCutoffAu: s.AfrhoCutoffAu,
     AfrhoMaxValueCm: s.AfrhoMaxValueCm);
@@ -41,30 +45,42 @@ public static class JetNativeSync
   /// </summary>
   public static void EnsureNative(INativeRuntimeService runtime, ModelSession session, float nucleusRadiusKm)
   {
-    var model = BuildModel(session);
     bool any = false;
     foreach (var jet in session.Jets)
       any |= jet.NativePsId != 0;
     foreach (var jet in session.Jets)
     {
       if (jet.NativePsId != 0) continue;
-      var psJet = BuildJet(jet, nucleusRadiusKm);
-      if (!any)
-      {
-        var computed = runtime.AddFirstParticleSystem(model, psJet, out ulong psId);
-        jet.NativePsId = psId;
-        if (computed is not null)
-        {
-          jet.Beta = computed.Beta;
-          jet.DustProductionRateAt1AuKgs = computed.DustProductionRateAt1AuKgs;
-        }
-      }
-      else
-      {
-        runtime.AddParticleSystem(model, psJet, out ulong psId);
-        jet.NativePsId = psId;
-      }
+      AddNative(runtime, BuildModel(session, jet), BuildJet(jet, nucleusRadiusKm), jet, isFirst: !any);
       any |= jet.NativePsId != 0;
+    }
+  }
+
+  /// <summary>
+  /// Creates <paramref name="jet"/>'s native particle system and stores its id, β and dust
+  /// production rate. <c>AddParticleSystem</c> returns no computed values, and every jet has its
+  /// own (its own grain and Afρ₀): a later jet reads them back with an unchanged modify.
+  /// </summary>
+  public static void AddNative(INativeRuntimeService runtime, ParticleSystemModel model,
+    ParticleSystemJet psJet, JetViewModel jet, bool isFirst)
+  {
+    if (isFirst)
+    {
+      var computed = runtime.AddFirstParticleSystem(model, psJet, out ulong psId);
+      jet.NativePsId = psId;
+      if (computed is not null)
+      {
+        jet.Beta = computed.Beta;
+        jet.DustProductionRateAt1AuKgs = computed.DustProductionRateAt1AuKgs;
+      }
+      return;
+    }
+    runtime.AddParticleSystem(model, psJet, out ulong id);
+    jet.NativePsId = id;
+    if (id != 0 && runtime.ModifyParticleSystem(id, model, psJet, out var props) && props is not null)
+    {
+      jet.Beta = props.Beta;
+      jet.DustProductionRateAt1AuKgs = props.DustProductionRateAt1AuKgs;
     }
   }
 }

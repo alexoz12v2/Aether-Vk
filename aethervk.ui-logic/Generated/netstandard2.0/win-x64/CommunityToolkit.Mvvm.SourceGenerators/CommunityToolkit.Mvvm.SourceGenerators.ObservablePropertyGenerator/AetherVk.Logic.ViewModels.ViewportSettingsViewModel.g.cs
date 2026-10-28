@@ -257,6 +257,27 @@ namespace AetherVk.Logic.ViewModels
             }
         }
 
+        /// <inheritdoc cref="_nucleusExposureEv"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public double NucleusExposureEv
+        {
+            get => _nucleusExposureEv;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<double>.Default.Equals(_nucleusExposureEv, value))
+                {
+                    OnNucleusExposureEvChanging(value);
+                    OnNucleusExposureEvChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.NucleusExposureEv);
+                    _nucleusExposureEv = value;
+                    OnNucleusExposureEvChanged(value);
+                    OnNucleusExposureEvChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.NucleusExposureEv);
+                }
+            }
+        }
+
         /// <inheritdoc cref="_isPhysicalLighting"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
@@ -296,6 +317,7 @@ namespace AetherVk.Logic.ViewModels
                     OnIsCometCommittedChanged(default, value);
                     OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsCometCommitted);
                     SnapAboveCometCommand.NotifyCanExecuteChanged();
+                    ViewNucleusFromEarthCommand.NotifyCanExecuteChanged();
                 }
             }
         }
@@ -359,6 +381,27 @@ namespace AetherVk.Logic.ViewModels
                     OnIsEarthObserverTopocentricChanged(value);
                     OnIsEarthObserverTopocentricChanged(default, value);
                     OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsEarthObserverTopocentric);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_isEarthObserverNorthUp"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public bool IsEarthObserverNorthUp
+        {
+            get => _isEarthObserverNorthUp;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_isEarthObserverNorthUp, value))
+                {
+                    OnIsEarthObserverNorthUpChanging(value);
+                    OnIsEarthObserverNorthUpChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsEarthObserverNorthUp);
+                    _isEarthObserverNorthUp = value;
+                    OnIsEarthObserverNorthUpChanged(value);
+                    OnIsEarthObserverNorthUpChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsEarthObserverNorthUp);
                 }
             }
         }
@@ -774,6 +817,28 @@ namespace AetherVk.Logic.ViewModels
         /// <remarks>This method is invoked right after the value of <see cref="CurrentCameraMode"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnCurrentCameraModeChanged(global::AetherVk.Logic.Services.CameraMode oldValue, global::AetherVk.Logic.Services.CameraMode newValue);
+        /// <summary>Executes the logic for when <see cref="NucleusExposureEv"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="NucleusExposureEv"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnNucleusExposureEvChanging(double value);
+        /// <summary>Executes the logic for when <see cref="NucleusExposureEv"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="NucleusExposureEv"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnNucleusExposureEvChanging(double oldValue, double newValue);
+        /// <summary>Executes the logic for when <see cref="NucleusExposureEv"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="NucleusExposureEv"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnNucleusExposureEvChanged(double value);
+        /// <summary>Executes the logic for when <see cref="NucleusExposureEv"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="NucleusExposureEv"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnNucleusExposureEvChanged(double oldValue, double newValue);
         /// <summary>Executes the logic for when <see cref="IsPhysicalLighting"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="IsPhysicalLighting"/> is changed.</remarks>
@@ -884,6 +949,28 @@ namespace AetherVk.Logic.ViewModels
         /// <remarks>This method is invoked right after the value of <see cref="IsEarthObserverTopocentric"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnIsEarthObserverTopocentricChanged(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="IsEarthObserverNorthUp"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="IsEarthObserverNorthUp"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsEarthObserverNorthUpChanging(bool value);
+        /// <summary>Executes the logic for when <see cref="IsEarthObserverNorthUp"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="IsEarthObserverNorthUp"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsEarthObserverNorthUpChanging(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="IsEarthObserverNorthUp"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="IsEarthObserverNorthUp"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsEarthObserverNorthUpChanged(bool value);
+        /// <summary>Executes the logic for when <see cref="IsEarthObserverNorthUp"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="IsEarthObserverNorthUp"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsEarthObserverNorthUpChanged(bool oldValue, bool newValue);
         /// <summary>Executes the logic for when <see cref="IsComparisonLocked"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="IsComparisonLocked"/> is changed.</remarks>

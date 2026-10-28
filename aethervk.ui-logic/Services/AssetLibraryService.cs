@@ -134,6 +134,21 @@ public sealed class AssetLibraryService : IDisposable
     if (!_disposed) _texelsChanged.OnNext(assetId);
   }
 
+  /// <summary>
+  /// The intensities of texture <paramref name="assetId"/> for measurements (the nucleus): a FITS
+  /// texture's physical raster, so a stretch that saturates the inner coma cannot move the
+  /// photocentre; any other texture's texel luminance. Both in texture row order (row 0 = the top
+  /// of the displayed image). Null when the texture is unknown, compressed, or the library is busy.
+  /// </summary>
+  public IntensityImage? ReadIntensity(ulong assetId)
+  {
+    if (_runtimeService.CopyFitsRaster(assetId) is { } raster)
+      return raster;
+    return _runtimeService.CopyAssetTexels(assetId) is { } texels
+      ? Utils.NucleusDetector.FromRgba8(texels.Width, texels.Height, texels.Rgba)
+      : null;
+  }
+
   public ImmutableArray<ImportedAsset> CurrentMeshes => _meshes.Value;
   public ImmutableArray<ImportedAsset> CurrentTextures => _textures.Value;
 

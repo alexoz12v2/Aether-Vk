@@ -46,7 +46,7 @@ namespace AetherVk.Logic.SaveFile
 
         private static global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[] JetDtoPropInit(global::System.Text.Json.JsonSerializerOptions options)
         {
-            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[8];
+            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[15];
 
             var info0 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<float>
             {
@@ -210,6 +210,146 @@ namespace AetherVk.Logic.SaveFile
             
             properties[7] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<uint>(options, info7);
 
+            var info8 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<float?>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.JetDto),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.JetDto)obj).DiametreUm,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.JetDto)obj).DiametreUm = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "DiametreUm",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.JetDto).GetProperty("DiametreUm", InstanceMemberBindingFlags, null, typeof(float?), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[8] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<float?>(options, info8);
+
+            var info9 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<float?>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.JetDto),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.JetDto)obj).DensityGCm3,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.JetDto)obj).DensityGCm3 = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "DensityGCm3",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.JetDto).GetProperty("DensityGCm3", InstanceMemberBindingFlags, null, typeof(float?), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[9] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<float?>(options, info9);
+
+            var info10 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<float?>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.JetDto),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.JetDto)obj).ScatteringEfficiency,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.JetDto)obj).ScatteringEfficiency = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "ScatteringEfficiency",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.JetDto).GetProperty("ScatteringEfficiency", InstanceMemberBindingFlags, null, typeof(float?), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[10] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<float?>(options, info10);
+
+            var info11 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<float?>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.JetDto),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.JetDto)obj).GeometricAlbedo,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.JetDto)obj).GeometricAlbedo = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "GeometricAlbedo",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.JetDto).GetProperty("GeometricAlbedo", InstanceMemberBindingFlags, null, typeof(float?), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[11] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<float?>(options, info11);
+
+            var info12 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<float?>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.JetDto),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.JetDto)obj).SizeQ,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.JetDto)obj).SizeQ = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "SizeQ",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.JetDto).GetProperty("SizeQ", InstanceMemberBindingFlags, null, typeof(float?), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[12] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<float?>(options, info12);
+
+            var info13 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<float?>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.JetDto),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.JetDto)obj).SizeRange,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.JetDto)obj).SizeRange = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "SizeRange",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.JetDto).GetProperty("SizeRange", InstanceMemberBindingFlags, null, typeof(float?), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[13] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<float?>(options, info13);
+
+            var info14 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<float?>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.JetDto),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.JetDto)obj).Afrho0Cm,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.JetDto)obj).Afrho0Cm = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "Afrho0Cm",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.JetDto).GetProperty("Afrho0Cm", InstanceMemberBindingFlags, null, typeof(float?), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[14] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<float?>(options, info14);
+
             return properties;
         }
 
@@ -234,6 +374,20 @@ namespace AetherVk.Logic.SaveFile
             SingleArraySerializeHandler(writer, ((global::AetherVk.Logic.SaveFile.JetDto)value).StreamColor);
             writer.WriteBoolean(PropName_preview_visible, ((global::AetherVk.Logic.SaveFile.JetDto)value).PreviewVisible);
             writer.WriteNumber(PropName_seed, ((global::AetherVk.Logic.SaveFile.JetDto)value).Seed);
+            writer.WritePropertyName(PropName_diametre_um);
+            global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.SaveFile.JetDto)value).DiametreUm, NullableSingle);
+            writer.WritePropertyName(PropName_density_g_cm3);
+            global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.SaveFile.JetDto)value).DensityGCm3, NullableSingle);
+            writer.WritePropertyName(PropName_scattering_efficiency);
+            global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.SaveFile.JetDto)value).ScatteringEfficiency, NullableSingle);
+            writer.WritePropertyName(PropName_geometric_albedo);
+            global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.SaveFile.JetDto)value).GeometricAlbedo, NullableSingle);
+            writer.WritePropertyName(PropName_size_q);
+            global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.SaveFile.JetDto)value).SizeQ, NullableSingle);
+            writer.WritePropertyName(PropName_size_range);
+            global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.SaveFile.JetDto)value).SizeRange, NullableSingle);
+            writer.WritePropertyName(PropName_afrho0_cm);
+            global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.SaveFile.JetDto)value).Afrho0Cm, NullableSingle);
 
             writer.WriteEndObject();
         }

@@ -21,6 +21,8 @@ public partial class DesignModelTabViewModel
     {
         j.LatitudeDeg = 30f;
         j.LongitudeDeg = 45f;
+        // its own grain, unlike the defaults (100 µm)
+        j.DiametreUm = 250f;
     }
     else
     {
@@ -47,6 +49,7 @@ public partial class DesignModelTabViewModel
 
   public IRelayCommand AddJetCommand    => new RelayCommand(() => { });
   public IRelayCommand<JetViewModel?> RemoveJetCommand => new RelayCommand<JetViewModel?>(_ => { });
+  public IRelayCommand CopyGrainToAllJetsCommand => new RelayCommand(() => { });
   public float ManualNucleusRadiusKm { get; set; } = 2.0f;
   public float? ManualNucleusRadiusKmNullable { get; set; } = 2.0f;
   public bool IsNucleusRadiusUnknown => ManualNucleusRadiusKm == 0f;
@@ -60,6 +63,11 @@ public partial class DesignModelTabViewModel
   public bool IsSimulationRunning { get; } = false;
   
   public bool IsGizmoVisible { get; set; } = true;
+  public bool ShowGizmoGrid { get; set; } = true;
+  public bool ShowGizmoBodyAxes { get; set; } = true;
+  public bool ShowGizmoSpinAxis { get; set; } = true;
+  public bool ShowGizmoSun { get; set; } = true;
+  public bool ShowGizmoVelocity { get; set; }
   public bool ShowJetAngles { get; set; }
   public string? StrPM { get; set; } = null;
   
@@ -69,8 +77,14 @@ public partial class DesignModelTabViewModel
     AetherVk.Logic.Utils.DustCurves.AfrhoPlot(100, 2, 15, 100_000, 1.3);
   public AetherVk.Logic.Utils.CurvePlotModel? SizeDistributionPlot { get; } =
     AetherVk.Logic.Utils.DustCurves.SizeDistributionPlot(100, 10, 3.5);
+  public AetherVk.Logic.Utils.CurvePlotModel? JetAfrhoPlot { get; } =
+    AetherVk.Logic.Utils.DustCurves.AfrhoPlot(100, 2, 15, 100_000, 1.3);
+  public AetherVk.Logic.Utils.CurvePlotModel? JetSizeDistributionPlot { get; } =
+    AetherVk.Logic.Utils.DustCurves.SizeDistributionPlot(100, 10, 3.5);
   public string AfrhoNowText { get; } =
     AetherVk.Logic.Utils.DustCurves.AfrhoNowText(1.3, 100, 2, 15, 100_000, 0.5, 1);
+  public string TotalActivityText { get; } =
+    AetherVk.Logic.Utils.DustCurves.TotalActivityText([(100, 0.5), (100, 0.5)], 2, 15, 100_000, 1.3);
 
   public void SetCursorPosition(int x, int y) { }
 }

@@ -66,6 +66,7 @@
                       <Grid ColumnDefinitions="*,Auto" Margin="0,1">
                         <Button Grid.Column="0"
                                 Content="{Binding Label}"
+                                ToolTip.Tip="Switch this tab to this session."
                                 HorizontalAlignment="Stretch"
                                 HorizontalContentAlignment="Left"
                                 Background="Transparent"
@@ -92,6 +93,7 @@
                 <Separator Margin="0,4"/>
 
                 <Button Content="+ New Session"
+                  ToolTip.Tip="Create a new session in this tab."
                         IsVisible="{Binding CanAddSession}"
                         Command="{Binding NewSessionCommand}"
                         HorizontalAlignment="Stretch"

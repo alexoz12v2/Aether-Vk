@@ -10,8 +10,9 @@ using CommunityToolkit.Mvvm.Input;
 
 namespace AetherVk.Logic.ViewModels;
 
-/// <summary>One line of the "Key facts" block.</summary>
-public sealed record FitsFactItem(string Label, string Value);
+/// <summary>One line of the "Key facts" block; <paramref name="AutomationId"/> names the value for
+/// UI tests ("FitsFact_Scale", …; null: none).</summary>
+public sealed record FitsFactItem(string Label, string Value, string? AutomationId = null);
 
 /// <summary>
 /// The "FITS image" part of a billboard row whose texture is a FITS asset: the key header facts,
@@ -159,6 +160,7 @@ public partial class FitsImageViewModel : ObservableObject
   public void RefreshPilot()
   {
     SeekToObservationCommand.NotifyCanExecuteChanged();
+    RequestModelRangeCommand.NotifyCanExecuteChanged();
     UseObservatorySiteCommand.NotifyCanExecuteChanged();
     OrientToImageCommand.NotifyCanExecuteChanged();
     SetUpComparisonCommand.NotifyCanExecuteChanged();
@@ -241,6 +243,20 @@ public partial class FitsImageViewModel : ObservableObject
       StatusMessage = "Seek refused (outside the loaded ephemeris?)";
   }
 
+  /// <summary>The observation epoch, UTC: the middle of the exposure, else DATE-OBS.</summary>
+  internal DateTimeOffset? ObservationUtc =>
+    (FactsData.DateMidUtc ?? FactsData.DateObs) is { } s && TimeUtils.TryParseIso8601(s, out var t) ? t : null;
+
+  private bool CanRequestModelRange() => _row.Owner?.CanRequestModelRange == true && ObservationUtc is not null;
+
+  /// <summary>The Timeline tab's model range (N nucleus rotations) ending at the observation (feedback #20).</summary>
+  [RelayCommand(CanExecute = nameof(CanRequestModelRange))]
+  private void RequestModelRange()
+  {
+    if (ObservationUtc is { } t)
+      _row.Owner?.RequestModelRange(t);
+  }
+
   private async Task<bool> SeekAsync() =>
     _row.Owner is { } o && FactsData is { DateMidTdbCenturies: { } c, DateMidTdbNanoseconds: { } ns }
     && await o.SeekTdbAsync(c, ns);
@@ -280,10 +296,8 @@ public partial class FitsImageViewModel : ObservableObject
       return false;
     if (!v.LockToDirection(SkyMath.EclipticDirection(c.RaDeg, c.DecDeg)))
       return false;
-    double? rotation = FactsData.RotationDeg is { } pa
-      ? SkyMath.BillboardRotationDeg(c.RaDeg, c.DecDeg, pa, v.ViewUpIsEclipticSouth, v.ViewUpIsCelestialNorth)
-      : null;
     var centre = v.ViewportCenterDesktopPx;
+    double? rotation = ImageRotationInView(v, c);
     _row.Service.Update(_row.Id, b => b with
     {
       RotationDeg = rotation ?? b.RotationDeg,
@@ -296,14 +310,36 @@ public partial class FitsImageViewModel : ObservableObject
     return true;
   }
 
+  /// <summary>The billboard rotation that turns the image like the sky in the view (from the WCS
+  /// position angle; null without one).</summary>
+  private double? ImageRotationInView(IBillboardViewportProbe v, (double RaDeg, double DecDeg) c) =>
+    FactsData.RotationDeg is { } pa
+      ? SkyMath.BillboardRotationDeg(c.RaDeg, c.DecDeg, pa, v.ViewUpIsEclipticSouth, v.ViewUpIsCelestialNorth)
+      : null;
+
+  /// <summary>
+  /// Turns the billboard like the sky in the view without moving the camera (the comparison keeps
+  /// tracking the comet). False without a WCS rotation.
+  /// </summary>
+  private bool RotateLikeTheSky(IBillboardViewportProbe v)
+  {
+    if (FactsData.SkyCenter is not { } c || ImageRotationInView(v, c) is not { } rotation)
+      return false;
+    return _row.Service.Update(_row.Id, b => b with { RotationDeg = rotation });
+  }
+
   private bool CanSetUpComparison() => Viewport is not null;
 
   /// <summary>
-  /// Everything in order: Earth observer → seek → site → match the field (the image's height fills
-  /// the viewport's, aimed at the comet; the billboard fills it, bound) → orient (a free look at the
-  /// WCS centre, the sky turned like the image) → centre (on the viewport centre once oriented, else
-  /// on the comet) → lock the viewport for comparison. Steps without header facts are skipped and
-  /// listed in <see cref="StatusMessage"/>.
+  /// Everything in order: Earth observer → seek → site → match the field (the image's height over
+  /// the viewport's, aimed at the comet, which stays at the centre; the billboard sized by the
+  /// conversion, bound) → rotate (the billboard turned like the sky, from the WCS position angle)
+  /// → the billboard's nucleus pixel on the comet → lock the viewport for comparison. Steps without header
+  /// facts are skipped and listed in <see cref="StatusMessage"/>.
+  /// The camera is never re-aimed at the WCS centre here: comet images are stacked on the comet,
+  /// and the WCS of a multi-night stack belongs to one night (the Liverpool 67P stack's centre is
+  /// 633″ = 1.7 fields off the comet at the mid-exposure epoch), so only its rotation and scale are
+  /// used. "Orient to image" still gives the star-aligned free look on demand.
   /// </summary>
   [RelayCommand(CanExecute = nameof(CanSetUpComparison))]
   private async Task SetUpComparisonAsync()
@@ -321,17 +357,13 @@ public partial class FitsImageViewModel : ObservableObject
     if (!ApplySite())
       skipped.Add("site");
     owner.Probe();
-    // match aims at the comet (tracking), so orient comes after it: the free look at the WCS centre
-    // keeps the matched field
+    // match aims at the comet (tracking) and puts the billboard's nucleus pixel on it
     if (!owner.MatchCameraToImage(_row.Id))
       skipped.Add("match");
-    bool oriented = Orient();
-    if (!oriented)
-      skipped.Add("orient");
-    // match centres on the comet; oriented, the image centre is the viewport centre
-    if (oriented && v.ViewportCenterDesktopPx is { } centre)
-      _row.Service.Update(_row.Id, b => b with { CenterX = centre.X, CenterY = centre.Y });
-    else if (!owner.CenterOnComet(_row.Id))
+    if (!RotateLikeTheSky(v))
+      skipped.Add("rotate");
+    owner.Probe(); // the comet as the matched view draws it
+    if (!owner.CenterOnComet(_row.Id))
       skipped.Add("center");
     v.IsComparisonLocked = true;
     owner.Probe();
@@ -347,23 +379,23 @@ public partial class FitsImageViewModel : ObservableObject
   {
     var f = FactsData;
     var list = new List<FitsFactItem>();
-    void Add(string label, string? value)
+    void Add(string label, string? value, string? automationId = null)
     {
       if (!string.IsNullOrEmpty(value))
-        list.Add(new FitsFactItem(label, value!));
+        list.Add(new FitsFactItem(label, value!, automationId));
     }
 
     Add("Object", f.Object);
     Add(f.DateSource ?? "DATE-OBS", f.DateObs);
     if (f.DateMidUtc is { } mid)
       Add("Mid-exposure", mid + (f.DateIsMid == true ? " (the card is mid-exposure)" : "")
-        + (f.TimesysAssumed == true ? " · no TIMESYS: read as UTC" : ""));
+        + (f.TimesysAssumed == true ? " · no TIMESYS: read as UTC" : ""), "FitsFact_DateMid");
     Add("Telescope", Join(" / ", f.Telescope, f.Instrument));
     Add("Filter", f.Filter);
     Add("Exposure", f.ExposureS is { } e ? string.Format(Ci, "{0:0.###} s", e) : null);
     Add("Plate scale", f.PixelScaleArcsec is { } s
-      ? string.Format(Ci, "{0:0.#####}″/px", s) + (f.PixelScaleSource is { } src ? $" ({src})" : "")
-      : null);
+      ? string.Format(Ci, "{0:0.######}″/px", s) + (f.PixelScaleSource is { } src ? $" ({src})" : "")
+      : null, "FitsFact_Scale");
     Add("Field", f.FovWidthArcmin is { } fw && f.FovHeightArcmin is { } fh
       ? string.Format(Ci, "{0:F2}′ × {1:F2}′", fw, fh)
       : null);
@@ -378,7 +410,13 @@ public partial class FitsImageViewModel : ObservableObject
       Add("Pointing", FormatRaDec(sc.RaDeg, sc.DecDeg));
     Add("Rotation", f.RotationDeg is { } rot
       ? string.Format(Ci, "{0:0.###}° E of N (image up)", rot) + (f.Mirrored == true ? " · mirrored" : "")
-      : null);
+      : null, "FitsFact_Rotation");
+    Add("Mirrored", f.Mirrored switch
+    {
+      true => "yes: east right with north up (det CD > 0)",
+      false => "no: east left with north up (det CD < 0)",
+      null => null,
+    }, "FitsFact_Mirrored");
     Add("WCS", f.WcsError);
     return list;
   }

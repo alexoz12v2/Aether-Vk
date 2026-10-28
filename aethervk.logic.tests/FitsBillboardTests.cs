@@ -236,6 +236,14 @@ public class FitsBillboardTests
     Assert.Equal("RA 09:02:24.00 (135.60000°) · Dec +28:06:00.0 (28.10000°) FK5", facts["WCS centre"]);
     Assert.Equal("10° E of N (image up)", facts["Rotation"]);
     Assert.False(facts.ContainsKey("WCS")); // no WCS error
+    Assert.Equal("no: east left with north up (det CD < 0)", facts["Mirrored"]);
+    // the values the end-to-end test reads
+    var ids = fits.Facts.Where(x => x.AutomationId is not null).ToDictionary(x => x.AutomationId!, x => x.Label);
+    Assert.Equal(new Dictionary<string, string>
+    {
+      ["FitsFact_DateMid"] = "Mid-exposure", ["FitsFact_Scale"] = "Plate scale",
+      ["FitsFact_Rotation"] = "Rotation", ["FitsFact_Mirrored"] = "Mirrored",
+    }, ids);
 
     // the plate scale came from the header; the PNG has none
     Assert.Equal(0.30368, rig.Svc.Find(row.Id)!.ImageArcsecPerPx);
@@ -246,6 +254,67 @@ public class FitsBillboardTests
     rig.Lib.Refresh();
     rig.Fake.Drain();
     Assert.Null(rig.Svc.Find(row.Id)!.ImageArcsecPerPx);
+  }
+
+  /// A Gaussian nucleus at (x0, y0) image px on a flat background, row 0 = the top.
+  private static IntensityImage Nucleus(int w, int h, double x0, double y0)
+  {
+    var v = new float[w * h];
+    for (int j = 0; j < h; j++)
+    for (int i = 0; i < w; i++)
+      v[j * w + i] = (float)(10 + 500 * Math.Exp(-((i - x0) * (i - x0) + (j - y0) * (j - y0)) / 8.0));
+    return new IntensityImage(w, h, v);
+  }
+
+  /// A FITS billboard finds its nucleus on its physical raster when it is first shown (not on the
+  /// stretched texels); "Center on comet" then puts that pixel on the comet. Any image can detect
+  /// it on demand from its texels; clearing a box returns to the image centre.
+  [Fact]
+  public void Nucleus_IsDetectedOnTheFitsRaster_AndOnDemandFromTexels()
+  {
+    var rig = new Rig();
+    rig.Fake.Runtime.Setup(r => r.CopyFitsRaster(FitsId)).Returns(Nucleus(1200, 1200, 593.1, 604.3));
+    var row = rig.Create("/data/lt_67p.fits");
+    var n = rig.Svc.Find(row.Id)!.ImageNucleusPx!.Value;
+    Near(593.1, n.X, 0.01);
+    Near(604.3, n.Y, 0.01);
+    Near(593.1, row.NucleusX!.Value, 0.01);
+    Assert.Contains("nucleus 593.1", row.GeometryLabel);
+    rig.Vm.Probe();
+    row.CenterOnCometCommand.Execute(null);
+    var b = rig.Svc.Find(row.Id)!;
+    Near(700, DesktopBillboardGeometry.NucleusDesktop(b).X, 1e-9);
+    Near(300, DesktopBillboardGeometry.NucleusDesktop(b).Y, 1e-9);
+    // 1 image px = 1 desktop px (native size): the centre is (599.5 − 593.1, 599.5 − 604.3) off
+    Near(700 + 6.4, b.CenterX, 0.02);
+    Near(300 - 4.8, b.CenterY, 0.02);
+
+    // a PNG: nothing until asked, then from its texels (luminance)
+    var png = rig.Create("/data/tail.png");
+    Assert.Null(rig.Svc.Find(png.Id)!.ImageNucleusPx);
+    var grey = Nucleus(1200, 1200, 610.25, 590.75);
+    var rgba = new byte[grey.Values.Length * 4];
+    for (int k = 0; k < grey.Values.Length; k++)
+    {
+      rgba[4 * k] = rgba[4 * k + 1] = rgba[4 * k + 2] = (byte)Math.Round(grey.Values[k] / 2);
+      rgba[4 * k + 3] = 255;
+    }
+    rig.Fake.Runtime.Setup(r => r.CopyAssetTexels(8)).Returns(new AssetThumbnail(1200, 1200, rgba));
+    Assert.True(png.DetectNucleusCommand.CanExecute(null));
+    png.DetectNucleusCommand.Execute(null);
+    rig.Fake.Drain();
+    n = rig.Svc.Find(png.Id)!.ImageNucleusPx!.Value;
+    Near(610.25, n.X, 0.1);
+    Near(590.75, n.Y, 0.1);
+
+    // typed by hand (the JPEG of the same field); one box clears it
+    png.NucleusX = 593.1;
+    png.NucleusY = 604.3;
+    Assert.Equal(new PointD(593.1, 604.3), rig.Svc.Find(png.Id)!.ImageNucleusPx);
+    png.NucleusY = null;
+    Assert.Null(rig.Svc.Find(png.Id)!.ImageNucleusPx);
+    rig.Fake.Drain();
+    Assert.Null(png.NucleusX);
   }
 
   [Fact]
@@ -376,12 +445,14 @@ public class FitsBillboardTests
     Near(2 * rig.Probe.CometDistanceKm!.Value * Math.Tan(angle / 2), rig.Probe.MatchedKm, 1e-6);
   }
 
-  /// Set up comparison: Earth observer → seek → site → match → orient → centre → lock, in order
-  /// (match aims at the comet; orient then looks at the WCS centre with the field kept); the
-  /// billboard fills the viewport's height, on the viewport centre (the image centre once oriented),
-  /// turned by the sky position angle alone (north up).
+  /// Set up comparison: Earth observer → seek → site → match → rotate → centre → lock, in order.
+  /// Match aims at the comet (tracking) and the camera is never re-aimed at the WCS centre: the
+  /// Liverpool 67P stack is comet-aligned and its WCS is night 1's, 633″ (1.7 fields) off the comet
+  /// at the averaged epoch, so a look at the WCS centre would lose the comet. The billboard is sized
+  /// by the image → viewport conversion (here the viewport's height), turned by the sky position
+  /// angle alone (north up) and centred on the comet.
   [Fact]
-  public async Task SetUpComparison_RunsEveryStepInOrder_AndLocksTheViewport()
+  public async Task SetUpComparison_KeepsTheCometCentred_RotatesFromTheWcs_AndLocksTheViewport()
   {
     var rig = new Rig();
     var row = rig.Create("/data/lt_67p.fits");
@@ -392,14 +463,15 @@ public class FitsBillboardTests
     await row.Fits.SetUpComparisonCommand.ExecuteAsync(null);
     rig.Fake.Drain();
 
-    Assert.Equal(["enter", "seek", "site", "match 364.416″", "orient", "lock True"], rig.Probe.Log);
+    Assert.Equal(["enter", "seek", "site", "match 364.416″", "lock True"], rig.Probe.Log);
+    Assert.Null(rig.Probe.Locked); // no free look at the WCS centre
     Assert.True(rig.Probe.IsComparisonLocked);
     var b = rig.Svc.Find(row.Id)!;
-    Near(1000, b.HeightPx); // the viewport's height (not 1:1 any more: a big FITS overflowed)
+    Near(1000, b.HeightPx); // 364.416″ over the matched viewport's 0.364416″/px
     Near(1000, b.WidthPx);
     Assert.True(b.PhysicalSizeBound);
-    Near(960, b.CenterX);
-    Near(540, b.CenterY);
+    Near(700, b.CenterX); // on the comet, not on the viewport centre (960, 540)
+    Near(300, b.CenterY);
     Near(-10.0, b.RotationDeg);
     Assert.Equal("Comparison set up; the viewport is locked.", row.Fits.StatusMessage);
   }

@@ -101,6 +101,33 @@ public class SaveIndexMappingTests
     }).Display);
   }
 
+  /// <summary>
+  /// A jet's own grain and activity survive the save (mapping and JSON); a jet without them (an
+  /// older save) takes the model's values given to <c>FromDto</c>.
+  /// </summary>
+  [Fact]
+  public void JetGrainFields_RoundTrip()
+  {
+    var grain = new AetherVk.Logic.Models.JetGrain(250f, 0.8f, 1.2f, 0.05f, 3.2f, 20f, 900f);
+    var jet = new AetherVk.Logic.ViewModels.JetViewModel(10, -20, 33, 2.5f, 0.25f, new Vector4(0.1f, 0.2f, 0.3f, 1), true, 7u, grain);
+    var dto = SaveIndexMapping.ToDto(jet);
+    Assert.Equal((250f, 0.8f, 1.2f, 0.05f, 3.2f, 20f, 900f),
+      (dto.DiametreUm, dto.DensityGCm3, dto.ScatteringEfficiency, dto.GeometricAlbedo, dto.SizeQ, dto.SizeRange, dto.Afrho0Cm));
+    var back = System.Text.Json.JsonSerializer.Deserialize(
+      SaveIndexIo.ToJson(new SaveIndex { Jets = [dto] }), SaveIndexJsonContext.Default.SaveIndex)!;
+    // the model's values must not override a jet's own
+    var other = new AetherVk.Logic.Models.JetGrain(1f, 2f, 0.6f, 0.3f, 4.5f, 2f, 3f);
+    Assert.Equal(grain, SaveIndexMapping.FromDto(back.Jets[0], other).Grain);
+    Assert.Equal(grain, SaveIndexMapping.FromDto(back.Jets[0]).Grain);
+
+    // a JSON jet without the fields: the model's values, else the built-in defaults
+    var old = System.Text.Json.JsonSerializer.Deserialize(
+      "{\"latitude_deg\": 5, \"seed\": 3}", SaveIndexJsonContext.Default.JetDto)!;
+    Assert.Null(old.DiametreUm);
+    Assert.Equal(other, SaveIndexMapping.FromDto(old, other).Grain);
+    Assert.Equal(AetherVk.Logic.Models.JetGrain.Default, SaveIndexMapping.FromDto(old).Grain);
+  }
+
   [Fact]
   public void ModelJetsSbdbRotationBillboards_RoundTrip()
   {
@@ -204,5 +231,21 @@ public class SaveIndexMappingTests
     var back = System.Text.Json.JsonSerializer.Deserialize(json, SaveIndexJsonContext.Default.SaveIndex)!;
     Assert.Equal(b, SaveIndexMapping.FromDto(back.Billboards[0]));
     Assert.Null(SaveIndexMapping.FromDto(new BillboardDto { Id = b.Id, TextureKey = "/a.png" }).ImageHeightKm);
+  }
+
+  /// A billboard's nucleus pixel round-trips; older saves (and half a pair) have none: the image
+  /// centre.
+  [Fact]
+  public void BillboardNucleusPixel_RoundTrips_AndOlderSavesHaveNone()
+  {
+    var b = new AetherVk.Logic.Models.DesktopBillboard(Guid.NewGuid(), "/a.fits", 1, 2, 300, 300)
+    { ImageWidthPx = 1200, ImageHeightPx = 1200, ImageNucleusPx = new AetherVk.Logic.Utils.PointD(593.1, 604.3) };
+    var json = SaveIndexIo.ToJson(new SaveIndex { Billboards = [SaveIndexMapping.ToDto(b)] });
+    Assert.Contains("\"image_nucleus_x\": 593.1", json);
+    Assert.Contains("\"image_nucleus_y\": 604.3", json);
+    var back = System.Text.Json.JsonSerializer.Deserialize(json, SaveIndexJsonContext.Default.SaveIndex)!;
+    Assert.Equal(b, SaveIndexMapping.FromDto(back.Billboards[0]));
+    Assert.Null(SaveIndexMapping.FromDto(new BillboardDto { Id = b.Id, TextureKey = "/a.png" }).ImageNucleusPx);
+    Assert.Null(SaveIndexMapping.FromDto(new BillboardDto { Id = b.Id, TextureKey = "/a.png", ImageNucleusX = 3 }).ImageNucleusPx);
   }
 }

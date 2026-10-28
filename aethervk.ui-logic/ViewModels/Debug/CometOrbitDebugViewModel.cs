@@ -1,3 +1,4 @@
+using AetherVk.Logic.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
@@ -5,25 +6,34 @@ namespace AetherVk.Logic.ViewModels.Debug;
 
 /// <summary>
 /// Debug telemetry for CometOrbiting mode, shown in the overlay panel.
-/// Visible only when <see cref="IsVisible"/> is true (i.e. camera is in CometOrbiting mode).
+/// Shown only when <see cref="IsVisible"/> is true (i.e. camera is in CometOrbiting mode).
 /// </summary>
 public sealed partial class CometOrbitDebugViewModel : ObservableObject
 {
+    private readonly PreferencesService? _preferences;
+
+    public CometOrbitDebugViewModel(PreferencesService? preferences = null)
+    {
+        _preferences = preferences;
+        _isExpanded = preferences?.HudOrbitExpanded ?? true;
+    }
+
     /// <summary>In CometOrbiting mode (set by the overlay).</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsShown))]
     private bool _isVisible;
 
-    /// <summary>Closed by the user: stays closed for the session.</summary>
+    /// <summary>Panel body open (true) or collapsed to its icon; collapsed is still shown.</summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsShown))]
-    private bool _isDismissed;
+    private bool _isExpanded = true;
 
-    /// <summary>What the panel binds: in CometOrbiting and not closed.</summary>
-    public bool IsShown => IsVisible && !IsDismissed;
+    partial void OnIsExpandedChanged(bool value) => _preferences?.SetHudOrbitExpanded(value);
+
+    /// <summary>What the panel binds: in CometOrbiting (expanded or collapsed).</summary>
+    public bool IsShown => IsVisible;
 
     [RelayCommand]
-    private void Dismiss() => IsDismissed = true;
+    private void ToggleExpanded() => IsExpanded = !IsExpanded;
 
     // ── Distance telemetry ────────────────────────────────────────────────────
 

@@ -277,9 +277,11 @@ public sealed class AppSaveFileHost : ISaveFileHost
     var session = Model;
     SaveIndexMapping.Apply(model, session);
     session.Jets.Clear();
+    // a jet of an older save has no grain of its own: it inherits the model's
+    var modelGrain = session.DefaultGrain;
     for (int i = 0; i < jets.Count; i++)
     {
-      var jet = SaveIndexMapping.FromDto(jets[i]);
+      var jet = SaveIndexMapping.FromDto(jets[i], modelGrain);
       jet.DisplayIndex = i + 1;
       session.Jets.Add(jet);
     }

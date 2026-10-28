@@ -128,6 +128,68 @@ pub unsafe extern "C" fn avkSimulationContext_setFitsStretch(
   }
 }
 
+/// The physical f32 raster of FITS texture `asset_id` (`BZERO + BSCALE · raw`, blank = NaN), in
+/// texture row order (row 0 = the top row of the displayed image, as
+/// `avkSimulationContext_copyAssetTexels` returns it), for measurements on the data rather than on
+/// the stretched texels (nucleus detection). With `out = null` only the size is written
+/// (`out_width · out_height` floats); `out_len` counts floats. Returns a
+/// [`crate::ffi_assets::TexelsStatus`]: `UnknownAsset` also for a texture that is not FITS.
+///
+/// # Safety
+/// FFI contract: `ctx` valid; `out` valid for `out_len` floats when non-null; `out_width` /
+/// `out_height` writable.
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_copyFitsRaster(
+  ctx: *mut SimulationContext,
+  asset_id: u64,
+  out: *mut f32,
+  out_len: u64,
+  out_width: *mut u32,
+  out_height: *mut u32,
+) -> i32 {
+  use crate::ffi_assets::TexelsStatus;
+  if ctx.is_null() || out_width.is_null() || out_height.is_null() {
+    return TexelsStatus::InvalidArgument as i32;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let library = alloc::sync::Arc::clone(&ctx_ref.scenes.read().asset_library);
+  let Some(library) = library.try_read() else {
+    return TexelsStatus::Busy as i32;
+  };
+  copy_fits_raster(&library, asset_id, out, out_len, out_width, out_height) as i32
+}
+
+/// [`avkSimulationContext_copyFitsRaster`] on a library (testable without a context).
+fn copy_fits_raster(
+  library: &AssetLibrary,
+  asset_id: u64,
+  out: *mut f32,
+  out_len: u64,
+  out_width: *mut u32,
+  out_height: *mut u32,
+) -> crate::ffi_assets::TexelsStatus {
+  use crate::ffi_assets::TexelsStatus;
+  let Some(f) = library.fits(asset_id) else {
+    return TexelsStatus::UnknownAsset;
+  };
+  let (w, h) = (f.width(), f.height());
+  unsafe {
+    *out_width = w;
+    *out_height = h;
+  }
+  if out.is_null() {
+    return TexelsStatus::Ok;
+  }
+  let raster = f.raster();
+  let n = w as usize * h as usize;
+  if (out_len as usize) < n || raster.len() < n {
+    return TexelsStatus::BufferTooSmall;
+  }
+  unsafe { core::ptr::copy_nonoverlapping(raster.as_ptr(), out, n) };
+  TexelsStatus::Ok
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -177,6 +239,25 @@ mod tests {
     assert!(j.contains("\"stretch\":{\"mode\":0,\"transfer\":0"));
     assert!(j.ends_with("}}"));
     assert!(fits_metadata_json(&lib, id + 99).is_none());
+
+    // the physical raster, texture row order: FITS row 0 (0, 100, 200, 300) is the bottom row
+    use crate::ffi_assets::TexelsStatus;
+    let (mut w, mut h) = (0u32, 0u32);
+    assert_eq!(copy_fits_raster(&lib, id, core::ptr::null_mut(), 0, &mut w, &mut h), TexelsStatus::Ok);
+    assert_eq!((w, h), (4, 3));
+    let mut short = [0f32; 11];
+    assert_eq!(
+      copy_fits_raster(&lib, id, short.as_mut_ptr(), 11, &mut w, &mut h),
+      TexelsStatus::BufferTooSmall
+    );
+    let mut px = [0f32; 12];
+    assert_eq!(copy_fits_raster(&lib, id, px.as_mut_ptr(), 12, &mut w, &mut h), TexelsStatus::Ok);
+    assert_eq!(&px[..4], &[800.0, 900.0, 1000.0, 1100.0]);
+    assert_eq!(&px[8..], &[0.0, 100.0, 200.0, 300.0]);
+    assert_eq!(
+      copy_fits_raster(&lib, id + 99, core::ptr::null_mut(), 0, &mut w, &mut h),
+      TexelsStatus::UnknownAsset
+    );
     lib.clear();
     let _ = std::fs::remove_dir_all(&dir);
   }
@@ -193,6 +274,11 @@ mod tests {
         core::ptr::null_mut()
       ));
       assert!(!avkSimulationContext_setFitsStretch(core::ptr::null_mut(), 1, 0, 0, 0.0, 0.0, &mut b, &mut w));
+      let (mut rw, mut rh) = (0u32, 0u32);
+      assert_eq!(
+        avkSimulationContext_copyFitsRaster(core::ptr::null_mut(), 1, core::ptr::null_mut(), 0, &mut rw, &mut rh),
+        crate::ffi_assets::TexelsStatus::InvalidArgument as i32
+      );
     }
   }
 }

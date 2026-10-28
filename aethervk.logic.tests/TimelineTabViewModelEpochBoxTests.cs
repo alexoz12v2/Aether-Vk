@@ -162,6 +162,49 @@ public class TimelineTabViewModelEpochBoxTests
         Assert.Equal("2020-01-25 00:00", rig.Session.CurrentEpochString);
     }
 
+    /// <summary>Feedback #19: the range boxes run the proposal on every keystroke; typing the
+    /// image date one character at a time must end on that date, not snap back to the old end.</summary>
+    [Fact]
+    public void RangeBoxes_TypedCharByChar_KeepTheText_AndProposeTheFinalRange()
+    {
+        var rig = new Rig();
+        rig.Vm.StartEpoch = "2025-10-01T00:00:00Z";
+        rig.Vm.EndEpoch = "2025-11-11T00:00:00Z";
+
+        const string start = "2021-11-01";
+        const string end = "2021-12-27T00:14:47Z";
+        for (int i = 1; i <= start.Length; i++)
+            rig.Vm.StartEpoch = start.Substring(0, i);
+        // start 2021, end still 2025: a valid (long) range; then the end is typed over
+        for (int i = 1; i <= end.Length; i++)
+        {
+            rig.Vm.EndEpoch = end.Substring(0, i);
+            Assert.Equal(end.Substring(0, i), rig.Vm.EndEpoch); // never snapped back
+        }
+
+        Assert.Equal(start, rig.Session.ProposedStartEpoch);
+        Assert.Equal(end, rig.Session.ProposedEndEpoch);
+        Assert.False(rig.Vm.HasError);
+    }
+
+    [Theory]
+    [InlineData("2021-12-27", "2021-12-01", "after the start")]
+    [InlineData("2021-12-01", "2021-12-01T12:00:00", "at least 1 days (now 0.5)")]
+    [InlineData("2021-12-01", "27/12/2021x", "End epoch")]
+    public void RangeBoxes_InvalidRange_ShowsWhy_AndKeepsTheLastProposal(string start, string end, string why)
+    {
+        var rig = new Rig();
+        rig.Vm.StartEpoch = "2021-10-01";
+        rig.Vm.EndEpoch = "2021-12-31";
+        rig.Vm.StartEpoch = start;
+        rig.Vm.EndEpoch = end;
+
+        Assert.True(rig.Vm.HasError);
+        Assert.Contains(why, rig.Vm.ErrorMessage);
+        Assert.Equal(end, rig.Vm.EndEpoch);
+        Assert.Equal("2021-12-31", rig.Session.ProposedEndEpoch);
+    }
+
     [Fact]
     public void Parse_IsInvariantAndUtc_AndRoundTripsTheDisplay()
     {

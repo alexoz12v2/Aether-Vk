@@ -126,6 +126,33 @@ public sealed class AppSaveFileHostTests
     Rotation = new RotationDto { PoleRaDeg = 69.3, PoleDecDeg = 64.1, RateDegDay = 649.1, BodyFixedOrientation = false },
   };
 
+  /// <summary>
+  /// A save written before jets had their own grain: each jet inherits the model's grain and Afρ₀
+  /// (which stay the defaults for new jets); a jet with its own keeps them, and the capture writes
+  /// both the model's and each jet's.
+  /// </summary>
+  [Fact]
+  public void OldJetDto_InheritsModelGrainValues()
+  {
+    var rig = new Rig();
+    var model = new ModelDto
+    {
+      DiametreUm = 150, DensityGCm3 = 0.9f, ScatteringEfficiency = 1.3f, GeometricAlbedo = 0.05f,
+      SizeQ = 3.1f, SizeRange = 25, Afrho0Cm = 420,
+    };
+    rig.Host.ApplyModel(model, [new JetDto { Seed = 1 }, new JetDto { Seed = 2, DiametreUm = 20, Afrho0Cm = 60 }]);
+
+    var inherited = new AetherVk.Logic.Models.JetGrain(150f, 0.9f, 1.3f, 0.05f, 3.1f, 25f, 420f);
+    Assert.Equal(inherited, rig.Model.Jets[0].Grain);
+    Assert.Equal(inherited with { DiametreUm = 20f, Afrho0Cm = 60f }, rig.Model.Jets[1].Grain);
+    Assert.Equal(inherited, rig.Model.DefaultGrain);
+
+    var snap = rig.Host.Capture();
+    Assert.Equal((150f, 420f), (snap.Model.DiametreUm, snap.Model.Afrho0Cm));
+    Assert.Equal([150f, 20f], snap.Jets.Select(j => j.DiametreUm!.Value));
+    Assert.Equal([0.9f, 0.9f], snap.Jets.Select(j => j.DensityGCm3!.Value));
+  }
+
   [Fact]
   public async Task Commit_SetsTheSessionsAndJets_AndCaptureSavesTheSameEntry()
   {

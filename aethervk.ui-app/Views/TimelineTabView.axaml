@@ -42,15 +42,29 @@
         <StackPanel Grid.Column="0" Orientation="Vertical" VerticalAlignment="Center" Spacing="4">
           <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
             <TextBlock Text="Start Epoch (TDB):" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" />
-            <TextBox AutomationProperties.AutomationId="StartEpochBox" Text="{Binding StartEpoch}" Width="180" Watermark="e.g. 2000-01-01T12:00:00Z" />
+            <TextBox AutomationProperties.AutomationId="StartEpochBox"
+              ToolTip.Tip="Start of the simulated period (ISO 8601, e.g. 2000-01-01T12:00:00Z). Typing here only proposes a range; commit it in the Comet tab. The period must be at least 1 day long." Text="{Binding StartEpoch}" Width="180" Watermark="e.g. 2000-01-01T12:00:00Z" />
 
             <TextBlock Text="End Epoch (TDB):" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" Margin="8,0,0,0"/>
-            <TextBox AutomationProperties.AutomationId="EndEpochBox" Text="{Binding EndEpoch}" Width="180" Watermark="e.g. 2000-02-01T12:00:00Z" />
+            <TextBox AutomationProperties.AutomationId="EndEpochBox"
+              ToolTip.Tip="End of the simulated period (ISO 8601). It must be at least 1 day after the start. Typing here only proposes a range; commit it in the Comet tab." Text="{Binding EndEpoch}" Width="180" Watermark="e.g. 2000-02-01T12:00:00Z" />
 
             <Button Content="Restore" Command="{Binding RestoreCommand}" IsEnabled="{Binding CanRestore}" ToolTip.Tip="Restore Proposed to Last Committed" ToolTip.ShowDelay="1000" />
 
             <!-- Indicator: proposed range differs from committed -->
             <TextBlock Text="●" Foreground="{DynamicResource Sem.Warning}" IsVisible="{Binding IsProposedDifferentFromCommitted}" ToolTip.Tip="Proposed range differs from committed" VerticalAlignment="Center" />
+          </StackPanel>
+
+          <!-- "Model" preset (feedback #20): N nucleus rotations ending at the image epoch -->
+          <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+            <TextBlock Text="Model range:" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" />
+            <TextBox AutomationProperties.AutomationId="ModelRotationsBox"
+              ToolTip.Tip="Number of full nucleus rotations (a whole number, at least 1) that the model range should span. One rotation lasts the period set in the Comet tab (360 deg divided by the rotation rate)." Text="{Binding ModelRotations}" Width="48" />
+            <TextBlock Text="rotations ending at" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" />
+            <TextBox AutomationProperties.AutomationId="ModelEndEpochBox"
+              ToolTip.Tip="End of the model range, normally the epoch of your telescope image (the FITS &quot;Model range&quot; button fills it with the observation epoch). Leave empty to use the End Epoch box." Text="{Binding ModelEndEpoch}" Width="180" Watermark="image epoch (empty: End)" />
+            <Button AutomationProperties.AutomationId="ApplyModelRangeButton" Content="Set range" Command="{Binding ApplyModelRangeCommand}"
+                    ToolTip.Tip="Sets Start and End so the timeline ends at the image epoch and starts N nucleus rotation periods earlier (N x period, never less than 1 day). The simulated dust history then covers N full spins before the image. It only proposes the range: commit it in the Comet tab." />
           </StackPanel>
           
           <StackPanel Orientation="Horizontal" Spacing="24" Margin="0,8,0,0">
@@ -75,7 +89,8 @@
           <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center" Margin="0,0,0,8">
             <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,0,16,0" VerticalAlignment="Center">
               <TextBlock Text="{Binding StrSpeed}" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" />
-              <ComboBox AutomationProperties.AutomationId="SpeedPicker" ItemsSource="{Binding SpeedOptions}"
+              <ComboBox AutomationProperties.AutomationId="SpeedPicker"
+                ToolTip.Tip="How fast simulated time runs while playing, as simulated time per real second (for example 1 hour per second)." ItemsSource="{Binding SpeedOptions}"
                         DisplayMemberBinding="{Binding Label, x:DataType=vm:TimelineTabViewModel+SpeedOption}"
                         SelectedValueBinding="{Binding Speed, x:DataType=vm:TimelineTabViewModel+SpeedOption}"
                         SelectedValue="{Binding SelectedSpeed}"
