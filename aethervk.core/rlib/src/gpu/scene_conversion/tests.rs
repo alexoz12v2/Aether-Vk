@@ -415,3 +415,154 @@ fn jet_site_lit_follows_the_sun_and_the_nucleus_rotation() {
   assert_eq!(jet_site_lit(&scene, sunward), Some(false));
   assert_eq!(jet_site_lit(&scene, antisolar), Some(true));
 }
+
+/// The jet line: three quarters of the gizmo's body axes (which reach 1.5 × the gizmo radius),
+/// along the site direction (local +Z of an orthonormal frame).
+#[test]
+fn jet_line_frame_points_local_z_along_the_site_and_is_orthonormal() {
+  use super::jet_line_frame;
+  use aethervk_oshal_rlib::math::vector::Vector4;
+  assert!((crate::scene::JET_LINE_LENGTH_OVER_GIZMO_RADIUS - 1.125).abs() < 1e-6);
+
+  for site in [[3.0, 4.0, 0.0], [0.0, 0.0, 2.0], [0.0, 0.0, -5.0], [1.0, -2.0, 0.5]] {
+    let m = jet_line_frame(site).expect("a non-zero site has a frame");
+    let n = (site[0] * site[0] + site[1] * site[1] + site[2] * site[2]).sqrt();
+    let col = |c: &aethervk_oshal_rlib::math::vector::vec4::Vec4f32| [c.x() as f64, c.y() as f64, c.z() as f64];
+    let (x, y, z) = (col(&m.x), col(&m.y), col(&m.z));
+    let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    for i in 0..3 {
+      assert!((z[i] - site[i] / n).abs() < 1e-6, "local Z is the site direction: {site:?}");
+    }
+    for (a, b) in [(x, y), (y, z), (z, x)] {
+      assert!(dot(a, b).abs() < 1e-6, "orthogonal axes for {site:?}");
+    }
+    for a in [x, y, z] {
+      assert!((dot(a, a) - 1.0).abs() < 1e-6, "unit axes for {site:?}");
+    }
+    assert_eq!(m.w.w(), 1.0);
+    assert_eq!((m.w.x(), m.w.y(), m.w.z()), (0.0, 0.0, 0.0), "the line starts at the nucleus centre");
+  }
+  assert!(jet_line_frame([0.0, 0.0, 0.0]).is_none());
+}
+
+/// The angle arcs: longitude on the equator from the prime meridian, latitude on the jet's
+/// meridian from the equator; both at 0.8 × the gizmo radius, ending at the jet's angles.
+#[test]
+fn jet_angle_arcs_measure_latitude_and_longitude() {
+  use super::{JET_ANGLE_ARC_OVER_GIZMO_RADIUS, jet_angle_arcs};
+  let (lat, lon) = (30f64.to_radians(), 45f64.to_radians());
+  let site = [lat.cos() * lon.cos() * 7.0, lat.cos() * lon.sin() * 7.0, lat.sin() * 7.0];
+  let gizmo_r = 10.0;
+  let a = jet_angle_arcs(site, gizmo_r).expect("arcs");
+  assert!((a.lat_rad - lat).abs() < 1e-12 && (a.lon_rad - lon).abs() < 1e-12);
+  let r = gizmo_r * JET_ANGLE_ARC_OVER_GIZMO_RADIUS;
+  let close = |p: [f64; 3], q: [f64; 3]| (0..3).all(|i| (p[i] - q[i]).abs() < 1e-9);
+  let at = |phi: f64, lam: f64| [r * phi.cos() * lam.cos(), r * phi.cos() * lam.sin(), r * phi.sin()];
+
+  let [lon_arc, lat_arc] = &a.arcs;
+  assert!(close(lon_arc.points[0], [r, 0.0, 0.0]), "longitude starts on the prime meridian");
+  assert!(close(*lon_arc.points.last().unwrap(), at(0.0, lon)));
+  assert!(lon_arc.points.iter().all(|p| p[2].abs() < 1e-9), "on the equator");
+  assert!(close(lat_arc.points[0], at(0.0, lon)), "latitude starts on the equator, at the jet's meridian");
+  assert!(close(*lat_arc.points.last().unwrap(), at(lat, lon)), "and ends on the jet's direction");
+  for p in lon_arc.points.iter().chain(&lat_arc.points) {
+    assert!(((p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt() - r).abs() < 1e-9, "on the arc radius");
+  }
+  assert!(lon_arc.points.len() >= 3 && lat_arc.points.len() >= 3);
+  assert_eq!(lon_arc.label, "lon 45.0°");
+  assert_eq!(lat_arc.label, "lat 30.0°");
+  assert!(close(lon_arc.label_at, at(0.0, lon * 0.5)), "labels at the arc midpoints");
+  assert!(close(lat_arc.label_at, at(lat * 0.5, lon)));
+
+  // southern and western sites: signed angles
+  let (lat, lon) = (-20f64.to_radians(), -100f64.to_radians());
+  let a = jet_angle_arcs([lat.cos() * lon.cos(), lat.cos() * lon.sin(), lat.sin()], gizmo_r).unwrap();
+  assert_eq!(a.arcs[0].label, "lon -100.0°");
+  assert_eq!(a.arcs[1].label, "lat -20.0°");
+  assert!(jet_angle_arcs([0.0; 3], gizmo_r).is_none());
+}
+
+/// An orthographic camera shows what lies behind its eye unless `CAMERA_HIDE_BEHIND` is set:
+/// the macro layer mirrors its slab and object slabs keep a negative near; with the bit the near
+/// is clamped at the eye. Perspective is never changed.
+#[test]
+fn orthographic_depth_shows_behind_the_eye_unless_hidden() {
+  use super::{fit_depth_slab, macro_layer_depth};
+  assert_eq!(macro_layer_depth(1e-6, 50.0, true, false), (-50.0, 50.0));
+  assert_eq!(macro_layer_depth(1e-6, 50.0, true, true), (1e-6, 50.0));
+  assert_eq!(macro_layer_depth(1e-6, 50.0, false, false), (1e-6, 50.0));
+
+  // a 10 km sphere 4 km behind the eye (depth −4): visible only when shown
+  let (n, f) = fit_depth_slab(-4.0, 10.0, true, false);
+  assert!(n < -14.0 && f > 6.0, "{n} {f}");
+  let (n, f) = fit_depth_slab(-4.0, 10.0, true, true);
+  assert_eq!(n, 0.0);
+  assert!(f > 6.0);
+  // wholly behind and hidden: an empty slab, skipped by the commit
+  let (n, f) = fit_depth_slab(-40.0, 10.0, true, true);
+  assert!(f <= n, "{n} {f}");
+  // perspective: always in front, whatever the bit
+  assert_eq!(fit_depth_slab(30.0, 10.0, false, false), fit_depth_slab(30.0, 10.0, false, true));
+  assert!(fit_depth_slab(30.0, 10.0, false, false).0 > 0.0);
+}
+
+/// The comet's screen position is the indicator's projection, light-time displaced: dead ahead is
+/// the viewport centre, a sideways offset lands right of it, outside the field is projectable but
+/// off screen, and behind a perspective eye or without an observer comet there is none.
+#[test]
+fn comet_screen_position_projects_the_light_time_displaced_comet() {
+  use super::comet_screen_position;
+  use crate::{
+    scene::{CameraComponent, HighResTransformComponent, Scene, TransformComponent},
+    simulation::texture_cache::TextureCache,
+    simulation_api::earth_observer::LightTimeViewComponent,
+  };
+  use aethervk_oshal_rlib::math::vector::{vec3::Vec3f32, vec3f64::DVec3, vec4f64::Quat64};
+
+  let scene = Scene::new(Arc::new(RwLock::new(TextureCache::new("test_comet_screen_pos"))));
+  scene.register_all_crate_components();
+  let comet = scene.spawn_entity("comet");
+  let mut ct = TransformComponent::default();
+  ct.position = Vec3f32::from_components(0.0, -1.0, 0.0); // 1 AU along the camera forward (−Y)
+  scene.add_component(comet, ct).unwrap();
+  let camera = scene.spawn_entity("camera");
+  scene
+    .add_component(
+      camera,
+      HighResTransformComponent {
+        position: DVec3::from_components(0.0, 0.0, 0.0),
+        rotation: Quat64::from_components(0.0, 0.0, 0.0, 1.0),
+        scale: Vec3f32::one(),
+      },
+    )
+    .unwrap();
+  // 2:1 viewport, 10° vertical field
+  let fov = 10f32.to_radians();
+  scene.add_component(camera, CameraComponent::new_persp(fov, 2.0, 1e-6, 10.0)).unwrap();
+  let extent = [800, 400];
+  assert_eq!(comet_screen_position(&scene, camera, extent), None, "no observer comet");
+
+  let mut lt = LightTimeViewComponent { comet, delay_s: 0.0, offset_au: [0.0, 0.0, 0.0] };
+  scene.add_component(camera, lt).unwrap();
+  let p = comet_screen_position(&scene, camera, extent).unwrap();
+  assert!(p.on_screen);
+  assert!((p.x_px - 400.0).abs() < 1e-6 && (p.y_px - 200.0).abs() < 1e-6, "{p:?}");
+
+  // displaced along screen right (world −X for this identity camera, as the indicator draws it)
+  // by a quarter of the half-width: 100 px right of centre
+  let half_w = (fov as f64 / 2.0).tan() * 2.0;
+  lt.offset_au = [-0.25 * half_w, 0.0, 0.0];
+  scene.with_component_mut(camera, |l: &mut LightTimeViewComponent| *l = lt).unwrap();
+  let p = comet_screen_position(&scene, camera, extent).unwrap();
+  assert!(p.on_screen && (p.x_px - 500.0).abs() < 0.05 && (p.y_px - 200.0).abs() < 0.05, "{p:?}");
+
+  // outside the field: projectable, off screen
+  lt.offset_au = [3.0 * half_w, 0.0, 0.0];
+  scene.with_component_mut(camera, |l: &mut LightTimeViewComponent| *l = lt).unwrap();
+  assert!(!comet_screen_position(&scene, camera, extent).unwrap().on_screen);
+
+  // behind the eye
+  lt.offset_au = [0.0, 2.0, 0.0];
+  scene.with_component_mut(camera, |l: &mut LightTimeViewComponent| *l = lt).unwrap();
+  assert_eq!(comet_screen_position(&scene, camera, extent), None);
+}

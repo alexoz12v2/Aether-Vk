@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Globalization;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
@@ -36,6 +37,13 @@ class Program
       }
       catch (DllNotFoundException) { }
     }
+
+    // Numbers read and print with a dot on every OS locale (an Italian Windows otherwise shows and
+    // parses "0,5"); dates and the rest of the locale are kept.
+    var culture = (CultureInfo)CultureInfo.CurrentCulture.Clone();
+    culture.NumberFormat = CultureInfo.InvariantCulture.NumberFormat;
+    CultureInfo.CurrentCulture = culture;
+    CultureInfo.DefaultThreadCurrentCulture = culture;
 
     bool skipNative = false;
 #if DEBUG

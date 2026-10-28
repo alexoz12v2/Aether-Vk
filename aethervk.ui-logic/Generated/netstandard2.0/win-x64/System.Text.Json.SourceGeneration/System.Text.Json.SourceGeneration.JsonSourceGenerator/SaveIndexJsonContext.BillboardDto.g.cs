@@ -46,7 +46,7 @@ namespace AetherVk.Logic.SaveFile
 
         private static global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[] BillboardDtoPropInit(global::System.Text.Json.JsonSerializerOptions options)
         {
-            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[9];
+            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[14];
 
             var info0 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<global::System.Guid>
             {
@@ -230,6 +230,106 @@ namespace AetherVk.Logic.SaveFile
             
             properties[8] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<bool>(options, info8);
 
+            var info9 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<double?>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.BillboardDto),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.BillboardDto)obj).ImageArcsecPerPx,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.BillboardDto)obj).ImageArcsecPerPx = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "ImageArcsecPerPx",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.BillboardDto).GetProperty("ImageArcsecPerPx", InstanceMemberBindingFlags, null, typeof(double?), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[9] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<double?>(options, info9);
+
+            var info10 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<int>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.BillboardDto),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.BillboardDto)obj).ImageWidthPx,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.BillboardDto)obj).ImageWidthPx = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "ImageWidthPx",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.BillboardDto).GetProperty("ImageWidthPx", InstanceMemberBindingFlags, null, typeof(int), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[10] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<int>(options, info10);
+
+            var info11 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<int>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.BillboardDto),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.BillboardDto)obj).ImageHeightPx,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.BillboardDto)obj).ImageHeightPx = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "ImageHeightPx",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.BillboardDto).GetProperty("ImageHeightPx", InstanceMemberBindingFlags, null, typeof(int), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[11] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<int>(options, info11);
+
+            var info12 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<bool>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.BillboardDto),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.BillboardDto)obj).PhysicalSizeBound,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.BillboardDto)obj).PhysicalSizeBound = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "PhysicalSizeBound",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.BillboardDto).GetProperty("PhysicalSizeBound", InstanceMemberBindingFlags, null, typeof(bool), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[12] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<bool>(options, info12);
+
+            var info13 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<global::AetherVk.Logic.SaveFile.FitsStretchDto>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.BillboardDto),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.BillboardDto)obj).FitsStretch,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.BillboardDto)obj).FitsStretch = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "FitsStretch",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.BillboardDto).GetProperty("FitsStretch", InstanceMemberBindingFlags, null, typeof(global::AetherVk.Logic.SaveFile.FitsStretchDto), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[13] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<global::AetherVk.Logic.SaveFile.FitsStretchDto>(options, info13);
+
             return properties;
         }
 
@@ -254,6 +354,13 @@ namespace AetherVk.Logic.SaveFile
             writer.WriteNumber(PropName_alpha, ((global::AetherVk.Logic.SaveFile.BillboardDto)value).Alpha);
             writer.WriteNumber(PropName_rotation_deg, ((global::AetherVk.Logic.SaveFile.BillboardDto)value).RotationDeg);
             writer.WriteBoolean(PropName_visible, ((global::AetherVk.Logic.SaveFile.BillboardDto)value).Visible);
+            writer.WritePropertyName(PropName_image_arcsec_per_px);
+            global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.SaveFile.BillboardDto)value).ImageArcsecPerPx, NullableDouble);
+            writer.WriteNumber(PropName_image_width_px, ((global::AetherVk.Logic.SaveFile.BillboardDto)value).ImageWidthPx);
+            writer.WriteNumber(PropName_image_height_px, ((global::AetherVk.Logic.SaveFile.BillboardDto)value).ImageHeightPx);
+            writer.WriteBoolean(PropName_physical_size_bound, ((global::AetherVk.Logic.SaveFile.BillboardDto)value).PhysicalSizeBound);
+            writer.WritePropertyName(PropName_fits_stretch);
+            FitsStretchDtoSerializeHandler(writer, ((global::AetherVk.Logic.SaveFile.BillboardDto)value).FitsStretch);
 
             writer.WriteEndObject();
         }

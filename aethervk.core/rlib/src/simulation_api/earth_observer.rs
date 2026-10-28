@@ -12,10 +12,13 @@
 //! convention: forward = local −Y, basis columns (right, backward, up). Positions are world (root)
 //! AU, heliocentric ecliptic.
 //!
-//! **Site.** The observer stands at a geodetic latitude / longitude / height on the WGS84 ellipsoid
-//! ([`super::astrometry::wgs84_surface_point_bf`], Earth body-fixed = ITRF93, the frame of the
-//! Earth rotation the almanac commits); the horizon is the ellipsoid's tangent plane (geodetic
-//! zenith, [`EarthObserverState::zenith_bf`]).
+//! **Position.** Geocentric by default: the camera sits at the Earth's centre and follows only its
+//! translation (the Earth's rotation never turns it, there is no horizon). **Topocentric** (optional,
+//! [`EarthObserverState::topocentric`]): the observer stands at a geodetic latitude / longitude /
+//! height on the WGS84 ellipsoid ([`super::astrometry::wgs84_surface_point_bf`], Earth body-fixed =
+//! ITRF93, the frame of the Earth rotation the almanac commits), carried by the Earth's rotation
+//! (parallax), with the ellipsoid's tangent plane as horizon (geodetic zenith,
+//! [`EarthObserverState::zenith_bf`]). The orientation never turns with the Earth in either case.
 //!
 //! **Light time.** With a comet set, every pose also computes where the telescope *sees* the
 //! comet: at the retarded epoch `t_r = t − Δ/c` ([`comet_light_time`], Δ topocentric, two
@@ -39,27 +42,25 @@ type V3 = [f64; 3];
 pub const EARTH_RADIUS_AU: f64 = 4.26e-5;
 type Q = [f64; 4]; // x, y, z, w
 
-/// Mirror of the C# `EarthObserverOrientationMode` (same integer values over FFI).
+/// Mirror of the C# `EarthObserverOrientationMode` (same integer values over FFI; 1 and 3 were the
+/// retired lock-in modes, read as `Free`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum EarthObserverMode {
   /// look direction fixed in the inertial (ecliptic) frame
   Free = 0,
-  /// aimed at the comet when entered, then turns with the Earth
-  CometLockIn = 1,
-  /// re-aims at the comet every commit, holding while it is below the horizon
+  /// re-aims at the comet every commit: the comet stays at the centre of the view (topocentric:
+  /// faces the horizon under it while it is below)
   CometTracking = 2,
-  SunLockIn = 3,
   SunTracking = 4,
 }
 
 impl EarthObserverMode {
   pub fn from_u32(v: u32) -> Option<Self> {
     Some(match v {
-      0 => Self::Free,
-      1 => Self::CometLockIn,
+      // 1 / 3: the retired comet / Sun lock-in (the look the caller passes is inertial)
+      0 | 1 | 3 => Self::Free,
       2 => Self::CometTracking,
-      3 => Self::SunLockIn,
       4 => Self::SunTracking,
       _ => return None,
     })
@@ -67,11 +68,8 @@ impl EarthObserverMode {
   pub fn is_tracking(self) -> bool {
     matches!(self, Self::CometTracking | Self::SunTracking)
   }
-  pub fn is_lock_in(self) -> bool {
-    matches!(self, Self::CometLockIn | Self::SunLockIn)
-  }
   pub fn targets_comet(self) -> bool {
-    matches!(self, Self::CometLockIn | Self::CometTracking)
+    matches!(self, Self::CometTracking)
   }
 }
 
@@ -83,6 +81,8 @@ pub struct EarthObserverState {
   pub earth: EntityId,
   /// comet body (comet submodes); the Sun is the origin
   pub comet: Option<EntityId>,
+  /// false: at the Earth's centre (no horizon); true: at the surface site below
+  pub topocentric: bool,
   /// surface point in the Earth body-fixed frame (AU): WGS84 at `lat_deg`, `lon_deg`, `elev_m`
   pub surface_bf_au: V3,
   /// geodetic latitude (deg)
@@ -93,7 +93,7 @@ pub struct EarthObserverState {
   pub elev_m: f64,
   /// unit geodetic zenith (ellipsoid normal), Earth body-fixed: the horizon plane
   pub zenith_bf: V3,
-  /// Free: inertial world look rotation; lock-in: body-fixed look (world = earth_rot · look)
+  /// Free: inertial world look rotation
   pub look: Q,
   /// last applied rotation (kept when the target is straight below, at the nadir)
   pub last: Q,
@@ -109,14 +109,15 @@ pub struct EarthObserverState {
 }
 
 impl EarthObserverState {
-  /// An observer at geodetic `lat_deg` / `lon_deg` / `elev_m` (WGS84). `last`: the camera's
-  /// current rotation (held while a target is unknown).
+  /// A geocentric observer, or (`topocentric`) one at geodetic `lat_deg` / `lon_deg` / `elev_m`
+  /// (WGS84). `last`: the camera's current rotation (held while a target is unknown).
   #[allow(clippy::too_many_arguments)]
   pub fn new(
     mode: EarthObserverMode,
     camera: EntityId,
     earth: EntityId,
     comet: Option<EntityId>,
+    topocentric: bool,
     lat_deg: f64,
     lon_deg: f64,
     elev_m: f64,
@@ -128,6 +129,7 @@ impl EarthObserverState {
       camera,
       earth,
       comet,
+      topocentric,
       surface_bf_au: super::astrometry::wgs84_surface_point_bf(lat_deg, lon_deg, elev_m),
       lat_deg,
       lon_deg,
@@ -142,9 +144,20 @@ impl EarthObserverState {
     }
   }
 
-  /// distance of the site from the Earth's centre (AU): the invariant `|camera − earth|`
+  /// distance of the site from the Earth's centre (AU)
   pub fn surface_radius_au(&self) -> f64 {
     dot(self.surface_bf_au, self.surface_bf_au).sqrt()
+  }
+
+  /// the camera's offset from the Earth's centre in the body-fixed frame: the site, or zero
+  /// (geocentric). `|camera − earth|` is its length.
+  pub fn offset_bf_au(&self) -> V3 {
+    if self.topocentric { self.surface_bf_au } else { [0.0; 3] }
+  }
+
+  /// latitude whose pole the view's up leans to: the site's, the ecliptic north geocentric
+  pub fn up_lat_deg(&self) -> f64 {
+    if self.topocentric { self.lat_deg } else { 0.0 }
   }
 
   /// Takes the comet's heliocentric velocity from the SPK state the logic thread just stepped
@@ -364,43 +377,44 @@ pub fn below_horizon(direction: V3, zenith: V3) -> bool {
   dot(direction, zenith) < 0.0
 }
 
-/// World position (AU) of the site `surface_bf_au` (Earth body-fixed) on an Earth at `earth_pos`
-/// turned by `earth_rot` (body-fixed → world): the camera position of [`pose`].
-pub fn observer_position(earth_pos: V3, earth_rot: Q, surface_bf_au: V3) -> V3 {
-  add(earth_pos, rotate(earth_rot, surface_bf_au))
+/// World position (AU) of the point `offset_bf_au` (Earth body-fixed) on an Earth at `earth_pos`
+/// turned by `earth_rot` (body-fixed → world): the camera position of [`pose`]
+/// ([`EarthObserverState::offset_bf_au`]: the geocentre unless topocentric).
+pub fn observer_position(earth_pos: V3, earth_rot: Q, offset_bf_au: V3) -> V3 {
+  add(earth_pos, rotate(earth_rot, offset_bf_au))
 }
 
 /// Camera pose for the observer: `(world position, world rotation)`, from the Earth's world
 /// position / rotation and the target's world position (`None`: no target known). Mirrors
-/// `CameraService.SnapCameraToEarth`, with the geodetic zenith.
+/// `CameraService.SnapCameraToEarth`, with the geodetic zenith. The Earth's rotation moves only a
+/// topocentric site, never the look.
 pub fn pose(s: &EarthObserverState, earth_pos: V3, earth_rot: Q, target: Option<V3>) -> (V3, Q) {
   let zenith = normalize(rotate(earth_rot, s.zenith_bf));
-  let cam_pos = observer_position(earth_pos, earth_rot, s.surface_bf_au);
+  let cam_pos = observer_position(earth_pos, earth_rot, s.offset_bf_au());
+  let up_lat = s.up_lat_deg();
   let rot = if s.mode.is_tracking() {
     match target {
       Some(t) => {
         let to = sub(t, cam_pos);
-        if below_horizon(to, zenith) {
+        if s.topocentric && below_horizon(to, zenith) {
           // the Earth is in the way: face the horizon under the target's azimuth (where it is,
           // and where it will rise), not whatever direction the camera had
           let h = sub(to, scale(zenith, dot(to, zenith)));
           if dot(h, h) > 1e-30 {
-            look_at(h, s.lat_deg)
+            look_at(h, up_lat)
           } else {
             s.last
           }
         } else {
-          look_at(to, s.lat_deg)
+          look_at(to, up_lat)
         }
       }
       None => s.last,
     }
-  } else if s.mode.is_lock_in() {
-    qnormalize(qmul(earth_rot, s.look))
   } else {
     s.look
   };
-  (cam_pos, orient(rot, s.lat_deg))
+  (cam_pos, orient(rot, up_lat))
 }
 
 fn v3(v: Vec3f64) -> V3 {
@@ -419,7 +433,7 @@ pub fn apply(scene: &Scene, s: &mut EarthObserverState) -> Option<(V3, Q)> {
   // the Earth's rotation is committed in f32: renormalize (|q|² − 1 ~ 1e-8 scales the surface
   // offset by ~0.1 m otherwise)
   let earth_rot = qnormalize(q(earth.rotation));
-  let site = observer_position(v3(earth.position), earth_rot, s.surface_bf_au);
+  let site = observer_position(v3(earth.position), earth_rot, s.offset_bf_au());
   let comet_geometric = s.comet.and_then(|c| scene.global_transform_f64(c)).map(|t| v3(t.position));
   s.light_time = match (comet_geometric, s.comet_vel_km_s) {
     (Some(c), Some(v)) => Some(comet_light_time(site, c, v)),
@@ -466,11 +480,16 @@ pub fn apply(scene: &Scene, s: &mut EarthObserverState) -> Option<(V3, Q)> {
   }
   if let Some(t) = target {
     let to = sub(t, pos);
-    let zenith = normalize(rotate(earth_rot, s.zenith_bf));
     let fwd = rotate(rot, [0.0, -1.0, 0.0]);
     let c = cross(fwd, to);
     s.last_error = dot(c, c).sqrt().atan2(dot(fwd, to));
-    s.last_elevation = (dot(normalize(to), zenith)).clamp(-1.0, 1.0).asin();
+    // geocentric: no horizon, the target is always "up" (π/2)
+    s.last_elevation = if s.topocentric {
+      let zenith = normalize(rotate(earth_rot, s.zenith_bf));
+      (dot(normalize(to), zenith)).clamp(-1.0, 1.0).asin()
+    } else {
+      core::f64::consts::FRAC_PI_2
+    };
   }
   Some((pos, rot))
 }
@@ -517,11 +536,16 @@ mod tests {
   }
 
   fn state(mode: EarthObserverMode) -> EarthObserverState {
+    topo(mode, true)
+  }
+
+  fn topo(mode: EarthObserverMode, topocentric: bool) -> EarthObserverState {
     EarthObserverState::new(
       mode,
       EntityId::default(),
       EntityId::default(),
       None,
+      topocentric,
       40.0,
       10.0,
       350.0,
@@ -584,21 +608,66 @@ mod tests {
     );
   }
 
-  /// Lock-in turns with the Earth: the look direction is fixed in the body frame.
+  /// Geocentric (the default): the camera is the Earth's centre whatever its rotation, and neither
+  /// the free look nor the tracking aim turns with the Earth; tracking has no horizon (the comet
+  /// is centred all day, the target "behind" the Earth included).
   #[test]
-  fn lock_in_turns_with_the_earth() {
-    let mut s = state(EarthObserverMode::CometLockIn);
-    let world_look = look_at([1.0, 0.5, 0.2], s.lat_deg);
-    s.look = qnormalize(qmul(qinverse(spin(0.0)), world_look));
-    let (_, r0) = pose(&s, [1.0, 0.0, 0.0], spin(0.0), None);
-    assert!(angle(forward(r0), forward(world_look)) < 1e-12);
-    let (_, r1) = pose(&s, [1.0, 0.0, 0.0], spin(3600.0), None);
-    let expect = rotate(
-      spin(3600.0),
-      rotate(qinverse(spin(0.0)), forward(world_look)),
-    );
-    assert!(angle(forward(r1), expect) < 1e-9);
-    assert!(angle(forward(r1), forward(r0)) > 1e-3, "it turned");
+  fn geocentric_camera_ignores_earth_rotation() {
+    let earth = [0.98, 0.17, 0.0];
+    let mut free = topo(EarthObserverMode::Free, false);
+    free.look = look_at([0.3, 1.0, -0.1], 0.0);
+    let mut track = topo(EarthObserverMode::CometTracking, false);
+    let comet = [1.3, -0.9, 0.05];
+    for k in 0..48 {
+      let t = k as f64 * 1800.0; // a day, every half hour
+      let (p, r) = pose(&free, earth, spin(t), None);
+      assert_eq!(p, earth, "geocentre");
+      assert!(angle(forward(r), forward(free.look)) < 1e-12, "free look turned at {t} s");
+      let (p, r) = pose(&track, earth, spin(t), Some(comet));
+      assert_eq!(p, earth);
+      assert!(angle(forward(r), sub(comet, earth)) < 1e-12, "comet off centre at {t} s");
+      // up towards the ecliptic north, right in the ecliptic: the frame does not roll either
+      assert!(rotate(r, [1.0, 0.0, 0.0])[2].abs() < 1e-12);
+      assert!(rotate(r, [0.0, 0.0, 1.0])[2] >= 0.0);
+      track.last = r;
+    }
+  }
+
+  /// Topocentric: the site turns with the Earth (diurnal parallax of the Earth radius on a nearby
+  /// target), the look still does not.
+  #[test]
+  fn topocentric_site_moves_with_the_earth_and_shows_parallax() {
+    let earth = [1.0, 0.0, 0.0];
+    let mut free = topo(EarthObserverMode::Free, true);
+    free.look = look_at([0.0, 1.0, 0.0], free.lat_deg);
+    let (p0, r0) = pose(&free, earth, spin(0.0), None);
+    let (p1, r1) = pose(&free, earth, spin(6.0 * 3600.0), None);
+    assert!(angle(forward(r0), forward(r1)) < 1e-12, "the look stays inertial");
+    let d = |a: V3, b: V3| dot(sub(a, b), sub(a, b)).sqrt();
+    assert!((d(p0, earth) - free.surface_radius_au()).abs() < 1e-15);
+    assert!(d(p0, p1) > 0.5 * free.surface_radius_au(), "a quarter day moves the site");
+    // a target 0.1 AU away: the geocentric and topocentric directions differ by ~R/Δ
+    let target = [1.0, 0.1, 0.0];
+    let track_geo = topo(EarthObserverMode::CometTracking, false);
+    let track_topo = topo(EarthObserverMode::CometTracking, true);
+    let (_, g) = pose(&track_geo, earth, spin(0.0), Some(target));
+    let (pt, t) = pose(&track_topo, earth, spin(0.0), Some(target));
+    let zenith = normalize(rotate(spin(0.0), track_topo.zenith_bf));
+    if !below_horizon(sub(target, pt), zenith) {
+      let parallax = angle(forward(g), forward(t));
+      assert!(parallax > 1e-5 && parallax < track_topo.surface_radius_au() / 0.1 * 1.01, "{parallax}");
+      assert!(angle(forward(t), sub(target, pt)) < 1e-12, "topocentric aims from the site");
+    }
+  }
+
+  /// The retired lock-in values read as Free over FFI (old callers, old saves).
+  #[test]
+  fn retired_lock_in_values_read_as_free() {
+    assert_eq!(EarthObserverMode::from_u32(1), Some(EarthObserverMode::Free));
+    assert_eq!(EarthObserverMode::from_u32(3), Some(EarthObserverMode::Free));
+    assert_eq!(EarthObserverMode::from_u32(2), Some(EarthObserverMode::CometTracking));
+    assert_eq!(EarthObserverMode::from_u32(4), Some(EarthObserverMode::SunTracking));
+    assert_eq!(EarthObserverMode::from_u32(5), None);
   }
 
   /// Free look keeps the inertial direction whatever the Earth does; the position follows the
@@ -733,6 +802,7 @@ mod scene_tests {
       cam,
       earth,
       Some(comet),
+      true,
       40.0,
       10.0,
       0.0,

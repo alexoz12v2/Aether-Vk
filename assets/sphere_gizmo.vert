@@ -10,9 +10,11 @@ struct SphereGizmoData {
     mat4 model;
     float radius;
     float subdivisions; // E.g. 12.0 for every 30 degrees (360/30)
-    float style;        // 0 = sphere wireframe + axes, 1 = dashed polar axis (local Z, ±radius)
+    float style;        // 0 = sphere wireframe + axes, 1 = dashed polar axis (local Z, ±radius),
+                        // 2 = solid jet line (local +Z, 0 → radius, in `color`)
     float dashCount;    // style 1: dashes (dash + gap) along the whole axis
     vec4 centerClip;    // P*V*center composed in f64 on the CPU; all zero = compute it here
+    vec4 color;         // style 2: the line's colour
 };
 
 // Bindless BDA block
@@ -38,6 +40,26 @@ const float PI = 3.14159265359;
 void main() {
     mat4 model = push.gizmoPtr.gizmos[gl_InstanceIndex].model;
     outDash = vec2(0.0);
+
+    if (push.gizmoPtr.gizmos[gl_InstanceIndex].style > 1.5) {
+        // ── Jet direction line: local +Z from the centre to +radius, solid, own colour ───────
+        if (gl_VertexIndex > 1) {
+            gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+            outAlpha = 0.0;
+            fragColor = vec3(0.0);
+            return;
+        }
+        vec4 lineCenterClip = push.gizmoPtr.gizmos[gl_InstanceIndex].centerClip;
+        if (lineCenterClip == vec4(0.0)) lineCenterClip = push.viewProj * vec4(model[3].xyz, 1.0);
+        float len = push.gizmoPtr.gizmos[gl_InstanceIndex].radius;
+        vec3 lineLocal = vec3(0.0, 0.0, gl_VertexIndex == 0 ? 0.0 : len);
+        gl_Position = lineCenterClip + push.viewProj * vec4(mat3(model) * lineLocal, 0.0);
+        // Reverse-Z: pulled forward like the body axes
+        gl_Position.z = min(gl_Position.z + 0.001 * gl_Position.w, gl_Position.w);
+        outAlpha = 1.0;
+        fragColor = push.gizmoPtr.gizmos[gl_InstanceIndex].color.rgb;
+        return;
+    }
 
     if (push.gizmoPtr.gizmos[gl_InstanceIndex].style > 0.5) {
         // ── Dashed polar axis: one line, local Z from -radius (south) to +radius (north) ─────

@@ -7,6 +7,7 @@ using AetherVk.Logic.ViewModels;
 using AetherVk.UI;
 using AetherVk.Views;
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
@@ -65,6 +66,47 @@ public class DesktopBillboardViewTests
     Dispatcher.UIThread.RunJobs();
     Assert.Equal(0, list.ItemCount);
     Assert.Empty(vm.Billboards.Service.Current);
+    window.Close();
+  }
+
+  /// A FITS billboard row has the "FITS image" expander: the key facts, the header cards in a
+  /// DataGrid (one row per card), the stretch controls and the purpose buttons.
+  [AvaloniaFact]
+  public void FitsRow_ShowsTheFactsAndTheHeaderGrid()
+  {
+    var vm = new DesignSettingsTabViewModel();
+    var view = new SettingsTabView { DataContext = vm };
+    var window = new Window { Content = view, Width = 520, Height = 2400 };
+    window.Show();
+    var section = view.GetLogicalDescendants().OfType<Expander>().Single(e => Equals(e.Header, vm.StrBillboards));
+    section.IsExpanded = true;
+    vm.Billboards.CreateCommand.Execute(null);
+    var row = vm.Billboards.Items.Single();
+    var meta = Logic.Models.FitsMetadata.Parse(DesignFits.SampleJson)!;
+    row.ShowFits(meta, 5);
+    Dispatcher.UIThread.RunJobs();
+    window.UpdateLayout();
+    Dispatcher.UIThread.RunJobs();
+
+    var fitsSection = view.GetVisualDescendants().OfType<Expander>()
+      .Single(e => AutomationProperties.GetAutomationId(e) == "BillboardFitsSection");
+    fitsSection.IsExpanded = true;
+    Dispatcher.UIThread.RunJobs();
+    window.UpdateLayout();
+    Dispatcher.UIThread.RunJobs();
+
+    Assert.Contains(fitsSection.GetVisualDescendants().OfType<SelectableTextBlock>(), t => t.Text == "Liverpool Telescope / IO:O");
+    var grid = fitsSection.GetVisualDescendants().OfType<DataGrid>().Single();
+    var rows = grid.GetVisualDescendants().OfType<DataGridRow>().ToList();
+    Assert.Equal(meta.Cards.Count, rows.Count);
+    Assert.Contains(grid.GetVisualDescendants().OfType<TextBlock>(), t => t.Text == "OBJECT");
+    Assert.Contains(grid.GetVisualDescendants().OfType<TextBlock>(), t => t.Text == "[degrees West] Telescope longitude");
+    Assert.InRange(grid.Bounds.Height, 239, 241); // its own scroll
+    var buttons = fitsSection.GetVisualDescendants().OfType<Button>().ToList();
+    Assert.Contains(buttons, b => Equals(b.Content, "Apply stretch"));
+    Assert.Contains(buttons, b => Equals(b.Content, "Set up comparison"));
+    // the plate scale came from the header
+    Assert.Equal(0.30368, vm.Billboards.Service.Current.Single().ImageArcsecPerPx);
     window.Close();
   }
 

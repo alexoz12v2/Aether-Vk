@@ -67,6 +67,10 @@ namespace AetherVk.Logic.SaveFile
             {
                 return Create_EpochParts(options);
             }
+            if (type == typeof(global::AetherVk.Logic.SaveFile.FitsStretchDto))
+            {
+                return Create_FitsStretchDto(options);
+            }
             if (type == typeof(global::AetherVk.Logic.SaveFile.JetDto))
             {
                 return Create_JetDto(options);

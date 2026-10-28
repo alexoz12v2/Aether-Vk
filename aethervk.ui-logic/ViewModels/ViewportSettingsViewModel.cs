@@ -202,7 +202,21 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
       _applyingDisplay = false;
     }
     OnPropertyChanged(nameof(IsOrthoProportionsLocked));
+    OnPropertyChanged(nameof(ShowBehindCamera));
     RestoreOrthoProportionsCommand.NotifyCanExecuteChanged();
+  }
+
+  /// <summary>An orthographic view also draws what lies behind the camera (saved with it).</summary>
+  public bool ShowBehindCamera
+  {
+    get => _cameraService?.ShowBehindCamera ?? true;
+    set
+    {
+      if (_cameraService == null || _cameraService.ShowBehindCamera == value)
+        return;
+      _cameraService.ShowBehindCamera = value;
+      OnPropertyChanged();
+    }
   }
 
   public bool IsOrthoProportionsLocked
@@ -274,6 +288,33 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
   [ObservableProperty]
   private double _earthObserverLonDeg = 0.0;
 
+  /// <summary>
+  /// The Earth observer stands on its surface site (latitude / longitude below: diurnal parallax, a
+  /// horizon) instead of the Earth's centre. Two-way bound to <see cref="CameraService"/>, saved with
+  /// the viewport camera.
+  /// </summary>
+  [ObservableProperty]
+  private bool _isEarthObserverTopocentric;
+
+  /// <summary>"Lock viewport for comparison": no mouse orbit / pan / zoom, projection greyed
+  /// (<see cref="CameraService.IsComparisonLocked"/>).</summary>
+  [ObservableProperty]
+  private bool _isComparisonLocked;
+
+  partial void OnIsComparisonLockedChanged(bool value)
+  {
+    if (!_isUpdatingFromRuntime)
+      _cameraService.IsComparisonLocked = value;
+  }
+
+  partial void OnIsEarthObserverTopocentricChanged(bool value)
+  {
+    if (_isUpdatingFromRuntime)
+      return;
+    _cameraService.SetEarthObserverTopocentric(value);
+    UpdateObserverHorizon(_cameraService.GetEarthObserverTargetVisibility());
+  }
+
   /// <summary>Current Earth Observer look-direction mode. Two-way bound to <see cref="CameraService"/>.</summary>
   [ObservableProperty]
   private EarthObserverOrientationMode _earthObserverOrientationMode =
@@ -293,20 +334,12 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
   }
 #endif
 
-  /// <summary>
-  /// Telescope image overlay of the Earth observer panel (<c>null</c> without a file dialog /
-  /// translation service, e.g. in tests that do not need it).
-  /// </summary>
-  public SkyImageOverlayViewModel? SkyImage { get; }
-
   public ViewportSettingsViewModel(
     ulong cameraId,
     int index,
     INativeRuntimeService runtimeService,
     ISchedulerProvider schedulerProvider,
-    CameraService cameraService,
-    IFileDialogService? fileDialogService = null,
-    ITranslationService? translationService = null
+    CameraService cameraService
   )
   {
     _runtimeService = runtimeService;
@@ -314,16 +347,9 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
     _cameraService = cameraService;
     CameraId = cameraId;
     ViewportName = $"Viewport {index + 1}";
-    if (fileDialogService is not null && translationService is not null)
-    {
-      SkyImage = new SkyImageOverlayViewModel(
-        runtimeService,
-        fileDialogService,
-        translationService,
-        schedulerProvider,
-        ApplyObserverSiteFromHeader,
-        cameraService.LockEarthObserverToDirection);
-    }
+    // telescope images are desktop billboards now (FITS rows in Settings > Billboards): nothing
+    // may stay drawn by the retired in-viewport sky image overlay
+    _runtimeService.RemoveSkyImage();
 
     _projectionListenerToken = _runtimeService.RegisterSimulationListener(
       cameraId,
@@ -376,6 +402,39 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
       })
       .AddDisposableTo(_disposables);
 
+    _cameraService
+      .ComparisonLockChanged.ObserveOn(schedulerProvider.MainThread)
+      .Subscribe(locked =>
+      {
+        _isUpdatingFromRuntime = true;
+        try
+        {
+          IsComparisonLocked = locked;
+        }
+        finally
+        {
+          _isUpdatingFromRuntime = false;
+        }
+      })
+      .AddDisposableTo(_disposables);
+
+    // Mirror the topocentric choice set elsewhere (opened saves, "Use observatory site").
+    _cameraService
+      .EarthObserverTopocentricChanged.ObserveOn(schedulerProvider.MainThread)
+      .Subscribe(topocentric =>
+      {
+        _isUpdatingFromRuntime = true;
+        try
+        {
+          IsEarthObserverTopocentric = topocentric;
+        }
+        finally
+        {
+          _isUpdatingFromRuntime = false;
+        }
+      })
+      .AddDisposableTo(_disposables);
+
     // Mirror observer sites set outside the sliders (opened saves, FITS headers, suggestions).
     _cameraService
       .EarthObserverSiteChanged.ObserveOn(schedulerProvider.MainThread)
@@ -396,12 +455,17 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
       })
       .AddDisposableTo(_disposables);
 
-    // Tracking below the horizon faces the horizon: explain it and suggest a site that sees the target.
+    // Tracking below the horizon faces the horizon: explain it and suggest a site that sees the
+    // target. The telescope scale follows the comet's distance, the zoom and the size.
     Observable
       .Timer(TimeSpan.Zero, TimeSpan.FromMilliseconds(500), schedulerProvider.Background)
-      .Select(_ => _cameraService.GetEarthObserverTargetVisibility())
+      .Select(_ => (_cameraService.GetEarthObserverTargetVisibility(), _cameraService.GetEarthObserverScale()))
       .ObserveOn(schedulerProvider.MainThread)
-      .Subscribe(UpdateObserverHorizon)
+      .Subscribe(v =>
+      {
+        UpdateObserverHorizon(v.Item1);
+        UpdateObserverScale(v.Item2);
+      })
       .AddDisposableTo(_disposables);
 
     _cameraService.ViewportResized += OnViewportResized;
@@ -543,7 +607,7 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
     _cameraService.SetEarthObserverOrientationMode(value);
   }
 
-  /// <summary>Enabled when the projection was changed away from the lock-in / tracking preset.</summary>
+  /// <summary>Enabled when the projection was changed away from the tracking preset.</summary>
   [ObservableProperty]
   [NotifyCanExecuteChangedFor(nameof(RestoreEarthPresetProjectionCommand))]
   private bool _isEarthPresetProjectionModified;
@@ -567,6 +631,26 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
   /// <summary>Longitude (°E) that has the tracked target at the zenith right now.</summary>
   [ObservableProperty]
   private double _suggestedObserverLonDeg;
+
+  /// <summary>The telescope scale (arcsec/px, field, km/px and half-extents at the comet), empty
+  /// outside the Earth observer.</summary>
+  [ObservableProperty]
+  private string _earthObserverScaleText = string.Empty;
+
+  internal void UpdateObserverScale(EarthObserverScale? s) => EarthObserverScaleText = FormatObserverScale(s);
+
+  internal static string FormatObserverScale(EarthObserverScale? s)
+  {
+    if (s is null)
+      return string.Empty;
+    var inv = System.Globalization.CultureInfo.InvariantCulture;
+    string text = string.Format(inv, "Scale {0:G4}″/px · field {1:G4}′ × {2:G4}′ ({3:0} × {4:0} px)",
+      s.ArcsecPerPx, s.FieldWidthArcmin, s.FieldHeightArcmin, s.WidthPx, s.HeightPx);
+    if (s.KmPerPx is { } kmPx && s.CometDistanceKm is { } dKm)
+      text += string.Format(inv, "\nAt the comet ({0:G4} AU): {1:G4} km/px, half-width {2:G5} km, half-height {3:G5} km",
+        dKm / 149_597_870.7, kmPx, s.HalfWidthKm, s.HalfHeightKm);
+    return text;
+  }
 
   internal void UpdateObserverHorizon(EarthObserverTargetVisibility? v)
   {
@@ -662,29 +746,8 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
     );
   }
 
-  /// <summary>"Use site from header" of the sky image overlay: the elevation first (it is
-  /// pushed with the next coordinates), then one push with both coordinates.</summary>
-  private void ApplyObserverSiteFromHeader(double lat, double lon, double? elevM)
-  {
-    if (elevM is { } elev)
-      _cameraService.SetEarthObserverElevation(elev);
-    _isUpdatingFromRuntime = true;
-    try
-    {
-      EarthObserverLatDeg = lat;
-      EarthObserverLonDeg = lon;
-    }
-    finally
-    {
-      _isUpdatingFromRuntime = false;
-    }
-    _cameraService.SetEarthObserverLatLon((float)lat, (float)lon);
-    UpdateObserverHorizon(_cameraService.GetEarthObserverTargetVisibility());
-  }
-
   public void Dispose()
   {
-    SkyImage?.Dispose();
     _cameraService.ViewportResized -= OnViewportResized;
     _projectionListenerToken?.Dispose();
     _disposables.Dispose();

@@ -12,9 +12,15 @@
           Padding="10,8">
     <StackPanel Spacing="5" MinWidth="230">
 
-      <TextBlock Text="🛸 Orbit Debug"
-                 FontWeight="Bold"
-                 Foreground="{DynamicResource Accent.Primary}"/>
+      <Grid ColumnDefinitions="*,Auto">
+        <TextBlock Text="🛸 Orbit Debug"
+                   FontWeight="Bold" VerticalAlignment="Center"
+                   Foreground="{DynamicResource Accent.Primary}"/>
+        <Button Grid.Column="1" Content="✕" Padding="6,0" FontSize="11"
+                AutomationProperties.AutomationId="OrbitDebugCloseButton"
+                Command="{Binding DismissCommand}"
+                ToolTip.Tip="Close the orbit debug panel for this session"/>
+      </Grid>
 
       <Separator Background="{DynamicResource Bg.Outline}" Margin="0,2"/>
 

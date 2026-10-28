@@ -53,6 +53,8 @@ public partial class MainWindow : Window
         _billboards = billboards;
         billboards.Attach(this);
       }
+      // FITS billboards: re-applies the stretches the billboards ask for (savefile load, re-import)
+      _ = App.Host?.Services.GetService(typeof(Logic.Services.FitsImageService));
     }
   }
 

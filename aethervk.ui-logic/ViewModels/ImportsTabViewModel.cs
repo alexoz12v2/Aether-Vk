@@ -16,7 +16,7 @@ using CommunityToolkit.Mvvm.Input;
 namespace AetherVk.Logic.ViewModels;
 
 /// <summary>
-/// Imports tab: imports meshes (obj, ply, gltf, glb) and textures (png, jpg, jpeg, ktx2) into
+/// Imports tab: imports meshes (obj, ply, gltf, glb) and textures (png, jpg, jpeg, ktx2, FITS fit / fits / fts) into
 /// the native asset library and lists them in two sections. Textures bundled in a mesh file
 /// show up in the texture section as their own entries (no duplicates: a re-import, or the same
 /// image reached through two files, maps to the existing asset).
