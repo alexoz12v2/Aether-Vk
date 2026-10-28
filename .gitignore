@@ -596,6 +596,8 @@ ipch/
 
 # Visual Studio Trace Files
 *.e2e
+# (but not the e2e test project, whose folder name ends in .e2e)
+!aethervk.ui.e2e/
 
 # TFS 2012 Local Workspace
 $tf/

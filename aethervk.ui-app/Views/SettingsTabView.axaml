@@ -395,14 +395,20 @@
                       <CheckBox Grid.Row="10" Grid.Column="2" AutomationProperties.AutomationId="BillboardVisible" IsChecked="{Binding IsVisible}"
                                 Content="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrBillboardVisible}" />
 
-                      <!-- Physical size (Earth observer): the image's plate scale sizes it on the sky -->
+                      <!-- Physical size (Earth observer): the image's height at the comet (km) or its
+                           plate scale sizes it on the sky -->
                       <TextBlock Grid.Row="12" Grid.Column="0" Text="Physical size" />
                       <StackPanel Grid.Row="12" Grid.Column="2" Spacing="4">
+                        <TextBlock Text="Image height at the comet (km)" Opacity="0.85" />
+                        <TextBox AutomationProperties.AutomationId="BillboardImageHeightKm" Text="{Binding ImageHeightKmText}"
+                                 Watermark="km at the comet (e.g. 120000)"
+                                 ToolTip.Tip="The image's vertical extent at the comet in kilometres (dot decimals), for an image without a WCS (a JPEG). It wins over the plate scale. Empty: not set." />
+                        <TextBlock Text="Plate scale (″/px)" Opacity="0.85" />
                         <TextBox AutomationProperties.AutomationId="BillboardArcsecPerPx" Text="{Binding ImageArcsecPerPxText}"
                                  Watermark="plate scale, arcsec / image px (e.g. 0.3037)"
-                                 ToolTip.Tip="The image's plate scale in arcseconds per image pixel (dot decimals). Empty: no physical size." />
+                                 ToolTip.Tip="The image's plate scale in arcseconds per image pixel (dot decimals); a FITS fills it from its WCS. Empty: not set." />
                         <TextBlock Text="{Binding PhysicalSizeLabel}" TextWrapping="Wrap" Opacity="0.8" />
-                        <TextBlock Text="Bound: follows the viewport's scale (a manual resize unbinds)" TextWrapping="Wrap"
+                        <TextBlock Text="Bound: covers the image's field at the viewport's scale on zoom and resize (a manual resize unbinds)" TextWrapping="Wrap"
                                    Opacity="0.7" IsVisible="{Binding IsPhysicalSizeBound}" />
                         <WrapPanel Orientation="Horizontal">
                           <Button AutomationProperties.AutomationId="BillboardApplyPhysicalSize" Content="Apply physical size" Margin="0,0,6,4"
@@ -413,7 +419,7 @@
                                   ToolTip.Tip="Move the billboard's centre onto the comet as the viewport draws it (enabled while the comet is on screen)." />
                           <Button AutomationProperties.AutomationId="BillboardMatchCamera" Content="Match camera to image" Margin="0,0,6,4"
                                   Command="{Binding MatchCameraToImageCommand}"
-                                  ToolTip.Tip="Set the Earth observer's scale to the image's plate scale, show the image 1:1 and centre it on the comet." />
+                                  ToolTip.Tip="Aim the Earth observer at the comet and set its field so the viewport's height shows the image's height (km, or plate scale × image height); the billboard fills the viewport's height, centred on the comet." />
                         </WrapPanel>
                       </StackPanel>
 
@@ -489,11 +495,11 @@
                                           ToolTip.Tip="Earth observer only: look at the image centre (WCS), turn the billboard like the sky in the view and move it to the viewport centre." />
                                   <Button Content="Match camera to image" Margin="0,0,6,4"
                                           Command="{Binding MatchCameraToImageCommand}" ToolTip.ShowOnDisabled="True"
-                                          ToolTip.Tip="Earth observer only: set the viewport's scale to the image's plate scale and show the image 1:1 on the comet." />
+                                          ToolTip.Tip="Earth observer only: aim at the comet and fit the image's field (its WCS plate scale × height) to the viewport's height; the billboard fills it, centred on the comet." />
                                   <Button Content="Set up comparison" Margin="0,0,6,4" Classes="accent"
                                           AutomationProperties.AutomationId="BillboardFitsSetUpComparison"
                                           Command="{Binding SetUpComparisonCommand}"
-                                          ToolTip.Tip="Enter the Earth observer, then seek, use the site, orient, match the scale, centre the billboard and lock the viewport for comparison." />
+                                          ToolTip.Tip="Enter the Earth observer, then seek, use the site, match the field, orient, centre the billboard and lock the viewport for comparison." />
                                 </WrapPanel>
                                 <TextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap" Opacity="0.8"
                                            IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
@@ -647,122 +653,132 @@
                     </StackPanel>
                   </Grid>
 
-                  <!-- Perspective parameters -->
-                  <Grid ColumnDefinitions="Auto,16,*"
-                        RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto"
-                        IsVisible="{Binding IsPerspective}" IsEnabled="{Binding !IsComparisonLocked}">
-                    <TextBlock Grid.Row="0" Grid.Column="0" Text="FOV" VerticalAlignment="Center" />
-                    <controls:UnboundedSlider Grid.Row="0" Grid.Column="2" AutomationProperties.AutomationId="FovSlider"
-                                              Value="{Binding PerspFovDisplay}"
-                                              HasBounds="True"
-                                              MinBound="{Binding PerspFovMin}"
-                                              MaxBound="{Binding PerspFovMax}"
-                                              Step="{Binding PerspFovStep}"
-                                              DragSensitivity="5.0"
-                                              HorizontalAlignment="Stretch" />
+                  <!-- Projection sliders: advanced (Match camera to image sets the field from the image) -->
+                  <Expander AutomationProperties.AutomationId="ProjectionAdvancedExpander" Margin="0,2"
+                            IsExpanded="False" HorizontalAlignment="Stretch"
+                            ToolTip.Tip="Field of view / orthographic extents, clip planes and units. A billboard's &quot;Match camera to image&quot; sets the field from the image instead.">
+                    <Expander.Header>
+                      <TextBlock Text="Advanced: projection" />
+                    </Expander.Header>
+                    <StackPanel Spacing="12" Margin="0,8,0,0">
+                      <!-- Perspective parameters -->
+                      <Grid ColumnDefinitions="Auto,16,*"
+                            RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto"
+                            IsVisible="{Binding IsPerspective}" IsEnabled="{Binding !IsComparisonLocked}">
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="FOV" VerticalAlignment="Center" />
+                        <controls:UnboundedSlider Grid.Row="0" Grid.Column="2" AutomationProperties.AutomationId="FovSlider"
+                                                  Value="{Binding PerspFovDisplay}"
+                                                  HasBounds="True"
+                                                  MinBound="{Binding PerspFovMin}"
+                                                  MaxBound="{Binding PerspFovMax}"
+                                                  Step="{Binding PerspFovStep}"
+                                                  DragSensitivity="5.0"
+                                                  HorizontalAlignment="Stretch" />
 
-                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Units" VerticalAlignment="Center" />
-                    <ComboBox Grid.Row="2" Grid.Column="2" AutomationProperties.AutomationId="FovUnitPicker"
-                              HorizontalAlignment="Stretch"
-                              ItemsSource="{Binding FovUnits}"
-                              SelectedIndex="{Binding FovUnitIndex}" />
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Units" VerticalAlignment="Center" />
+                        <ComboBox Grid.Row="2" Grid.Column="2" AutomationProperties.AutomationId="FovUnitPicker"
+                                  HorizontalAlignment="Stretch"
+                                  ItemsSource="{Binding FovUnits}"
+                                  SelectedIndex="{Binding FovUnitIndex}" />
 
-                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Near" VerticalAlignment="Center" />
-                    <controls:UnboundedSlider Grid.Row="4" Grid.Column="2"
-                                              Value="{Binding PerspNearDisplay}"
-                                              HasBounds="True"
-                                              MinBound="{Binding OrthoExtentMin}"
-                                              MaxBound="{Binding OrthoExtentMax}"
-                                              Step="{Binding OrthoExtentStep}"
-                                              IsLogarithmic="True"
-                                              DragSensitivity="5.0"
-                                              DisplayFormat="G5"
-                                              HorizontalAlignment="Stretch" />
+                        <TextBlock Grid.Row="4" Grid.Column="0" Text="Near" VerticalAlignment="Center" />
+                        <controls:UnboundedSlider Grid.Row="4" Grid.Column="2"
+                                                  Value="{Binding PerspNearDisplay}"
+                                                  HasBounds="True"
+                                                  MinBound="{Binding OrthoExtentMin}"
+                                                  MaxBound="{Binding OrthoExtentMax}"
+                                                  Step="{Binding OrthoExtentStep}"
+                                                  IsLogarithmic="True"
+                                                  DragSensitivity="5.0"
+                                                  DisplayFormat="G5"
+                                                  HorizontalAlignment="Stretch" />
 
-                    <TextBlock Grid.Row="6" Grid.Column="0" Text="Far" VerticalAlignment="Center" />
-                    <controls:UnboundedSlider Grid.Row="6" Grid.Column="2"
-                                              Value="{Binding PerspFarDisplay}"
-                                              HasBounds="True"
-                                              MinBound="{Binding OrthoExtentMin}"
-                                              MaxBound="{Binding OrthoExtentMax}"
-                                              Step="{Binding OrthoExtentStep}"
-                                              IsLogarithmic="True"
-                                              DragSensitivity="5.0"
-                                              DisplayFormat="G5"
-                                              HorizontalAlignment="Stretch" />
+                        <TextBlock Grid.Row="6" Grid.Column="0" Text="Far" VerticalAlignment="Center" />
+                        <controls:UnboundedSlider Grid.Row="6" Grid.Column="2"
+                                                  Value="{Binding PerspFarDisplay}"
+                                                  HasBounds="True"
+                                                  MinBound="{Binding OrthoExtentMin}"
+                                                  MaxBound="{Binding OrthoExtentMax}"
+                                                  Step="{Binding OrthoExtentStep}"
+                                                  IsLogarithmic="True"
+                                                  DragSensitivity="5.0"
+                                                  DisplayFormat="G5"
+                                                  HorizontalAlignment="Stretch" />
 
-                    <TextBlock Grid.Row="8" Grid.Column="0" Text="Distance units" VerticalAlignment="Center" />
-                    <ComboBox Grid.Row="8" Grid.Column="2"
-                              HorizontalAlignment="Stretch"
-                              ItemsSource="{Binding DistanceUnits}"
-                              SelectedIndex="{Binding OrthoUnitIndex}" />
-                  </Grid>
+                        <TextBlock Grid.Row="8" Grid.Column="0" Text="Distance units" VerticalAlignment="Center" />
+                        <ComboBox Grid.Row="8" Grid.Column="2"
+                                  HorizontalAlignment="Stretch"
+                                  ItemsSource="{Binding DistanceUnits}"
+                                  SelectedIndex="{Binding OrthoUnitIndex}" />
+                      </Grid>
 
-                  <!-- Orthographic parameters -->
-                  <Grid ColumnDefinitions="Auto,16,*"
-                        RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto"
-                        IsVisible="{Binding IsOrthographic}" IsEnabled="{Binding !IsComparisonLocked}">
-                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Half-Width" VerticalAlignment="Center" />
-                    <controls:UnboundedSlider Grid.Row="0" Grid.Column="2" AutomationProperties.AutomationId="OrthoHalfWidthSlider"
-                                              Value="{Binding OrthoHalfWidthDisplay}"
-                                              HasBounds="True"
-                                              MinBound="{Binding OrthoExtentMin}"
-                                              MaxBound="{Binding OrthoExtentMax}"
-                                              Step="{Binding OrthoExtentStep}"
-                                              IsLogarithmic="True"
-                                              DragSensitivity="5.0"
-                                              DisplayFormat="G5"
-                                              HorizontalAlignment="Stretch" />
+                      <!-- Orthographic parameters -->
+                      <Grid ColumnDefinitions="Auto,16,*"
+                            RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto"
+                            IsVisible="{Binding IsOrthographic}" IsEnabled="{Binding !IsComparisonLocked}">
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Half-Width" VerticalAlignment="Center" />
+                        <controls:UnboundedSlider Grid.Row="0" Grid.Column="2" AutomationProperties.AutomationId="OrthoHalfWidthSlider"
+                                                  Value="{Binding OrthoHalfWidthDisplay}"
+                                                  HasBounds="True"
+                                                  MinBound="{Binding OrthoExtentMin}"
+                                                  MaxBound="{Binding OrthoExtentMax}"
+                                                  Step="{Binding OrthoExtentStep}"
+                                                  IsLogarithmic="True"
+                                                  DragSensitivity="5.0"
+                                                  DisplayFormat="G5"
+                                                  HorizontalAlignment="Stretch" />
 
-                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Half-Height" VerticalAlignment="Center" />
-                    <controls:UnboundedSlider Grid.Row="2" Grid.Column="2" AutomationProperties.AutomationId="OrthoHalfHeightSlider"
-                                              Value="{Binding OrthoHalfHeightDisplay}"
-                                              HasBounds="True"
-                                              MinBound="{Binding OrthoExtentMin}"
-                                              MaxBound="{Binding OrthoExtentMax}"
-                                              Step="{Binding OrthoExtentStep}"
-                                              IsLogarithmic="True"
-                                              DragSensitivity="5.0"
-                                              DisplayFormat="G5"
-                                              HorizontalAlignment="Stretch" />
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Half-Height" VerticalAlignment="Center" />
+                        <controls:UnboundedSlider Grid.Row="2" Grid.Column="2" AutomationProperties.AutomationId="OrthoHalfHeightSlider"
+                                                  Value="{Binding OrthoHalfHeightDisplay}"
+                                                  HasBounds="True"
+                                                  MinBound="{Binding OrthoExtentMin}"
+                                                  MaxBound="{Binding OrthoExtentMax}"
+                                                  Step="{Binding OrthoExtentStep}"
+                                                  IsLogarithmic="True"
+                                                  DragSensitivity="5.0"
+                                                  DisplayFormat="G5"
+                                                  HorizontalAlignment="Stretch" />
 
-                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Units" VerticalAlignment="Center" />
-                    <ComboBox Grid.Row="4" Grid.Column="2" AutomationProperties.AutomationId="OrthoUnitPicker"
-                              HorizontalAlignment="Stretch"
-                              ItemsSource="{Binding DistanceUnits}"
-                              SelectedIndex="{Binding OrthoUnitIndex}" />
+                        <TextBlock Grid.Row="4" Grid.Column="0" Text="Units" VerticalAlignment="Center" />
+                        <ComboBox Grid.Row="4" Grid.Column="2" AutomationProperties.AutomationId="OrthoUnitPicker"
+                                  HorizontalAlignment="Stretch"
+                                  ItemsSource="{Binding DistanceUnits}"
+                                  SelectedIndex="{Binding OrthoUnitIndex}" />
 
-                    <TextBlock Grid.Row="6" Grid.Column="0" Text="Near" VerticalAlignment="Center" />
-                    <controls:UnboundedSlider Grid.Row="6" Grid.Column="2"
-                                              Value="{Binding OrthoNearDisplay}"
-                                              HasBounds="True"
-                                              MinBound="{Binding OrthoExtentMin}"
-                                              MaxBound="{Binding OrthoExtentMax}"
-                                              Step="{Binding OrthoExtentStep}"
-                                              IsLogarithmic="True"
-                                              DragSensitivity="5.0"
-                                              DisplayFormat="G5"
-                                              HorizontalAlignment="Stretch" />
+                        <TextBlock Grid.Row="6" Grid.Column="0" Text="Near" VerticalAlignment="Center" />
+                        <controls:UnboundedSlider Grid.Row="6" Grid.Column="2"
+                                                  Value="{Binding OrthoNearDisplay}"
+                                                  HasBounds="True"
+                                                  MinBound="{Binding OrthoExtentMin}"
+                                                  MaxBound="{Binding OrthoExtentMax}"
+                                                  Step="{Binding OrthoExtentStep}"
+                                                  IsLogarithmic="True"
+                                                  DragSensitivity="5.0"
+                                                  DisplayFormat="G5"
+                                                  HorizontalAlignment="Stretch" />
 
-                    <TextBlock Grid.Row="8" Grid.Column="0" Text="Far" VerticalAlignment="Center" />
-                    <controls:UnboundedSlider Grid.Row="8" Grid.Column="2"
-                                              Value="{Binding OrthoFarDisplay}"
-                                              HasBounds="True"
-                                              MinBound="{Binding OrthoExtentMin}"
-                                              MaxBound="{Binding OrthoExtentMax}"
-                                              Step="{Binding OrthoExtentStep}"
-                                              IsLogarithmic="True"
-                                              DragSensitivity="5.0"
-                                              DisplayFormat="G5"
-                                              HorizontalAlignment="Stretch" />
+                        <TextBlock Grid.Row="8" Grid.Column="0" Text="Far" VerticalAlignment="Center" />
+                        <controls:UnboundedSlider Grid.Row="8" Grid.Column="2"
+                                                  Value="{Binding OrthoFarDisplay}"
+                                                  HasBounds="True"
+                                                  MinBound="{Binding OrthoExtentMin}"
+                                                  MaxBound="{Binding OrthoExtentMax}"
+                                                  Step="{Binding OrthoExtentStep}"
+                                                  IsLogarithmic="True"
+                                                  DragSensitivity="5.0"
+                                                  DisplayFormat="G5"
+                                                  HorizontalAlignment="Stretch" />
 
-                    <StackPanel Grid.Row="10" Grid.Column="0" Grid.ColumnSpan="3" Orientation="Vertical" Spacing="8">
-                      <CheckBox AutomationProperties.AutomationId="OrthoProportionsLock" Content="Keep Proportions Locked" IsChecked="{Binding IsOrthoProportionsLocked}" />
-                      <CheckBox AutomationProperties.AutomationId="ShowBehindCameraCheckBox" Content="Show objects behind camera" IsChecked="{Binding ShowBehindCamera}"
-                                ToolTip.Tip="Orthographic only: also draw the geometry behind the camera plane (within the far distance), as a telescope image does. Dust behind the camera is not drawn. A perspective view cannot show it." />
-                      <Button AutomationProperties.AutomationId="RestoreOrthoProportionsButton" Content="Restore Proportions" Command="{Binding RestoreOrthoProportionsCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                        <StackPanel Grid.Row="10" Grid.Column="0" Grid.ColumnSpan="3" Orientation="Vertical" Spacing="8">
+                          <CheckBox AutomationProperties.AutomationId="OrthoProportionsLock" Content="Keep Proportions Locked" IsChecked="{Binding IsOrthoProportionsLocked}" />
+                          <CheckBox AutomationProperties.AutomationId="ShowBehindCameraCheckBox" Content="Show objects behind camera" IsChecked="{Binding ShowBehindCamera}"
+                                    ToolTip.Tip="Orthographic only: also draw the geometry behind the camera plane (within the far distance), as a telescope image does. Dust behind the camera is not drawn. A perspective view cannot show it." />
+                          <Button AutomationProperties.AutomationId="RestoreOrthoProportionsButton" Content="Restore Proportions" Command="{Binding RestoreOrthoProportionsCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                        </StackPanel>
+                      </Grid>
                     </StackPanel>
-                  </Grid>
+                  </Expander>
 
                   <!-- ── CometOrbiting (comet debug): physical nucleus lighting ── -->
                   <CheckBox AutomationProperties.AutomationId="PhysicalLightingToggle"
@@ -799,6 +815,11 @@
                               Content="Observer on the Earth's surface (topocentric)"
                               IsChecked="{Binding IsEarthObserverTopocentric}"
                               ToolTip.Tip="Off: the camera is at the Earth's centre and only follows its motion around the Sun. On: it stands at the latitude / longitude below, turning with the Earth (diurnal parallax, a horizon). The view never rotates with the Earth. Saved with the file." />
+
+                    <CheckBox AutomationProperties.AutomationId="ObserverNorthUpCheckBox"
+                              Content="North up"
+                              IsChecked="{Binding IsEarthObserverNorthUp}"
+                              ToolTip.Tip="On: the view is levelled to celestial north (J2000), north up and east left like a telescope image. Off: levelled to the ecliptic pole (the site's side of the equator). Saved with the file." />
 
                     <!-- Latitude -->
                     <Grid ColumnDefinitions="Auto,16,*" IsVisible="{Binding IsEarthObserverTopocentric}">

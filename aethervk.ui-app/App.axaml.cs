@@ -328,7 +328,7 @@ public class MockNativeRuntimeService : INativeRuntimeService
   public uint SceneDumpVersion => 0;
   public double DustComaRadiusKm() => 0.0;
   public EarthObserverStatus? EarthObserverStatus() => null;
-  public bool SetEarthObserver(ulong cameraId, int mode, ulong earthId, ulong cometId, bool topocentric, double latDeg, double lonDeg, double elevM, AetherVk.Logic.Utils.Quaterniond look) => true;
+  public bool SetEarthObserver(ulong cameraId, int mode, ulong earthId, ulong cometId, bool topocentric, double latDeg, double lonDeg, double elevM, AetherVk.Logic.Utils.Quaterniond look, AetherVk.Logic.Services.ObserverUp up) => true;
 
   public bool SetReferenceErrorVisible(bool visible) => true;
   public bool SetDustSoftening(float softening) => true;

@@ -65,6 +65,13 @@ public partial class DesignModelTabViewModel
   
   public AetherVk.Logic.Services.ModelSession? CurrentSession { get; } = new AetherVk.Logic.Services.ModelSession();
 
+  public AetherVk.Logic.Utils.CurvePlotModel? AfrhoPlot { get; } =
+    AetherVk.Logic.Utils.DustCurves.AfrhoPlot(100, 2, 15, 100_000, 1.3);
+  public AetherVk.Logic.Utils.CurvePlotModel? SizeDistributionPlot { get; } =
+    AetherVk.Logic.Utils.DustCurves.SizeDistributionPlot(100, 10, 3.5);
+  public string AfrhoNowText { get; } =
+    AetherVk.Logic.Utils.DustCurves.AfrhoNowText(1.3, 100, 2, 15, 100_000, 0.5, 1);
+
   public void SetCursorPosition(int x, int y) { }
 }
 #endif

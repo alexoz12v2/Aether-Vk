@@ -81,6 +81,7 @@ public static class SaveIndexMapping
       BodyFixedLook = [.. s.ObserverBodyFixedLook],
       Topocentric = s.ObserverTopocentric,
       Projection = s.ObserverProjection is { } op ? ToDto(op) : null,
+      Up = Snake(s.ObserverUp),
     },
     Display = s.Display is { } d
       ? new ViewportDisplayDto
@@ -131,7 +132,8 @@ public static class SaveIndexMapping
           disp.OrthoProportionsLocked, disp.ShowBehindCamera)
         : null,
       o.Topocentric,
-      o.Projection is { } op ? FromDto(op) : null);
+      o.Projection is { } op ? FromDto(op) : null,
+      ParseSnake(o.Up, ObserverUp.Ecliptic));
   }
 
   private static ProjectionDto ToDto(CameraProjectionState p) => new()
@@ -295,6 +297,7 @@ public static class SaveIndexMapping
     RotationDeg = b.RotationDeg,
     Visible = b.Visible,
     ImageArcsecPerPx = b.ImageArcsecPerPx,
+    ImageHeightKm = b.ImageHeightKm,
     ImageWidthPx = b.ImageWidthPx,
     ImageHeightPx = b.ImageHeightPx,
     PhysicalSizeBound = b.PhysicalSizeBound,
@@ -307,6 +310,7 @@ public static class SaveIndexMapping
     new(d.Id, d.TextureKey, d.CenterX, d.CenterY, d.WidthPx, d.HeightPx, d.Alpha, d.RotationDeg, d.Visible)
     {
       ImageArcsecPerPx = d.ImageArcsecPerPx,
+      ImageHeightKm = d.ImageHeightKm,
       ImageWidthPx = d.ImageWidthPx,
       ImageHeightPx = d.ImageHeightPx,
       PhysicalSizeBound = d.PhysicalSizeBound,

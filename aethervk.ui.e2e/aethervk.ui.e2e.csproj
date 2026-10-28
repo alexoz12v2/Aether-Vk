@@ -1,0 +1,48 @@
+<Project>
+  <!-- Appium / WinAppDriver end-to-end tests of the real app window (the thesis "Experiments"
+       scenarios). Windows only, slow, and they reach JPL Horizons over the network, so the solution
+       build skips them: build and run them explicitly with the flag (or the BuildE2E=true env var):
+
+         dotnet test aethervk.ui.e2e -p:BuildE2E=true
+
+       They drive the app built at aethervk.ui-app/bin/Release/net10.0/AetherVk.exe (override with
+       AETHERVK_E2E_APP) and start WinAppDriver if it is not listening on 127.0.0.1:4723. -->
+  <Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <AssemblyName>AetherVk.UI.E2E</AssemblyName>
+    <RootNamespace>AetherVk.UI.E2E</RootNamespace>
+    <!-- WinAppDriver 1.2 takes the legacy /keys endpoint (Keyboard), not W3C actions -->
+    <NoWarn>$(NoWarn);CS0618</NoWarn>
+    <RunSettingsFilePath>$(MSBuildThisFileDirectory)e2e.runsettings</RunSettingsFilePath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <!-- 4.x speaks the JSON wire protocol of WinAppDriver 1.2 (5.x needs the Appium server) -->
+    <PackageReference Include="Appium.WebDriver" Version="4.4.5" />
+    <PackageReference Include="xunit" Version="2.5.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
+    <PackageReference Include="Xunit.SkippableFact" Version="1.5.85" />
+    <PackageReference Include="System.IO.Hashing" Version="9.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="xunit.runner.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
+  <!-- Without the flag Build / Test do nothing (imported last, so they replace the SDK targets) -->
+  <Import Project="E2ESkip.targets" Condition="'$(BuildE2E)' != 'true'" />
+</Project>
