@@ -68,13 +68,7 @@ public static class SaveIndexMapping
       : new CameraSnapshotDto
       {
         Transform = s.Transform is { } t ? [t.PosX, t.PosY, t.PosZ, t.RotX, t.RotY, t.RotZ, t.RotW] : [0, 0, 0, 0, 0, 0, 1],
-        Projection = s.Projection is { } p
-          ? new ProjectionDto
-          {
-            IsPerspective = p.IsPerspective, Fov = p.Fov, Aspect = p.Aspect, Near = p.Near, Far = p.Far,
-            Left = p.Left, Right = p.Right, Bottom = p.Bottom, Top = p.Top, FocusDistance = p.FocusDistance,
-          }
-          : null,
+        Projection = s.Projection is { } p ? ToDto(p) : null,
       },
     OrbitOffsetAu = [s.OrbitOffsetAu.X, s.OrbitOffsetAu.Y, s.OrbitOffsetAu.Z],
     Observer = new ObserverDto
@@ -85,6 +79,8 @@ public static class SaveIndexMapping
       Orientation = Snake(s.ObserverOrientation),
       InertialLook = [.. s.ObserverInertialLook],
       BodyFixedLook = [.. s.ObserverBodyFixedLook],
+      Topocentric = s.ObserverTopocentric,
+      Projection = s.ObserverProjection is { } op ? ToDto(op) : null,
     },
     Display = s.Display is { } d
       ? new ViewportDisplayDto
@@ -92,6 +88,7 @@ public static class SaveIndexMapping
         OrthoUnit = UnitName(OrthoUnits, d.OrthoUnitIndex),
         FovUnit = UnitName(FovUnits, d.FovUnitIndex),
         OrthoProportionsLocked = d.OrthoProportionsLocked,
+        ShowBehindCamera = d.ShowBehindCamera,
       }
       : null,
   };
@@ -114,8 +111,7 @@ public static class SaveIndexMapping
       if (c.Transform is { Length: 7 } t)
         transform = new CameraTransformState(t[0], t[1], t[2], t[3], t[4], t[5], t[6]);
       if (c.Projection is { } p)
-        projection = new CameraProjectionState(p.IsPerspective, p.Fov, p.Aspect, p.Near, p.Far,
-          p.Left, p.Right, p.Bottom, p.Top, p.FocusDistance);
+        projection = FromDto(p);
     }
     var o = d.Observer ?? new ObserverDto();
     var off = d.OrbitOffsetAu is { Length: 3 } a ? a : [0, 0, 0];
@@ -132,9 +128,20 @@ public static class SaveIndexMapping
       Quat(o.BodyFixedLook),
       d.Display is { } disp
         ? new ViewportDisplayState(UnitIndex(OrthoUnits, disp.OrthoUnit), UnitIndex(FovUnits, disp.FovUnit),
-          disp.OrthoProportionsLocked)
-        : null);
+          disp.OrthoProportionsLocked, disp.ShowBehindCamera)
+        : null,
+      o.Topocentric,
+      o.Projection is { } op ? FromDto(op) : null);
   }
+
+  private static ProjectionDto ToDto(CameraProjectionState p) => new()
+  {
+    IsPerspective = p.IsPerspective, Fov = p.Fov, Aspect = p.Aspect, Near = p.Near, Far = p.Far,
+    Left = p.Left, Right = p.Right, Bottom = p.Bottom, Top = p.Top, FocusDistance = p.FocusDistance,
+  };
+
+  private static CameraProjectionState FromDto(ProjectionDto p) =>
+    new(p.IsPerspective, p.Fov, p.Aspect, p.Near, p.Far, p.Left, p.Right, p.Bottom, p.Top, p.FocusDistance);
 
   private static double[] Quat(double[]? q) => q is { Length: 4 } ? [.. q] : [0, 0, 0, 1];
 
@@ -157,6 +164,7 @@ public static class SaveIndexMapping
     DustFlow = m.DustFlow,
     DustFlowSpeed = m.DustFlowSpeed,
     SphereGizmoVisible = m.SphereGizmoVisible,
+    ShowJetAngles = m.ShowJetAngles,
     ShowReferencePositionError = m.ShowReferencePositionError,
     ManualNucleusRadiusKm = m.ManualNucleusRadiusKm,
   };
@@ -179,6 +187,7 @@ public static class SaveIndexMapping
     m.DustFlow = d.DustFlow;
     m.DustFlowSpeed = d.DustFlowSpeed;
     m.SphereGizmoVisible = d.SphereGizmoVisible;
+    m.ShowJetAngles = d.ShowJetAngles;
     m.ShowReferencePositionError = d.ShowReferencePositionError;
     m.ManualNucleusRadiusKm = d.ManualNucleusRadiusKm;
   }
@@ -285,10 +294,27 @@ public static class SaveIndexMapping
     Alpha = b.Alpha,
     RotationDeg = b.RotationDeg,
     Visible = b.Visible,
+    ImageArcsecPerPx = b.ImageArcsecPerPx,
+    ImageWidthPx = b.ImageWidthPx,
+    ImageHeightPx = b.ImageHeightPx,
+    PhysicalSizeBound = b.PhysicalSizeBound,
+    FitsStretch = b.FitsStretch is { } s && !s.SameAs(FitsStretch.Default)
+      ? new FitsStretchDto { Mode = Snake(s.Mode), Transfer = Snake(s.Transfer), P0 = s.P0, P1 = s.P1 }
+      : null,
   };
 
   public static DesktopBillboard FromDto(BillboardDto d) =>
-    new(d.Id, d.TextureKey, d.CenterX, d.CenterY, d.WidthPx, d.HeightPx, d.Alpha, d.RotationDeg, d.Visible);
+    new(d.Id, d.TextureKey, d.CenterX, d.CenterY, d.WidthPx, d.HeightPx, d.Alpha, d.RotationDeg, d.Visible)
+    {
+      ImageArcsecPerPx = d.ImageArcsecPerPx,
+      ImageWidthPx = d.ImageWidthPx,
+      ImageHeightPx = d.ImageHeightPx,
+      PhysicalSizeBound = d.PhysicalSizeBound,
+      FitsStretch = d.FitsStretch is { } s
+        ? new FitsStretch(
+          ParseSnake(s.Mode, FitsStretchMode.ZScale), ParseSnake(s.Transfer, FitsTransfer.Linear), s.P0, s.P1)
+        : null,
+    };
 
   // ── appearance ─────────────────────────────────────────────────────────────
 

@@ -904,17 +904,24 @@ public class HorizonJplService
       else
       {
         _console.Log($"[HorizonJpl] SPK cache expired for {cacheKey}, invalidating.");
-        File.Delete(cachePath);
+        try
+        {
+          File.Delete(cachePath);
+        }
+        catch (IOException ex)
+        {
+          // still open (an older build loaded the cache file itself): the data for one record
+          // and range does not change, so keep using it rather than failing the commit
+          _console.Log($"[HorizonJpl] SPK cache in use, kept: {ex.Message}");
+          useCache = true;
+        }
       }
     }
 
     if (useCache)
     {
       _console.Log($"[HorizonJpl] SPK persistent cache hit: {cacheKey}");
-      // Copy to caller-requested path if different
-      if (!string.Equals(cachePath, savePath, StringComparison.OrdinalIgnoreCase))
-        File.Copy(cachePath, savePath, overwrite: true);
-      return cachePath;
+      return DeliverSpk(cachePath, savePath, startTime, stopTime);
     }
 
     try
@@ -1037,11 +1044,7 @@ public class HorizonJplService
 
       outFs.Close(); // MUST close the FileShare.None handle before we can copy the file!
 
-      // Copy to caller-requested path if different
-      if (!string.Equals(cachePath, savePath, StringComparison.OrdinalIgnoreCase))
-        File.Copy(cachePath, savePath, overwrite: true);
-
-      return cachePath;
+      return DeliverSpk(cachePath, savePath, startTime, stopTime);
     }
     catch (Exception ex)
     {
@@ -1051,6 +1054,31 @@ public class HorizonJplService
         File.Delete(cachePath);
       return null;
     }
+  }
+
+  /// <summary>
+  /// The file the engine loads: a per-range copy beside <paramref name="savePath"/>
+  /// (<c>spk_&lt;des&gt;_&lt;record&gt;_&lt;start&gt;_&lt;stop&gt;.bsp</c>), never the persistent cache file. The loaded
+  /// file stays mapped while the comet is committed, so handing out the cache path made a later
+  /// expiry delete or re-download of it fail; and one name for every range let a recommit with a
+  /// new end date overwrite the file still in use. An identical copy still in use is reused.
+  /// </summary>
+  internal static string DeliverSpk(string cachePath, string savePath, string startTime, string stopTime)
+  {
+    var dir = Path.GetDirectoryName(savePath) ?? string.Empty;
+    var target = Path.Combine(dir,
+      $"{Path.GetFileNameWithoutExtension(savePath)}_{Sanitize(startTime)}_{Sanitize(stopTime)}{Path.GetExtension(savePath)}");
+    if (string.Equals(cachePath, target, StringComparison.OrdinalIgnoreCase))
+      return target;
+    try
+    {
+      File.Copy(cachePath, target, overwrite: true);
+    }
+    catch (IOException) when (File.Exists(target) && new FileInfo(target).Length == new FileInfo(cachePath).Length)
+    {
+      // the same range is committed right now (its copy is mapped): same bytes, reuse it
+    }
+    return target;
   }
 
   public async Task<bool> DownloadObservationAsync(

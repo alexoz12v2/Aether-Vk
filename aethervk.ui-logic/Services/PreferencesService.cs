@@ -31,9 +31,13 @@ public sealed class PreferencesFile
   [JsonPropertyName("dust_haze_detail")]
   public int? DustHazeDetail { get; set; }
   /// <summary>Dust temporal reuse tolerance in pixels (Settings › Particle rendering): 0 (off), 1, 2,
-  /// 4, 8 or 16; missing = 0.</summary>
+  /// 4, 8 or 16; missing = 16.</summary>
   [JsonPropertyName("dust_reuse_px")]
   public int? DustReuseTolerance { get; set; }
+  /// <summary>Particle quality preset (Settings › Particle rendering): 1 (lowest) … 5 (ultra), 0 =
+  /// custom (the four dust values above as edited); missing = 1, the app starts on the lowest.</summary>
+  [JsonPropertyName("particle_quality")]
+  public int? ParticleQuality { get; set; }
 }
 
 public sealed class BindingDto
@@ -91,24 +95,30 @@ public sealed class PreferencesService
 
   public IReadOnlyList<string> RecentSaves => _file.RecentSaves;
 
-  /// <summary>The dust volume detail, clamped (<see cref="ParticleRenderingViewModel.ClampVolumeDetail"/>);
-  /// 16 when the file has none.</summary>
-  public int DustVolumeDetail =>
+  /// <summary>The particle quality preset: 1 … 5, or 0 (custom); 1 when the file has none.</summary>
+  public int ParticleQuality =>
+    _file.ParticleQuality is int q && q >= 0 && q <= ParticleRenderingViewModel.QualityMax ? q : ParticleRenderingViewModel.QualityDefault;
+
+  private ParticleRenderingViewModel.QualityPreset? Preset => ParticleRenderingViewModel.PresetFor(ParticleQuality);
+
+  /// <summary>The dust volume detail: the preset's, else the stored one clamped
+  /// (<see cref="ParticleRenderingViewModel.ClampVolumeDetail"/>; 16 when the file has none).</summary>
+  public int DustVolumeDetail => Preset?.VolumeDetail ??
     ParticleRenderingViewModel.ClampVolumeDetail(_file.DustVolumeDetail ?? ParticleRenderingViewModel.VolumeDetailDefault);
 
-  /// <summary>The dust trajectory detail, clamped (<see cref="ParticleRenderingViewModel.ClampPropagateDetail"/>);
-  /// 17 when the file has none.</summary>
-  public int DustPropagateDetail =>
+  /// <summary>The dust trajectory detail: the preset's, else the stored one clamped
+  /// (<see cref="ParticleRenderingViewModel.ClampPropagateDetail"/>; 17 when the file has none).</summary>
+  public int DustPropagateDetail => Preset?.PropagateDetail ??
     ParticleRenderingViewModel.ClampPropagateDetail(_file.DustPropagateDetail ?? ParticleRenderingViewModel.PropagateDetailDefault);
 
-  /// <summary>The dust haze detail, clamped (<see cref="ParticleRenderingViewModel.ClampHazeDetail"/>);
-  /// 16 when the file has none.</summary>
-  public int DustHazeDetail =>
+  /// <summary>The dust haze detail: the preset's, else the stored one clamped
+  /// (<see cref="ParticleRenderingViewModel.ClampHazeDetail"/>; 16 when the file has none).</summary>
+  public int DustHazeDetail => Preset?.HazeDetail ??
     ParticleRenderingViewModel.ClampHazeDetail(_file.DustHazeDetail ?? ParticleRenderingViewModel.HazeDetailDefault);
 
-  /// <summary>The dust temporal reuse tolerance in pixels, clamped
-  /// (<see cref="ParticleRenderingViewModel.ClampReuseTolerance"/>); 0 (off) when the file has none.</summary>
-  public int DustReuseTolerance =>
+  /// <summary>The dust temporal reuse tolerance in pixels: the preset's, else the stored one clamped
+  /// (<see cref="ParticleRenderingViewModel.ClampReuseTolerance"/>; 16 when the file has none).</summary>
+  public int DustReuseTolerance => Preset?.ReuseTolerance ??
     ParticleRenderingViewModel.ClampReuseTolerance(_file.DustReuseTolerance ?? ParticleRenderingViewModel.ReuseToleranceDefault);
 
   /// <summary>What <see cref="Load"/> did: "defaults", "loaded", "corrupt", "newer".</summary>
@@ -181,6 +191,14 @@ public sealed class PreferencesService
   public void SetDustReuseTolerance(int px)
   {
     _file.DustReuseTolerance = ParticleRenderingViewModel.ClampReuseTolerance(px);
+    Save();
+  }
+
+  /// <summary>Stores the preset (0 = custom); the four dust values are stored as well, so custom
+  /// keeps what the preset left.</summary>
+  public void SetParticleQuality(int quality)
+  {
+    _file.ParticleQuality = Math.Min(Math.Max(quality, 0), ParticleRenderingViewModel.QualityMax);
     Save();
   }
 

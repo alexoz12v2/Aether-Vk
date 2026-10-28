@@ -108,4 +108,42 @@ public class CometReferenceOrbitTests
     Assert.False(vm.IsReferenceOrbitSelectable);
     Assert.True(raised);
   }
+
+  /// The rotation period in hours is the rate seen another way: 67P's 12.4 h is ~696.8 °/day; a
+  /// period edit keeps the sense of rotation; zero, negative or non-finite periods are refused.
+  [Fact]
+  public void RotationPeriodHours_MirrorsTheRate_AndKeepsItsSign()
+  {
+    var vm = BuildVm(new CometSession());
+    Assert.Equal(0, vm.RotationPeriodHours); // no rotation
+    var raised = new List<string?>();
+    vm.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+    vm.RotRateDegDay = 720;
+    Assert.Equal(12, vm.RotationPeriodHours, 9);
+    Assert.Contains(nameof(CometTabViewModel.RotationPeriodHours), raised);
+    vm.RotationPeriodHours = 12.4;
+    Assert.Equal(360.0 * 24 / 12.4, vm.RotRateDegDay, 9);
+    vm.RotRateDegDay = -720; // retrograde
+    vm.RotationPeriodHours = 24;
+    Assert.Equal(-360, vm.RotRateDegDay, 9);
+    vm.RotationPeriodHours = 0;
+    vm.RotationPeriodHours = -5;
+    vm.RotationPeriodHours = double.NaN;
+    Assert.Equal(-360, vm.RotRateDegDay, 9);
+  }
+
+  /// The orbit debug panel shows in CometOrbiting until the user closes it.
+  [Fact]
+  public void OrbitDebugPanel_CanBeClosed()
+  {
+    var vm = new AetherVk.Logic.ViewModels.Debug.CometOrbitDebugViewModel();
+    Assert.False(vm.IsShown);
+    vm.IsVisible = true;
+    Assert.True(vm.IsShown);
+    vm.DismissCommand.Execute(null);
+    Assert.False(vm.IsShown);
+    vm.IsVisible = false;
+    vm.IsVisible = true;
+    Assert.False(vm.IsShown); // stays closed
+  }
 }

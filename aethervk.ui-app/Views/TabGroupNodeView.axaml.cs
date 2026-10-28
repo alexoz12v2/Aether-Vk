@@ -206,6 +206,8 @@ public partial class TabGroupNodeView : UserControl, IDragSourceView
 
   private void StartDrag(PointerEventArgs e, TabItemViewModel draggedTab)
   {
+    if (draggedTab.IsPinned)
+      return;
     if (DataContext is TabGroupNodeViewModel vm && vm.IsRoot() && vm.Tabs.Count <= 1)
       return;
 

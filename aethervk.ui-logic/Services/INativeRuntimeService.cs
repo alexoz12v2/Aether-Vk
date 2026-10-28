@@ -222,6 +222,8 @@ public interface INativeRuntimeService : IDisposable
     out ParticleSystemComputedProperties outPsComputedProps
   );
   bool SetJetPreviewVisibility(ulong jetEntityId, bool isVisible);
+  /// <summary>Shows or hides one jet's latitude/longitude arcs and degree labels in the viewport.</summary>
+  bool SetJetAngleVisibility(ulong jetEntityId, bool isVisible);
 
   /// <summary>Shows or hides the comet label (shown only in Earth observer mode).</summary>
   bool SetCometIndicatorVisible(bool visible);
@@ -241,18 +243,27 @@ public interface INativeRuntimeService : IDisposable
   bool SetCameraShading(ulong cameraEntityId, uint flags);
 
   /// <summary>
+  /// Where the Earth observer camera <paramref name="cameraEntityId"/> draws its comet on a
+  /// <paramref name="widthPx"/> × <paramref name="heightPx"/> viewport (physical px, from the
+  /// top-left corner), light-time displaced as drawn. Null when unavailable (no observer comet,
+  /// behind a perspective eye).
+  /// </summary>
+  CometScreenPosition? GetCometScreenPosition(ulong cameraEntityId, uint widthPx, uint heightPx);
+
+  /// <summary>
   /// Native Earth observer: the core poses the Earth-parented camera inside every commit that moves
   /// the Earth and the comet, so no frame shows a stale aim. <paramref name="mode"/> is the
   /// <c>EarthObserverOrientationMode</c> value, or -1 to clear (the UI poses the camera again).
-  /// <paramref name="look"/>: the free inertial look, or the lock-in body-fixed look. The site is
-  /// geodetic <paramref name="latDeg"/> / <paramref name="lonDeg"/> on the WGS84 ellipsoid,
+  /// <paramref name="look"/>: the free inertial look (the Earth's rotation never turns it). The
+  /// camera is at the Earth's centre, or with <paramref name="topocentric"/> at geodetic
+  /// <paramref name="latDeg"/> / <paramref name="lonDeg"/> on the WGS84 ellipsoid,
   /// <paramref name="elevM"/> metres above it. With a comet, the core draws the comet and its dust
   /// at the light-time retarded epoch.
   /// </summary>
-  bool SetEarthObserver(ulong cameraId, int mode, ulong earthId, ulong cometId, double latDeg, double lonDeg, double elevM, Quaterniond look);
+  bool SetEarthObserver(ulong cameraId, int mode, ulong earthId, ulong cometId, bool topocentric, double latDeg, double lonDeg, double elevM, Quaterniond look);
 
   /// <summary>Radius (km) of the visible dust coma (0 without dust): frames the comet in Earth
-  /// observer lock-in / tracking.</summary>
+  /// observer tracking.</summary>
   double DustComaRadiusKm();
 
   /// <summary>Native Earth observer status (null when the UI poses the camera).</summary>
@@ -402,7 +413,7 @@ public interface INativeRuntimeService : IDisposable
 
   /// <summary>
   /// Starts an asynchronous import of a mesh (obj, ply, gltf, glb) or a texture (png, jpg,
-  /// jpeg, ktx2). Completion arrives as <see cref="ExternalStateType.AssetImported"/> carrying
+  /// jpeg, ktx2, FITS fit / fits / fts). Completion arrives as <see cref="ExternalStateType.AssetImported"/> carrying
   /// <paramref name="requestId"/>. Decoded data is cached (memory mapped) under
   /// <paramref name="cacheDir"/>. Returns <c>false</c> if the request could not be queued.
   /// </summary>
@@ -429,6 +440,22 @@ public interface INativeRuntimeService : IDisposable
   /// draw them). Null when the asset is unknown, block-compressed, or the library is busy.
   /// </summary>
   Models.AssetThumbnail? CopyAssetTexels(ulong assetId);
+
+  /// <summary>
+  /// Header metadata of a FITS texture as UTF-8 JSON (<c>docs/fits_ffi_contract.md</c>; parse with
+  /// <see cref="Models.FitsMetadata.Parse"/>). Null when the asset is unknown, is not a FITS
+  /// texture, or while an import / unload holds the library.
+  /// </summary>
+  string? GetFitsMetadataJson(ulong assetId);
+
+  /// <summary>
+  /// Re-renders the RGBA8 texels of FITS texture <paramref name="assetId"/> from its cached raster
+  /// (synchronous, ~1 s on a large image: call it off the UI thread). <paramref name="mode"/> 0 zscale,
+  /// 1 percentile (p0 / p1 low / high %), 2 manual (p0 / p1 black / white, data units);
+  /// <paramref name="transfer"/> 0 linear, 1 log, 2 asinh. Returns the black / white points used,
+  /// null when refused (not FITS, bad codes / parameters, library busy).
+  /// </summary>
+  Models.FitsStretchResult? SetFitsStretch(ulong assetId, uint mode, uint transfer, double p0, double p1);
 
   /// <summary>
   /// Requests a comet appearance change (validated synchronously, applied by the logic thread
@@ -1032,6 +1059,17 @@ internal unsafe static class PInvokeAetherVkCore
     nint ctx, ulong sceneId, byte* outUtf8, uint outLen, uint* outNeeded);
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.U1)]
+  public static extern unsafe bool avkSimulationContext_getFitsMetadataJson(
+    nint ctx, ulong assetId, byte* outUtf8, uint outLen, uint* outNeeded);
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.U1)]
+  public static extern unsafe bool avkSimulationContext_setFitsStretch(
+    nint ctx, ulong assetId, uint mode, uint transfer, double p0, double p1,
+    double* outBlack, double* outWhite);
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   public static extern uint avkSceneDumpVersion();
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
@@ -1299,6 +1337,14 @@ internal unsafe static class PInvokeAetherVkCore
   );
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern bool avkSimulationContext_setJetAngleVisibility(
+    nint ctx,
+    ulong sceneId,
+    ulong jetEntityId,
+    bool isVisible
+  );
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   [return: MarshalAs(UnmanagedType.U1)]
   public static extern bool avkSimulationContext_setDustSoftening(nint ctx, ulong sceneId, float softening);
 
@@ -1353,10 +1399,22 @@ internal unsafe static class PInvokeAetherVkCore
     uint mode,
     ulong earthId,
     ulong cometId,
+    [MarshalAs(UnmanagedType.U1)] bool topocentric,
     double latDeg,
     double lonDeg,
     double elevM,
     [In] double[] look
+  );
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern int avkSimulationContext_cometScreenPosition(
+    nint ctx,
+    ulong sceneId,
+    ulong cameraEntity,
+    uint widthPx,
+    uint heightPx,
+    out double xPx,
+    out double yPx
   );
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
@@ -2013,6 +2071,14 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     presentationEngineId = 0;
     cameraEntityId = 0;
 
+    // one camera / presentation engine: a second viewport crashed the render thread at shutdown
+    // (vkQueuePresentKHR on a dead window) and stole the camera hotkeys from the first one
+    if (PresentationEngineId is not null)
+    {
+      Console.WriteLine($"[AddViewport] refused: viewport PE={PresentationEngineId} is already attached");
+      return false;
+    }
+
     // Publish the provider so GetNativeWindowHandleThunk can read it.
     // The Rust spin-wait guarantees the callback executes and completes
     // synchronously (from AddViewport's perspective) before the FFI call returns.
@@ -2056,7 +2122,13 @@ public sealed class NativeRuntimeService : INativeRuntimeService
 
   public void RemoveViewport(ulong presentationEngineId)
   {
+    if (presentationEngineId == 0) return;
     PInvokeAetherVkCore.avkSimulationContext_removeViewport(_ctx, _sceneId, presentationEngineId);
+    if (PresentationEngineId == presentationEngineId)
+    {
+      PresentationEngineId = null;
+      CameraEntityId = null;
+    }
   }
 
   public void ResizeViewport(ulong presentationEngineId, uint width, uint height)
@@ -2429,6 +2501,15 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     _ctx != 0
     && PInvokeAetherVkCore.avkSimulationContext_setCameraShading(_ctx, _sceneId, cameraEntityId, flags);
 
+  public CometScreenPosition? GetCometScreenPosition(ulong cameraEntityId, uint widthPx, uint heightPx)
+  {
+    if (_ctx == 0)
+      return null;
+    int r = PInvokeAetherVkCore.avkSimulationContext_cometScreenPosition(
+      _ctx, _sceneId, cameraEntityId, widthPx, heightPx, out double x, out double y);
+    return r < 0 ? null : new CometScreenPosition(x, y, r == 1);
+  }
+
   public unsafe EarthObserverStatus? EarthObserverStatus()
   {
     if (_ctx == 0)
@@ -2442,13 +2523,21 @@ public sealed class NativeRuntimeService : INativeRuntimeService
   public double DustComaRadiusKm() =>
     _ctx != 0 ? PInvokeAetherVkCore.avkSimulationContext_dustComaRadiusKm(_ctx, _sceneId) : 0.0;
 
-  public bool SetEarthObserver(ulong cameraId, int mode, ulong earthId, ulong cometId, double latDeg, double lonDeg, double elevM, Quaterniond look) =>
+  public bool SetEarthObserver(ulong cameraId, int mode, ulong earthId, ulong cometId, bool topocentric, double latDeg, double lonDeg, double elevM, Quaterniond look) =>
     _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_setEarthObserver(
-      _ctx, _sceneId, cameraId, mode < 0 ? uint.MaxValue : (uint)mode, earthId, cometId, latDeg, lonDeg, elevM,
+      _ctx, _sceneId, cameraId, mode < 0 ? uint.MaxValue : (uint)mode, earthId, cometId, topocentric, latDeg, lonDeg, elevM,
       new[] { look.X, look.Y, look.Z, look.W });
 
   public bool SetJetPreviewVisibility(ulong jetEntityId, bool isVisible) =>
     PInvokeAetherVkCore.avkSimulationContext_setJetPreviewVisibility(
+      _ctx,
+      _sceneId,
+      jetEntityId,
+      isVisible
+    );
+
+  public bool SetJetAngleVisibility(ulong jetEntityId, bool isVisible) =>
+    _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_setJetAngleVisibility(
       _ctx,
       _sceneId,
       jetEntityId,
@@ -2736,6 +2825,30 @@ public sealed class NativeRuntimeService : INativeRuntimeService
         return null;
     }
     return new Models.AssetThumbnail((int)w, (int)h, rgba);
+  }
+
+  public unsafe string? GetFitsMetadataJson(ulong assetId)
+  {
+    if (_ctx == 0) return null;
+    uint needed;
+    if (!PInvokeAetherVkCore.avkSimulationContext_getFitsMetadataJson(_ctx, assetId, null, 0, &needed))
+      return null;
+    var buf = new byte[needed + 1];
+    fixed (byte* p = buf)
+    {
+      if (!PInvokeAetherVkCore.avkSimulationContext_getFitsMetadataJson(_ctx, assetId, p, (uint)buf.Length, &needed))
+        return null;
+    }
+    return Encoding.UTF8.GetString(buf, 0, (int)Math.Min(needed, (uint)buf.Length - 1));
+  }
+
+  public unsafe Models.FitsStretchResult? SetFitsStretch(ulong assetId, uint mode, uint transfer, double p0, double p1)
+  {
+    if (_ctx == 0) return null;
+    double black, white;
+    return PInvokeAetherVkCore.avkSimulationContext_setFitsStretch(_ctx, assetId, mode, transfer, p0, p1, &black, &white)
+      ? new Models.FitsStretchResult(black, white)
+      : null;
   }
 
   public unsafe Models.CometAppearanceStatus SetCometAppearance(Models.CometAppearanceDto appearance)
@@ -3480,6 +3593,10 @@ internal struct CEarthObserverStatusDTO
 /// <summary>Native Earth observer: the submode (<c>EarthObserverOrientationMode</c> value), the
 /// view-axis error to the target and the target elevation (rad) at the last commit.</summary>
 public sealed record EarthObserverStatus(int Mode, double AimErrorRad, double TargetElevationRad);
+
+/// <summary>The observed comet on the viewport: physical px from its top-left corner, and whether
+/// that is inside the viewport.</summary>
+public sealed record CometScreenPosition(double XPx, double YPx, bool OnScreen);
 
 /// <summary>Mirrors Rust <c>CDustExposure</c> (ffi.rs), 32 bytes.</summary>
 [StructLayout(LayoutKind.Sequential)]

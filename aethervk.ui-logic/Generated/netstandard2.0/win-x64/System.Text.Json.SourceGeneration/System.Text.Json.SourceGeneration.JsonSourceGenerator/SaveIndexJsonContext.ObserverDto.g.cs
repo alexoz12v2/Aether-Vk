@@ -46,7 +46,7 @@ namespace AetherVk.Logic.SaveFile
 
         private static global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[] ObserverDtoPropInit(global::System.Text.Json.JsonSerializerOptions options)
         {
-            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[6];
+            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[8];
 
             var info0 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<float>
             {
@@ -174,6 +174,46 @@ namespace AetherVk.Logic.SaveFile
             properties[5].IsGetNullable = false;
             properties[5].IsSetNullable = false;
 
+            var info6 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<bool>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.ObserverDto),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.ObserverDto)obj).Topocentric,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.ObserverDto)obj).Topocentric = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "Topocentric",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.ObserverDto).GetProperty("Topocentric", InstanceMemberBindingFlags, null, typeof(bool), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[6] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<bool>(options, info6);
+
+            var info7 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<global::AetherVk.Logic.SaveFile.ProjectionDto>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.ObserverDto),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.ObserverDto)obj).Projection,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.ObserverDto)obj).Projection = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "Projection",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.ObserverDto).GetProperty("Projection", InstanceMemberBindingFlags, null, typeof(global::AetherVk.Logic.SaveFile.ProjectionDto), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[7] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<global::AetherVk.Logic.SaveFile.ProjectionDto>(options, info7);
+
             return properties;
         }
 
@@ -197,6 +237,9 @@ namespace AetherVk.Logic.SaveFile
             DoubleArraySerializeHandler(writer, ((global::AetherVk.Logic.SaveFile.ObserverDto)value).InertialLook);
             writer.WritePropertyName(PropName_body_fixed_look);
             DoubleArraySerializeHandler(writer, ((global::AetherVk.Logic.SaveFile.ObserverDto)value).BodyFixedLook);
+            writer.WriteBoolean(PropName_topocentric, ((global::AetherVk.Logic.SaveFile.ObserverDto)value).Topocentric);
+            writer.WritePropertyName(PropName_projection);
+            ProjectionDtoSerializeHandler(writer, ((global::AetherVk.Logic.SaveFile.ObserverDto)value).Projection);
 
             writer.WriteEndObject();
         }

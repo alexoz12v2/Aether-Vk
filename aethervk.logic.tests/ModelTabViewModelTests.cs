@@ -32,7 +32,7 @@ public class ModelTabViewModelTests
     public Mock<INativeRuntimeService> Runtime { get; }
     public ModelSession Session { get; }
 
-    public TestSetup(float nucleusRadiusKm = 5.0f, bool cometCommitted = true)
+    public TestSetup(float nucleusRadiusKm = 5.0f, bool cometCommitted = true, ICameraServiceRegistry? cameras = null)
     {
       Runtime = new Mock<INativeRuntimeService>();
       // RegisterExternalStateListener must return a non-null disposable.
@@ -107,7 +107,8 @@ public class ModelTabViewModelTests
         dispatcher.Object,
         cometMessenger.Object,
         new Mock<IPlatformWindowService>().Object,
-        timelineService
+        timelineService,
+        cameras
       ); // Most tests need a committed comet — simulate commitment via the observable property.
       if (cometCommitted)
         Vm.IsCometCommitted = true;
@@ -117,6 +118,89 @@ public class ModelTabViewModelTests
   }
 
   // ── tests ─────────────────────────────────────────────────────────────────────
+
+  [Fact]
+  public void SphereGizmo_Toggle_ReachesNativeAndSession_AndIsReappliedOnCommit()
+  {
+    var s = new TestSetup(cometCommitted: false);
+
+    // before any commit: stored, and the commit applies it (a commit rebuilds the gizmo shown)
+    s.Vm.IsGizmoVisible = false;
+    Assert.False(s.Session.SphereGizmoVisible);
+    s.Runtime.Invocations.Clear();
+    s.Vm.IsCometCommitted = true;
+    s.Runtime.Verify(r => r.SetSphereGizmoVisibility(false), Times.Once);
+
+    s.Vm.IsGizmoVisible = true;
+    Assert.True(s.Session.SphereGizmoVisible);
+    s.Runtime.Verify(r => r.SetSphereGizmoVisibility(true), Times.Once);
+  }
+
+  /// <summary>Jets with native ids 11 and 22, the first one selected.</summary>
+  private static (JetViewModel A, JetViewModel B) TwoNativeJets(TestSetup s)
+  {
+    var a = new JetViewModel(10, 20, 30, 2, 0.5f, new System.Numerics.Vector4(1, 1, 1, 1), true, 1u) { NativePsId = 11 };
+    var b = new JetViewModel(-5, 120, 30, 2, 0.5f, new System.Numerics.Vector4(1, 1, 1, 1), true, 2u) { NativePsId = 22 };
+    s.Session.Jets.Clear();
+    s.Session.Jets.Add(a);
+    s.Session.Jets.Add(b);
+    return (a, b);
+  }
+
+  /// <summary>Jet angles: shown on the selected jet only, following the selection; saved.</summary>
+  [Fact]
+  public void JetAngles_FollowTheSelectedJetOnly_AndAreSaved()
+  {
+    var s = new TestSetup();
+    var (a, b) = TwoNativeJets(s);
+    s.Vm.SelectedJet = a;
+    s.Runtime.Invocations.Clear();
+
+    s.Vm.ShowJetAngles = true;
+    Assert.True(s.Session.ShowJetAngles);
+    s.Runtime.Verify(r => r.SetJetAngleVisibility(11ul, true), Times.Once);
+    s.Runtime.Verify(r => r.SetJetAngleVisibility(22ul, false), Times.Once);
+
+    s.Runtime.Invocations.Clear();
+    s.Vm.SelectedJet = b;
+    s.Runtime.Verify(r => r.SetJetAngleVisibility(11ul, false), Times.Once);
+    s.Runtime.Verify(r => r.SetJetAngleVisibility(22ul, true), Times.Once);
+
+    s.Runtime.Invocations.Clear();
+    s.Vm.ShowJetAngles = false;
+    Assert.False(s.Session.ShowJetAngles);
+    s.Runtime.Verify(r => r.SetJetAngleVisibility(It.IsAny<ulong>(), true), Times.Never);
+    s.Runtime.Verify(r => r.SetJetAngleVisibility(22ul, false), Times.Once);
+
+    // the savefile round trip and a restore into the tab
+    s.Session.ShowJetAngles = true;
+    var dto = AetherVk.Logic.SaveFile.SaveIndexMapping.ToDto(s.Session);
+    Assert.True(dto.ShowJetAngles);
+    var restored = new ModelSession();
+    AetherVk.Logic.SaveFile.SaveIndexMapping.Apply(dto, restored);
+    Assert.True(restored.ShowJetAngles);
+    s.Session.NotifyRestored();
+    Assert.True(s.Vm.ShowJetAngles);
+  }
+
+  /// <summary>
+  /// Selecting a jet, or moving its site, leaves every camera alone (it used to switch the
+  /// viewports to comet orbiting facing the site). The tab only reaches cameras through the
+  /// registry, which is never consulted.
+  /// </summary>
+  [Fact]
+  public void SelectingOrEditingAJet_DoesNotTouchTheCameras()
+  {
+    var cameras = new Mock<ICameraServiceRegistry>(MockBehavior.Strict);
+    var s = new TestSetup(cameras: cameras.Object);
+    var (a, b) = TwoNativeJets(s);
+    s.Vm.SelectedJet = a;
+    s.Vm.SelectedJet = b;
+    b.LatitudeDeg = 40;
+    b.LongitudeDeg = -60;
+    s.Vm.AddJetCommand.Execute(null);
+    cameras.VerifyNoOtherCalls();
+  }
 
   /// <summary>
   /// Savefile restore: the session is replaced from outside and <see cref="ModelSession.NotifyRestored"/>

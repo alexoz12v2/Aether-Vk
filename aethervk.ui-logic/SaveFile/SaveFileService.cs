@@ -69,8 +69,9 @@ public sealed class SaveFileService
 
   /// <summary>
   /// Whether the session differs from what was last saved or opened: comet, range, model, jets,
-  /// assets, appearance, billboards, camera modes and observer sites. The camera pose and the
-  /// clock are not compared (they move by themselves while the simulation plays).
+  /// assets, appearance, billboards, camera modes and the Earth observer setup (site, submode,
+  /// topocentric, a free look). The camera pose, the projections (confirmed asynchronously by the
+  /// core) and the clock are not compared (they move by themselves while the simulation plays).
   /// </summary>
   /// The first check (at startup) takes the untouched application as the baseline.
   public bool IsDirty
@@ -105,7 +106,15 @@ public sealed class SaveFileService
       {
         Mode = v.Mode,
         Observer = v.Observer is { } o
-          ? new ObserverDto { LatDeg = o.LatDeg, LonDeg = o.LonDeg, ElevationM = o.ElevationM, Orientation = o.Orientation }
+          ? new ObserverDto
+          {
+            LatDeg = o.LatDeg, LonDeg = o.LonDeg, ElevationM = o.ElevationM, Orientation = o.Orientation,
+            Topocentric = o.Topocentric,
+            // a free look is the user's aim (tracking re-aims by itself); rounded past f64 noise
+            InertialLook = o.Orientation == new ObserverDto().Orientation
+              ? [.. o.InertialLook.Select(x => Math.Round(x, 9))]
+              : [0, 0, 0, 1],
+          }
           : null,
       })],
       Assets = [.. s.Assets.Select(a => new AssetDto { Key = a.Key, ContentHash = SaveIndexMapping.HashHex(a.ContentHash) })],
@@ -121,7 +130,7 @@ public sealed class SaveFileService
     var fresh = new ViewportDto();
     return v.Mode == fresh.Mode
       && (v.Observer is null || (v.Observer.LatDeg == 0 && v.Observer.LonDeg == 0 && v.Observer.ElevationM == 0
-        && v.Observer.Orientation == new ObserverDto().Orientation));
+        && v.Observer.Orientation == new ObserverDto().Orientation && !v.Observer.Topocentric));
   }
 
   // ── new ────────────────────────────────────────────────────────────────────
@@ -511,6 +520,8 @@ public sealed class SaveFileService
       {
         Id = b.Id, TextureKey = m.Key, CenterX = b.CenterX, CenterY = b.CenterY, WidthPx = b.WidthPx,
         HeightPx = b.HeightPx, Alpha = b.Alpha, RotationDeg = b.RotationDeg, Visible = b.Visible,
+        ImageArcsecPerPx = b.ImageArcsecPerPx, ImageWidthPx = b.ImageWidthPx, ImageHeightPx = b.ImageHeightPx,
+        PhysicalSizeBound = b.PhysicalSizeBound, FitsStretch = b.FitsStretch,
       }
       : b; // its texture is gone: the billboard keeps its spec as a placeholder
 

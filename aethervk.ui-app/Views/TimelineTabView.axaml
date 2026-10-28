@@ -100,6 +100,26 @@
 
           <!-- Progress Bar -->
           <ProgressBar AutomationProperties.AutomationId="TimelineProgress" Minimum="0" Maximum="100" Value="{Binding Progress, FallbackValue=0}" Height="6" CornerRadius="3" Background="{DynamicResource Bg.Subtle}" Foreground="{DynamicResource Accent.Primary}" />
+
+          <!-- Current epoch: the engine clock (as the viewport shows it); type an epoch + Enter to seek -->
+          <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center" Margin="0,8,0,0">
+            <TextBlock Text="Epoch (UTC)" VerticalAlignment="Center" FontSize="12" Foreground="{DynamicResource Text.Secondary}" />
+            <TextBox x:Name="CurrentEpochBox" AutomationProperties.AutomationId="CurrentEpochBox"
+                     Text="{Binding CurrentEpochText}" Width="170"
+                     FontFamily="Cascadia Mono, Consolas, monospace" FontSize="12"
+                     Watermark="yyyy-MM-dd HH:mm:ss"
+                     ToolTip.Tip="The simulation's current epoch. Type an epoch inside the committed range and press Enter to jump there."
+                     ToolTip.ShowDelay="1000">
+              <TextBox.KeyBindings>
+                <KeyBinding Gesture="Enter" Command="{Binding SeekToEpochCommand}" />
+              </TextBox.KeyBindings>
+            </TextBox>
+            <Button x:Name="SeekToEpochButton" AutomationProperties.AutomationId="SeekToEpochButton"
+                    Content="Go" Command="{Binding SeekToEpochCommand}" ToolTip.Tip="Jump to this epoch" ToolTip.ShowDelay="1000" />
+          </StackPanel>
+          <TextBlock AutomationProperties.AutomationId="CurrentEpochErrorText" Text="{Binding CurrentEpochError}"
+                     IsVisible="{Binding HasCurrentEpochError}" Foreground="{DynamicResource Sem.Error}"
+                     FontSize="11" HorizontalAlignment="Center" Margin="0,4,0,0" />
         </StackPanel>
 
       </Grid>

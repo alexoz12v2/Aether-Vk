@@ -38,6 +38,7 @@ public sealed class TimelineService : IDisposable
   private readonly BehaviorSubject<TimeRange?> _proposedTimeRangeSubject = new(null);
   private readonly BehaviorSubject<bool> _isSimulationRunningSubject = new(false);
   private readonly Subject<System.Reactive.Unit> _snapshotRestoreSubject = new();
+  private readonly Subject<System.Reactive.Unit> _seekedSubject = new();
   private readonly IDisposable _listenerToken;
 
 
@@ -159,6 +160,22 @@ public sealed class TimelineService : IDisposable
       return ok;
   }
 
+  /// <summary>
+  /// The one seek path (Run to End, the timeline's epoch box, a FITS observation epoch): blocks
+  /// off the UI thread until the engine confirms, then raises <see cref="Seeked"/> — even when the
+  /// wait timed out, since the clock moved anyway.
+  /// </summary>
+  public async System.Threading.Tasks.Task<bool> SeekAsync(short centuries, ulong nanoseconds)
+  {
+    bool ok = await System.Threading.Tasks.Task.Run(() => _runtimeService.SeekEpochSync(centuries, nanoseconds));
+    _seekedSubject.OnNext(System.Reactive.Unit.Default);
+    return ok;
+  }
+
+  /// <summary>After every <see cref="SeekAsync"/>: the timeline re-reads the engine clock.</summary>
+  public IObservable<System.Reactive.Unit> Seeked =>
+    _seekedSubject.ObserveOn(_schedulerProvider.MainThread);
+
   public bool SnapshotRestore()
   {
       bool ok = _runtimeService.RestoreSnapshotSync();
@@ -191,5 +208,6 @@ public sealed class TimelineService : IDisposable
     _proposedTimeRangeSubject.Dispose();
     _isSimulationRunningSubject.Dispose();
     _snapshotRestoreSubject.Dispose();
+    _seekedSubject.Dispose();
   }
 }

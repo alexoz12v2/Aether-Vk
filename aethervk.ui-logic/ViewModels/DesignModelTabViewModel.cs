@@ -59,7 +59,8 @@ public partial class DesignModelTabViewModel
   public bool EnableLegacyExpanders { get; set; } = false;
   public bool IsSimulationRunning { get; } = false;
   
-  public int IsGizmoVisibleIndex { get; set; } = 0;
+  public bool IsGizmoVisible { get; set; } = true;
+  public bool ShowJetAngles { get; set; }
   public string? StrPM { get; set; } = null;
   
   public AetherVk.Logic.Services.ModelSession? CurrentSession { get; } = new AetherVk.Logic.Services.ModelSession();

@@ -43,9 +43,12 @@ public partial class Viewport3DViewModel : StatefulTabViewModelBase<ViewportSess
   [ObservableProperty]
   private uint _height = 600;
 
+  // set while SetPixelSize writes both sides: one resize push, not an intermediate aspect
+  private bool _settingPixelSize;
+
   partial void OnWidthChanged(uint value)
   {
-    if (CameraId != 0 && CameraService != null)
+    if (!_settingPixelSize && CameraId != 0 && CameraService != null)
     {
       CameraService.OnViewportResized(value, _height);
     }
@@ -53,11 +56,38 @@ public partial class Viewport3DViewModel : StatefulTabViewModelBase<ViewportSess
 
   partial void OnHeightChanged(uint value)
   {
-    if (CameraId != 0 && CameraService != null)
+    if (!_settingPixelSize && CameraId != 0 && CameraService != null)
     {
       CameraService.OnViewportResized(_width, value);
     }
   }
+
+  /// <summary>
+  /// The render target's physical pixel size (the swapchain's): both sides, then a single resize
+  /// push to the camera (two pushes posed a projection with an intermediate aspect).
+  /// </summary>
+  public void SetPixelSize(uint width, uint height)
+  {
+    if (width == Width && height == Height)
+      return;
+    _settingPixelSize = true;
+    try
+    {
+      Width = width;
+      Height = height;
+    }
+    finally
+    {
+      _settingPixelSize = false;
+    }
+    if (CameraId != 0 && CameraService != null)
+      CameraService.OnViewportResized(width, height);
+  }
+
+  /// <summary>Physical pixels of a <paramref name="dip"/> extent at <paramref name="renderScaling"/>
+  /// (the native child window is sized the same way); at least 1.</summary>
+  public static uint DipToPixels(double dip, double renderScaling) =>
+    (uint)Math.Max(1.0, Math.Round(dip * (renderScaling > 0 ? renderScaling : 1.0)));
 
   [ObservableProperty]
   private bool _isInitialized;
@@ -119,6 +149,14 @@ public partial class Viewport3DViewModel : StatefulTabViewModelBase<ViewportSess
   private readonly BreadcrumbService _breadcrumbService;
   private IDisposable? _cameraModeSubscription;
 
+  /// <summary>
+  /// The runtime drives one camera and one presentation engine: the viewport tab is unique, and
+  /// pinned so closing, replacing or re-docking it never destroys and re-creates the native view.
+  /// </summary>
+  public override bool IsPinned => true;
+
+  public override bool IsSingleInstance => true;
+
   private void SetupViewport()
   {
     if (PresentationEngineId != 0)
@@ -175,6 +213,7 @@ public partial class Viewport3DViewModel : StatefulTabViewModelBase<ViewportSess
   )
     : base("Viewport 3D", sessionService)
   {
+    CanClose = false;
     _runtimeService = runtimeService;
     _breadcrumbService = breadcrumbService;
     _uiThreadDispatcher = uiThreadDispatcher;
