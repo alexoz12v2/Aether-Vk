@@ -90,9 +90,9 @@ public class DustParameterViewTests
   }
 
   /// <summary>
-  /// The selected jet's own grain and activity: collapsed "Grain" and "Activity" expanders in the
-  /// jet panel with their boxes, plots and help, and the "Copy to all jets" button; the Σ read-out
-  /// sits outside them.
+  /// The selected jet's own grain and activity: collapsed "Grain" and "Advanced: activity (Afρ)"
+  /// expanders in the jet panel with their boxes, plots and help, and the "Copy to all jets"
+  /// button. Afρ stays out of sight: the Σ read-out is in the model-wide advanced expander.
   /// </summary>
   [AvaloniaFact]
   public void Model_JetPanel_HasItsOwnGrainAndActivity()
@@ -120,7 +120,7 @@ public class DustParameterViewTests
 
     var outside = Ids(view).Except(inGrain).Except(inActivity).ToList();
     Assert.Contains("CopyGrainToAllJetsButton", outside);
-    Assert.Contains("TotalActivityText", outside);
+    Assert.Contains("TotalActivityText", Ids(ExpanderById(view, "ActivityAdvancedExpander")));
 
     // the boxes are bound to the selected jet, not to the defaults
     grain.IsExpanded = true;

@@ -622,10 +622,10 @@
               <Expander AutomationProperties.AutomationId="JetActivityExpander" Margin="12,8,12,0">
                 <Expander.Header>
                   <StackPanel Orientation="Horizontal" Spacing="4">
-                    <TextBlock Text="Activity" />
+                    <TextBlock Text="Advanced: activity (Afρ)" />
                     <controls:PropertyHelpButton AutomationProperties.AutomationId="JetActivityHelp"
                                                  HelpHeader="Activity (this jet)"
-                                                 HelpContent="This jet's Afρ at 1 AU: how much dust it produces. The jets add up: the comet's total is the Σ read-out under the list.&#x0A;&#x0A;Afρ(r) = min(max, Afρ₀ · r⁻ᵏ), zero beyond the cutoff; the exponent k, the cutoff and the max are shared by every jet (Advanced: activity, further down).&#x0A;&#x0A;The engine turns this jet's Afρ into its production rate Q_d with its own grain (density, size, albedo) and speed." />
+                                                 HelpContent="This jet's Afρ at 1 AU: how much dust it produces. The jets add up: the comet's total is the Σ read-out under the list.&#x0A;&#x0A;Afρ(r) = min(max, Afρ₀ · r⁻ᵏ), zero beyond the cutoff; the exponent k, the cutoff and the max are shared by every jet (Advanced: activity (Afρ) under Defaults for new jets).&#x0A;&#x0A;The engine turns this jet's Afρ into its production rate Q_d with its own grain (density, size, albedo) and speed." />
                   </StackPanel>
                 </Expander.Header>
                 <StackPanel Spacing="8">
@@ -667,14 +667,6 @@
                       ToolTip.Tip="Gives every other jet this jet's grain and activity: diameter, density, Q_pr, albedo, q, F and Afρ₀. Their sites, speeds and colours stay as they are." />
             </StackPanel><!-- /detail StackPanel -->
           </Border><!-- /detail outer Border -->
-
-            <!-- ──── The whole comet's activity: Σ over the jets ─────────── -->
-            <TextBlock AutomationProperties.AutomationId="TotalActivityText"
-                       Margin="12,8,12,8"
-                       Text="{Binding TotalActivityText}"
-                       FontSize="11" TextWrapping="Wrap"
-                       Foreground="{DynamicResource Text.Secondary}"
-                       ToolTip.Tip="The comet's total activity: the jets' Afρ add up, and so do their dust production rates Q_d (each from its own grain and speed). Shown at 1 AU from the Sun and, with a committed comet, at its current distance." />
 
             <!-- ──── Grain and activity defaults for new jets (each jet then has its own) ── -->
             <!-- Thin divider + section label separates this from the jet panel -->
@@ -760,6 +752,12 @@
                 </StackPanel>
               </Expander.Header>
               <StackPanel Spacing="8">
+                <!-- the whole comet's activity: Σ over the jets -->
+                <TextBlock AutomationProperties.AutomationId="TotalActivityText"
+                           Text="{Binding TotalActivityText}"
+                           FontSize="11" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Text.Secondary}"
+                           ToolTip.Tip="The comet's total activity: the jets' Afρ add up, and so do their dust production rates Q_d (each from its own grain and speed). Shown at 1 AU from the Sun and, with a committed comet, at its current distance." />
                 <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto,8,Auto,8,Auto,8,Auto">
 
                   <TextBlock Grid.Row="0" Grid.Column="0" Text="Afρ₀ (at 1 AU)" />
