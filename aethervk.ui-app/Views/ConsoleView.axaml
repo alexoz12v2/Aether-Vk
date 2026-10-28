@@ -19,11 +19,15 @@
                  PointerWheelChanged="OnConsolePointerWheelChanged" />
         <Grid Grid.Row="1" ColumnDefinitions="*,Auto" Margin="5">
             <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="5">
-                <Button Content="Zoom In (+)" Command="{Binding ZoomInCommand}" Classes="accent"/>
-                <Button Content="Zoom Out (-)" Command="{Binding ZoomOutCommand}" Classes="accent"/>
-                <Button Content="Export Logs" Command="{Binding ExportLogsCommand}" Classes="accent"/>
+                <Button Content="Zoom In (+)"
+                  ToolTip.Tip="Increase the console font size." Command="{Binding ZoomInCommand}" Classes="accent"/>
+                <Button Content="Zoom Out (-)"
+                  ToolTip.Tip="Decrease the console font size." Command="{Binding ZoomOutCommand}" Classes="accent"/>
+                <Button Content="Export Logs"
+                  ToolTip.Tip="Save the console messages to a file." Command="{Binding ExportLogsCommand}" Classes="accent"/>
             </StackPanel>
-            <Button Grid.Column="1" Content="Clear Console" Command="{Binding ClearConsoleCommand}" Classes="accent"/>
+            <Button Grid.Column="1" Content="Clear Console"
+              ToolTip.Tip="Remove all messages from the console." Command="{Binding ClearConsoleCommand}" Classes="accent"/>
         </Grid>
     </Grid>
 </UserControl>

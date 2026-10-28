@@ -39,6 +39,10 @@ namespace AetherVk.Logic.SaveFile
             {
                 return Create_Single(options);
             }
+            if (type == typeof(float?))
+            {
+                return Create_NullableSingle(options);
+            }
             if (type == typeof(float[]))
             {
                 return Create_SingleArray(options);

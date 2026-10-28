@@ -74,6 +74,12 @@ public sealed record ExportedAssetFile(string FileName, ulong ContentHash, bool 
 public sealed record AssetThumbnail(int Width, int Height, byte[] Rgba);
 
 /// <summary>
+/// One intensity per image pixel, row-major, row 0 = the top of the displayed image (texture row
+/// order); NaN = blank. A FITS texture's physical values, or the luminance of RGBA8 texels.
+/// </summary>
+public sealed record IntensityImage(int Width, int Height, float[] Values);
+
+/// <summary>
 /// An asset of the native asset library (Imports tab). Meshes and textures are always separate
 /// assets: textures bundled in an OBJ material or a glTF/GLB are imported as their own entries and
 /// referenced through <see cref="BundledTextures"/>.

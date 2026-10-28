@@ -333,6 +333,30 @@ pub mod v2 {
         seed: self.seed,
       }
     }
+
+    /// The emission parameters of one jet from its FFI record (add and modify). Every field is
+    /// the jet's own: grain (diameter, density, Q_pr, albedo, size law) and activity (Afρ law)
+    /// included, so a jet never reads nor writes its siblings' parameters.
+    pub fn from_dto(dto: &crate::scene::ParticleSystemDTO) -> Self {
+      Self {
+        diametre_um: dto.diametre_um,
+        density_gcm3: dto.density_gcm3,
+        scattering_efficiency: dto.scattering_efficiency,
+        geometric_albedo: dto.geometric_albedo,
+        size_q: dto.size_q,
+        size_range: dto.size_range,
+        afrho_0_cm: dto.afrho_0_cm,
+        afrho_power: dto.afrho_power,
+        afrho_cutoff_au: dto.afrho_cutoff_au,
+        afrho_max_value_cm: dto.afrho_max_value_cm,
+        latitude_rad: dto.latitude_rad,
+        longitude_rad: dto.longitude_rad,
+        aperture_rad: dto.aperture_rad,
+        start_velocity_mean: dto.start_velocity_mean,
+        start_velocity_std: dto.start_velocity_std,
+        seed: dto.seed,
+      }
+    }
   }
 
   impl Component for ParticleSystemComponent {}

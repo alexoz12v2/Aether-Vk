@@ -324,6 +324,54 @@ fn emission_times_and_beta_are_in_range() {
   assert!(norm(sub(c.r0().to_f64(), r_expect)) < 0.05);
 }
 
+/// Per-jet grains: two jets with different grain parameters fill their batches from their own
+/// emission config, and each emitted cluster carries its own jet's reference radius and β (no
+/// model-wide grain anywhere between the jet's parameters and the cluster).
+#[test]
+fn emit_cluster_uses_the_batch_s_own_s_ref_and_beta() {
+  use crate::scene::particles::ParticleSystemEmitParams;
+  let jet = |diametre_um: f32, density_gcm3: f32, q_pr: f32| {
+    let mut ep: ParticleSystemEmitParams = bytemuck::Zeroable::zeroed();
+    ep.diametre_um = diametre_um;
+    ep.density_gcm3 = density_gcm3;
+    ep.scattering_efficiency = q_pr;
+    ep.geometric_albedo = 0.04;
+    ep.start_velocity_mean = 2.0;
+    ep.start_velocity_std = 0.5;
+    ep
+  };
+  let mut clusters = alloc::vec::Vec::new();
+  for ep in [jet(100.0, 0.533, 1.0), jet(10.0, 1.0, 1.5)] {
+    let cfg = ep.dust_emit_config(1.4, 30 * 86_400 * 1_000_000);
+    let (size_params, vel_params, mass_params) = batch_params(
+      &cfg.dist,
+      cfg.diameter_um,
+      cfg.density_gcm3,
+      cfg.beta_ref,
+      cfg.v_mean,
+      cfg.v_std,
+      1.0e6,
+      0.37,
+    );
+    let mut b = test_batch(16, 1800.0);
+    b.size_params = size_params;
+    b.vel_params = vel_params;
+    b.mass_params = mass_params;
+    let c = emit_cluster(&b, 3);
+    let s_ref = 0.5 * ep.diametre_um;
+    assert!((c.eject[3] - s_ref).abs() < 1e-4, "s_ref {} vs {s_ref}", c.eject[3]);
+    assert!(
+      ((c.beta() - ep.beta()) / ep.beta()).abs() < 1e-5,
+      "cluster β {} vs the jet's {}",
+      c.beta(),
+      ep.beta()
+    );
+    clusters.push(c);
+  }
+  // β ∝ Q_pr / (ρ s): 1.5 / (1 · 5) against 1 / (0.533 · 50), 8× apart
+  assert!(clusters[1].beta() > 7.0 * clusters[0].beta());
+}
+
 /// β is the radiation-pressure-to-gravity ratio of the configured grain, and the engine's
 /// `μ(1 − β)` propagation is the two-force motion (solar gravity + radiation pressure) of that
 /// grain: an independent two-force RK4 built from L☉, c, Q_pr, s and ρ — no β anywhere — lands

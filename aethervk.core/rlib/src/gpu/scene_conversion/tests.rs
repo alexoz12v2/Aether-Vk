@@ -566,3 +566,37 @@ fn comet_screen_position_projects_the_light_time_displaced_comet() {
   scene.with_component_mut(camera, |l: &mut LightTimeViewComponent| *l = lt).unwrap();
   assert_eq!(comet_screen_position(&scene, camera, extent), None);
 }
+
+/// The style-0 gizmo's per-instance colour carries its drawn parts (`.w`) and the comet's
+/// velocity direction in the gizmo's layer frame (`.xyz`); without the parts component: the
+/// default parts, no velocity.
+#[test]
+fn sphere_gizmo_parts_color_packs_parts_and_frame_velocity() {
+  use aethervk_oshal_rlib::math::vector::vec4::Quat;
+  use crate::scene::{SPHERE_GIZMO_PART_GRID, SPHERE_GIZMO_PART_VELOCITY, SPHERE_GIZMO_PARTS_DEFAULT, SphereGizmoPartsComponent};
+  let tex_cache = Arc::new(RwLock::new(TextureCache::new("test_tex_cache_gizmo_parts")));
+  let scene = Scene::new(tex_cache);
+  scene.register_all_crate_components();
+
+  let frame = scene.spawn_entity("frame");
+  let mut ft = TransformComponent::default();
+  let h = core::f32::consts::FRAC_1_SQRT_2; // +90° about Z, (x, y, z, w)
+  ft.rotation = Quat::from_components(0.0, 0.0, h, h);
+  scene.add_component(frame, ft).unwrap();
+  let gizmo = scene.spawn_entity("gizmo");
+  scene.set_parent(gizmo, Some(frame));
+  scene.add_component(gizmo, TransformComponent::default()).unwrap();
+
+  assert_eq!(sphere_gizmo_parts_color(&scene, gizmo, Some(frame)), [0.0, 0.0, 0.0, SPHERE_GIZMO_PARTS_DEFAULT as f32]);
+
+  let parts = SPHERE_GIZMO_PART_GRID | SPHERE_GIZMO_PART_VELOCITY;
+  scene
+    .add_component(gizmo, SphereGizmoPartsComponent { parts, velocity_dir: [1.0, 0.0, 0.0] })
+    .unwrap();
+  let c = sphere_gizmo_parts_color(&scene, gizmo, None);
+  assert_eq!(c, [1.0, 0.0, 0.0, parts as f32]);
+  // the frame turned +90° about Z: world +X is the frame's −Y
+  let c = sphere_gizmo_parts_color(&scene, gizmo, Some(frame));
+  assert!(c[0].abs() < 1e-6 && (c[1] + 1.0).abs() < 1e-6 && c[2].abs() < 1e-6, "{c:?}");
+  assert_eq!(c[3], parts as f32);
+}

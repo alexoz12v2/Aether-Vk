@@ -201,6 +201,42 @@ public static class DustCurves
     return text;
   }
 
+  /// <summary>
+  /// The whole comet's activity: Σ Afρ and Σ Q_d over the jets (each with its own Afρ₀ and engine
+  /// rate at 1 AU, the Afρ law's shape shared), at 1 AU and, with a committed comet, at
+  /// <paramref name="rhNowAu"/>. Afρ and Q_d add up: each jet's coma brightness is linear in its
+  /// production. A rate NaN = a jet without a native system: Σ Q_d is left out (it would be partial).
+  /// </summary>
+  public static string TotalActivityText(IReadOnlyList<(double Afrho0Cm, double RateAt1AuKgs)> jets,
+    double power, double cutoffAu, double maxCm, double rhNowAu)
+  {
+    if (jets.Count == 0)
+      return "Σ activity: no jets.";
+    var ci = CultureInfo.InvariantCulture;
+    bool rates = true;
+    double afrho1 = 0, q1 = 0, afrhoNow = 0, qNow = 0;
+    bool now = IsFinite(rhNowAu) && rhNowAu > 0;
+    foreach (var (afrho0, rate) in jets)
+    {
+      afrho1 += AfrhoCm(1.0, afrho0, power, cutoffAu, maxCm);
+      rates &= IsFinite(rate);
+      q1 += rate;
+      if (now)
+      {
+        afrhoNow += AfrhoCm(rhNowAu, afrho0, power, cutoffAu, maxCm);
+        // a jet with no Afρ at 1 AU (cutoff ≤ 1 AU) has no rate to scale: it emits nothing now either
+        double q = ProductionRateKgs(rhNowAu, rate, afrho0, power, cutoffAu, maxCm);
+        qNow += IsFinite(q) ? q : 0;
+      }
+    }
+    string Part(string where, double afrho, double q) =>
+      where + ": Σ Afρ " + FormatNumber(afrho) + " cm" + (rates ? " → Σ Q_d ≈ " + FormatNumber(q) + " kg/s" : "");
+    string text = Part("Σ " + jets.Count.ToString(ci) + (jets.Count == 1 ? " jet" : " jets") + " at 1 AU", afrho1, q1);
+    if (now)
+      text += "; now (r_h " + rhNowAu.ToString("0.00", ci) + " AU)" + Part("", afrhoNow, qNow);
+    return text;
+  }
+
   // ── grain size law ───────────────────────────────────────────────────────────
 
   /// <summary>Smallest F the plots use: F = 1 is a single size (a delta), not a curve.</summary>

@@ -131,6 +131,76 @@ internal static partial class Win32
     }
   }
 
+  [DllImport("gdi32.dll")]
+  private static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+
+  [DllImport("gdi32.dll")]
+  private static extern IntPtr CreateCompatibleBitmap(IntPtr hdc, int width, int height);
+
+  [DllImport("gdi32.dll")]
+  private static extern IntPtr SelectObject(IntPtr hdc, IntPtr obj);
+
+  [DllImport("gdi32.dll")]
+  private static extern bool BitBlt(IntPtr dst, int x, int y, int w, int h, IntPtr src, int sx, int sy, uint rop);
+
+  [DllImport("gdi32.dll")]
+  private static extern int GetDIBits(IntPtr hdc, IntPtr bitmap, uint start, uint lines, byte[] bits,
+    ref BitmapInfoHeader info, uint usage);
+
+  [DllImport("gdi32.dll")]
+  private static extern bool DeleteObject(IntPtr obj);
+
+  [DllImport("gdi32.dll")]
+  private static extern bool DeleteDC(IntPtr hdc);
+
+  [StructLayout(LayoutKind.Sequential)]
+  private struct BitmapInfoHeader
+  {
+    public uint Size;
+    public int Width, Height;
+    public ushort Planes, BitCount;
+    public uint Compression, SizeImage;
+    public int XPelsPerMeter, YPelsPerMeter;
+    public uint ClrUsed, ClrImportant;
+    // GetDIBits writes a colour table after the header for some formats; none for 32 bpp BI_RGB
+  }
+
+  /// <summary>
+  /// Luminance (0..1, Rec. 709) of every screen pixel of a rectangle, row by row from the top:
+  /// the full-resolution counterpart of <see cref="SampleLuminance"/> (one BitBlt, overlays included).
+  /// </summary>
+  public static double[] CaptureLuminance(int left, int top, int width, int height)
+  {
+    const uint SRCCOPY = 0x00CC0020;
+    var screen = GetDC(IntPtr.Zero);
+    var mem = CreateCompatibleDC(screen);
+    var bmp = CreateCompatibleBitmap(screen, width, height);
+    try
+    {
+      var old = SelectObject(mem, bmp);
+      BitBlt(mem, 0, 0, width, height, screen, left, top, SRCCOPY);
+      SelectObject(mem, old);
+      // negative height: top-down rows; BGRA bytes
+      var info = new BitmapInfoHeader
+      {
+        Size = (uint)Marshal.SizeOf<BitmapInfoHeader>(), Width = width, Height = -height, Planes = 1, BitCount = 32,
+      };
+      var bits = new byte[width * height * 4];
+      if (GetDIBits(mem, bmp, 0, (uint)height, bits, ref info, 0) != height)
+        throw new InvalidOperationException("GetDIBits failed");
+      var lum = new double[width * height];
+      for (int k = 0; k < lum.Length; k++)
+        lum[k] = (0.0722 * bits[4 * k] + 0.7152 * bits[4 * k + 1] + 0.2126 * bits[4 * k + 2]) / 255.0;
+      return lum;
+    }
+    finally
+    {
+      DeleteObject(bmp);
+      DeleteDC(mem);
+      ReleaseDC(IntPtr.Zero, screen);
+    }
+  }
+
   public const byte VK_RETURN = 0x0D;
   public const byte VK_CONTROL = 0x11;
   public const byte VK_MENU = 0x12;

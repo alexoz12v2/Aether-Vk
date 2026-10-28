@@ -71,16 +71,64 @@ public class DustParameterViewTests
     var help = All(activity).OfType<PropertyHelpButton>().Single(h => AutomationProperties.GetAutomationId(h) == "ActivityAdvancedHelp");
     Assert.Contains("not a grain distribution", help.HelpContent);
 
-    // the plots get their models and draw without throwing once expanded
+    // the plots get their models and draw without throwing once expanded (the defaults' two and
+    // the selected jet's two)
     activity.IsExpanded = true;
     size.IsExpanded = true;
+    ExpanderById(view, "JetGrainExpander").IsExpanded = true;
+    ExpanderById(view, "JetActivityExpander").IsExpanded = true;
     Dispatcher.UIThread.RunJobs();
     var plots = All(view).OfType<CurvePlot>().ToList();
-    Assert.Equal(2, plots.Count);
+    Assert.Equal(
+      new[] { "AfrhoCurvePlot", "JetAfrhoCurvePlot", "JetSizeDistributionPlot", "SizeDistributionPlot" },
+      plots.Select(AutomationProperties.GetAutomationId).OrderBy(id => id, System.StringComparer.Ordinal));
     Assert.All(plots, p => Assert.NotNull(p.Model));
     window.UpdateLayout();
     using var frame = window.CaptureRenderedFrame();
     Assert.NotNull(frame);
+    window.Close();
+  }
+
+  /// <summary>
+  /// The selected jet's own grain and activity: collapsed "Grain" and "Activity" expanders in the
+  /// jet panel with their boxes, plots and help, and the "Copy to all jets" button; the Σ read-out
+  /// sits outside them.
+  /// </summary>
+  [AvaloniaFact]
+  public void Model_JetPanel_HasItsOwnGrainAndActivity()
+  {
+    var vm = new DesignModelTabViewModel();
+    var view = new ModelTabView { DataContext = vm };
+    var window = new Window { Content = view, Width = 520, Height = 2400 };
+    window.Show();
+    foreach (var e in All(view).OfType<Expander>().Where(e => AutomationProperties.GetAutomationId(e) == "DustSection"))
+      e.IsExpanded = true;
+    Dispatcher.UIThread.RunJobs();
+
+    var grain = ExpanderById(view, "JetGrainExpander");
+    var activity = ExpanderById(view, "JetActivityExpander");
+    Assert.False(grain.IsExpanded);
+    Assert.False(activity.IsExpanded);
+
+    var inGrain = Ids(grain);
+    foreach (var id in new[] { "JetDiametreUm", "JetDensity", "JetQpr", "JetAlbedo", "JetSizeQ", "JetSizeRange",
+               "JetSizeDistributionPlot", "JetGrainHelp" })
+      Assert.Contains(id, inGrain);
+    var inActivity = Ids(activity);
+    foreach (var id in new[] { "JetAfrho0", "JetAfrhoCurvePlot", "AfrhoNowText", "JetActivityHelp" })
+      Assert.Contains(id, inActivity);
+
+    var outside = Ids(view).Except(inGrain).Except(inActivity).ToList();
+    Assert.Contains("CopyGrainToAllJetsButton", outside);
+    Assert.Contains("TotalActivityText", outside);
+
+    // the boxes are bound to the selected jet, not to the defaults
+    grain.IsExpanded = true;
+    Dispatcher.UIThread.RunJobs();
+    var diameter = All(grain).OfType<TextBox>().Single(t => AutomationProperties.GetAutomationId(t) == "JetDiametreUm");
+    Assert.Equal("250", diameter.Text);
+    var help = All(grain).OfType<PropertyHelpButton>().Single(h => AutomationProperties.GetAutomationId(h) == "JetGrainHelp");
+    Assert.Contains("q = 3.5", help.HelpContent);
     window.Close();
   }
 

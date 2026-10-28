@@ -106,6 +106,7 @@
             <Button Grid.Column="0" Classes="accent"
                     Content="{Binding StrImport}"
                     AutomationProperties.AutomationId="ImportButton"
+                    ToolTip.Tip="Import meshes (OBJ, PLY, glTF, GLB) or textures (PNG, JPEG, KTX2) from disk."
                 Command="{Binding ImportCommand}" />
             <StackPanel Grid.Column="2" VerticalAlignment="Center" Spacing="2">
                 <TextBlock Classes="secondary" Text="{Binding StrHint}" />

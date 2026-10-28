@@ -142,6 +142,7 @@
             <!-- Search row -->
             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
               <TextBox Grid.Column="0" AutomationProperties.AutomationId="CometSearchBox"
+                ToolTip.Tip="Comet name or designation to search for, for example 67P or Halley. Press Enter to search."
                        Text="{Binding SearchQuery}"
                        Watermark="Search comets (e.g. 67P, Halley)…"
                        FontSize="12">
@@ -180,6 +181,7 @@
                 </TextBox.InnerRightContent>
               </TextBox>
               <Button Grid.Column="1" AutomationProperties.AutomationId="CometSearchButton"
+                ToolTip.Tip="Search for comets matching the text. Select one from the list to see its available ephemeris (SPK) records."
                       Content="Search"
                       Command="{Binding SearchCometsCommand}"
                       Classes="accent"
@@ -188,7 +190,8 @@
             </Grid>
 
             <!-- Search results -->
-            <ListBox AutomationProperties.AutomationId="CometResultsList" ItemsSource="{Binding FilteredSearchResults}"
+            <ListBox AutomationProperties.AutomationId="CometResultsList"
+              ToolTip.Tip="Comets matching the search. Select one to list its ephemeris (SPK) records." ItemsSource="{Binding FilteredSearchResults}"
                      SelectedItem="{Binding SelectedComet}"
                      MaxHeight="140"
                      IsVisible="{Binding FilteredSearchResults.Count}"
@@ -215,7 +218,8 @@
               <TextBlock Text="Loading records…" FontSize="11"
                          Foreground="{DynamicResource Text.Disabled}"
                          IsVisible="{Binding IsLoadingSpkRecords}" />
-              <ListBox AutomationProperties.AutomationId="SpkRecordsList" ItemsSource="{Binding SpkRecords}"
+              <ListBox AutomationProperties.AutomationId="SpkRecordsList"
+                ToolTip.Tip="Ephemeris (SPK) records of the selected comet: each is a fit of its orbit. Select one, then press Download &amp; Commit." ItemsSource="{Binding SpkRecords}"
                        SelectedItem="{Binding SelectedSpkRecord}"
                        MaxHeight="120"
                        IsVisible="{Binding SpkRecords.Count}"
@@ -361,7 +365,8 @@
             <!-- RA Rate -->
             <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
               <TextBlock Grid.Column="0" Classes="label" Text="RA Rate" VerticalAlignment="Center" />
-              <controls:UnboundedSlider Grid.Column="2" Value="{Binding PoleRaRateDegCen}" Step="0.001">
+              <controls:UnboundedSlider Grid.Column="2" Value="{Binding PoleRaRateDegCen}"
+                ToolTip.Tip="Slow drift of the spin axis right ascension (precession), in degrees per Julian century. 0 keeps the axis fixed." Step="0.001">
                 <controls:UnboundedSlider.InnerRightContent>
                   <TextBlock Classes="unit-of-measurement" Text="°/cen" />
                 </controls:UnboundedSlider.InnerRightContent>
@@ -371,7 +376,8 @@
             <!-- Dec Rate -->
             <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
               <TextBlock Grid.Column="0" Classes="label" Text="Dec Rate" VerticalAlignment="Center" />
-              <controls:UnboundedSlider Grid.Column="2" Value="{Binding PoleDecRateDegCen}" Step="0.001">
+              <controls:UnboundedSlider Grid.Column="2" Value="{Binding PoleDecRateDegCen}"
+                ToolTip.Tip="Slow drift of the spin axis declination (precession), in degrees per Julian century. 0 keeps the axis fixed." Step="0.001">
                 <controls:UnboundedSlider.InnerRightContent>
                   <TextBlock Classes="unit-of-measurement" Text="°/cen" />
                 </controls:UnboundedSlider.InnerRightContent>
@@ -381,7 +387,8 @@
             <!-- Rotation Rate -->
             <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
               <TextBlock Grid.Column="0" Classes="label" Text="Rotation Rate (°/day)" VerticalAlignment="Center" />
-              <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="RotRateSlider" Value="{Binding RotRateDegDay}" Step="0.01">
+              <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="RotRateSlider"
+                ToolTip.Tip="Nucleus spin rate in degrees per day (the IAU rotation rate W). The sign gives prograde (+) or retrograde (-) spin; the period in hours is 360 x 24 / |rate|." Value="{Binding RotRateDegDay}" Step="0.01">
                 <controls:UnboundedSlider.InnerRightContent>
                   <TextBlock Classes="unit-of-measurement" Text="°/day" />
                 </controls:UnboundedSlider.InnerRightContent>
@@ -393,7 +400,8 @@
             <!-- Body-Fixed Camera -->
             <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
               <TextBlock Grid.Column="0" Classes="label" Text="Camera orientation is body-fixed with respect to camera" VerticalAlignment="Center" TextWrapping="Wrap" />
-              <ComboBox Grid.Column="2" AutomationProperties.AutomationId="BodyFixedOrientationPicker" SelectedIndex="{Binding BodyFixedOrientationIndex}" HorizontalAlignment="Center">
+              <ComboBox Grid.Column="2" AutomationProperties.AutomationId="BodyFixedOrientationPicker"
+                ToolTip.Tip="Yes: a camera attached to the nucleus turns with it, so the nucleus surface stays fixed in the view. No: the spin is compensated, so the view keeps its direction relative to the stars while the nucleus rotates." SelectedIndex="{Binding BodyFixedOrientationIndex}" HorizontalAlignment="Center">
                 <ComboBoxItem>Yes</ComboBoxItem>
                 <ComboBoxItem>No</ComboBoxItem>
               </ComboBox>

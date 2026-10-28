@@ -27,8 +27,8 @@ public sealed class DesktopBillboardService : IDisposable
   public DesktopBillboard? Find(Guid id) => Current.FirstOrDefault(b => b.Id == id);
 
   /// <summary>
-  /// Adds a billboard of <paramref name="texture"/> at the centre of <paramref name="screen"/>,
-  /// native size shrunk to fit half the display (<see cref="DesktopBillboardGeometry.InitialSize"/>).
+  /// Adds a billboard of <paramref name="texture"/> at the centre of <paramref name="screen"/>, at
+  /// its native size (<see cref="DesktopBillboardGeometry.InitialSize"/>).
   /// </summary>
   public DesktopBillboard Create(ImportedAsset texture, ScreenInfo screen)
   {
@@ -102,26 +102,6 @@ public sealed class DesktopBillboardService : IDisposable
   }
 
   /// <summary>
-  /// "Match camera to image": the billboard fills <paramref name="viewportHeightPx"/> (the
-  /// viewport's height, now the image's field), the width from the image's aspect, and is bound so
-  /// <see cref="RescaleBound"/> keeps it matched. False without the billboard or a height.
-  /// </summary>
-  public bool ApplyViewportHeight(Guid id, double viewportHeightPx)
-  {
-    lock (_gate)
-    {
-      if (Find(id) is not { } b || !(viewportHeightPx > 0) || double.IsInfinity(viewportHeightPx))
-        return false;
-      double aspect = b.ImageWidthPx > 0 && b.ImageHeightPx > 0
-        ? (double)b.ImageWidthPx / b.ImageHeightPx
-        : b.HeightPx > 0 ? b.WidthPx / b.HeightPx : 1.0;
-      return Replace(
-        b with { WidthPx = viewportHeightPx * aspect, HeightPx = viewportHeightPx, PhysicalSizeBound = true },
-        keepBinding: true);
-    }
-  }
-
-  /// <summary>
   /// Re-sizes every bound billboard for a new viewport scale (zoom, resize) or comet distance:
   /// its height stays the image's angular height over the viewport's angle per px, so a billboard
   /// matched to the viewport's field keeps filling it.
@@ -173,7 +153,7 @@ public sealed class DesktopBillboardService : IDisposable
   }
 
   /// <summary>Clamps what a hand-edited value could break: alpha to [0, 1], sides ≥ the minimum,
-  /// rotation into (−180, 180].</summary>
+  /// rotation into (−180, 180], a non-finite nucleus pixel dropped.</summary>
   private static DesktopBillboard Sanitize(DesktopBillboard b) =>
     b with
     {
@@ -185,7 +165,10 @@ public sealed class DesktopBillboardService : IDisposable
       ImageHeightKm = b.ImageHeightKm is { } km && km > 0 && !double.IsInfinity(km) ? km : null,
       ImageWidthPx = Math.Max(0, b.ImageWidthPx),
       ImageHeightPx = Math.Max(0, b.ImageHeightPx),
+      ImageNucleusPx = b.ImageNucleusPx is { } n && IsFinite(n.X) && IsFinite(n.Y) ? n : null,
     };
+
+  private static bool IsFinite(double v) => !double.IsNaN(v) && !double.IsInfinity(v);
 
   public void Dispose() => _billboards.Dispose();
 }

@@ -1,26 +1,17 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vmDebug="using:AetherVk.Logic.ViewModels.Debug"
+             xmlns:controls="using:AetherVk.UI.Controls"
              x:CompileBindings="False"
              x:Class="AetherVk.UI.CometOrbitDebugPanel">
 
-  <Border CornerRadius="8"
-          Background="{DynamicResource Bg.Surface}"
-          BorderBrush="{DynamicResource Bg.Outline}"
-          BorderThickness="1"
-          Opacity="0.9"
-          Padding="10,8">
+  <controls:CollapsibleHudPanel IsExpanded="{Binding IsExpanded, Mode=TwoWay}"
+                                ToggleAutomationId="OrbitHudCollapseButton">
     <StackPanel Spacing="5" MinWidth="230">
 
-      <Grid ColumnDefinitions="*,Auto">
-        <TextBlock Text="🛸 Orbit Debug"
-                   FontWeight="Bold" VerticalAlignment="Center"
-                   Foreground="{DynamicResource Accent.Primary}"/>
-        <Button Grid.Column="1" Content="✕" Padding="6,0" FontSize="11"
-                AutomationProperties.AutomationId="OrbitDebugCloseButton"
-                Command="{Binding DismissCommand}"
-                ToolTip.Tip="Close the orbit debug panel for this session"/>
-      </Grid>
+      <TextBlock Text="🛸 Orbit Debug"
+                 FontWeight="Bold" VerticalAlignment="Center"
+                 Foreground="{DynamicResource Accent.Primary}"/>
 
       <Separator Background="{DynamicResource Bg.Outline}" Margin="0,2"/>
 
@@ -91,5 +82,5 @@
       </Panel>
 
     </StackPanel>
-  </Border>
+  </controls:CollapsibleHudPanel>
 </UserControl>

@@ -241,6 +241,74 @@ public class CameraServiceTests
     Assert.Equal(-1, calls[^1].Mode);
   }
 
+  /// Reopening a save in Earth observer / comet tracking: once the camera is parented to the Earth
+  /// the core owns its pose. The end of the fly-in used to write the UI's own pose (geometric comet,
+  /// spherical site) as a queued animation right before the synchronous hand-over, so the logic
+  /// thread ran it after the core's pose and, paused, nothing re-posed it: the reopened 67P save
+  /// drew the nucleus 50 px off centre (`comet_67p_reopen_offset_is_the_light_time_aim`). Now the
+  /// tracking submode, the comet and the site are handed over and the UI writes nothing after the
+  /// parenting (nor from the per-tick Earth callback).
+  [Fact]
+  public async Task RestorePersistedState_InCometTracking_DoesNotReposeFromTheUi()
+  {
+    var (service, runtime, scheduler) = BuildService();
+    var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+    runtime.Setup(r => r.CometEntityId).Returns(77UL);
+    runtime.Setup(r => r.SetCameraParent(It.IsAny<ulong>(), It.IsAny<ulong>(), It.IsAny<bool>())).Returns(true);
+    var calls = new System.Collections.Generic.List<(int Mode, ulong Comet, bool Topo, double Lat, double Lon, ObserverUp Up)>();
+    runtime.Setup(r => r.SetEarthObserver(It.IsAny<ulong>(), It.IsAny<int>(), It.IsAny<ulong>(), It.IsAny<ulong>(),
+        It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<Quaterniond>(), It.IsAny<ObserverUp>()))
+      .Callback<ulong, int, ulong, ulong, bool, double, double, double, Quaterniond, ObserverUp>(
+        (_, m, _, c, t, la, lo, _, _, u) => calls.Add((m, c, t, la, lo, u)))
+      .Returns(true);
+    var cometConfig = (CometConfigService)typeof(CameraService).GetField("_cometConfigService", flags)!.GetValue(service)!;
+    ((System.Reactive.Subjects.BehaviorSubject<bool>)typeof(CometConfigService)
+      .GetField("_isCommittedSubject", flags)!.GetValue(cometConfig)!).OnNext(true);
+    var tracker = typeof(CameraService).GetField("_cometTracker", flags)!.GetValue(service)!;
+    tracker.GetType().GetField("_lastKnownCometPositionF64", flags)!
+      .SetValue(tracker, ((double X, double Y, double Z)?)(1.3, -0.4, 0.05));
+    var saved = new CameraPersistedState(
+      CameraMode.EarthPosition, null, null, Vector3.Zero,
+      28.7624f, -17.8792f, 0.0,
+      EarthObserverOrientationMode.CometTracking,
+      [0, 0, 0, 1], [0, 0, 0, 1], ObserverTopocentric: true, ObserverUp: ObserverUp.CelestialNorth);
+    runtime.Invocations.Clear();
+
+    service.RestorePersistedState(saved);
+    await Task.Delay(TimeSpan.FromSeconds(2.5 + 0.7)); // the fly-in (ModeSwitchAnimationSeconds)
+    scheduler.AdvanceBy(1);
+    // a commit's Earth callback after the hand-over
+    var dto = new MutableHighResTransformDTO { PosX = 0.98, PosY = 0.17, RotW = 1, ScaleX = 1, ScaleY = 1, ScaleZ = 1 };
+    nint ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(System.Runtime.InteropServices.Marshal.SizeOf(dto));
+    try
+    {
+      System.Runtime.InteropServices.Marshal.StructureToPtr(dto, ptr, false);
+      typeof(CameraService).GetMethod("HandleEarthTransformCallback", flags)!.Invoke(service, new object[] { ptr });
+    }
+    finally
+    {
+      System.Runtime.InteropServices.Marshal.FreeHGlobal(ptr);
+    }
+
+    Assert.NotEmpty(calls);
+    var last = calls[^1];
+    Assert.Equal((int)EarthObserverOrientationMode.CometTracking, last.Mode);
+    Assert.Equal(77UL, last.Comet);
+    Assert.True(last.Topo);
+    Assert.Equal((28.7624, -17.8792), (Math.Round(last.Lat, 4), Math.Round(last.Lon, 4)));
+    Assert.Equal(ObserverUp.CelestialNorth, last.Up);
+    var invocations = runtime.Invocations.ToList();
+    int parented = invocations.FindIndex(i => i.Method.Name == nameof(INativeRuntimeService.SetCameraParent)
+      && (bool)i.Arguments[2]);
+    Assert.True(parented >= 0, "the fly-in never parented the camera to the Earth");
+    var uiWrites = invocations.Skip(parented)
+      .Where(i => i.Method.Name is nameof(INativeRuntimeService.CameraSetRotoTranslate)
+        or nameof(INativeRuntimeService.AddCameraAnimation))
+      .Select(i => i.Method.Name)
+      .ToList();
+    Assert.Empty(uiWrites);
+  }
+
   [System.Runtime.InteropServices.StructLayout(
     System.Runtime.InteropServices.LayoutKind.Sequential
   )]
@@ -935,7 +1003,16 @@ public class CameraServiceTests
     var below = AetherVk.Logic.ViewModels.Debug.CameraMatrixDebugViewModel.FormatEarthObserver(
       new EarthObserverStatus((int)EarthObserverOrientationMode.CometTracking, 0.2, -0.2));
     Assert.Contains("below horizon: facing its azimuth", below);
-    Assert.Equal(24, System.Runtime.InteropServices.Marshal.SizeOf<CEarthObserverStatusDTO>());
+    // where the comet is drawn, after the part the e2e scenario parses (ThesisScenarioTests)
+    var placed = AetherVk.Logic.ViewModels.Debug.CameraMatrixDebugViewModel.FormatEarthObserver(
+      new EarthObserverStatus((int)EarthObserverOrientationMode.CometTracking, 6e-17, 0.5),
+      new CometScreenPosition(609.5, 325.26, true), 1123f, 694f);
+    Assert.Equal("CometTracking · aim 6.0e-17 rad · target +28.6° · screen (609.5, 325.3) px of 1123×694", placed);
+    Assert.Matches(@"aim (\S+) rad · target ([+-]\S+)°", placed);
+    Assert.EndsWith(" off-screen", AetherVk.Logic.ViewModels.Debug.CameraMatrixDebugViewModel.FormatEarthObserver(
+      new EarthObserverStatus((int)EarthObserverOrientationMode.Free, 0.0, 0.5),
+      new CometScreenPosition(-40.0, 12.0, false), 1123f, 694f));
+    Assert.Equal(24,System.Runtime.InteropServices.Marshal.SizeOf<CEarthObserverStatusDTO>());
   }
 
   /// A comet submode without a committed comet ejects to Free and warns with a breadcrumb.
@@ -1348,6 +1425,72 @@ public class CameraServiceTests
     service.SetCameraMode(CameraMode.UpZenith);
     var p = CameraService.ShadingPhysical;
     Assert.Equal(new List<(ulong, uint)> { (100UL, 0u), (100UL, p), (100UL, 0u), (100UL, p), (100UL, 0u) }, sent);
+  }
+
+  /// The "Model" mode button (feedback #20): the Earth observer with celestial north up; without
+  /// a comet the tracking is refused (back to free look) and so is the nucleus-from-Earth field.
+  [Fact]
+  public void ModelView_IsTheEarthObserverNorthUp_AndNeedsAComet()
+  {
+    var (service, _, _) = BuildService();
+    Assert.False(service.EnterModelView());
+    Assert.Equal(CameraMode.EarthPosition, service.CurrentMode);
+    Assert.Equal(ObserverUp.CelestialNorth, service.EarthObserverUp);
+    Assert.False(service.ViewNucleusFromEarth());
+  }
+
+  /// Free orbit (feedback #16): the elevation wraps in (−π, π] and the camera turns smoothly over
+  /// the pole (no flip at ±90°), keeping the old +Z-up framing below it.
+  [Fact]
+  public void OrbitRotation_IsContinuousOverThePole_AndWraps()
+  {
+    Assert.Equal(-3f, CameraService.WrapElevation(-3f), 5);
+    Assert.Equal((float)(3.5 - 2 * Math.PI), CameraService.WrapElevation(3.5f), 5);
+    Assert.Equal((float)Math.PI, CameraService.WrapElevation((float)-Math.PI), 5);
+
+    static Vector3 Offset(float a, float e) =>
+      new((float)(Math.Cos(e) * Math.Cos(a)), (float)(Math.Cos(e) * Math.Sin(a)), (float)Math.Sin(e));
+
+    // below the pole: same as the +Z-up basis (fallback path for angles that do not match)
+    var below = CameraService.OrbitCameraRotation(Offset(0.7f, 0.4f), 0.7f, 0.4f);
+    var zUp = CameraService.OrbitCameraRotation(Offset(0.7f, 0.4f), 0f, 1.5f);
+    Assert.True(Math.Abs(Quaternion.Dot(below, zUp)) > 0.99999f);
+
+    // small steps across the pole: neighbouring rotations stay close
+    for (float e = 1.2f; e < 2.0f; e += 0.01f)
+    {
+      var q0 = CameraService.OrbitCameraRotation(Offset(0.7f, e), 0.7f, e);
+      var q1 = CameraService.OrbitCameraRotation(Offset(0.7f, e + 0.01f), 0.7f, e + 0.01f);
+      Assert.True(Math.Abs(Quaternion.Dot(q0, q1)) > 0.999f, $"jump at e = {e}");
+    }
+  }
+
+  /// The nucleus exposure undoes the display shading's 1/π (a sunlit white surface is white at
+  /// 0 EV, feedback #17), leaves the physical shading and the UpZenith view alone, scales by 2^EV,
+  /// is clamped, and is sent per camera on change.
+  [Fact]
+  public void Exposure_UndoesDisplayPi_ScalesByStops_AndIsSentOnChange()
+  {
+    Assert.Equal(1f, CameraService.ExposureFor(CameraMode.UpZenith, false, 3f));
+    Assert.Equal((float)Math.PI, CameraService.ExposureFor(CameraMode.CometOrbiting, false, 0f), 5);
+    Assert.Equal((float)Math.PI, CameraService.ExposureFor(CameraMode.EarthPosition, true, 0f), 5);
+    Assert.Equal(4f, CameraService.ExposureFor(CameraMode.CometOrbiting, true, 2f), 5);
+
+    var (service, runtime, _) = BuildService();
+    var sent = new List<float>();
+    runtime
+      .Setup(r => r.SetCameraExposure(100UL, It.IsAny<float>()))
+      .Callback<ulong, float>((_, f) => sent.Add(f))
+      .Returns(true);
+    service.SetCameraMode(CameraMode.EarthPosition);
+    service.NucleusExposureEv = 1f;
+    service.NucleusExposureEv = 1f; // unchanged: nothing sent
+    service.NucleusExposureEv = 100f; // clamped
+    Assert.Equal(CameraService.MaxNucleusExposureEv, service.NucleusExposureEv);
+    Assert.Equal(3, sent.Count);
+    Assert.Equal((float)Math.PI, sent[0], 4);
+    Assert.Equal((float)(2 * Math.PI), sent[1], 4);
+    Assert.Equal((float)(64 * Math.PI), sent[2], 3);
   }
 
   /// Behind-camera geometry is on by default; turning it off sets the hide bit on the camera

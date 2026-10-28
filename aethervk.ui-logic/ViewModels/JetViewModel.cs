@@ -1,11 +1,13 @@
 using System;
 using System.Numerics;
+using AetherVk.Logic.Models;
 using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace AetherVk.Logic.ViewModels;
 
 /// <summary>
-/// Represents a single dust emission jet, wrapping all editable per-jet properties.
+/// Represents a single dust emission jet, wrapping all editable per-jet properties: its site,
+/// ejection, colour and its own grain and activity parameters.
 /// All mutable properties raise <see cref="System.ComponentModel.INotifyPropertyChanged"/>
 /// so that <see cref="ModelTabViewModel"/> can react and submit a <c>ModifyParticleSystem</c>
 /// call after a short debounce.
@@ -90,6 +92,72 @@ public sealed partial class JetViewModel : ObservableObject
   [ObservableProperty]
   private bool _isPreviewVisible = true;
 
+  // ── Grain and activity (per jet) ─────────────────────────────────────────────
+  // New jets start from the Model tab's defaults (ModelSession); see ParticleSystemEmitParams in
+  // particles.rs for units and valid ranges.
+
+  /// <summary>
+  /// Reference grain diameter in µm (radii s₀/F..s₀·F about s₀ = diameter / 2).
+  /// Corresponds to <c>ParticleSystemEmitParams.diametre_um</c>.
+  /// </summary>
+  [ObservableProperty]
+  private float _diametreUm = JetGrain.Default.DiametreUm;
+
+  /// <summary>Grain bulk density in g/cm³. Corresponds to <c>ParticleSystemEmitParams.density_gcm3</c>.</summary>
+  [ObservableProperty]
+  private float _densityGCm3 = JetGrain.Default.DensityGCm3;
+
+  /// <summary>
+  /// Radiation-pressure efficiency Q_pr (0.5–2, enters β only).
+  /// Corresponds to <c>ParticleSystemEmitParams.scattering_efficiency</c>.
+  /// </summary>
+  [ObservableProperty]
+  private float _scatteringEfficiency = JetGrain.Default.ScatteringEfficiency;
+
+  /// <summary>
+  /// Geometric albedo p of the dust (0.01–0.5): brightness and the Afρ → production conversion.
+  /// Corresponds to <c>ParticleSystemEmitParams.geometric_albedo</c>.
+  /// </summary>
+  [ObservableProperty]
+  private float _geometricAlbedo = JetGrain.Default.GeometricAlbedo;
+
+  /// <summary>
+  /// Size law exponent q (2–5). Only the specks follow it: the continuum keeps q = 3.5.
+  /// Corresponds to <c>ParticleSystemEmitParams.size_q</c>.
+  /// </summary>
+  [ObservableProperty]
+  private float _sizeQ = JetGrain.Default.SizeQ;
+
+  /// <summary>Size range factor F (1–1000). Corresponds to <c>ParticleSystemEmitParams.size_range</c>.</summary>
+  [ObservableProperty]
+  private float _sizeRange = JetGrain.Default.SizeRange;
+
+  /// <summary>
+  /// This jet's Afρ at 1 AU in cm (its activity; the law's exponent, cutoff and max are model-wide).
+  /// Corresponds to <c>ParticleSystemEmitParams.afrho_0_cm</c>.
+  /// </summary>
+  [ObservableProperty]
+  private float _afrho0Cm = JetGrain.Default.Afrho0Cm;
+
+  /// <summary>
+  /// The grain and activity parameters as one value; setting it assigns each property (each one
+  /// raises its own change notification).
+  /// </summary>
+  public JetGrain Grain
+  {
+    get => new(DiametreUm, DensityGCm3, ScatteringEfficiency, GeometricAlbedo, SizeQ, SizeRange, Afrho0Cm);
+    set
+    {
+      DiametreUm = value.DiametreUm;
+      DensityGCm3 = value.DensityGCm3;
+      ScatteringEfficiency = value.ScatteringEfficiency;
+      GeometricAlbedo = value.GeometricAlbedo;
+      SizeQ = value.SizeQ;
+      SizeRange = value.SizeRange;
+      Afrho0Cm = value.Afrho0Cm;
+    }
+  }
+
   // ── Computed (native round-trip) ─────────────────────────────────────────────
 
   /// <summary>
@@ -147,6 +215,12 @@ public sealed partial class JetViewModel : ObservableObject
     Seed = BitConverter.ToUInt32(buf, 0);
   }
 
+  /// <summary>A new jet with random site and ejection (as above) and the given grain (the model defaults).</summary>
+  public JetViewModel(JetGrain grain) : this()
+  {
+    Grain = grain;
+  }
+
   /// <summary>
   /// Restores a jet exactly as saved (savefile): every property and the PCG <paramref name="seed"/>,
   /// so the dust it emits — and the scene's compatibility JSON — match the saved one.
@@ -159,7 +233,8 @@ public sealed partial class JetViewModel : ObservableObject
     float startVelocityStdMs,
     Vector4 streamColor,
     bool isPreviewVisible,
-    uint seed)
+    uint seed,
+    JetGrain? grain = null)
   {
     _latitudeDeg = latitudeDeg;
     _longitudeDeg = longitudeDeg;
@@ -169,6 +244,8 @@ public sealed partial class JetViewModel : ObservableObject
     _streamColor = streamColor;
     _isPreviewVisible = isPreviewVisible;
     Seed = seed;
+    if (grain is not null)
+      Grain = grain;
   }
 
   // ── Private helpers ───────────────────────────────────────────────────────────

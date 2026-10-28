@@ -358,6 +358,20 @@ public unsafe class LinuxNativeInputHandler(IntPtr handle, string handleDescript
     17 => 0x38, // 8
     18 => 0x39, // 9
 
+    // --- Keypad (physical keys, so NumLock does not matter; Win32 VK_NUMPAD0-9 0x60-0x69) ---
+    // Unmapped, these passed through raw and collided with letters (KP_1 = 87 = 'W').
+    90 => 0x60, // KP_0
+    87 => 0x61, // KP_1
+    88 => 0x62, // KP_2
+    89 => 0x63, // KP_3
+    83 => 0x64, // KP_4
+    84 => 0x65, // KP_5
+    85 => 0x66, // KP_6
+    79 => 0x67, // KP_7
+    80 => 0x68, // KP_8
+    81 => 0x69, // KP_9
+    91 => 0x6E, // KP_Decimal → VK_DECIMAL
+
     // --- Control / Navigation ---
     9   => 0x1B, // Escape     → VK_ESCAPE
     36  => 0x0D, // Return     → VK_RETURN

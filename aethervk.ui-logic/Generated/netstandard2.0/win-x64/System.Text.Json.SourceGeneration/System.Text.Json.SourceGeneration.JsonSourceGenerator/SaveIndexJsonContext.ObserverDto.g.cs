@@ -46,7 +46,7 @@ namespace AetherVk.Logic.SaveFile
 
         private static global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[] ObserverDtoPropInit(global::System.Text.Json.JsonSerializerOptions options)
         {
-            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[8];
+            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[9];
 
             var info0 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<float>
             {
@@ -214,6 +214,28 @@ namespace AetherVk.Logic.SaveFile
             
             properties[7] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<global::AetherVk.Logic.SaveFile.ProjectionDto>(options, info7);
 
+            var info8 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<string>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.ObserverDto),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.ObserverDto)obj).Up,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.ObserverDto)obj).Up = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "Up",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.ObserverDto).GetProperty("Up", InstanceMemberBindingFlags, null, typeof(string), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[8] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<string>(options, info8);
+            properties[8].IsGetNullable = false;
+            properties[8].IsSetNullable = false;
+
             return properties;
         }
 
@@ -240,6 +262,7 @@ namespace AetherVk.Logic.SaveFile
             writer.WriteBoolean(PropName_topocentric, ((global::AetherVk.Logic.SaveFile.ObserverDto)value).Topocentric);
             writer.WritePropertyName(PropName_projection);
             ProjectionDtoSerializeHandler(writer, ((global::AetherVk.Logic.SaveFile.ObserverDto)value).Projection);
+            writer.WriteString(PropName_up, ((global::AetherVk.Logic.SaveFile.ObserverDto)value).Up);
 
             writer.WriteEndObject();
         }
