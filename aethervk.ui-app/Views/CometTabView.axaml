@@ -293,7 +293,11 @@
 
             <!-- Pole RA -->
             <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
-              <TextBlock Grid.Column="0" Classes="label" Text="Pole RA" VerticalAlignment="Center" />
+              <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                <TextBlock Classes="label" Text="Pole RA" VerticalAlignment="Center" />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="PoleRaHelp" HelpHeader="Pole RA"
+                                             HelpContent="Where the spin axis points on the sky (J2000). These are not rotations: the nucleus rotates only about its own axis, and the axis stays fixed in space. RA/Dec only orient it." />
+              </StackPanel>
               <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="PoleRaSlider" Value="{Binding PoleRaDeg}" Step="0.1">
                 <controls:UnboundedSlider.InnerRightContent>
                   <TextBlock Classes="unit-of-measurement" Text="°" />
@@ -303,7 +307,11 @@
 
             <!-- Pole Dec -->
             <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
-              <TextBlock Grid.Column="0" Classes="label" Text="Pole Dec" VerticalAlignment="Center" />
+              <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                <TextBlock Classes="label" Text="Pole Dec" VerticalAlignment="Center" />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="PoleDecHelp" HelpHeader="Pole Dec"
+                                             HelpContent="Where the spin axis points on the sky (J2000). These are not rotations: the nucleus rotates only about its own axis, and the axis stays fixed in space. RA/Dec only orient it." />
+              </StackPanel>
               <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="PoleDecSlider" Value="{Binding PoleDecDeg}" Step="0.1">
                 <controls:UnboundedSlider.InnerRightContent>
                   <TextBlock Classes="unit-of-measurement" Text="°" />
@@ -313,7 +321,11 @@
 
             <!-- Prime Meridian -->
             <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
-              <TextBlock Grid.Column="0" Classes="label" Text="Prime Meridian" VerticalAlignment="Center" />
+              <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                <TextBlock Classes="label" Text="Prime Meridian" VerticalAlignment="Center" />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="PrimeMeridianHelp" HelpHeader="Prime Meridian"
+                                             HelpContent="The nucleus' rotation angle at the reference date J2000 (where longitude 0 faces). It sets which side faces where at a given time, i.e. the timing of the jet spirals, not the outline of the fan." />
+              </StackPanel>
               <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="PrimeMeridianSlider" Value="{Binding PrimeMeridianDeg}" Step="0.1">
                 <controls:UnboundedSlider.InnerRightContent>
                   <TextBlock Classes="unit-of-measurement" Text="°" />
@@ -321,11 +333,29 @@
               </controls:UnboundedSlider>
             </Grid>
 
-            <!-- Pole precession: rarely known for a comet, so out of the way -->
-            <Expander AutomationProperties.AutomationId="PolePrecessionExpander" Margin="0,2"
-                      ToolTip.Tip="Slow drift of the pole (IAU model terms). Leave at 0 unless the literature gives one.">
+            <!-- Rotation Period: the control; the same spin as the °/day rate in the expander below -->
+            <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
+              <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                <TextBlock Classes="label" Text="Rotation Period (h)" VerticalAlignment="Center" />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="RotPeriodHelp" HelpHeader="Rotation Period (h)"
+                                             HelpContent="Sidereal spin period. Edits the rate in the Advanced expander (°/day); the sign (prograde/retrograde) is kept. Example: 718 °/day = 12.03 h." />
+              </StackPanel>
+              <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="RotPeriodSlider" Value="{Binding RotationPeriodHours}" Step="0.01">
+                <controls:UnboundedSlider.InnerRightContent>
+                  <TextBlock Classes="unit-of-measurement" Text="h" />
+                </controls:UnboundedSlider.InnerRightContent>
+              </controls:UnboundedSlider>
+            </Grid>
+
+            <!-- Precession and the °/day rate: rarely needed, so out of the way -->
+            <Expander AutomationProperties.AutomationId="PolePrecessionExpander" Margin="0,2">
               <Expander.Header>
-                <TextBlock Text="Advanced: pole precession" />
+                <StackPanel Orientation="Horizontal" Spacing="4">
+                  <TextBlock Text="Advanced: rates (precession, °/day)" />
+                  <controls:PropertyHelpButton AutomationProperties.AutomationId="RatesAdvancedHelp"
+                                               HelpHeader="Advanced: rates"
+                                               HelpContent="RA/Dec rates are a slow drift of the spin axis (precession), °/century, 0 by default. The rotation rate is the same spin as the period, in °/day (360·24 / period h)." />
+                </StackPanel>
               </Expander.Header>
               <StackPanel>
             <!-- RA Rate -->
@@ -347,28 +377,18 @@
                 </controls:UnboundedSlider.InnerRightContent>
               </controls:UnboundedSlider>
             </Grid>
-              </StackPanel>
-            </Expander>
-
-            <!-- Rotation Period (the same quantity as the rate below) -->
-            <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
-              <TextBlock Grid.Column="0" Classes="label" Text="Rotation Period" VerticalAlignment="Center" />
-              <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="RotPeriodSlider" Value="{Binding RotationPeriodHours}" Step="0.01" ToolTip.Tip="Sidereal rotation period; edits the rotation rate below (the sign stays)." ToolTip.ShowDelay="500">
-                <controls:UnboundedSlider.InnerRightContent>
-                  <TextBlock Classes="unit-of-measurement" Text="h" />
-                </controls:UnboundedSlider.InnerRightContent>
-              </controls:UnboundedSlider>
-            </Grid>
 
             <!-- Rotation Rate -->
             <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
-              <TextBlock Grid.Column="0" Classes="label" Text="Rotation Rate" VerticalAlignment="Center" />
-              <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="RotRateSlider" Value="{Binding RotRateDegDay}" Step="0.01" ToolTip.Tip="Sidereal rotation rate. Positive = prograde." ToolTip.ShowDelay="500">
+              <TextBlock Grid.Column="0" Classes="label" Text="Rotation Rate (°/day)" VerticalAlignment="Center" />
+              <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="RotRateSlider" Value="{Binding RotRateDegDay}" Step="0.01">
                 <controls:UnboundedSlider.InnerRightContent>
                   <TextBlock Classes="unit-of-measurement" Text="°/day" />
                 </controls:UnboundedSlider.InnerRightContent>
               </controls:UnboundedSlider>
             </Grid>
+              </StackPanel>
+            </Expander>
 
             <!-- Body-Fixed Camera -->
             <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">

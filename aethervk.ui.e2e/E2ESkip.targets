@@ -1,0 +1,13 @@
+<Project>
+  <!-- Imported by aethervk.ui.e2e.csproj unless BuildE2E=true: the solution build and
+       `dotnet test` stay off the Appium suite. -->
+  <Target Name="Build">
+    <Message Importance="high" Text="aethervk.ui.e2e skipped (build it with -p:BuildE2E=true)" />
+  </Target>
+  <Target Name="Rebuild" DependsOnTargets="Build" />
+  <Target Name="VSTest">
+    <Message Importance="high" Text="aethervk.ui.e2e skipped (run it with -p:BuildE2E=true)" />
+  </Target>
+  <Target Name="Publish" />
+  <Target Name="Pack" />
+</Project>

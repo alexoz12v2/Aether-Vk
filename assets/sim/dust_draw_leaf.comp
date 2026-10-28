@@ -106,7 +106,9 @@ void main() {
         bool any_ = dust_scatter_rows_pq(uvec2(pc.pyramid), pc.invUnit, pbase, pcap, cslot, rec, s, off, w, h, seed, 0, int(h) - 1);
 #endif
 #ifdef DUST_LEAF_WG
-        if (any_) atomicOr(pc.pyramid.v[DUST_PYR_LEVEL_MASK], 1u << level);
+        // (the level read back from its shared word, not held over the walk: a live `level` took
+        // Mali-G52 from 32 to 59 registers, 50 % occupancy)
+        if (any_) atomicOr(pc.pyramid.v[DUST_PYR_LEVEL_MASK], 1u << dust_lv(39u));
 #else
         if (any_) atomicOr(pc.pyramid.v[DUST_PYR_LEVEL_MASK], 1u << DustLRowV(dust_l_slot).v[39u]);
 #endif

@@ -4151,6 +4151,15 @@ mod utils {
     );
   }
 
+  /// the smallest seek (simulated seconds) that restarts the views' dust feedback ([`apply_seek`])
+  pub const DUST_FEEDBACK_RESET_SEEK_S: f64 = 86_400.0;
+
+  /// whether a seek from `previous_s` (none: the scene had no time yet) to `now_s` restarts the
+  /// views' dust feedback: a jump past [`DUST_FEEDBACK_RESET_SEEK_S`]
+  pub fn seek_resets_dust_feedback(previous_s: Option<f64>, now_s: f64) -> bool {
+    previous_s.is_none_or(|p| (now_s - p).abs() > DUST_FEEDBACK_RESET_SEEK_S)
+  }
+
   /// Brings the scene to `epoch` (the clock already moved there, `scaled_us` after
   /// `start_epoch`): fresh cartesian cache stepped and committed, effective trajectory cleared,
   /// and the last TTL of dust emitted right away from the deterministic grid (a few passes of
@@ -4174,6 +4183,7 @@ mod utils {
     insert_almanac_bodies_into_cache(scene_write, scene_id, cache);
     step_cartesian_cache(cache, scene_id, epoch, almanac);
     commit_cartesian_cache(scene_write, scene_id, cache);
+    let previous_s = scene_write.scene.sim_time_s();
     scene_write.scene.set_sim_time_s(scaled_us as f64 * 1e-6);
     apply_earth_observer(scene_write, scene_id, cache);
     // the recorded comet path belongs to the previous timeline position
@@ -4201,10 +4211,15 @@ mod utils {
         .active_physics_task
         .store(true, core::sync::atomic::Ordering::Release);
     }
-    // the whole history appeared at once: what the views' feedback learned no longer applies
-    scene_write
-      .dust_feedback_gen
-      .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    // the whole history appeared at once: past a day's jump what the views' feedback learned no
+    // longer applies (it restarts from its cheap warm-up state, `DustViewHost::reset_feedback`); a
+    // shorter seek (timeline scrubbing, the observer's camera path) shows nearly the same dust and
+    // keeps it (a reset per seek drew every such frame at the warm-up's levels)
+    if seek_resets_dust_feedback(previous_s, scaled_us as f64 * 1e-6) {
+      scene_write
+        .dust_feedback_gen
+        .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    }
     mark_all_serializable_as_changed(scene_write);
   }
 

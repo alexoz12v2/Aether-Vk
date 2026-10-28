@@ -2097,7 +2097,8 @@ fn test_earth_observer_aims_at_the_sun_on_the_real_scene() {
         lat_deg,
         lon_deg,
         0.0,
-        look
+        look,
+        crate::simulation_api::earth_observer::ObserverUp::Ecliptic
       ),
       "{mode:?}: native observer refused"
     );
@@ -2116,7 +2117,8 @@ fn test_earth_observer_aims_at_the_sun_on_the_real_scene() {
     lat_deg,
     lon_deg,
     0.0,
-    [0.0, 0.0, 0.0, 1.0]
+    [0.0, 0.0, 0.0, 1.0],
+    crate::simulation_api::earth_observer::ObserverUp::Ecliptic
   ));
   assert!(ctx.start_simulation(scene_id, SimSpeed::OneHourPerSec));
   let mut worst = 0.0f64;
@@ -2859,4 +2861,18 @@ fn comet_67p_topocentric_ra_dec_matches_horizons() {
     worst_render < 1.0,
     "render-path RA/Dec off Horizons by {worst_render}″"
   );
+}
+
+/// the seek's dust feedback reset: a jump past a day restarts it (a restored save, a far timeline
+/// seek); a shorter seek keeps it (scrubbing, the observer's per-frame path seeks drew every
+/// frame at the reset's levels, 2.9 s at 1 km on the GTX 1070 against 0.25 s)
+#[test]
+fn only_a_day_long_seek_resets_the_dust_feedback() {
+  let day = utils::DUST_FEEDBACK_RESET_SEEK_S;
+  assert!(utils::seek_resets_dust_feedback(None, 0.0), "the first time the scene has");
+  assert!(!utils::seek_resets_dust_feedback(Some(1.0e6), 1.0e6));
+  assert!(!utils::seek_resets_dust_feedback(Some(1.0e6), 1.0e6 + day), "one observer path step");
+  assert!(!utils::seek_resets_dust_feedback(Some(1.0e6), 1.0e6 - day));
+  assert!(utils::seek_resets_dust_feedback(Some(1.0e6), 1.0e6 + day + 1.0));
+  assert!(utils::seek_resets_dust_feedback(Some(1.0e6), 1.0e6 - 30.0 * day));
 }

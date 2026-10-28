@@ -450,7 +450,11 @@
                   </controls:UnboundedSlider>
 
                   <!-- Aperture -->
-                  <TextBlock Grid.Row="4" Grid.Column="0" Text="Aperture" />
+                  <StackPanel Grid.Row="4" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                    <TextBlock Text="Aperture" />
+                    <controls:PropertyHelpButton AutomationProperties.AutomationId="JetApertureHelp" HelpHeader="Aperture"
+                                                 HelpContent="Half-angle of the emission cone." />
+                  </StackPanel>
                   <controls:UnboundedSlider Grid.Row="4" Grid.Column="2" AutomationProperties.AutomationId="JetApertureSlider"
                                             Value="{Binding ApertureDeg}">
                     <controls:UnboundedSlider.InnerRightContent>
@@ -459,7 +463,11 @@
                   </controls:UnboundedSlider>
 
                   <!-- Start Velocity Mean -->
-                  <TextBlock Grid.Row="6" Grid.Column="0" Text="Velocity" />
+                  <StackPanel Grid.Row="6" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                    <TextBlock Text="Velocity" />
+                    <controls:PropertyHelpButton AutomationProperties.AutomationId="JetVelocityHelp" HelpHeader="Velocity"
+                                                 HelpContent="Mean ejection speed of the grains." />
+                  </StackPanel>
                   <Panel Grid.Row="6" Grid.Column="2" Classes="unit-overlay">
                     <TextBox AutomationProperties.AutomationId="JetVelocityBox">
                       <i:Interaction.Behaviors>
@@ -471,7 +479,11 @@
                   </Panel>
 
                   <!-- Velocity Std -->
-                  <TextBlock Grid.Row="8" Grid.Column="0" Text="Vel. σ" />
+                  <StackPanel Grid.Row="8" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                    <TextBlock Text="Vel. σ" />
+                    <controls:PropertyHelpButton AutomationProperties.AutomationId="JetVelocityStdHelp" HelpHeader="Vel. σ"
+                                                 HelpContent="Standard deviation (σ) of the ejection speed." />
+                  </StackPanel>
                   <Panel Grid.Row="8" Grid.Column="2" Classes="unit-overlay">
                     <TextBox AutomationProperties.AutomationId="JetVelocityStdBox">
                       <i:Interaction.Behaviors>
@@ -521,12 +533,17 @@
             </Border>
 
             <Grid ColumnDefinitions="*,12,1.6*"
-                  RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto"
-                  Margin="12,8,12,12">
+                  RowDefinitions="Auto,8,Auto,8,Auto,8,Auto"
+                  Margin="12,8,12,8">
 
-              <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding StrDustDensity}" />
+              <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                <TextBlock Text="{Binding StrDustDensity}" />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="DustDensityHelp"
+                                             HelpHeader="{Binding StrDustDensity}"
+                                             HelpContent="Grain bulk density, g/cm³; enters β and the mass per brightness." />
+              </StackPanel>
               <Panel Grid.Row="0" Grid.Column="2" Classes="unit-overlay">
-                <TextBox>
+                <TextBox AutomationProperties.AutomationId="DustDensityBox">
                   <i:Interaction.Behaviors>
                     <b:NumericTextBoxBehavior Value="{Binding CurrentSession.DensityGCm3}" Minimum="0.00001" Maximum="7.0" />
                   </i:Interaction.Behaviors>
@@ -534,9 +551,14 @@
                 <TextBlock Classes="unit-of-measurement" Text="g/cm³" />
               </Panel>
 
-              <TextBlock Grid.Row="2" Grid.Column="0" Text="{Binding StrDustDiameter}" />
+              <StackPanel Grid.Row="2" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                <TextBlock Text="{Binding StrDustDiameter}" />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="DustDiameterHelp"
+                                             HelpHeader="{Binding StrDustDiameter}"
+                                             HelpContent="Grain diameter; with density it sets β, the radiation-pressure push: smaller or lighter grains curve away from the Sun faster." />
+              </StackPanel>
               <Panel Grid.Row="2" Grid.Column="2" Classes="unit-overlay">
-                <TextBox>
+                <TextBox AutomationProperties.AutomationId="DustDiameterBox">
                   <i:Interaction.Behaviors>
                     <b:NumericTextBoxBehavior Value="{Binding CurrentSession.DiametreUm}" Minimum="0.0001" Maximum="10000" />
                   </i:Interaction.Behaviors>
@@ -551,45 +573,125 @@
                 </i:Interaction.Behaviors>
               </TextBox>
 
-              <TextBlock Grid.Row="10" Grid.Column="0" Text="{Binding StrGeometricAlbedo}" />
-              <TextBox Grid.Row="10" Grid.Column="2">
+              <StackPanel Grid.Row="6" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                <TextBlock Text="{Binding StrGeometricAlbedo}" />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="DustAlbedoHelp"
+                                             HelpHeader="{Binding StrGeometricAlbedo}"
+                                             HelpContent="Geometric albedo of the dust; cometary dust 0.03–0.06; scales brightness and the Afρ → kg/s conversion." />
+              </StackPanel>
+              <TextBox Grid.Row="6" Grid.Column="2" AutomationProperties.AutomationId="DustAlbedoBox">
                 <i:Interaction.Behaviors>
                   <b:NumericTextBoxBehavior Value="{Binding CurrentSession.GeometricAlbedo}" Minimum="0.01" Maximum="0.5" />
                 </i:Interaction.Behaviors>
               </TextBox>
 
-              <TextBlock Grid.Row="12" Grid.Column="0" Text="{Binding StrSizeQ}" />
-              <TextBox Grid.Row="12" Grid.Column="2">
-                <i:Interaction.Behaviors>
-                  <b:NumericTextBoxBehavior Value="{Binding CurrentSession.SizeQ}" Minimum="2" Maximum="5" />
-                </i:Interaction.Behaviors>
-              </TextBox>
-
-              <TextBlock Grid.Row="14" Grid.Column="0" Text="{Binding StrSizeRange}" />
-              <TextBox Grid.Row="14" Grid.Column="2">
-                <i:Interaction.Behaviors>
-                  <b:NumericTextBoxBehavior Value="{Binding CurrentSession.SizeRange}" Minimum="1" Maximum="1000" />
-                </i:Interaction.Behaviors>
-              </TextBox>
-
-              <TextBlock Grid.Row="6" Grid.Column="0" Text="Afρ₀" />
-              <Panel Grid.Row="6" Grid.Column="2" Classes="unit-overlay">
-                <TextBox>
-                  <i:Interaction.Behaviors>
-                    <b:NumericTextBoxBehavior Value="{Binding CurrentSession.Afrho0Cm}" Minimum="1" Maximum="2000000" />
-                  </i:Interaction.Behaviors>
-                </TextBox>
-                <TextBlock Classes="unit-of-measurement" Text="cm" />
-              </Panel>
-
-              <TextBlock Grid.Row="8" Grid.Column="0" Text="Afρ power" />
-              <TextBox Grid.Row="8" Grid.Column="2">
-                <i:Interaction.Behaviors>
-                  <b:NumericTextBoxBehavior Value="{Binding CurrentSession.AfrhoPower}" Minimum="1" Maximum="4" />
-                </i:Interaction.Behaviors>
-              </TextBox>
-
             </Grid>
+
+            <!-- Activity law: rarely changed, out of the way (it is not a grain-size law) -->
+            <Expander AutomationProperties.AutomationId="ActivityAdvancedExpander" Margin="12,0,12,8">
+              <Expander.Header>
+                <StackPanel Orientation="Horizontal" Spacing="4">
+                  <TextBlock Text="Advanced: activity (Afρ)" />
+                  <controls:PropertyHelpButton AutomationProperties.AutomationId="ActivityAdvancedHelp"
+                                               HelpHeader="Activity (Afρ)"
+                                               HelpContent="Afρ is not a grain distribution: it is how much dust the comet produces at each distance from the Sun.&#x0A;&#x0A;Afρ(r) = min(max, Afρ₀ · r⁻ᵏ), zero beyond the cutoff.&#x0A;• Afρ₀: activity at 1 AU (cm).&#x0A;• Exponent k: how fast activity falls with solar distance (k = 2: twice as far → 4× less dust).&#x0A;• Cutoff: distance where activity stops.&#x0A;• Max: cap close to the Sun.&#x0A;&#x0A;The engine turns Afρ into a production rate Q = 2ρ·s·v·Afρ / (3·p·f_v·(1+(σ/v)²)) kg/s (ρ density, s grain radius, v speed, p albedo, f_v speed factor of the size spread).&#x0A;&#x0A;Afρ is a brightness measurement, so it fixes how bright the coma is. Density and diameter do not set the amount of dust: they set how much mass that brightness needs, and how hard radiation pressure pushes the grains (β ∝ 1/(ρ·s)), i.e. how much the coma curves away from the Sun." />
+                </StackPanel>
+              </Expander.Header>
+              <StackPanel Spacing="8">
+                <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto,8,Auto,8,Auto,8,Auto">
+
+                  <TextBlock Grid.Row="0" Grid.Column="0" Text="Afρ₀ (at 1 AU)" />
+                  <Panel Grid.Row="0" Grid.Column="2" Classes="unit-overlay">
+                    <TextBox AutomationProperties.AutomationId="Afrho0Box">
+                      <i:Interaction.Behaviors>
+                        <b:NumericTextBoxBehavior Value="{Binding CurrentSession.Afrho0Cm}" Minimum="1" Maximum="2000000" />
+                      </i:Interaction.Behaviors>
+                    </TextBox>
+                    <TextBlock Classes="unit-of-measurement" Text="cm" />
+                  </Panel>
+
+                  <TextBlock Grid.Row="2" Grid.Column="0" Text="Afρ exponent k" />
+                  <TextBox Grid.Row="2" Grid.Column="2" AutomationProperties.AutomationId="AfrhoPowerBox">
+                    <i:Interaction.Behaviors>
+                      <b:NumericTextBoxBehavior Value="{Binding CurrentSession.AfrhoPower}" Minimum="1" Maximum="4" />
+                    </i:Interaction.Behaviors>
+                  </TextBox>
+
+                  <TextBlock Grid.Row="4" Grid.Column="0" Text="Afρ cutoff" />
+                  <Panel Grid.Row="4" Grid.Column="2" Classes="unit-overlay">
+                    <TextBox AutomationProperties.AutomationId="AfrhoCutoffBox">
+                      <i:Interaction.Behaviors>
+                        <b:NumericTextBoxBehavior Value="{Binding CurrentSession.AfrhoCutoffAu}" Minimum="3" Maximum="100" />
+                      </i:Interaction.Behaviors>
+                    </TextBox>
+                    <TextBlock Classes="unit-of-measurement" Text="AU" />
+                  </Panel>
+
+                  <TextBlock Grid.Row="6" Grid.Column="0" Text="Afρ max" />
+                  <Panel Grid.Row="6" Grid.Column="2" Classes="unit-overlay">
+                    <TextBox AutomationProperties.AutomationId="AfrhoMaxBox">
+                      <i:Interaction.Behaviors>
+                        <b:NumericTextBoxBehavior Value="{Binding CurrentSession.AfrhoMaxValueCm}" Minimum="1" Maximum="10000000" />
+                      </i:Interaction.Behaviors>
+                    </TextBox>
+                    <TextBlock Classes="unit-of-measurement" Text="cm" />
+                  </Panel>
+                </Grid>
+
+                <controls:CurvePlot AutomationProperties.AutomationId="AfrhoCurvePlot"
+                                    Model="{Binding AfrhoPlot}"
+                                    Height="140" HorizontalAlignment="Stretch"
+                                    PlotBackground="{DynamicResource Bg.Surface}"
+                                    PrimaryBrush="{DynamicResource Accent.Primary}"
+                                    SecondaryBrush="{DynamicResource Accent.Secondary}"
+                                    MarkerBrush="{DynamicResource Sem.Warning}"
+                                    AxisBrush="{DynamicResource Text.Disabled}"
+                                    TextBrush="{DynamicResource Text.Secondary}" />
+                <TextBlock AutomationProperties.AutomationId="AfrhoNowText"
+                           Text="{Binding AfrhoNowText}"
+                           FontSize="11" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Text.Secondary}" />
+              </StackPanel>
+            </Expander>
+
+            <!-- Grain size law: only the discrete specks follow q -->
+            <Expander AutomationProperties.AutomationId="SizeDistributionAdvancedExpander" Margin="12,0,12,12">
+              <Expander.Header>
+                <StackPanel Orientation="Horizontal" Spacing="4">
+                  <TextBlock Text="Advanced: grain size distribution" />
+                  <controls:PropertyHelpButton AutomationProperties.AutomationId="SizeDistributionAdvancedHelp"
+                                               HelpHeader="Grain size distribution"
+                                               HelpContent="Grain radii follow n(s) ∝ s^−q from s₀/F to s₀·F, s₀ = diameter/2 (q = 3.5, F = 10, 100 µm → radii 5–500 µm).&#x0A;&#x0A;By number, small grains dominate; by cross-section (what sets brightness) the law is s^(2−q), so brightness favours small grains only slowly.&#x0A;&#x0A;The continuous dust rendering is built for q = 3.5; changing q only affects the individual bright specks." />
+                </StackPanel>
+              </Expander.Header>
+              <StackPanel Spacing="8">
+                <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto,8,Auto">
+                  <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding StrSizeQ}" />
+                  <TextBox Grid.Row="0" Grid.Column="2" AutomationProperties.AutomationId="SizeQBox">
+                    <i:Interaction.Behaviors>
+                      <b:NumericTextBoxBehavior Value="{Binding CurrentSession.SizeQ}" Minimum="2" Maximum="5" />
+                    </i:Interaction.Behaviors>
+                  </TextBox>
+
+                  <TextBlock Grid.Row="2" Grid.Column="0" Text="{Binding StrSizeRange}" />
+                  <TextBox Grid.Row="2" Grid.Column="2" AutomationProperties.AutomationId="SizeRangeBox">
+                    <i:Interaction.Behaviors>
+                      <b:NumericTextBoxBehavior Value="{Binding CurrentSession.SizeRange}" Minimum="1" Maximum="1000" />
+                    </i:Interaction.Behaviors>
+                  </TextBox>
+                </Grid>
+
+                <controls:CurvePlot AutomationProperties.AutomationId="SizeDistributionPlot"
+                                    Model="{Binding SizeDistributionPlot}"
+                                    Height="140" HorizontalAlignment="Stretch"
+                                    PlotBackground="{DynamicResource Bg.Surface}"
+                                    PrimaryBrush="{DynamicResource Accent.Primary}"
+                                    SecondaryBrush="{DynamicResource Sem.Warning}"
+                                    MarkerBrush="{DynamicResource Sem.Warning}"
+                                    AxisBrush="{DynamicResource Text.Disabled}"
+                                    TextBrush="{DynamicResource Text.Secondary}" />
+              </StackPanel>
+            </Expander>
           </StackPanel>
         </Expander>
       </Border>

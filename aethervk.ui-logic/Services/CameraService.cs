@@ -57,6 +57,21 @@ public enum EarthObserverOrientationMode
   SunTracking = 4,
 }
 
+/// <summary>
+/// Which way the Earth observer's view is "up" (the up hint every look is levelled to). Values
+/// match the native <c>avkSimulationContext_setEarthObserver</c> <c>up</c> argument.
+/// </summary>
+public enum ObserverUp
+{
+  /// The ecliptic pole: +Z, or −Z for a topocentric site south of the equator (the screen right
+  /// vector stays in the ecliptic plane). Older saves read as this.
+  Ecliptic = 0,
+
+  /// J2000 celestial north, (0, sin ε, cos ε) in the ecliptic world frame, whatever the site: a
+  /// telescope image's north-up / east-left orientation (latitude ignored).
+  CelestialNorth = 1,
+}
+
 /// <summary>Body an Earth observer tracking submode aims at.</summary>
 public enum EarthObserverTarget
 {
@@ -119,7 +134,9 @@ public sealed record CameraPersistedState(
   bool ObserverTopocentric = false,
   /// <summary>The Earth observer's remembered projection while the camera is in another mode
   /// (re-entering lands on it); null in the Earth observer itself (see Projection) or never entered.</summary>
-  CameraProjectionState? ObserverProjection = null);
+  CameraProjectionState? ObserverProjection = null,
+  /// <summary>The Earth observer's view up (older saves: the ecliptic pole).</summary>
+  ObserverUp ObserverUp = ObserverUp.Ecliptic);
 
 /// <summary>
 /// How a viewport's settings panel shows its camera: the distance unit of the orthographic
@@ -284,6 +301,27 @@ public sealed class CameraService : IDisposable
 
   // The latitude whose pole the view's up leans to: the site's, the ecliptic north at the centre.
   private float UpLatDeg => _observerTopocentricSubject.Value ? _observerLatDeg : 0f;
+
+  // The Earth observer's view up: celestial north by default (a telescope image's north up).
+  private readonly BehaviorSubject<ObserverUp> _observerUpSubject = new(ObserverUp.CelestialNorth);
+
+  /// <summary>Emits the Earth observer's view up, then each change.</summary>
+  public IObservable<ObserverUp> EarthObserverUpChanged => _observerUpSubject.AsObservable();
+
+  /// <summary>The Earth observer's view up (<see cref="SetEarthObserverUp"/>).</summary>
+  public ObserverUp EarthObserverUp => _observerUpSubject.Value;
+
+  // The up hint every Earth observer look is levelled to (identical to the native observer's).
+  private Vector3d UpHint => ObserverUpHint(_observerUpSubject.Value, UpLatDeg);
+
+  /// <summary>
+  /// The world (ecliptic J2000) up hint of <paramref name="up"/>: the ecliptic pole on the
+  /// <paramref name="latDeg"/> side (+Z north of the equator, −Z south), or celestial north
+  /// (0, sin ε, cos ε) whatever the latitude. The native observer uses the same vector.
+  /// </summary>
+  internal static Vector3d ObserverUpHint(ObserverUp up, float latDeg) => up == ObserverUp.CelestialNorth
+    ? new Vector3d(0.0, Math.Sin(SkyMath.ObliquityRad), Math.Cos(SkyMath.ObliquityRad))
+    : latDeg >= 0f ? Vector3d.UnitZ : -Vector3d.UnitZ;
   /// <summary>Observer height above the WGS84 ellipsoid (m), native observer only (0 by default).</summary>
   private double _observerElevM;
   /// <summary>True while the core poses the Earth observer camera in its commits
@@ -393,7 +431,8 @@ public sealed class CameraService : IDisposable
         _modeSubject.Value != CameraMode.EarthPosition
           && _modeSnapshots.TryGetValue(CameraMode.EarthPosition, out var earth)
           ? earth.Projection
-          : null);
+          : null,
+        _observerUpSubject.Value);
     }
   }
 
@@ -413,6 +452,7 @@ public sealed class CameraService : IDisposable
     SetEarthObserverLatLon(state.ObserverLatDeg, state.ObserverLonDeg);
     SetEarthObserverElevation(state.ObserverElevationM);
     SetEarthObserverTopocentric(state.ObserverTopocentric);
+    SetEarthObserverUp(state.ObserverUp);
     SetOrbitOffset(state.OrbitOffsetAu);
     lock (_earthPosLock)
     {
@@ -1298,14 +1338,14 @@ public sealed class CameraService : IDisposable
 
       lock (_earthPosLock)
       {
-        // Yaw about the ecliptic pole the view is levelled to (the right vector stays in the
-        // ecliptic plane), pitch about the camera's local X; then re-assert the frame.
-        var pole = UpLatDeg >= 0f ? Vector3d.UnitZ : -Vector3d.UnitZ;
+        // Yaw about the pole the view is levelled to (the up hint: the right vector stays in its
+        // equator), pitch about the camera's local X; then re-assert the frame.
+        var pole = UpHint;
         var yaw   = Quaterniond.CreateFromAxisAngle(pole, earthYawRad);
         var pitch = Quaterniond.CreateFromAxisAngle(Vector3d.UnitX, earthPitchRad);
 
         // Apply yaw in world space (pre-multiply), and pitch in local space (post-multiply).
-        var newRot = EarthObserverOrient(Quaterniond.Normalize(yaw * _earthRotation * pitch), UpLatDeg);
+        var newRot = EarthObserverOrient(Quaterniond.Normalize(yaw * _earthRotation * pitch), pole);
 
         // Update all cached look directions so a later mode switch has fresh anchors.
         _earthRotation     = newRot;
@@ -1542,6 +1582,27 @@ public sealed class CameraService : IDisposable
   }
 
   /// <summary>
+  /// The Earth observer's view up (<see cref="ObserverUp"/>): the current look is re-levelled to it
+  /// and re-pushed right away in Earth observer mode. Kept across exit / re-enter and saved.
+  /// </summary>
+  public void SetEarthObserverUp(ObserverUp up)
+  {
+    lock (_earthPosLock)
+    {
+      if (_observerUpSubject.Value == up)
+        return;
+      _observerUpSubject.OnNext(up);
+      _earthRotation = EarthObserverOrient(_earthRotation, UpHint);
+      _inertialLookDir = EarthObserverOrient(_inertialLookDir, UpHint);
+      if (_modeSubject.Value == CameraMode.EarthPosition)
+      {
+        SnapCameraToEarth(_lastEarthPos);
+        PushNativeObserver();
+      }
+    }
+  }
+
+  /// <summary>
   /// Sets the observer's height above the WGS84 ellipsoid (metres, e.g. a FITS <c>SITEELEV</c>).
   /// Only the native observer uses it (the UI's own spherical pose ignores it); re-pushed right
   /// away in Earth observer mode.
@@ -1615,7 +1676,7 @@ public sealed class CameraService : IDisposable
     {
       if (_modeSubject.Value != CameraMode.EarthPosition || !(worldDirection.Length() > 1e-12))
         return false;
-      var aimed = EarthObserverOrient(EarthObserverLookAt(worldDirection), UpLatDeg);
+      var aimed = EarthObserverOrient(EarthObserverLookAt(worldDirection), UpHint);
       _earthRotation = aimed;
       _inertialLookDir = aimed;
       _earthOrientationMode = EarthObserverOrientationMode.Free;
@@ -1648,7 +1709,7 @@ public sealed class CameraService : IDisposable
     ulong comet = _cometConfigService.IsAlmanacCommittedValue ? _runtimeService.CometEntityId ?? 0 : 0;
     _nativeObserverActive = _runtimeService.SetEarthObserver(
       cam, (int)mode, earth, comet, _observerTopocentricSubject.Value,
-      _observerLatDeg, _observerLonDeg, _observerElevM, _inertialLookDir);
+      _observerLatDeg, _observerLonDeg, _observerElevM, _inertialLookDir, _observerUpSubject.Value);
     if (!_nativeObserverActive)
       Console.WriteLine($"[CameraService] native Earth observer refused ({mode}, earth {earth}, comet {comet}): the UI poses the camera");
   }
@@ -1658,7 +1719,7 @@ public sealed class CameraService : IDisposable
   {
     if (!_nativeObserverActive)
       return;
-    _runtimeService.SetEarthObserver(CameraEntityId ?? 0, -1, 0, 0, false, 0, 0, 0, Quaterniond.Identity);
+    _runtimeService.SetEarthObserver(CameraEntityId ?? 0, -1, 0, 0, false, 0, 0, 0, Quaterniond.Identity, ObserverUp.Ecliptic);
     _nativeObserverActive = false;
   }
 
@@ -1865,6 +1926,67 @@ public sealed class CameraService : IDisposable
     return RequestOrthographicProjection(-halfW, halfW, -halfH, halfH, near, far);
   }
 
+  /// <summary>
+  /// The comet's distance from the Earth observer (km, geometric: the comet where the UI last saw
+  /// it, the observer at the Earth's centre or on its site). Null outside the Earth observer or
+  /// without a comet. The core draws the comet light-time retarded, ~1e-4 relative closer or
+  /// farther; only perspective fields and the labels feel it.
+  /// </summary>
+  public double? GetEarthObserverCometDistanceKm()
+  {
+    const double AuToKm = 149_597_870.7;
+    if (_modeSubject.Value != CameraMode.EarthPosition)
+      return null;
+    lock (_earthPosLock)
+    {
+      var cam = _lastEarthPos + ObserverOffsetWorld();
+      return ResolveEarthObserverTarget(EarthObserverTarget.Comet) is { } c && (c - cam).Length() is var d && d > 0
+        ? d * AuToKm
+        : null;
+    }
+  }
+
+  /// <summary>
+  /// "Match camera to image": the Earth observer shows a field <paramref name="heightKm"/> tall at
+  /// the comet, which subtends <paramref name="angleRad"/> from the observer, over the viewport's
+  /// height. It aims at the comet (CometTracking, frontal: the camera on the observer → comet line,
+  /// a symmetric frustum) with the current <see cref="ObserverUp"/>, and keeps the projection type
+  /// and clip planes:
+  /// <list type="bullet">
+  /// <item>orthographic: half-height = <paramref name="heightKm"/> / 2 exactly (no distance), the
+  /// half-width that × the viewport's physical px aspect;</item>
+  /// <item>perspective: vertical fov = <paramref name="angleRad"/> (refused from 0.9 π).</item>
+  /// </list>
+  /// False outside the Earth observer, without a comet, or for an unusable size of the projection
+  /// in use.
+  /// </summary>
+  public bool SetEarthObserverField(double heightKm, double angleRad)
+  {
+    const double AuToKm = 149_597_870.7;
+    if (_modeSubject.Value != CameraMode.EarthPosition)
+      return false;
+    var proj = _projectionSubject.Value;
+    bool perspective = proj?.IsPerspective ?? true;
+    if (perspective ? !(angleRad > 0 && angleRad < Math.PI * 0.9) : !(heightKm > 0 && !double.IsInfinity(heightKm)))
+      return false;
+    lock (_earthPosLock)
+    {
+      if (ResolveEarthObserverTarget(EarthObserverTarget.Comet) is null)
+        return false;
+    }
+    if (_earthOrientationMode != EarthObserverOrientationMode.CometTracking)
+      SetEarthObserverOrientationMode(EarthObserverOrientationMode.CometTracking);
+    if (_earthOrientationMode != EarthObserverOrientationMode.CometTracking)
+      return false;
+    float near = proj?.Near ?? 1e-9f, far = proj?.Far ?? 10f;
+    if (perspective)
+      return RequestPerspectiveProjection((float)angleRad, _viewportAspect, near, far);
+    double aspect = Math.Max(1f, _viewportWidthPx) / (double)Math.Max(1f, _viewportHeightPx);
+    double halfH = heightKm * 0.5 / AuToKm;
+    float halfW = (float)(halfH * aspect);
+    return RequestOrthographicProjection(-halfW, halfW, -(float)halfH, (float)halfH, near, far);
+  }
+
   /// <summary>See <see cref="GetEarthObserverScale"/>: the scale of a projection on a
   /// <paramref name="widthPx"/> × <paramref name="heightPx"/> target, the comet at
   /// <paramref name="cometDistanceAu"/> (null: unknown).</summary>
@@ -1919,10 +2041,18 @@ public sealed class CameraService : IDisposable
   /// the view up leans towards +Z north of the equator, −Z south of it (snapping allowed).
   /// </summary>
   internal static Quaterniond EarthObserverOrient(Quaterniond q, float latDeg) =>
-    StripRoll(q, latDeg >= 0f ? Vector3d.UnitZ : -Vector3d.UnitZ);
+    EarthObserverOrient(q, ObserverUpHint(ObserverUp.Ecliptic, latDeg));
 
-  private Quaterniond EarthObserverLookAt(Vector3d direction) =>
-    LookAtOriginFrom(-Vector3d.Normalize(direction), UpLatDeg >= 0f ? Vector3d.UnitZ : -Vector3d.UnitZ);
+  /// <summary>Levels <paramref name="q"/> to the world up hint <paramref name="upHint"/>
+  /// (<see cref="ObserverUpHint"/>): the screen right vector ⟂ the hint, the view up towards it.</summary>
+  internal static Quaterniond EarthObserverOrient(Quaterniond q, Vector3d upHint) => StripRoll(q, upHint);
+
+  /// <summary>The Earth observer look along <paramref name="direction"/> levelled to
+  /// <paramref name="upHint"/> (the mirror of the native <c>earth_observer::look_at</c>).</summary>
+  internal static Quaterniond EarthObserverLookAt(Vector3d direction, Vector3d upHint) =>
+    LookAtOriginFrom(-Vector3d.Normalize(direction), upHint);
+
+  private Quaterniond EarthObserverLookAt(Vector3d direction) => EarthObserverLookAt(direction, UpHint);
 
 
 
@@ -2629,9 +2759,9 @@ dump_context()
       camRot = _inertialLookDir;
     }
 
-    // Camera assertions: right vector in the ecliptic plane, up towards the latitude's pole (the
-    // ecliptic north at the Earth's centre).
-    camRot = EarthObserverOrient(camRot, UpLatDeg);
+    // Camera assertions: right vector in the up hint's equator, up towards it (the ecliptic pole of
+    // the latitude's side, or celestial north).
+    camRot = EarthObserverOrient(camRot, UpHint);
     _earthRotation = camRot;
 
     // The core poses the camera in its own commits (same scene write as the Earth and the comet):
@@ -2689,6 +2819,7 @@ dump_context()
     _modeSubject.Dispose();
     _earthPresetSubject.Dispose();
     _observerTopocentricSubject.Dispose();
+    _observerUpSubject.Dispose();
     _comparisonLockSubject.Dispose();
   }
 }

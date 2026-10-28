@@ -2183,7 +2183,8 @@ fn the_feedback_band_keeps_the_state() {
 /// at EWA bias 0 → 3, 8.3e8 at 3 → 4, 2.9e8 at 4 → 5), then the settled view, whose texels at
 /// bias 5 sit under budget / 8 but whose remembered step (×28) refuses every lower: bias 5 for
 /// good, where the live session that grew the same dust settled at 3 (blocky dust after Open).
-/// A reset once the view settled measures it cold and lands where the live session did.
+/// A reset once the view settled restarts from the warm-up state (`FeedbackSet::coarse`: the
+/// cheapest levels, no memory), lowers from there and lands where the live session did.
 #[test]
 fn the_feedback_reset_forgets_a_transient() {
   use crate::scene::dust::{DUST_EWA_FRAME_BUDGET, DUST_EWA_TEXEL_UNIT, DUST_VOLUME_FRAME_BUDGET, EwaStats};
@@ -2226,19 +2227,27 @@ fn the_feedback_reset_forgets_a_transient() {
   }
   settle(&mut reopened);
   assert_eq!(reopened.ewa_bias, 5, "the premise: the transient's memory keeps the coarse level");
-  // the view settled: a cold start measures it again
+  // the view settled: the reset restarts from the warm-up state and measures it again
   reopened.drawn = Some((1, alloc::vec![0]));
+  assert!(reopened.feedback_measured());
   reopened.reset_feedback();
-  assert_eq!((reopened.ewa_bias, reopened.volume_bias), (0, 0));
-  assert_eq!(reopened.split_depth, dust::DUST_SPLIT_DEPTH_MAX);
+  assert_eq!(
+    (reopened.ewa_bias, reopened.volume_bias),
+    (dust::DUST_EWA_BIAS_FEEDBACK_MAX, dust::DUST_VOLUME_BIAS_MAX),
+    "the cheapest levels the feedback reaches"
+  );
+  assert_eq!(reopened.split_depth, 0);
   assert_eq!(reopened.split_depth_over, u32::MAX);
-  assert_eq!(reopened.fb_memory, FeedbackSet::default());
-  assert_eq!(reopened.fb_full, FeedbackSet::default());
+  assert_eq!(reopened.fb_memory, FeedbackSet::coarse());
+  assert_eq!(reopened.fb_full, FeedbackSet::coarse());
+  assert!(!reopened.feedback_measured(), "a second generation change before a readback keeps it");
   assert!(reopened.fb_cad.is_none() && reopened.budget.is_none());
   assert!(reopened.drawn.is_none(), "the next frame draws (and is read back), even paused");
   reopened.volume_bias = 2;
   settle(&mut reopened);
   assert_eq!(reopened.ewa_bias, live.ewa_bias, "path independent after the reset");
+  // a new view has measured nothing: a generation change keeps its cold start
+  assert!(!DustViewHost::default().feedback_measured());
 }
 
 /// the EWA feedback stops at `DUST_EWA_BIAS_FEEDBACK_MAX` (5): the 67P Earth view (1.9·10⁵ km
