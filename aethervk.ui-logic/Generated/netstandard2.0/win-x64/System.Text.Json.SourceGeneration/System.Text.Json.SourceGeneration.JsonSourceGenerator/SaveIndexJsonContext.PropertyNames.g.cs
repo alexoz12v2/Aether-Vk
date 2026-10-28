@@ -28,6 +28,11 @@ namespace AetherVk.Logic.SaveFile
         private static readonly global::System.Text.Json.JsonEncodedText PropName_alpha = global::System.Text.Json.JsonEncodedText.Encode("alpha");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_rotation_deg = global::System.Text.Json.JsonEncodedText.Encode("rotation_deg");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_visible = global::System.Text.Json.JsonEncodedText.Encode("visible");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_image_arcsec_per_px = global::System.Text.Json.JsonEncodedText.Encode("image_arcsec_per_px");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_image_width_px = global::System.Text.Json.JsonEncodedText.Encode("image_width_px");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_image_height_px = global::System.Text.Json.JsonEncodedText.Encode("image_height_px");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_physical_size_bound = global::System.Text.Json.JsonEncodedText.Encode("physical_size_bound");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_fits_stretch = global::System.Text.Json.JsonEncodedText.Encode("fits_stretch");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_transform = global::System.Text.Json.JsonEncodedText.Encode("transform");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_projection = global::System.Text.Json.JsonEncodedText.Encode("projection");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_mode = global::System.Text.Json.JsonEncodedText.Encode("mode");
@@ -42,6 +47,9 @@ namespace AetherVk.Logic.SaveFile
         private static readonly global::System.Text.Json.JsonEncodedText PropName_end = global::System.Text.Json.JsonEncodedText.Encode("end");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_centuries = global::System.Text.Json.JsonEncodedText.Encode("centuries");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_nanoseconds = global::System.Text.Json.JsonEncodedText.Encode("nanoseconds");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_transfer = global::System.Text.Json.JsonEncodedText.Encode("transfer");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_p0 = global::System.Text.Json.JsonEncodedText.Encode("p0");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_p1 = global::System.Text.Json.JsonEncodedText.Encode("p1");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_latitude_deg = global::System.Text.Json.JsonEncodedText.Encode("latitude_deg");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_longitude_deg = global::System.Text.Json.JsonEncodedText.Encode("longitude_deg");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_aperture_deg = global::System.Text.Json.JsonEncodedText.Encode("aperture_deg");
@@ -65,6 +73,7 @@ namespace AetherVk.Logic.SaveFile
         private static readonly global::System.Text.Json.JsonEncodedText PropName_dust_flow = global::System.Text.Json.JsonEncodedText.Encode("dust_flow");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_dust_flow_speed = global::System.Text.Json.JsonEncodedText.Encode("dust_flow_speed");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_sphere_gizmo_visible = global::System.Text.Json.JsonEncodedText.Encode("sphere_gizmo_visible");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_show_jet_angles = global::System.Text.Json.JsonEncodedText.Encode("show_jet_angles");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_show_reference_position_error = global::System.Text.Json.JsonEncodedText.Encode("show_reference_position_error");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_manual_nucleus_radius_km = global::System.Text.Json.JsonEncodedText.Encode("manual_nucleus_radius_km");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_lat_deg = global::System.Text.Json.JsonEncodedText.Encode("lat_deg");
@@ -73,6 +82,7 @@ namespace AetherVk.Logic.SaveFile
         private static readonly global::System.Text.Json.JsonEncodedText PropName_orientation = global::System.Text.Json.JsonEncodedText.Encode("orientation");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_inertial_look = global::System.Text.Json.JsonEncodedText.Encode("inertial_look");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_body_fixed_look = global::System.Text.Json.JsonEncodedText.Encode("body_fixed_look");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_topocentric = global::System.Text.Json.JsonEncodedText.Encode("topocentric");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_is_perspective = global::System.Text.Json.JsonEncodedText.Encode("is_perspective");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_fov = global::System.Text.Json.JsonEncodedText.Encode("fov");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_aspect = global::System.Text.Json.JsonEncodedText.Encode("aspect");
@@ -143,6 +153,7 @@ namespace AetherVk.Logic.SaveFile
         private static readonly global::System.Text.Json.JsonEncodedText PropName_ortho_unit = global::System.Text.Json.JsonEncodedText.Encode("ortho_unit");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_fov_unit = global::System.Text.Json.JsonEncodedText.Encode("fov_unit");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_ortho_proportions_locked = global::System.Text.Json.JsonEncodedText.Encode("ortho_proportions_locked");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_show_behind_camera = global::System.Text.Json.JsonEncodedText.Encode("show_behind_camera");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_camera = global::System.Text.Json.JsonEncodedText.Encode("camera");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_orbit_offset_au = global::System.Text.Json.JsonEncodedText.Encode("orbit_offset_au");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_observer = global::System.Text.Json.JsonEncodedText.Encode("observer");

@@ -3,14 +3,13 @@
 //! These tests operate on a bare [`Scene`] (no GPU required) to verify the
 //! structural invariants of jet entities:
 //!
-//! 1. A jet entity spawned as a child of the comet must have both a
-//!    [`TransformComponent`] and a [`StaticMeshComponent`] before receiving
-//!    a [`ParticleSystemComponent`] — this mirrors what `avkSimulationContext_addParticleSystem`
-//!    does in `ffi.rs`.
+//! 1. A jet entity spawned as a child of the comet carries a [`TransformComponent`] and a
+//!    [`JetDirectionLineComponent`] (its direction line), no [`StaticMeshComponent`] (the old
+//!    sphere marker) — this mirrors what `avkSimulationContext_addParticleSystem` does in `ffi.rs`.
 //! 2. A jet entity must be a child of the comet body entity.
 //! 3. `propagate_common_params` updates only the 8 common fields of sibling
 //!    [`ParticleSystemEmitParams`], leaving per-jet fields intact.
-//! 4. `StaticMeshComponent::emissive_color` is updated from `draw_params.stream_color`
+//! 4. `JetDirectionLineComponent::color` is updated from `draw_params.stream_color`
 //!    on modify (mirrors `avkSimulationContext_modifyParticleSystem`).
 
 extern crate std;
@@ -20,7 +19,7 @@ use bytemuck::Zeroable;
 use parking_lot::RwLock;
 
 use crate::scene::{
-  HasComponentResultEnum, Scene, StaticMeshComponent, TransformComponent,
+  HasComponentResultEnum, JetDirectionLineComponent, Scene, StaticMeshComponent, TransformComponent,
   particles::v2::ParticleSystemEmitParams,
 };
 use aethervk_oshal_rlib::math::{
@@ -37,6 +36,7 @@ fn make_scene() -> Scene {
   let scene = Scene::new(texture_cache);
   scene.register_component::<TransformComponent>(&[]);
   scene.register_component::<StaticMeshComponent>(&[core::any::TypeId::of::<TransformComponent>()]);
+  scene.register_component::<JetDirectionLineComponent>(&[core::any::TypeId::of::<TransformComponent>()]);
   scene
 }
 
@@ -48,32 +48,28 @@ fn make_transform() -> TransformComponent {
   }
 }
 
-fn make_static_mesh(color: [f32; 4]) -> StaticMeshComponent {
-  StaticMeshComponent {
-    asset_path: alloc::string::String::from("__jet_marker__"),
-    mesh: Arc::new(crate::simulation::comet::generate_uv_sphere(
-      1.0, 8, 8, 1.0, false,
-    )),
-    emissive_color: color,
+fn make_jet_line(color: [f32; 4]) -> JetDirectionLineComponent {
+  JetDirectionLineComponent {
+    color,
     is_visible: true,
+    show_angles: false,
   }
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────
 
-/// Invariant 1 & 2: a jet entity spawned as a comet child must carry both
-/// `TransformComponent` and `StaticMeshComponent` before a `ParticleSystemComponent`
-/// can be attached. This mirrors the spawn sequence in `avkSimulationContext_addParticleSystem`.
+/// Invariant 1: a jet entity spawned as a comet child carries its transform and its direction
+/// line, and no marker mesh (the sphere on the site is gone). Mirrors the spawn sequence in
+/// `avkSimulationContext_addParticleSystem`.
 #[test]
-fn jet_entity_requires_transform_and_static_mesh() {
+fn jet_entity_has_a_direction_line_and_no_marker_mesh() {
   let scene = make_scene();
   let comet = scene.spawn_entity("comet");
   let jet = scene.spawn_entity("jet");
   scene.set_parent(jet, Some(comet));
 
-  // Add the two mandatory visualization components (mirrors ffi.rs lines 842-862)
   let _ = scene.add_component(jet, make_transform());
-  let _ = scene.add_component(jet, make_static_mesh([0.4, 0.8, 1.0, 1.0]));
+  let _ = scene.add_component(jet, make_jet_line([0.4, 0.8, 1.0, 1.0]));
 
   assert_eq!(
     scene.has_component::<TransformComponent>(jet),
@@ -81,10 +77,18 @@ fn jet_entity_requires_transform_and_static_mesh() {
     "jet entity must have TransformComponent"
   );
   assert_eq!(
+    scene.has_component::<JetDirectionLineComponent>(jet),
+    HasComponentResultEnum::EntityHasComponent,
+    "jet entity must have its direction line"
+  );
+  assert_ne!(
     scene.has_component::<StaticMeshComponent>(jet),
     HasComponentResultEnum::EntityHasComponent,
-    "jet entity must have StaticMeshComponent"
+    "no marker mesh on the jet site"
   );
+  // ffi.rs spawns the line visible, angles off (the C# side turns them on for the selected jet)
+  let line = scene.with_component(jet, |l: &JetDirectionLineComponent| l.clone()).unwrap();
+  assert!(line.is_visible && !line.show_angles);
 }
 
 /// Invariant 1: the jet entity must appear in the comet's children list.
@@ -159,12 +163,10 @@ fn propagate_common_params_leaves_jet_specific_fields_intact() {
   );
 }
 
-/// Invariant 4: `StaticMeshComponent::emissive_color` reflects the stream_color from draw params.
-///
-/// Mirrors the update in `avkSimulationContext_modifyParticleSystem` where
-/// `s.emissive_color = ps_dto.stream_color` is applied.
+/// Invariant 4: the direction line's colour follows the jet's stream colour (mirrors the update
+/// in `avkSimulationContext_modifyParticleSystem`).
 #[test]
-fn static_mesh_emissive_color_matches_stream_color() {
+fn jet_line_color_matches_stream_color() {
   let scene = make_scene();
   let comet = scene.spawn_entity("comet");
   let jet = scene.spawn_entity("jet");
@@ -172,27 +174,20 @@ fn static_mesh_emissive_color_matches_stream_color() {
 
   let initial_color = [0.4_f32, 0.8, 1.0, 1.0];
   let _ = scene.add_component(jet, make_transform());
-  let _ = scene.add_component(jet, make_static_mesh(initial_color));
-
-  // Confirm initial emissive_color
-  let read = scene.with_component(jet, |s: &StaticMeshComponent| s.emissive_color);
+  let _ = scene.add_component(jet, make_jet_line(initial_color));
   assert_eq!(
-    read,
-    Some(initial_color),
-    "initial emissive_color must match stream_color"
+    scene.with_component(jet, |l: &JetDirectionLineComponent| l.color),
+    Some(initial_color)
   );
 
-  // Update (mirrors avkSimulationContext_modifyParticleSystem)
   let new_color = [1.0_f32, 0.5, 0.0, 1.0];
-  scene.with_component_mut(jet, |s: &mut StaticMeshComponent| {
-    s.emissive_color = new_color;
+  scene.with_component_mut(jet, |l: &mut JetDirectionLineComponent| {
+    l.color = new_color;
   });
-
-  let updated = scene.with_component(jet, |s: &StaticMeshComponent| s.emissive_color);
   assert_eq!(
-    updated,
+    scene.with_component(jet, |l: &JetDirectionLineComponent| l.color),
     Some(new_color),
-    "emissive_color must update to new stream_color on modify"
+    "the line colour must update to the new stream_color on modify"
   );
 }
 

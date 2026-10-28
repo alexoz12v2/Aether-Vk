@@ -46,7 +46,7 @@ namespace AetherVk.Logic.SaveFile
 
         private static global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[] ModelDtoPropInit(global::System.Text.Json.JsonSerializerOptions options)
         {
-            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[17];
+            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[18];
 
             var info0 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<float>
             {
@@ -355,6 +355,26 @@ namespace AetherVk.Logic.SaveFile
                 IsVirtual = false,
                 DeclaringType = typeof(global::AetherVk.Logic.SaveFile.ModelDto),
                 Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.ModelDto)obj).ShowJetAngles,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.ModelDto)obj).ShowJetAngles = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "ShowJetAngles",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.ModelDto).GetProperty("ShowJetAngles", InstanceMemberBindingFlags, null, typeof(bool), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[15] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<bool>(options, info15);
+
+            var info16 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<bool>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.ModelDto),
+                Converter = null,
                 Getter = static obj => ((global::AetherVk.Logic.SaveFile.ModelDto)obj).ShowReferencePositionError,
                 Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.ModelDto)obj).ShowReferencePositionError = value!,
                 IgnoreCondition = null,
@@ -366,9 +386,9 @@ namespace AetherVk.Logic.SaveFile
                 AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.ModelDto).GetProperty("ShowReferencePositionError", InstanceMemberBindingFlags, null, typeof(bool), global::System.Array.Empty<global::System.Type>(), null),
             };
             
-            properties[15] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<bool>(options, info15);
+            properties[16] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<bool>(options, info16);
 
-            var info16 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<float>
+            var info17 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<float>
             {
                 IsProperty = true,
                 IsPublic = true,
@@ -386,7 +406,7 @@ namespace AetherVk.Logic.SaveFile
                 AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.ModelDto).GetProperty("ManualNucleusRadiusKm", InstanceMemberBindingFlags, null, typeof(float), global::System.Array.Empty<global::System.Type>(), null),
             };
             
-            properties[16] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<float>(options, info16);
+            properties[17] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<float>(options, info17);
 
             return properties;
         }
@@ -418,6 +438,7 @@ namespace AetherVk.Logic.SaveFile
             writer.WriteBoolean(PropName_dust_flow, ((global::AetherVk.Logic.SaveFile.ModelDto)value).DustFlow);
             writer.WriteNumber(PropName_dust_flow_speed, ((global::AetherVk.Logic.SaveFile.ModelDto)value).DustFlowSpeed);
             writer.WriteBoolean(PropName_sphere_gizmo_visible, ((global::AetherVk.Logic.SaveFile.ModelDto)value).SphereGizmoVisible);
+            writer.WriteBoolean(PropName_show_jet_angles, ((global::AetherVk.Logic.SaveFile.ModelDto)value).ShowJetAngles);
             writer.WriteBoolean(PropName_show_reference_position_error, ((global::AetherVk.Logic.SaveFile.ModelDto)value).ShowReferencePositionError);
             writer.WriteNumber(PropName_manual_nucleus_radius_km, ((global::AetherVk.Logic.SaveFile.ModelDto)value).ManualNucleusRadiusKm);
 

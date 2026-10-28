@@ -45,6 +45,21 @@ public readonly record struct HandleSpot(BillboardHandle Kind, PointD Center, do
 /// </summary>
 public static class DesktopBillboardGeometry
 {
+  /// <summary>
+  /// The on-screen size (desktop physical px) at which <paramref name="b"/> covers the sky its
+  /// image covers, on a viewport of <paramref name="viewportArcsecPerPx"/> arcsec per physical px:
+  /// image px × image scale ÷ viewport scale. Null without a plate scale, a native size or a scale.
+  /// </summary>
+  public static (double WidthPx, double HeightPx)? PhysicalSize(DesktopBillboard b, double viewportArcsecPerPx)
+  {
+    if (b.ImageArcsecPerPx is not { } img || !(img > 0) || double.IsInfinity(img)
+        || b.ImageWidthPx <= 0 || b.ImageHeightPx <= 0
+        || !(viewportArcsecPerPx > 0) || double.IsInfinity(viewportArcsecPerPx))
+      return null;
+    double k = img / viewportArcsecPerPx;
+    return (b.ImageWidthPx * k, b.ImageHeightPx * k);
+  }
+
   /// <summary>Room around the rotated image for the gizmo handles, px.</summary>
   public const double GizmoMargin = 48;
 

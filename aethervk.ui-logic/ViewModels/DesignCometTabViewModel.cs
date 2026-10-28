@@ -75,6 +75,7 @@ public partial class DesignCometTabViewModel
   public double PoleRaRateDegCen { get; set; } = 0.0;
   public double PoleDecRateDegCen { get; set; } = 0.0;
   public double RotRateDegDay    { get; set; } = 696.0;
+  public double RotationPeriodHours { get; set; } = 12.41;
   public int BodyFixedOrientationIndex { get; set; } = 0;
 
   // ── Commands (no-ops for design time) ────────────────────────────────────

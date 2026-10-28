@@ -6,6 +6,92 @@ namespace AetherVk.Logic.ViewModels
     /// <inheritdoc/>
     partial class DesktopBillboardItemViewModel
     {
+        /// <inheritdoc cref="_imageArcsecPerPxText"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public string ImageArcsecPerPxText
+        {
+            get => _imageArcsecPerPxText;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<string>.Default.Equals(_imageArcsecPerPxText, value))
+                {
+                    OnImageArcsecPerPxTextChanging(value);
+                    OnImageArcsecPerPxTextChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.ImageArcsecPerPxText);
+                    _imageArcsecPerPxText = value;
+                    OnImageArcsecPerPxTextChanged(value);
+                    OnImageArcsecPerPxTextChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.ImageArcsecPerPxText);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_physicalSizeLabel"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public string PhysicalSizeLabel
+        {
+            get => _physicalSizeLabel;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<string>.Default.Equals(_physicalSizeLabel, value))
+                {
+                    OnPhysicalSizeLabelChanging(value);
+                    OnPhysicalSizeLabelChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.PhysicalSizeLabel);
+                    _physicalSizeLabel = value;
+                    OnPhysicalSizeLabelChanged(value);
+                    OnPhysicalSizeLabelChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.PhysicalSizeLabel);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_isPhysicalSizeBound"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public bool IsPhysicalSizeBound
+        {
+            get => _isPhysicalSizeBound;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_isPhysicalSizeBound, value))
+                {
+                    OnIsPhysicalSizeBoundChanging(value);
+                    OnIsPhysicalSizeBoundChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsPhysicalSizeBound);
+                    _isPhysicalSizeBound = value;
+                    OnIsPhysicalSizeBoundChanged(value);
+                    OnIsPhysicalSizeBoundChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsPhysicalSizeBound);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_fits"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public global::AetherVk.Logic.ViewModels.FitsImageViewModel? Fits
+        {
+            get => _fits;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<global::AetherVk.Logic.ViewModels.FitsImageViewModel?>.Default.Equals(_fits, value))
+                {
+                    OnFitsChanging(value);
+                    OnFitsChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.Fits);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsFits);
+                    _fits = value;
+                    OnFitsChanged(value);
+                    OnFitsChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.Fits);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsFits);
+                }
+            }
+        }
+
         /// <inheritdoc cref="_textureLabel"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
@@ -260,6 +346,94 @@ namespace AetherVk.Logic.ViewModels
             }
         }
 
+        /// <summary>Executes the logic for when <see cref="ImageArcsecPerPxText"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="ImageArcsecPerPxText"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnImageArcsecPerPxTextChanging(string value);
+        /// <summary>Executes the logic for when <see cref="ImageArcsecPerPxText"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="ImageArcsecPerPxText"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnImageArcsecPerPxTextChanging(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="ImageArcsecPerPxText"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="ImageArcsecPerPxText"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnImageArcsecPerPxTextChanged(string value);
+        /// <summary>Executes the logic for when <see cref="ImageArcsecPerPxText"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="ImageArcsecPerPxText"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnImageArcsecPerPxTextChanged(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="PhysicalSizeLabel"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="PhysicalSizeLabel"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnPhysicalSizeLabelChanging(string value);
+        /// <summary>Executes the logic for when <see cref="PhysicalSizeLabel"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="PhysicalSizeLabel"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnPhysicalSizeLabelChanging(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="PhysicalSizeLabel"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="PhysicalSizeLabel"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnPhysicalSizeLabelChanged(string value);
+        /// <summary>Executes the logic for when <see cref="PhysicalSizeLabel"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="PhysicalSizeLabel"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnPhysicalSizeLabelChanged(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="IsPhysicalSizeBound"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="IsPhysicalSizeBound"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsPhysicalSizeBoundChanging(bool value);
+        /// <summary>Executes the logic for when <see cref="IsPhysicalSizeBound"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="IsPhysicalSizeBound"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsPhysicalSizeBoundChanging(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="IsPhysicalSizeBound"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="IsPhysicalSizeBound"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsPhysicalSizeBoundChanged(bool value);
+        /// <summary>Executes the logic for when <see cref="IsPhysicalSizeBound"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="IsPhysicalSizeBound"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsPhysicalSizeBoundChanged(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="Fits"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="Fits"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnFitsChanging(global::AetherVk.Logic.ViewModels.FitsImageViewModel? value);
+        /// <summary>Executes the logic for when <see cref="Fits"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="Fits"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnFitsChanging(global::AetherVk.Logic.ViewModels.FitsImageViewModel? oldValue, global::AetherVk.Logic.ViewModels.FitsImageViewModel? newValue);
+        /// <summary>Executes the logic for when <see cref="Fits"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="Fits"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnFitsChanged(global::AetherVk.Logic.ViewModels.FitsImageViewModel? value);
+        /// <summary>Executes the logic for when <see cref="Fits"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="Fits"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnFitsChanged(global::AetherVk.Logic.ViewModels.FitsImageViewModel? oldValue, global::AetherVk.Logic.ViewModels.FitsImageViewModel? newValue);
         /// <summary>Executes the logic for when <see cref="TextureLabel"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="TextureLabel"/> is changed.</remarks>

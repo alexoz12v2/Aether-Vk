@@ -51,6 +51,7 @@ public sealed class AppSaveFileHostTests
         .Callback<ExternalStateType, Action<nint>>((t, a) => _listeners[t] = a)
         .Returns(Mock.Of<IDisposable>());
       Runtime.Setup(r => r.ShutdownToken).Returns(System.Threading.CancellationToken.None);
+      Runtime.Setup(r => r.SetEpochRange(It.IsAny<short>(), It.IsAny<ulong>(), It.IsAny<short>(), It.IsAny<ulong>())).Returns(true);
       Runtime.Setup(r => r.LoadAlmanacFileAsync(It.IsAny<string>())).Returns(() =>
       {
         Fire(ExternalStateType.AlmanacImported, 1, 1000012);
@@ -158,6 +159,19 @@ public sealed class AppSaveFileHostTests
       snap.Timeline.CommittedEnd!.Centuries, snap.Timeline.CommittedEnd.Nanoseconds));
     Assert.Equal([11u, 22u], snap.Jets.Select(j => j.Seed));
     Assert.Equal(150, snap.Model.DiametreUm);
+  }
+
+  [Fact]
+  public async Task Commit_IsRefused_WhenTheEngineDoesNotTakeTheSavedRange()
+  {
+    // the engine would keep its previous range and Run to End would land on that stale end
+    var rig = new Rig();
+    rig.Runtime.Setup(r => r.SetEpochRange(It.IsAny<short>(), It.IsAny<ulong>(), It.IsAny<short>(), It.IsAny<ulong>())).Returns(false);
+
+    Assert.False(await rig.Host.CommitCometAsync("/save/spk/spk_67P_90000703.bsp", Spk(), new TimeRange(0, 1_000, 0, 9_000)));
+
+    Assert.False(rig.Comet.IsAlmanacLoaded);
+    rig.Runtime.Verify(r => r.LoadAlmanacFileAsync(It.IsAny<string>()), Times.Never);
   }
 
   private static SpkDto Without(SpkDto s) => new()

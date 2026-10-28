@@ -441,10 +441,12 @@ namespace AetherVk.Logic.ViewModels
                     OnRotRateDegDayChanging(value);
                     OnRotRateDegDayChanging(default, value);
                     OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.RotRateDegDay);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.RotationPeriodHours);
                     _rotRateDegDay = value;
                     OnRotRateDegDayChanged(value);
                     OnRotRateDegDayChanged(default, value);
                     OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.RotRateDegDay);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.RotationPeriodHours);
                 }
             }
         }

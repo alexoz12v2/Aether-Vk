@@ -342,6 +342,48 @@ namespace AetherVk.Logic.ViewModels
             }
         }
 
+        /// <inheritdoc cref="_isEarthObserverTopocentric"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public bool IsEarthObserverTopocentric
+        {
+            get => _isEarthObserverTopocentric;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_isEarthObserverTopocentric, value))
+                {
+                    OnIsEarthObserverTopocentricChanging(value);
+                    OnIsEarthObserverTopocentricChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsEarthObserverTopocentric);
+                    _isEarthObserverTopocentric = value;
+                    OnIsEarthObserverTopocentricChanged(value);
+                    OnIsEarthObserverTopocentricChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsEarthObserverTopocentric);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_isComparisonLocked"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public bool IsComparisonLocked
+        {
+            get => _isComparisonLocked;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_isComparisonLocked, value))
+                {
+                    OnIsComparisonLockedChanging(value);
+                    OnIsComparisonLockedChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsComparisonLocked);
+                    _isComparisonLocked = value;
+                    OnIsComparisonLockedChanged(value);
+                    OnIsComparisonLockedChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsComparisonLocked);
+                }
+            }
+        }
+
         /// <inheritdoc cref="_earthObserverOrientationMode"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
@@ -465,6 +507,27 @@ namespace AetherVk.Logic.ViewModels
                     OnSuggestedObserverLonDegChanged(value);
                     OnSuggestedObserverLonDegChanged(default, value);
                     OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.SuggestedObserverLonDeg);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_earthObserverScaleText"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public string EarthObserverScaleText
+        {
+            get => _earthObserverScaleText;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<string>.Default.Equals(_earthObserverScaleText, value))
+                {
+                    OnEarthObserverScaleTextChanging(value);
+                    OnEarthObserverScaleTextChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.EarthObserverScaleText);
+                    _earthObserverScaleText = value;
+                    OnEarthObserverScaleTextChanged(value);
+                    OnEarthObserverScaleTextChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.EarthObserverScaleText);
                 }
             }
         }
@@ -799,6 +862,50 @@ namespace AetherVk.Logic.ViewModels
         /// <remarks>This method is invoked right after the value of <see cref="EarthObserverLonDeg"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnEarthObserverLonDegChanged(double oldValue, double newValue);
+        /// <summary>Executes the logic for when <see cref="IsEarthObserverTopocentric"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="IsEarthObserverTopocentric"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsEarthObserverTopocentricChanging(bool value);
+        /// <summary>Executes the logic for when <see cref="IsEarthObserverTopocentric"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="IsEarthObserverTopocentric"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsEarthObserverTopocentricChanging(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="IsEarthObserverTopocentric"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="IsEarthObserverTopocentric"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsEarthObserverTopocentricChanged(bool value);
+        /// <summary>Executes the logic for when <see cref="IsEarthObserverTopocentric"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="IsEarthObserverTopocentric"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsEarthObserverTopocentricChanged(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="IsComparisonLocked"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="IsComparisonLocked"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsComparisonLockedChanging(bool value);
+        /// <summary>Executes the logic for when <see cref="IsComparisonLocked"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="IsComparisonLocked"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsComparisonLockedChanging(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="IsComparisonLocked"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="IsComparisonLocked"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsComparisonLockedChanged(bool value);
+        /// <summary>Executes the logic for when <see cref="IsComparisonLocked"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="IsComparisonLocked"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsComparisonLockedChanged(bool oldValue, bool newValue);
         /// <summary>Executes the logic for when <see cref="EarthObserverOrientationMode"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="EarthObserverOrientationMode"/> is changed.</remarks>
@@ -931,5 +1038,27 @@ namespace AetherVk.Logic.ViewModels
         /// <remarks>This method is invoked right after the value of <see cref="SuggestedObserverLonDeg"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnSuggestedObserverLonDegChanged(double oldValue, double newValue);
+        /// <summary>Executes the logic for when <see cref="EarthObserverScaleText"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="EarthObserverScaleText"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEarthObserverScaleTextChanging(string value);
+        /// <summary>Executes the logic for when <see cref="EarthObserverScaleText"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="EarthObserverScaleText"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEarthObserverScaleTextChanging(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="EarthObserverScaleText"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="EarthObserverScaleText"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEarthObserverScaleTextChanged(string value);
+        /// <summary>Executes the logic for when <see cref="EarthObserverScaleText"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="EarthObserverScaleText"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEarthObserverScaleTextChanged(string? oldValue, string newValue);
     }
 }

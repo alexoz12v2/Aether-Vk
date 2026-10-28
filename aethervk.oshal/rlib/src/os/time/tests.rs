@@ -42,6 +42,25 @@ fn test_time_manager_seek_clamps_and_clears_accumulator() {
   assert_eq!(tm.seek(start - Duration::from_days(5.0)), start);
 }
 
+/// A play never steps past the end epoch: the last tick is clamped (it used to overshoot the end
+/// by up to `max_unscaled_delta × speed`), and further ticks stay there.
+#[test]
+fn test_time_manager_tick_never_passes_the_end() {
+  use crate::os::time::v2::{SimSpeed, TimeManager};
+  use hifitime::{Duration, Epoch};
+  let start = Epoch::from_gregorian_utc(2021, 12, 15, 0, 0, 0, 0);
+  let end = start + Duration::from_days(13.0);
+  // 1e9× with a 100 ms cap: a single tick may cover ~3 years of sim time
+  let mut tm = TimeManager::new(start, end, SimSpeed::Custom(1e9), 100);
+  tm.seek(end - Duration::from_seconds(1.0));
+  for _ in 0..50 {
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    tm.tick();
+    assert!(tm.current_epoch() <= end, "{} past the end {}", tm.current_epoch(), end);
+  }
+  assert_eq!(tm.current_epoch(), end);
+}
+
 /// Debug presets are appended on the wire (5, 6) so existing values never shift, and round trip.
 #[test]
 fn test_debug_speed_presets_wire_values_and_scales() {

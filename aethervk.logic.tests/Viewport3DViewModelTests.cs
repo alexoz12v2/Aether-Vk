@@ -246,4 +246,35 @@ public class Viewport3DViewModelTests
     catch (TypeInitializationException) { }
     catch (DllNotFoundException)        { }
   }
+
+  // ── Physical pixels ────────────────────────────────────────────────────────
+
+  /// Avalonia sizes are DIPs; the swapchain (and every per-pixel scale) is physical pixels.
+  [Theory]
+  [InlineData(800.0, 1.0, 800u)]
+  [InlineData(800.0, 1.25, 1000u)]
+  [InlineData(801.3, 1.5, 1202u)]
+  [InlineData(0.2, 2.0, 1u)]
+  [InlineData(640.0, 0.0, 640u)] // unknown scaling: 1
+  public void DipToPixels_UsesTheRenderScaling(double dip, double scaling, uint want) =>
+    Assert.Equal(want, Viewport3DViewModel.DipToPixels(dip, scaling));
+
+  /// Both sides land in one resize push (two pushes posed a projection with an intermediate
+  /// aspect), in physical pixels.
+  [Fact]
+  public void SetPixelSize_PushesOnceWithBothSides()
+  {
+    var vm = BuildVm();
+    vm.OnViewportCreated(1UL, 100UL);
+    int pushes = 0;
+    vm.CameraService.ViewportResized += () => pushes++;
+
+    vm.SetPixelSize(1920, 1080);
+
+    Assert.Equal(1, pushes);
+    Assert.Equal((1920f, 1080f), (vm.CameraService.ViewportWidthPx, vm.CameraService.ViewportHeightPx));
+    Assert.Equal(1920f / 1080f, vm.CameraService.ViewportAspect, 6);
+    vm.SetPixelSize(1920, 1080); // unchanged: nothing to push
+    Assert.Equal(1, pushes);
+  }
 }

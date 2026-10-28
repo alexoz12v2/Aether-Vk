@@ -121,15 +121,27 @@ impl SceneConversionExt2 for Scene {
 
     // ------ 2. O(Frames) RTE Caching & Layer Pre-Allocation -------------------------------
     // Note: we are assuming that camera is in macro frame, not micro. TODO: assertion
-    let macro_near = cam_comp.near_plane();
-    let macro_far = cam_comp.far_plane();
+    let camera_flags = self
+      .with_component(camera_entity, |s: &crate::scene::CameraShadingComponent| s.0)
+      .unwrap_or(0);
+    let hide_behind = camera_flags & crate::scene::CAMERA_HIDE_BEHIND != 0;
+    let is_ortho = matches!(
+      camera_data.projection_params,
+      CameraProjectionParams::Orthographic { .. }
+    );
+    let (macro_near, macro_far) = macro_layer_depth(
+      cam_comp.near_plane() as f64,
+      cam_comp.far_plane() as f64,
+      is_ortho,
+      hide_behind,
+    );
 
     let mut layer_bounds: hashbrown::HashMap<u32, (f64, f64)> =
       hashbrown::HashMap::with_capacity(64);
     let mut layer_frame_scales: hashbrown::HashMap<u32, f32> =
       hashbrown::HashMap::with_capacity(64);
 
-    layer_bounds.insert(0, (macro_near as f64, macro_far as f64));
+    layer_bounds.insert(0, (macro_near, macro_far));
     layer_frame_scales.insert(0, 1.0);
 
     let mut layer_frame_entities: hashbrown::HashMap<u32, EntityId> =
@@ -257,7 +269,7 @@ impl SceneConversionExt2 for Scene {
           let (near, far) = layer_bounds
             .get(&$layer_idx)
             .copied()
-            .unwrap_or((macro_near as f64, macro_far as f64));
+            .unwrap_or((macro_near, macro_far));
           let scale = layer_frame_scales.get(&$layer_idx).copied().unwrap_or(1.0);
           RenderLayer::new(
             $layer_idx,
@@ -314,9 +326,7 @@ impl SceneConversionExt2 for Scene {
       dust_flow: Default::default(),
       dust_view: Default::default(),
       layer_ref_dist: core::array::from_fn(|i| layer_ref_dists.get(&(i as u32)).copied().unwrap_or(0.0)),
-      mesh_shading: self
-        .with_component(camera_entity, |s: &crate::scene::CameraShadingComponent| s.0)
-        .unwrap_or(0),
+      mesh_shading: camera_flags,
     };
 
     // ------ 3. Zero-Copy GPU Upload Abstraction Macro -------------------------------------
@@ -399,18 +409,7 @@ impl SceneConversionExt2 for Scene {
         // TODO reintroduce following and selected if necessary. If reintroduced, the selection and
         // following state should have been stored in the scene
         let outline = get_mesh_outline(false, false, render_outline);
-        let mut mesh = mesh.clone();
-        // a jet marker in the nucleus shadow is dimmed: the editor shows where the spawn
-        // point is and whether it emits now
-        if self.has_component::<crate::scene::ParticleSystemComponent>(id)
-            == crate::scene::HasComponentResultEnum::EntityHasComponent
-          && jet_site_lit(self, id) == Some(false)
-        {
-          for c in &mut mesh.emissive_color[..3] {
-            *c *= UNLIT_JET_MARKER_DIM;
-          }
-        }
-        (layer_idx, id, mesh, rte, outline)
+        (layer_idx, id, mesh.clone(), rte, outline)
       })
     });
 
@@ -440,6 +439,7 @@ impl SceneConversionExt2 for Scene {
           sg.subdivisions,
           gpu::SPHERE_GIZMO_STYLE_SPHERE,
           0.0f32,
+          [1.0f32; 4],
         )
       })
     });
@@ -461,10 +461,43 @@ impl SceneConversionExt2 for Scene {
             0.0f32,
             gpu::SPHERE_GIZMO_STYLE_POLAR_AXIS,
             axis.dash_count,
+            [0.85f32, 0.9, 1.0, 1.0],
           )
         })
       }
     ));
+    // Jet direction lines (`JetDirectionLineComponent`): from the nucleus centre along the site
+    // direction, 0.75 × the body axes, the jet's colour (dimmed while the site is unlit).
+    extracted_sg.extend(extract!(crate::scene::JetDirectionLineComponent, |id, line| {
+      if !line.is_visible {
+        return None;
+      }
+      let nucleus = self.get_parent(id)?;
+      let gizmo_radius = self.with_component(nucleus, |g: &SphereGizmoComponent| g.radius)?;
+      let site = self.with_component(id, |t: &crate::scene::TransformComponent| t.position)?;
+      let frame = jet_line_frame(vec3_f64(site))?;
+      let mut color = line.color;
+      if jet_site_lit(self, id) == Some(false) {
+        for c in &mut color[..3] {
+          *c *= UNLIT_JET_MARKER_DIM;
+        }
+      }
+      compute_rte(self, nucleus).map(|(layer_idx, rte)| {
+        let mut rte_for_gizmo = rte;
+        rte_for_gizmo.scale = Vec3f32::from_components(1.0, 1.0, 1.0);
+        (
+          layer_idx,
+          id,
+          rte_for_gizmo.to_transform().to_mat4::<Mat4x4f32>() * frame,
+          [rte.position.x(), rte.position.y(), rte.position.z()],
+          gizmo_radius * crate::scene::JET_LINE_LENGTH_OVER_GIZMO_RADIUS,
+          0.0f32,
+          gpu::SPHERE_GIZMO_STYLE_JET_LINE,
+          0.0f32,
+          color,
+        )
+      })
+    }));
 
     // ------ Depth fitting pass -------------------------------------------------------
     // Refits micro-layer near/far from actual draw-call geometry rather than the
@@ -484,9 +517,6 @@ impl SceneConversionExt2 for Scene {
     //                      (perspective only; orthographic near may be negative)
     //   DEPTH_MARGIN     — 5% padding on both sides to prevent near/far edge clipping
     {
-      const DEPTH_NEAR_FLOOR: f64 = 0.001; // km (= 1 m)
-      const DEPTH_NEAR_MIN: f64 = 1.0e-7; // km (= 0.1 mm) when within 2 m of the surface
-      const DEPTH_MARGIN: f64 = 1.05;
 
       // Frustum plane extraction via Gribb-Hartmann from VP in f64.
       // L/R/T/B planes depend only on FOV + aspect (not near/far), so the macro-layer
@@ -537,31 +567,7 @@ impl SceneConversionExt2 for Scene {
       let mut per_layer_depth: hashbrown::HashMap<u32, (f64, f64)> =
         hashbrown::HashMap::with_capacity(4);
 
-      // Orthographic projections have no w=0 singularity: depth is linear in view distance and
-      // the near plane may legitimately be negative (geometry behind the camera plane is still
-      // visible). Perspective projections need a strictly positive near plane.
-      let is_ortho = matches!(
-        camera_data.projection_params,
-        CameraProjectionParams::Orthographic { .. }
-      );
-      // `depth` is the signed view depth along the camera forward axis (view −Y is forward).
-      // Returns the (near, far) slab enclosing a sphere of radius `r` centred at `depth`.
-      let fit_slab = |depth: f64, r: f64| -> (f64, f64) {
-        if is_ortho {
-          (depth - r * DEPTH_MARGIN, depth + r * DEPTH_MARGIN)
-        } else {
-          let d = depth.abs();
-          let surface_floor = if d > r {
-            ((d - r) * 0.5).clamp(DEPTH_NEAR_MIN, DEPTH_NEAR_FLOOR)
-          } else {
-            DEPTH_NEAR_FLOOR
-          };
-          (
-            (d - r * DEPTH_MARGIN).max(surface_floor),
-            d + r * DEPTH_MARGIN,
-          )
-        }
-      };
+      let fit_slab = |depth: f64, r: f64| fit_depth_slab(depth, r, is_ortho, hide_behind);
 
       for (layer_idx, _id, mesh, rte, _outline) in &extracted_meshes {
         if *layer_idx == 0 {
@@ -626,7 +632,7 @@ impl SceneConversionExt2 for Scene {
       // (line 151). The full gizmo bounding sphere is therefore `radius * 1.7` km.
       // -> scratch that, it seems that the yellow one is still cut. Trying out 2.1 km
       // extracted_sg tuple: (layer_idx, id, mat, center, rad, sub)
-      for (layer_idx, _id, _mat, _center, rad, _sub, style, _dash) in &extracted_sg {
+      for (layer_idx, _id, _mat, _center, rad, _sub, style, _dash, _color) in &extracted_sg {
         if *layer_idx == 0 {
           continue;
         }
@@ -647,8 +653,10 @@ impl SceneConversionExt2 for Scene {
           -view_pos.y()
         };
 
-        // Bounding radius: full axis + arrowhead envelope; a polar axis ends at `rad`.
-        let gizmo_radius = if *style == gpu::SPHERE_GIZMO_STYLE_POLAR_AXIS {
+        // Bounding radius: full axis + arrowhead envelope; a polar axis or a jet line ends at `rad`.
+        let gizmo_radius = if *style == gpu::SPHERE_GIZMO_STYLE_POLAR_AXIS
+          || *style == gpu::SPHERE_GIZMO_STYLE_JET_LINE
+        {
           *rad as f64
         } else {
           (*rad as f64) * 2.1
@@ -845,11 +853,14 @@ impl SceneConversionExt2 for Scene {
     // 6. Sphere Gizmos (Batched - deferred upload)
     let mut sg_batch_buffers = hashbrown::HashMap::<
       u32,
-      alloc::vec::Vec<(EntityId, Mat4x4f32, [f64; 3], f32, f32, f32, f32)>,
+      alloc::vec::Vec<(EntityId, Mat4x4f32, [f64; 3], f32, f32, f32, f32, [f32; 4])>,
     >::with_capacity(16);
-    for (layer_idx, id, mat, center, rad, sub, style, dash) in extracted_sg {
+    for (layer_idx, id, mat, center, rad, sub, style, dash, color) in extracted_sg {
       get_or_create_layer!(layer_idx);
-      sg_batch_buffers.entry(layer_idx).or_default().push((id, mat, center, rad, sub, style, dash));
+      sg_batch_buffers
+        .entry(layer_idx)
+        .or_default()
+        .push((id, mat, center, rad, sub, style, dash, color));
     }
 
     // 7. Trajectories (Batched - deferred upload)
@@ -1545,6 +1556,81 @@ impl SceneConversionExt2 for Scene {
           },
         );
 
+      // Jet angles (`JetDirectionLineComponent::show_angles`): longitude arc on the equator from
+      // the prime meridian, latitude arc on the jet's meridian from the equator, each with its
+      // degree label; the font is the body labels' (any `ReferentialIndicatorComponent`).
+      {
+        const ARC_PX: f32 = 1.5;
+        const ARC_LABEL_PT: f32 = 13.0;
+        let mut font: Option<(alloc::sync::Arc<text::FontAtlas>, u64)> = None;
+        self.query1(|_, r: &crate::scene::ReferentialIndicatorComponent| {
+          if font.is_none() {
+            font = Some((r.font_atlas.clone(), r.font_hash));
+          }
+        });
+        self.query1_without::<crate::scene::JetDirectionLineComponent, HiddenComponent, _>(
+          |id, line| {
+            if !line.is_visible || !line.show_angles || hidden_set.contains(&id) {
+              return;
+            }
+            let Some(nucleus) = self.get_parent(id) else {
+              return;
+            };
+            let (Some(g), Some(gizmo_radius), Some(site)) = (
+              self.global_transform_f64(nucleus),
+              self.with_component(nucleus, |g: &SphereGizmoComponent| g.radius),
+              self.with_component(id, |t: &crate::scene::TransformComponent| t.position),
+            ) else {
+              return;
+            };
+            let Some(angles) = jet_angle_arcs(vec3_f64(site), gizmo_radius as f64) else {
+              return;
+            };
+            use aethervk_oshal_rlib::math::quaternion::Quaternion;
+            let to_global = |p: [f64; 3]| {
+              g.position
+                + g.rotation.rotate_vector(aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(
+                  p[0] / AU_TO_KM as f64,
+                  p[1] / AU_TO_KM as f64,
+                  p[2] / AU_TO_KM as f64,
+                ))
+            };
+            let font_desc = font.as_ref().and_then(|(atlas, hash)| {
+              device
+                .allocate_rasterized_font_atlas(cmd_buffer, *hash, atlas.clone())
+                .ok()
+                .map(|d| (atlas, d))
+            });
+            for arc in &angles.arcs {
+              let px: alloc::vec::Vec<Option<[f32; 2]>> =
+                arc.points.iter().map(|p| to_px(to_global(*p))).collect();
+              for w in px.windows(2) {
+                if let [Some(a), Some(b)] = w {
+                  gpu_ui.push(segment_to_ui_quad(*a, *b, ARC_PX, JET_ANGLE_COLOR));
+                }
+              }
+              let (Some((atlas, desc)), Some(anchor)) = (font_desc, to_px(to_global(arc.label_at)))
+              else {
+                continue;
+              };
+              let style = text::TextStyle {
+                size_pt: ARC_LABEL_PT,
+                color: JET_ANGLE_COLOR,
+                style_flags: 2,
+              };
+              text::push_text_to_batch(
+                &arc.label,
+                [anchor[0] + 6.0, anchor[1] - 4.0],
+                &style,
+                atlas,
+                desc,
+                &mut text_batch,
+              );
+            }
+          },
+        );
+      }
+
       // Pole labels ("N" / "S" at the ends of a dashed polar axis, `earth_visual`).
       const POLE_LABEL_PT: f32 = 16.0;
       const POLE_LABEL_GAP_PX: f32 = 4.0;
@@ -1621,7 +1707,7 @@ impl SceneConversionExt2 for Scene {
             render_scene.camera_data.rebuild_for_layer(l.near, l.far, l.frame_scale);
           let sg_data: alloc::vec::Vec<_> = sg_list
             .into_iter()
-            .filter_map(|(id, m, center, r, sub, style, dash_count)| {
+            .filter_map(|(id, m, center, r, sub, style, dash_count, color)| {
               device.allocate_sphere_gizmo_instance(id).ok().map(|idx| {
                 (
                   idx,
@@ -1632,6 +1718,7 @@ impl SceneConversionExt2 for Scene {
                     style,
                     dash_count,
                     center_clip: crate::gpu::frame::center_clip_f64(&layer_camera, center),
+                    color,
                   },
                 )
               })
@@ -1922,6 +2009,147 @@ pub(crate) const UNLIT_JET_MARKER_DIM: f32 = 0.25;
 /// Whether the jet site `jet` (a child of the nucleus, translated to its surface) faces the Sun,
 /// the heliocentric origin: `(site − nucleus) · (−nucleus) > 0`, the dust emission's lit test at
 /// the current rotation. `None` without a parent or transforms.
+/// Absolute minimum perspective near plane (1 m) to handle camera-inside-mesh.
+const DEPTH_NEAR_FLOOR: f64 = 0.001; // km (= 1 m)
+/// Perspective near plane when within 2 m of the surface (0.1 mm).
+const DEPTH_NEAR_MIN: f64 = 1.0e-7; // km
+/// 5% padding on both sides to prevent near/far edge clipping.
+const DEPTH_MARGIN: f64 = 1.05;
+
+/// The macro layer's (near, far) from the UI's camera planes. An orthographic camera that shows
+/// what lies behind it (no [`crate::scene::CAMERA_HIDE_BEHIND`]) gets the mirrored slab
+/// `(−far, far)`: ortho depth is linear, so a negative near is valid and costs only precision.
+pub(crate) fn macro_layer_depth(near: f64, far: f64, is_ortho: bool, hide_behind: bool) -> (f64, f64) {
+  if is_ortho && !hide_behind {
+    (-far.abs(), far)
+  } else {
+    (near, far)
+  }
+}
+
+/// The (near, far) slab enclosing a sphere of radius `r` centred at the signed view depth `depth`
+/// (along the camera forward axis, view −Y). Orthographic projections have no w=0 singularity:
+/// the near plane may be negative, which shows geometry behind the eye plane, unless
+/// `hide_behind` clamps it at the eye. Perspective needs a strictly positive near plane.
+pub(crate) fn fit_depth_slab(depth: f64, r: f64, is_ortho: bool, hide_behind: bool) -> (f64, f64) {
+  if is_ortho {
+    let (near, far) = (depth - r * DEPTH_MARGIN, depth + r * DEPTH_MARGIN);
+    if hide_behind {
+      // wholly behind: an empty slab (far <= near), which the commit step skips
+      (near.max(0.0), far.max(0.0))
+    } else {
+      (near, far)
+    }
+  } else {
+    let d = depth.abs();
+    let surface_floor = if d > r {
+      ((d - r) * 0.5).clamp(DEPTH_NEAR_MIN, DEPTH_NEAR_FLOOR)
+    } else {
+      DEPTH_NEAR_FLOOR
+    };
+    (
+      (d - r * DEPTH_MARGIN).max(surface_floor),
+      d + r * DEPTH_MARGIN,
+    )
+  }
+}
+
+fn vec3_f64(v: Vec3f32) -> [f64; 3] {
+  use aethervk_oshal_rlib::math::vector::Vector3;
+  [v.x() as f64, v.y() as f64, v.z() as f64]
+}
+
+/// Colour of the jet angle arcs and their labels.
+pub(crate) const JET_ANGLE_COLOR: [f32; 4] = [1.0, 0.85, 0.35, 1.0];
+/// Segments of a 90° jet angle arc (proportionally fewer for a smaller angle, at least 2).
+pub(crate) const JET_ANGLE_ARC_SEGMENTS_PER_RIGHT_ANGLE: usize = 24;
+/// Radius of the jet angle arcs over the gizmo radius: inside the jet line (`1.125 ×`).
+pub(crate) const JET_ANGLE_ARC_OVER_GIZMO_RADIUS: f64 = 0.8;
+
+/// A jet's site direction (nucleus frame) → the jet line's local frame for the gizmo pipeline:
+/// orthonormal, local +Z along the site, X/Y any perpendicular pair. `None` for a zero site.
+pub(crate) fn jet_line_frame(site: [f64; 3]) -> Option<Mat4x4f32> {
+  use aethervk_oshal_rlib::math::vector::vec4::Vec4f32;
+  let n = (site[0] * site[0] + site[1] * site[1] + site[2] * site[2]).sqrt();
+  if !(n > 0.0) || !n.is_finite() {
+    return None;
+  }
+  let z = [site[0] / n, site[1] / n, site[2] / n];
+  // a helper axis not parallel to z
+  let h = if z[2].abs() < 0.9 { [0.0, 0.0, 1.0] } else { [1.0, 0.0, 0.0] };
+  let cross = |a: [f64; 3], b: [f64; 3]| {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+  };
+  let x = cross(h, z);
+  let xn = (x[0] * x[0] + x[1] * x[1] + x[2] * x[2]).sqrt();
+  let x = [x[0] / xn, x[1] / xn, x[2] / xn];
+  let y = cross(z, x);
+  let col = |v: [f64; 3]| Vec4f32::from_components(v[0] as f32, v[1] as f32, v[2] as f32, 0.0);
+  Some(Mat4x4f32 {
+    x: col(x),
+    y: col(y),
+    z: col(z),
+    w: Vec4f32::from_components(0.0, 0.0, 0.0, 1.0),
+  })
+}
+
+/// One jet angle arc: points in the nucleus frame (km) and its label.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct JetAngleArc {
+  pub points: alloc::vec::Vec<[f64; 3]>,
+  /// Where the label starts (the arc's midpoint).
+  pub label_at: [f64; 3],
+  pub label: alloc::string::String,
+}
+
+/// The two arcs of a jet's angles, nucleus frame (km), at `0.8 ×` the gizmo radius:
+/// `arcs[0]` longitude, on the equator from the prime meridian (+X) to the jet's meridian;
+/// `arcs[1]` latitude, on that meridian from the equator to the jet's direction.
+/// Labels "lon 45.0°" / "lat -30.0°" (east longitude, the C# convention). `None` for a zero site.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct JetAngleArcs {
+  pub lat_rad: f64,
+  pub lon_rad: f64,
+  pub arcs: [JetAngleArc; 2],
+}
+
+pub(crate) fn jet_angle_arcs(site: [f64; 3], gizmo_radius_km: f64) -> Option<JetAngleArcs> {
+  let n = (site[0] * site[0] + site[1] * site[1] + site[2] * site[2]).sqrt();
+  if !(n > 0.0) || !n.is_finite() {
+    return None;
+  }
+  let lat = (site[2] / n).clamp(-1.0, 1.0).asin();
+  let lon = site[1].atan2(site[0]);
+  let r = gizmo_radius_km * JET_ANGLE_ARC_OVER_GIZMO_RADIUS;
+  let segments = |angle: f64| {
+    ((angle.abs() / core::f64::consts::FRAC_PI_2 * JET_ANGLE_ARC_SEGMENTS_PER_RIGHT_ANGLE as f64)
+      .ceil() as usize)
+      .max(2)
+  };
+  // a point at latitude `phi`, longitude `lam`, radius r
+  let at = |phi: f64, lam: f64| [r * phi.cos() * lam.cos(), r * phi.cos() * lam.sin(), r * phi.sin()];
+  let sweep = |count: usize, f: &dyn Fn(f64) -> [f64; 3]| -> alloc::vec::Vec<[f64; 3]> {
+    (0..=count).map(|i| f(i as f64 / count as f64)).collect()
+  };
+  let lon_n = segments(lon);
+  let lat_n = segments(lat);
+  let lon_arc = JetAngleArc {
+    points: sweep(lon_n, &|t| at(0.0, lon * t)),
+    label_at: at(0.0, lon * 0.5),
+    label: alloc::format!("lon {:.1}°", lon.to_degrees()),
+  };
+  let lat_arc = JetAngleArc {
+    points: sweep(lat_n, &|t| at(lat * t, lon)),
+    label_at: at(lat * 0.5, lon),
+    label: alloc::format!("lat {:.1}°", lat.to_degrees()),
+  };
+  Some(JetAngleArcs {
+    lat_rad: lat,
+    lon_rad: lon,
+    arcs: [lon_arc, lat_arc],
+  })
+}
+
 pub(crate) fn jet_site_lit(scene: &Scene, jet: EntityId) -> Option<bool> {
   use aethervk_oshal_rlib::math::vector::Vector3;
   let nucleus = scene.global_transform_f64(scene.get_parent(jet)?)?.position;
@@ -1929,6 +2157,59 @@ pub(crate) fn jet_site_lit(scene: &Scene, jet: EntityId) -> Option<bool> {
   let normal = site - nucleus;
   let to_sun = -nucleus;
   Some(normal.x() * to_sun.x() + normal.y() * to_sun.y() + normal.z() * to_sun.z() > 0.0)
+}
+
+/// Where the Earth observer camera draws its comet on a `extent` (physical px) viewport.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CometScreenPosition {
+  /// From the left edge, px.
+  pub x_px: f64,
+  /// From the top edge, px.
+  pub y_px: f64,
+  /// Inside the viewport and drawable (in front of a perspective eye).
+  pub on_screen: bool,
+}
+
+/// Projects the comet the Earth observer `camera` tracks (its `LightTimeViewComponent`) onto a
+/// viewport of `extent` physical px, light-time displaced as its label and micro layer are drawn:
+/// the same f64 camera-relative projection as the comet's indicator. `None` without an observer
+/// comet, transforms or camera, or behind a perspective eye.
+pub(crate) fn comet_screen_position(
+  scene: &Scene,
+  camera: EntityId,
+  extent: [u32; 2],
+) -> Option<CometScreenPosition> {
+  use aethervk_oshal_rlib::math::{
+    matrix::{Matrix, mat4f64::Mat4x4f64},
+    vector::{Vector4, vec3f64::Vec3f64, vec4f64::Vec4f64},
+  };
+  if extent[0] == 0 || extent[1] == 0 {
+    return None;
+  }
+  let lt = scene
+    .with_component(camera, |l: &crate::simulation_api::earth_observer::LightTimeViewComponent| *l)?;
+  let cam_global = scene.global_transform_f64(camera)?;
+  let cam_comp = scene.with_component(camera, |c: &CameraComponent| *c)?;
+  let target = scene.global_transform_f64(lt.comet)?;
+  let camera_data = CameraRenderData::new_f64(&cam_global, &cam_comp, 1.0, extent);
+  let offset = Vec3f64::from_components(lt.offset_au[0], lt.offset_au[1], lt.offset_au[2]);
+  let rte = target.position + offset - cam_global.position;
+  let view_proj: Mat4x4f64 = camera_data.proj_f64 * camera_data.view_f64;
+  let clip = view_proj.mul_vector(Vec4f64::from_components(
+    aethervk_oshal_rlib::math::vector::Vector3::x(&rte),
+    aethervk_oshal_rlib::math::vector::Vector3::y(&rte),
+    aethervk_oshal_rlib::math::vector::Vector3::z(&rte),
+    1.0,
+  ));
+  if clip.w() <= 0.0 {
+    return None;
+  }
+  let (ndc_x, ndc_y) = (clip.x() / clip.w(), clip.y() / clip.w());
+  Some(CometScreenPosition {
+    x_px: (ndc_x + 1.0) * 0.5 * extent[0] as f64,
+    y_px: (ndc_y + 1.0) * 0.5 * extent[1] as f64,
+    on_screen: (-1.0..=1.0).contains(&ndc_x) && (-1.0..=1.0).contains(&ndc_y),
+  })
 }
 
 /// The Earth observer's light-time displacement (`earth_observer::LightTimeViewComponent` on the

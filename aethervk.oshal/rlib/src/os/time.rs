@@ -450,6 +450,10 @@ pub mod v2 {
       let scale = state.speed.scale_factor();
       // f64 -> u64 for delta no problem
       let scaled_delta = (unscaled_delta as f64 * scale) as timeus_t;
+      // never step past the end epoch: the last tick of a play used to overshoot it by up to
+      // `max_unscaled_delta × speed` (the play loop only checks `current < end` before ticking)
+      let total = ((self.end_epoch - self.start_epoch).to_seconds().max(0.0) * 1e6) as timeus_t;
+      let scaled_delta = min(scaled_delta, (total - state.scaled_time).max(0));
 
       state.unscaled_delta = unscaled_delta;
       state.unscaled_time += unscaled_delta;

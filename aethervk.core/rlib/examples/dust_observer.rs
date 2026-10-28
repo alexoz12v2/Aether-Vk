@@ -2389,6 +2389,7 @@ fn main() {
       Some(earth_observer::EarthObserverMode::CometTracking),
       scene_ret.earth_body,
       scene_ret.comet_body,
+      true,
       args.lat_deg,
       lon_deg,
       args.elev_m,

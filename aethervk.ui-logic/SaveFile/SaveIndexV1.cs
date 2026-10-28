@@ -141,6 +141,7 @@ public sealed class ModelDto
   public bool DustFlow { get; set; }
   public double DustFlowSpeed { get; set; } = 1;
   public bool SphereGizmoVisible { get; set; } = true;
+  public bool ShowJetAngles { get; set; }
   public bool ShowReferencePositionError { get; set; }
   /// <summary>The Model tab's manual nucleus radius (used when Horizons has none).</summary>
   public float ManualNucleusRadiusKm { get; set; } = 2;
@@ -181,6 +182,8 @@ public sealed class ViewportDisplayDto
   /// <summary>deg | arcmin | arcsec: the perspective field of view's unit.</summary>
   public string FovUnit { get; set; } = "deg";
   public bool OrthoProportionsLocked { get; set; } = true;
+  /// <summary>An orthographic view also draws what lies behind the camera (absent: on).</summary>
+  public bool ShowBehindCamera { get; set; } = true;
 }
 
 public sealed class CameraSnapshotDto
@@ -209,12 +212,19 @@ public sealed class ObserverDto
   public float LatDeg { get; set; }
   public float LonDeg { get; set; }
   public double ElevationM { get; set; }
-  /// <summary>free | comet_lock_in | comet_tracking | sun_lock_in | … (EarthObserverOrientationMode, snake_case).</summary>
+  /// <summary>free | comet_tracking | sun_tracking (EarthObserverOrientationMode, snake_case). The
+  /// retired comet_lock_in / sun_lock_in of older saves read as free, with the inertial look.</summary>
   public string Orientation { get; set; } = "free";
   /// <summary>Look quaternion x, y, z, w in the inertial frame.</summary>
   public double[] InertialLook { get; set; } = [0, 0, 0, 1];
-  /// <summary>Look quaternion x, y, z, w in the Earth body-fixed frame.</summary>
+  /// <summary>Retired lock-in look (Earth body-fixed): written as the inertial look, ignored on open.</summary>
   public double[] BodyFixedLook { get; set; } = [0, 0, 0, 1];
+  /// <summary>Observer on its surface site (LatDeg / LonDeg / ElevationM) instead of the Earth's
+  /// centre; false in older saves.</summary>
+  public bool Topocentric { get; set; }
+  /// <summary>The observer's projection remembered while the viewport is in another mode (absent:
+  /// entering the observer starts from its defaults).</summary>
+  public ProjectionDto? Projection { get; set; }
 }
 
 public sealed class AssetDto
@@ -253,6 +263,27 @@ public sealed class BillboardDto
   public double Alpha { get; set; } = 0.6;
   public double RotationDeg { get; set; }
   public bool Visible { get; set; } = true;
+  /// <summary>Physical size: arcsec per image pixel (absent: not set).</summary>
+  public double? ImageArcsecPerPx { get; set; }
+  public int ImageWidthPx { get; set; }
+  public int ImageHeightPx { get; set; }
+  /// <summary>The size follows the Earth observer's viewport scale.</summary>
+  public bool PhysicalSizeBound { get; set; }
+  /// <summary>FITS texture stretch (absent / null: the import's zscale, linear).</summary>
+  public FitsStretchDto? FitsStretch { get; set; }
+}
+
+/// <summary>A FITS billboard's stretch; enum values snake_case.</summary>
+public sealed class FitsStretchDto
+{
+  /// <summary><c>z_scale</c> | <c>percentile</c> | <c>manual</c>.</summary>
+  public string Mode { get; set; } = "z_scale";
+  /// <summary><c>linear</c> | <c>log</c> | <c>asinh</c>.</summary>
+  public string Transfer { get; set; } = "linear";
+  /// <summary>Percentile: low %; manual: black (data units).</summary>
+  public double P0 { get; set; }
+  /// <summary>Percentile: high %; manual: white (data units).</summary>
+  public double P1 { get; set; }
 }
 
 /// <summary>Source-generated (AOT-friendly) JSON metadata for the save index, snake_case keys.</summary>

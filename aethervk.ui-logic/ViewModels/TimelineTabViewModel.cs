@@ -175,6 +175,26 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
   public IRelayCommand PlayPauseCommand { get; }
   public ICommand ResetCommand { get; }
   public IAsyncRelayCommand RunToEndCommand { get; }
+  public IAsyncRelayCommand SeekToEpochCommand { get; }
+
+  /// <summary>Display and input format of the epoch box (the viewport's date, to the second).</summary>
+  public const string EpochBoxFormat = "yyyy-MM-dd HH:mm:ss";
+
+  /// <summary>
+  /// The engine clock in <see cref="EpochBoxFormat"/>; the user types an epoch here and presses
+  /// Enter (<see cref="SeekToEpochCommand"/>) to seek. Not refreshed while <see cref="IsEditingCurrentEpoch"/>.
+  /// </summary>
+  [ObservableProperty]
+  private string _currentEpochText = string.Empty;
+
+  [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(HasCurrentEpochError))]
+  private string _currentEpochError = string.Empty;
+
+  public bool HasCurrentEpochError => CurrentEpochError.Length > 0;
+
+  /// <summary>Set by the view while the box has focus, so playback does not overwrite typing.</summary>
+  public bool IsEditingCurrentEpoch { get; set; }
 
   public TimelineTabViewModel(
     ITranslationService translationService,
@@ -200,6 +220,8 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
         IsPlaying = false;
         _timelineService.Reset();
         Progress = 0.0;
+        CurrentEpochError = string.Empty;
+        PollSimulationClock();
         
         // Clear current epoch in session so the 3D viewport overlay resets immediately
         _timelineSessionService.UpdateSession(SessionId, s =>
@@ -216,6 +238,19 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
       })
       .AddDisposableTo(_disposables);
     RunToEndCommand = new AsyncRelayCommand(RunToEndAsync);
+    SeekToEpochCommand = new AsyncRelayCommand(SeekToEpochAsync);
+
+    // any seek (this tab, a FITS observation epoch): show where the clock now is
+    _timelineService.Seeked
+      .Subscribe(_ => PollSimulationClock())
+      .AddDisposableTo(_disposables);
+
+    // the range the engine actually holds (ExternalState::TimeRange): Run to End and the committed
+    // labels follow it, never the textbox, so a refused or stale range cannot send the clock
+    // past the user's end (towards the SPK's +30 d margin)
+    _timelineService.ValidatedTimeRange
+      .Subscribe(range => _confirmedRange = range)
+      .AddDisposableTo(_disposables);
 
     _timelineService.IsTimelineValid
       .ObserveOn(schedulerProvider.MainThread)
@@ -242,23 +277,106 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
   /// </summary>
   private async Task RunToEndAsync()
   {
-    if (CurrentSession is null
-        || !TimeUtils.TryParseIso8601(CurrentSession.CommittedEndEpoch, out var endDt))
+    if (CurrentSession is null || RunToEndTarget(_confirmedRange, CurrentSession.CommittedEndEpoch) is not var (cent, ns))
       return;
     IsPlaying = false;
-    // a day past the end: the seek clamps to the committed end exactly (TAI vs TDB parts)
-    var (cent, ns) = TimeUtils.ToTaiParts(endDt.AddDays(1));
     _timelineSessionService.UpdateSession(SessionId, s => s.IsRunningToEnd = true);
     bool ok;
     try
     {
-      ok = await Task.Run(() => _runtimeService.SeekEpochSync(cent, ns));
+      ok = await _timelineService.SeekAsync(cent, ns);
     }
     finally
     {
       _timelineSessionService.UpdateSession(SessionId, s => s.IsRunningToEnd = false);
     }
-    if (ok) PollSimulationClock();
+    // even a timed-out seek moved the clock: show where it is
+    PollSimulationClock();
+    if (!ok) Console.WriteLine("[Timeline] Run to End: the seek did not confirm in time");
+  }
+
+  /// <summary>
+  /// The epoch box: parses <see cref="CurrentEpochText"/> (UTC, as displayed), refuses it outside
+  /// the committed range, else pauses and seeks there.
+  /// </summary>
+  private async Task SeekToEpochAsync()
+  {
+    if (CurrentSession is null || !HasCommittedState)
+      return;
+    if (!TryParseEpochBox(CurrentEpochText, out var target))
+    {
+      CurrentEpochError = $"Not an epoch: use {EpochBoxFormat}.";
+      return;
+    }
+    if (EffectiveRange() is not { } range)
+      return;
+    if (!InRange(target, range))
+    {
+      CurrentEpochError = $"Outside the timeline ({FormatEpoch(range.StartCenturies, range.StartNs)} to {FormatEpoch(range.EndCenturies, range.EndNs)}).";
+      return;
+    }
+    CurrentEpochError = string.Empty;
+    IsPlaying = false;
+    _timelineSessionService.UpdateSession(SessionId, s => s.IsRunningToEnd = true);
+    bool ok;
+    try
+    {
+      ok = await _timelineService.SeekAsync(target.Centuries, target.Nanoseconds);
+    }
+    finally
+    {
+      _timelineSessionService.UpdateSession(SessionId, s => s.IsRunningToEnd = false);
+    }
+    PollSimulationClock(force: true);
+    if (!ok) Console.WriteLine("[Timeline] epoch box: the seek did not confirm in time");
+  }
+
+  /// <summary>The epoch box's text as an engine epoch: invariant culture, UTC unless an offset is typed.</summary>
+  internal static bool TryParseEpochBox(string text, out (short Centuries, ulong Nanoseconds) epoch)
+  {
+    epoch = default;
+    if (string.IsNullOrWhiteSpace(text)
+        || !DateTimeOffset.TryParse(text.Trim(), System.Globalization.CultureInfo.InvariantCulture,
+             System.Globalization.DateTimeStyles.AssumeUniversal, out var dt))
+      return false;
+    epoch = TimeUtils.ToTaiParts(dt);
+    return true;
+  }
+
+  internal static string FormatEpoch(short cent, ulong ns) =>
+    TimeUtils.FromTaiParts(cent, ns).ToString(EpochBoxFormat, System.Globalization.CultureInfo.InvariantCulture);
+
+  internal static bool InRange((short Centuries, ulong Nanoseconds) e, TimeRange range) =>
+    Compare(e, (range.StartCenturies, range.StartNs)) >= 0 && Compare(e, (range.EndCenturies, range.EndNs)) <= 0;
+
+  private static int Compare((short C, ulong N) a, (short C, ulong N) b) =>
+    a.C != b.C ? a.C.CompareTo(b.C) : a.N.CompareTo(b.N);
+
+  /// <summary>The engine-confirmed range, else the committed text.</summary>
+  private TimeRange? EffectiveRange()
+  {
+    if (_confirmedRange is not null)
+      return _confirmedRange;
+    if (CurrentSession is null
+        || !TimeUtils.TryParseIso8601(CurrentSession.CommittedStartEpoch, out var startDt)
+        || !TimeUtils.TryParseIso8601(CurrentSession.CommittedEndEpoch, out var endDt))
+      return null;
+    var a = TimeUtils.ToTaiParts(startDt);
+    var b = TimeUtils.ToTaiParts(endDt);
+    return new TimeRange(a.centuries, a.nanoseconds, b.centuries, b.nanoseconds);
+  }
+
+  /// <summary>
+  /// Where Run to End seeks: exactly the engine-confirmed end (the user's end date as the engine
+  /// holds it), else the committed end text; <c>null</c> without either.
+  /// </summary>
+  internal static (short Centuries, ulong Nanoseconds)? RunToEndTarget(TimeRange? confirmed, string committedEndEpoch)
+  {
+    if (confirmed is not null)
+      return (confirmed.EndCenturies, confirmed.EndNs);
+    if (TimeUtils.TryParseIso8601(committedEndEpoch, out var endDt))
+      return TimeUtils.ToTaiParts(endDt);
+    return null;
   }
 
   /// <summary>
@@ -275,10 +393,15 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
     return currentStr != startDt.ToString("yyyy-MM-dd HH:mm") ? currentStr : string.Empty;
   }
 
-  private void PollSimulationClock()
+  private void PollSimulationClock() => PollSimulationClock(force: false);
+
+  /// <param name="force">also refresh the epoch box while it is being edited (after its own seek)</param>
+  private void PollSimulationClock(bool force)
   {
     if (_runtimeService.GetSimulationClock(out var cent, out var ns))
     {
+      if (force || !IsEditingCurrentEpoch)
+        CurrentEpochText = FormatEpoch(cent, ns);
       string startEpochStr = CurrentSession?.CommittedStartEpoch ?? "";
       string endEpochStr = CurrentSession?.CommittedEndEpoch ?? "";
 
@@ -453,6 +576,8 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
     if (!IsPlaying) PollSimulationClock();
   }
 
+  private TimeRange? _confirmedRange;
+
   private bool _isProposing;
   private void TryPropose()
   {
@@ -523,6 +648,8 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
 
     RefreshCommittedState();
     CheckProposedVsCommitted();
+    CurrentEpochError = string.Empty;
+    PollSimulationClock();
   }
 
   private void SubscribeToStrings(ISchedulerProvider schedulerProvider)

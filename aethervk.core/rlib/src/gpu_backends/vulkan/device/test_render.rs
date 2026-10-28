@@ -210,6 +210,7 @@ fn test_render_all_archetypes_windowless() {
           style: 0.0,
           dash_count: 0.0,
           center_clip: [0.0; 4],
+          color: [1.0; 4],
         },
       )];
 

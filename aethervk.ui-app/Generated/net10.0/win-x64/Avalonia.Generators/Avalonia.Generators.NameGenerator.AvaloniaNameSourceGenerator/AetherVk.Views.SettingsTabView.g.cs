@@ -17,6 +17,10 @@ namespace AetherVk.Views
         [global::System.CodeDom.Compiler.GeneratedCode("Avalonia.Generators.NameGenerator.InitializeComponentCodeGenerator", "11.3.12.0")]
         internal global::Avalonia.Controls.Expander ParticleRenderingSection;
         [global::System.CodeDom.Compiler.GeneratedCode("Avalonia.Generators.NameGenerator.InitializeComponentCodeGenerator", "11.3.12.0")]
+        internal global::Avalonia.Controls.Slider ParticleQualitySlider;
+        [global::System.CodeDom.Compiler.GeneratedCode("Avalonia.Generators.NameGenerator.InitializeComponentCodeGenerator", "11.3.12.0")]
+        internal global::Avalonia.Controls.TextBlock ParticleQualityLabel;
+        [global::System.CodeDom.Compiler.GeneratedCode("Avalonia.Generators.NameGenerator.InitializeComponentCodeGenerator", "11.3.12.0")]
         internal global::Avalonia.Controls.ComboBox VolumeDetailPicker;
         [global::System.CodeDom.Compiler.GeneratedCode("Avalonia.Generators.NameGenerator.InitializeComponentCodeGenerator", "11.3.12.0")]
         internal global::Avalonia.Controls.ComboBox PropagateDetailPicker;
@@ -46,6 +50,8 @@ namespace AetherVk.Views
             CreateBillboardButton = __thisNameScope__?.Find<global::Avalonia.Controls.Button>("CreateBillboardButton");
             BillboardList = __thisNameScope__?.Find<global::Avalonia.Controls.ItemsControl>("BillboardList");
             ParticleRenderingSection = __thisNameScope__?.Find<global::Avalonia.Controls.Expander>("ParticleRenderingSection");
+            ParticleQualitySlider = __thisNameScope__?.Find<global::Avalonia.Controls.Slider>("ParticleQualitySlider");
+            ParticleQualityLabel = __thisNameScope__?.Find<global::Avalonia.Controls.TextBlock>("ParticleQualityLabel");
             VolumeDetailPicker = __thisNameScope__?.Find<global::Avalonia.Controls.ComboBox>("VolumeDetailPicker");
             PropagateDetailPicker = __thisNameScope__?.Find<global::Avalonia.Controls.ComboBox>("PropagateDetailPicker");
             HazeDetailPicker = __thisNameScope__?.Find<global::Avalonia.Controls.ComboBox>("HazeDetailPicker");

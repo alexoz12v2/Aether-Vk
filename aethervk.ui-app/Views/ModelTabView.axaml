@@ -68,7 +68,7 @@
     <StackPanel Orientation="Vertical" Spacing="16" Margin="16,16,16,16" IsEnabled="{Binding !IsSimulationRunning}">
 
       <!-- ══════════════════ SUN ══════════════════════════════════════════════ -->
-      <Border Background="Transparent" IsHitTestVisible="{Binding !EnableLegacyExpanders}">
+      <Border Background="Transparent" IsHitTestVisible="{Binding !EnableLegacyExpanders}" IsVisible="{Binding EnableLegacyExpanders}">
         <FlyoutBase.AttachedFlyout>
           <Flyout Placement="Right">
             <TextBlock MaxWidth="280" TextWrapping="Wrap"
@@ -134,7 +134,7 @@
       </Border>
 
       <!-- ══════════════════ NUCLEUS AND SPIN AXIS ═══════════════════════════ -->
-      <Border Background="Transparent" IsHitTestVisible="{Binding !EnableLegacyExpanders}">
+      <Border Background="Transparent" IsHitTestVisible="{Binding !EnableLegacyExpanders}" IsVisible="{Binding EnableLegacyExpanders}">
         <FlyoutBase.AttachedFlyout>
           <Flyout Placement="Right">
             <TextBlock MaxWidth="280" TextWrapping="Wrap"
@@ -157,11 +157,6 @@
             <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding StrRadius}" />
             <controls:UnboundedSlider Grid.Row="0" Grid.Column="2" />
 
-            <TextBlock Grid.Row="2" Grid.Column="0" Text="Gizmo Visible" VerticalAlignment="Center" />
-            <ComboBox Grid.Row="2" Grid.Column="2" SelectedIndex="{Binding IsGizmoVisibleIndex}" HorizontalAlignment="Center">
-              <ComboBoxItem>Yes</ComboBoxItem>
-              <ComboBoxItem>No</ComboBoxItem>
-            </ComboBox>
 
             <TextBlock Grid.Row="4" Grid.Column="0" Text="{Binding StrRotationPeriod}" />
             <controls:UnboundedSlider Grid.Row="4" Grid.Column="2">
@@ -304,6 +299,12 @@
               </controls:UnboundedSlider>
             </Grid>
 
+            <CheckBox Margin="12,2,12,4"
+                      AutomationProperties.AutomationId="SphereGizmoVisibleCheckBox"
+                      IsChecked="{Binding IsGizmoVisible}"
+                      Content="Show sphere gizmo"
+                      ToolTip.Tip="The wireframe sphere and axes around the nucleus. Saved with the file." />
+
             <!-- Warning: no radius known yet -->
             <TextBlock Margin="12,0,12,6"
                        IsVisible="{Binding IsNucleusRadiusUnknown}"
@@ -341,6 +342,12 @@
               </Panel>
             </Grid>
 
+            <CheckBox Margin="12,2,12,4"
+                      AutomationProperties.AutomationId="ShowJetAnglesCheckBox"
+                      IsChecked="{Binding ShowJetAngles}"
+                      Content="Show jet angles"
+                      ToolTip.Tip="Draws the selected jet's latitude and longitude as arcs with their degrees in the viewport. Saved with the file." />
+
             <!-- ──── Jet list ─────────────────────────────────────────────── -->
             <ListBox x:Name="JetListBox"
                      Classes="list-tray"
@@ -362,10 +369,10 @@
                       </TextBlock>
                       <StackPanel Orientation="Horizontal" Spacing="10">
                         <TextBlock FontSize="11" Foreground="{DynamicResource Text.Tertiary}">
-                          <Run Text="λ " /><Run Text="{Binding LatitudeDeg, StringFormat='{}{0:F1}°'}" />
+                          <Run Text="φ " /><Run Text="{Binding LatitudeDeg, StringFormat='{}{0:F1}°'}" />
                         </TextBlock>
                         <TextBlock FontSize="11" Foreground="{DynamicResource Text.Tertiary}">
-                          <Run Text="φ " /><Run Text="{Binding LongitudeDeg, StringFormat='{}{0:F1}°'}" />
+                          <Run Text="λ " /><Run Text="{Binding LongitudeDeg, StringFormat='{}{0:F1}°'}" />
                         </TextBlock>
                         <TextBlock FontSize="11" Foreground="{DynamicResource Text.Tertiary}">
                           <Run Text="∠ " /><Run Text="{Binding ApertureDeg, StringFormat='{}{0:F0}°'}" />

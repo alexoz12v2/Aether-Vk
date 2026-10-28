@@ -321,6 +321,13 @@
               </controls:UnboundedSlider>
             </Grid>
 
+            <!-- Pole precession: rarely known for a comet, so out of the way -->
+            <Expander AutomationProperties.AutomationId="PolePrecessionExpander" Margin="0,2"
+                      ToolTip.Tip="Slow drift of the pole (IAU model terms). Leave at 0 unless the literature gives one.">
+              <Expander.Header>
+                <TextBlock Text="Advanced: pole precession" />
+              </Expander.Header>
+              <StackPanel>
             <!-- RA Rate -->
             <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
               <TextBlock Grid.Column="0" Classes="label" Text="RA Rate" VerticalAlignment="Center" />
@@ -337,6 +344,18 @@
               <controls:UnboundedSlider Grid.Column="2" Value="{Binding PoleDecRateDegCen}" Step="0.001">
                 <controls:UnboundedSlider.InnerRightContent>
                   <TextBlock Classes="unit-of-measurement" Text="°/cen" />
+                </controls:UnboundedSlider.InnerRightContent>
+              </controls:UnboundedSlider>
+            </Grid>
+              </StackPanel>
+            </Expander>
+
+            <!-- Rotation Period (the same quantity as the rate below) -->
+            <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
+              <TextBlock Grid.Column="0" Classes="label" Text="Rotation Period" VerticalAlignment="Center" />
+              <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="RotPeriodSlider" Value="{Binding RotationPeriodHours}" Step="0.01" ToolTip.Tip="Sidereal rotation period; edits the rotation rate below (the sign stays)." ToolTip.ShowDelay="500">
+                <controls:UnboundedSlider.InnerRightContent>
+                  <TextBlock Classes="unit-of-measurement" Text="h" />
                 </controls:UnboundedSlider.InnerRightContent>
               </controls:UnboundedSlider>
             </Grid>

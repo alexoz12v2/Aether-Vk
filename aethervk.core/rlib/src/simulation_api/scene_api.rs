@@ -782,9 +782,9 @@ impl SimulationContext {
 
   /// Sets (or, with `mode = None`, clears) the native Earth observer of `scene_id` and poses the
   /// camera right away (it is re-posed in every commit afterwards, see `earth_observer`).
-  /// `look` (xyzw): the Free inertial world look, or the lock-in body-fixed look. The observer
-  /// stands on the WGS84 ellipsoid at geodetic `lat_deg` / `lon_deg`, `elev_m` metres above it
-  /// ([`crate::simulation_api::astrometry::wgs84_surface_point_bf`]). With a comet, the comet and
+  /// `look` (xyzw): the Free inertial world look. The observer is at the Earth's centre, or
+  /// (`topocentric`) on the WGS84 ellipsoid at geodetic `lat_deg` / `lon_deg`, `elev_m` metres above
+  /// it ([`crate::simulation_api::astrometry::wgs84_surface_point_bf`]). With a comet, the comet and
   /// its dust are drawn at the light-time retarded epoch (the comet's velocity is taken from the
   /// almanac at the scene's current epoch here, then from every commit). Returns false when the
   /// scene or an entity is missing.
@@ -796,6 +796,7 @@ impl SimulationContext {
     mode: Option<crate::simulation_api::earth_observer::EarthObserverMode>,
     earth: u64,
     comet: u64,
+    topocentric: bool,
     lat_deg: f64,
     lon_deg: f64,
     elev_m: f64,
@@ -853,6 +854,7 @@ impl SimulationContext {
       camera,
       EntityId::from_ffi(earth),
       comet,
+      topocentric,
       lat_deg,
       lon_deg,
       elev_m,
@@ -1178,6 +1180,23 @@ impl SimulationContext {
       let _ = guard.scene.add_component(e, crate::scene::HiddenComponent {});
     }
     true
+  }
+
+  /// Where the Earth observer camera `camera_entity` (FFI id) draws its comet on a viewport of
+  /// `width_px` × `height_px` physical pixels (from the top-left corner), light-time displaced as
+  /// drawn. `None` when the scene, the camera or the observer's comet is missing, or the comet is
+  /// behind a perspective eye.
+  pub fn comet_screen_position(
+    &self,
+    scene_id: u64,
+    camera_entity: u64,
+    width_px: u32,
+    height_px: u32,
+  ) -> Option<crate::gpu::scene_conversion::CometScreenPosition> {
+    let scene_arc = self.scenes.read().get_scene(scene_id)?;
+    let guard = scene_arc.read();
+    let camera: EntityId = slotmap::KeyData::from_ffi(camera_entity).into();
+    crate::gpu::scene_conversion::comet_screen_position(&guard.scene, camera, [width_px, height_px])
   }
 
   /// Sets the render layers the camera `camera_entity` (FFI id) draws

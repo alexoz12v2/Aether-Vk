@@ -748,6 +748,26 @@ pub struct SphereGizmoComponent {
 }
 impl Component for SphereGizmoComponent {}
 
+/// A jet's direction on its nucleus (on the jet entity, a child of the nucleus translated to the
+/// site): a solid line from the nucleus centre along the site direction, `0.75 ×` the gizmo's body
+/// axes (`1.125 ×` the parent's [`SphereGizmoComponent::radius`]), no arrowhead, in the jet's
+/// colour (dimmed while the site is unlit). Drawn by the sphere-gizmo pipeline, depth tested, so
+/// the part inside the nucleus stays hidden.
+#[derive(Clone, Debug, PartialEq)]
+pub struct JetDirectionLineComponent {
+  pub color: [f32; 4],
+  /// The jet preview toggle (`setJetPreviewVisibility`).
+  pub is_visible: bool,
+  /// Latitude arc (equator → the jet) and longitude arc (prime meridian → the jet's meridian)
+  /// with their degree labels (`setJetAngleVisibility`; the C# side sets it on the selected jet).
+  pub show_angles: bool,
+}
+impl Component for JetDirectionLineComponent {}
+
+/// Length of a [`JetDirectionLineComponent`] line over the parent's gizmo radius: three quarters of
+/// the body axes, which reach `1.5 ×` the radius (`sphere_gizmo.vert`).
+pub const JET_LINE_LENGTH_OVER_GIZMO_RADIUS: f32 = 0.75 * 1.5;
+
 /// A spherical gizmo with a simpler toggle, distinct from SphereGizmoComponent
 #[derive(Clone, Debug, PartialEq)]
 pub struct SphericalGizmoComponent {
@@ -787,9 +807,14 @@ impl Component for CameraRenderMaskComponent {}
 /// (1 AU / r)², no ambient fill, unlit fragments in a debug tint) instead of the display shading
 /// (constant sunlight, ambient fill).
 pub const CAMERA_SHADING_PHYSICAL: u32 = 1 << 0;
+/// [`CameraShadingComponent`] bit: an orthographic camera drops geometry behind its eye plane
+/// (near clamped at 0). Without it (the default) an orthographic view also shows what lies behind
+/// the camera within the far distance, which a telescope-like view needs; perspective views can
+/// never show it.
+pub const CAMERA_HIDE_BEHIND: u32 = 1 << 1;
 
-/// How a camera shades meshes (`CAMERA_SHADING_*` bits). A camera without it uses the display
-/// shading.
+/// How a camera shades meshes (`CAMERA_SHADING_*` bits, plus [`CAMERA_HIDE_BEHIND`]). A camera
+/// without it uses the display shading and shows what lies behind an orthographic eye.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct CameraShadingComponent(pub u32);
 impl Component for CameraShadingComponent {}
@@ -1689,6 +1714,7 @@ impl Scene {
     self.register_component::<GizmoComponent>(&transform_type_id);
 
     self.register_component::<SphereGizmoComponent>(&transform_type_id);
+    self.register_component::<JetDirectionLineComponent>(&transform_type_id);
     self.register_component::<GridComponent>(&transform_type_id);
     self.register_component::<HiddenComponent>(&[]);
     self.register_component::<RenderLayerComponent>(&[]);

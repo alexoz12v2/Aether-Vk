@@ -507,4 +507,142 @@ public class DesktopBillboardTests
     fake.Drain();
     Assert.False(row.IsMissing);
   }
+
+  // ── physical size and piloting (Earth observer) ────────────────────────────────────────────
+
+  private sealed class FakeProbe : IBillboardViewportProbe
+  {
+    public double? ArcsecPerPx { get; set; }
+    public PointD? CometDesktopPx { get; set; }
+    public List<double> Matched { get; } = [];
+    public bool MatchArcsecPerPx(double arcsecPerPx)
+    {
+      Matched.Add(arcsecPerPx);
+      ArcsecPerPx = arcsecPerPx;
+      return true;
+    }
+    public bool IsEarthObserver => true;
+    public bool EnterEarthObserver() => true;
+    public void SetObserverSite(double latDeg, double lonDeg, double? elevM) { }
+    public bool LockToDirection(Vector3d worldDirection) => true;
+    public bool ViewUpIsEclipticSouth => false;
+    public PointD? ViewportCenterDesktopPx => null;
+    public bool IsComparisonLocked { get; set; }
+  }
+
+  /// The physical size is the sky the image covers over the viewport's scale; none without a
+  /// plate scale, a native size or a viewport scale.
+  [Fact]
+  public void PhysicalSize_IsImagePixelsTimesThePlateScaleOverTheViewportScale()
+  {
+    var b = Bb() with { ImageArcsecPerPx = 0.3, ImageWidthPx = 1200, ImageHeightPx = 800 };
+    var s = DesktopBillboardGeometry.PhysicalSize(b, 1.2)!.Value;
+    Near(300, s.WidthPx);
+    Near(200, s.HeightPx);
+    Near(1200, DesktopBillboardGeometry.PhysicalSize(b, 0.3)!.Value.WidthPx); // 1:1
+    Assert.Null(DesktopBillboardGeometry.PhysicalSize(b with { ImageArcsecPerPx = null }, 1.2));
+    Assert.Null(DesktopBillboardGeometry.PhysicalSize(b with { ImageWidthPx = 0 }, 1.2));
+    Assert.Null(DesktopBillboardGeometry.PhysicalSize(b, 0));
+    Assert.Null(DesktopBillboardGeometry.PhysicalSize(b, double.NaN));
+  }
+
+  /// Apply binds; a new viewport scale re-sizes bound billboards only; a manual size edit unbinds
+  /// while moves and rotations keep the binding; Create records the texture's native size.
+  [Fact]
+  public void PhysicalSizeBinding_FollowsTheScale_UntilAManualResize()
+  {
+    using var svc = new DesktopBillboardService();
+    var screen = new ScreenInfo(new RectI(0, 0, 1920, 1080), 1);
+    var b = svc.Create(Tex(w: 1200, h: 800), screen);
+    Assert.Equal((1200, 800), (b.ImageWidthPx, b.ImageHeightPx));
+    Assert.False(svc.ApplyPhysicalSize(b.Id, 1.0)); // no plate scale yet
+    svc.Update(b.Id, x => x with { ImageArcsecPerPx = 0.5 });
+    var other = svc.Create(Tex(w: 1200, h: 800), screen);
+    svc.Update(other.Id, x => x with { ImageArcsecPerPx = 0.5 });
+
+    Assert.True(svc.ApplyPhysicalSize(b.Id, 1.0));
+    var bound = svc.Find(b.Id)!;
+    Assert.True(bound.PhysicalSizeBound);
+    Near(600, bound.WidthPx);
+    Near(400, bound.HeightPx);
+
+    svc.RescaleBound(0.25); // zoomed in 4×
+    Near(2400, svc.Find(b.Id)!.WidthPx);
+    Assert.Equal(other.WidthPx, svc.Find(other.Id)!.WidthPx); // unbound: untouched
+
+    svc.Update(b.Id, x => x with { CenterX = 10, RotationDeg = 30 });
+    Assert.True(svc.Find(b.Id)!.PhysicalSizeBound);
+    svc.Update(b.Id, x => x with { WidthPx = 500 });
+    Assert.False(svc.Find(b.Id)!.PhysicalSizeBound);
+    svc.RescaleBound(1.0);
+    Near(500, svc.Find(b.Id)!.WidthPx);
+  }
+
+  /// The rows pilot the billboard from the viewport: Center needs the comet on screen, Apply is
+  /// off while bound and back after a manual resize, Match sets the viewport's scale to the
+  /// image's and shows it 1:1 on the comet.
+  [Fact]
+  public void Rows_CenterOnComet_ApplyPhysicalSize_AndMatchTheCamera()
+  {
+    var (vm, svc, fake, _) = BuildVm();
+    vm.CreateCommand.Execute(null);
+    fake.Drain();
+    var row = vm.Items[0];
+    var probe = new FakeProbe();
+    vm.AttachViewport(probe, poll: false); // a polling interval never drains
+    Assert.False(row.CenterOnCometCommand.CanExecute(null));
+    Assert.False(row.ApplyPhysicalSizeCommand.CanExecute(null)); // no viewport scale, no plate scale
+    Assert.False(row.MatchCameraToImageCommand.CanExecute(null));
+    Assert.Contains("set the plate scale", row.PhysicalSizeLabel);
+
+    probe.ArcsecPerPx = 2.0;
+    probe.CometDesktopPx = new PointD(700, 300);
+    vm.Probe();
+    Assert.True(row.CenterOnCometCommand.CanExecute(null));
+    row.CenterOnCometCommand.Execute(null);
+    Near(700, svc.Current[0].CenterX);
+    Near(300, svc.Current[0].CenterY);
+
+    row.ImageArcsecPerPxText = "0.5"; // the 800 × 400 texture: 6.67′ × 3.33′
+    fake.Drain();
+    Assert.Equal(0.5, svc.Current[0].ImageArcsecPerPx);
+    Assert.Equal("6.67′ × 3.33′ · 800 × 400 px", row.PhysicalSizeLabel);
+    Assert.True(row.ApplyPhysicalSizeCommand.CanExecute(null));
+    row.ApplyPhysicalSizeCommand.Execute(null);
+    fake.Drain();
+    Near(200, svc.Current[0].WidthPx);
+    Assert.True(row.IsPhysicalSizeBound);
+    Assert.False(row.ApplyPhysicalSizeCommand.CanExecute(null));
+    probe.ArcsecPerPx = 1.0; // zoom: the bound billboard follows
+    vm.Probe();
+    fake.Drain();
+    Near(400, svc.Current[0].WidthPx);
+    row.Width = 300; // manual resize: unbound, Apply again
+    fake.Drain();
+    Assert.False(row.IsPhysicalSizeBound);
+    Assert.True(row.ApplyPhysicalSizeCommand.CanExecute(null));
+
+    probe.CometDesktopPx = new PointD(960, 540);
+    row.MatchCameraToImageCommand.Execute(null);
+    fake.Drain();
+    Assert.Equal([0.5], probe.Matched);
+    var m = svc.Current[0];
+    Near(800, m.WidthPx);
+    Near(400, m.HeightPx);
+    Assert.True(m.PhysicalSizeBound);
+    Near(960, m.CenterX);
+    Near(540, m.CenterY);
+
+    // the comet leaves the viewport: Center is off
+    probe.CometDesktopPx = null;
+    vm.Probe();
+    Assert.False(row.CenterOnCometCommand.CanExecute(null));
+    // a bad scale while typing keeps the last valid one; clearing removes it and the binding
+    row.ImageArcsecPerPxText = "0.";
+    Assert.Equal(0.5, svc.Current[0].ImageArcsecPerPx);
+    row.ImageArcsecPerPxText = "";
+    fake.Drain();
+    Assert.Null(svc.Current[0].ImageArcsecPerPx);
+    Assert.False(svc.Current[0].PhysicalSizeBound);
+  }
 }

@@ -113,6 +113,11 @@ public sealed class DesktopBillboardWindowManager : IDisposable
       .ObserveOn(_schedulers.MainThread)
       .Subscribe(_ => RefreshBitmaps())
       .AddDisposableTo(_disposables);
+    // a FITS re-stretch rewrites the texels in place (same id): copy them again
+    _assets.TexelsChanged
+      .ObserveOn(_schedulers.MainThread)
+      .Subscribe(ReloadTexels)
+      .AddDisposableTo(_disposables);
     if (main.Screens is { } screens)
       screens.Changed += OnScreensChanged;
   }
@@ -260,6 +265,17 @@ public sealed class DesktopBillboardWindowManager : IDisposable
   {
     foreach (var w in _windows.Values)
       w.SetBitmap(BitmapFor(w.Billboard.TextureKey));
+  }
+
+  private void ReloadTexels(ulong assetId)
+  {
+    var stale = _bitmaps.Where(kv => kv.Key.Id == assetId).ToList();
+    foreach (var kv in stale)
+      _bitmaps.Remove(kv.Key);
+    RefreshBitmaps();
+    // the windows hold the new bitmaps now
+    foreach (var kv in stale)
+      kv.Value.Dispose();
   }
 
   /// <summary>Full-resolution bitmap of the texture with asset key <paramref name="key"/>, cached

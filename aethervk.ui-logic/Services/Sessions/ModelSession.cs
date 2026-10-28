@@ -26,6 +26,8 @@ public sealed partial class ModelSession : ObservableObject, ITabSession
   public double DustFlowSpeed { get; set; } = 1.0;
   /// <summary>The nucleus sphere gizmo is shown (Model tab), visual only.</summary>
   public bool SphereGizmoVisible { get; set; } = true;
+  /// <summary>The selected jet's latitude/longitude arcs and degrees in the viewport (Model tab), visual only.</summary>
+  public bool ShowJetAngles { get; set; }
 
   /// <summary>
   /// The Model tab's manual nucleus radius (km; 0 = use the comet's catalogue radius). Plain

@@ -202,7 +202,7 @@
             DataContext="{ReflectionBinding CometOrbitDebug}"
             HorizontalAlignment="Left" VerticalAlignment="Bottom"
             Margin="10,0,0,60"
-            IsVisible="{Binding IsVisible}">
+            IsVisible="{Binding IsShown}">
       <ui:CometOrbitDebugPanel/>
     </Border>
 

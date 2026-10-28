@@ -91,7 +91,8 @@ public partial class TabGroupNodeViewModel
   // Populated by AddNewTab/ChangeSelectedTab and by AttachDetachedTab (drag-move).
   private readonly Dictionary<TabItemViewModel, Action> _tabDisposers = new();
 
-  public IReadOnlyList<TabDescriptor> AvailableTabs => _tabFactory.AvailableTabs;
+  public IReadOnlyList<TabDescriptor> AvailableTabs =>
+    _tabFactory.AvailableTabs.Where(d => CanCreateTab(d.TabType)).ToList();
 
   public TabGroupNodeViewModel(
     TabItemViewModel defaultTab,
@@ -113,6 +114,8 @@ public partial class TabGroupNodeViewModel
   [RelayCommand]
   private void CloseTab(TabItemViewModel tab)
   {
+    if (tab.IsPinned)
+      return;
     Tabs.Remove(tab);
 
     // Dispose the tab's DI scope (which disposes the ViewModel automatically).
@@ -149,17 +152,8 @@ public partial class TabGroupNodeViewModel
   [RelayCommand]
   private void CloseAllTabs()
   {
-    foreach (var tab in Tabs)
-    {
-      if (_tabDisposers.TryGetValue(tab, out var disposer))
-        disposer();
-      else if (tab is IDisposable d)
-        d.Dispose();
-    }
-    _tabDisposers.Clear();
-    Tabs.Clear();
-    SelectedTab = null;
-    _layoutMessenger.Send(new CoalesceGroupMessage(this));
+    foreach (var tab in Tabs.Where(t => !t.IsPinned).ToList())
+      CloseTab(tab);
   }
 
   [RelayCommand]
@@ -168,7 +162,7 @@ public partial class TabGroupNodeViewModel
     if (SelectedTab == null)
       return;
     var index = Tabs.IndexOf(SelectedTab);
-    if (index == -1)
+    if (index == -1 || SelectedTab.IsPinned || !CanCreateTab(tabType))
       return;
 
     var old = SelectedTab;
@@ -199,6 +193,8 @@ public partial class TabGroupNodeViewModel
   [RelayCommand]
   private void AddNewTab(Type tabType)
   {
+    if (!CanCreateTab(tabType))
+      return;
     var (vm, dispose) = _tabFactory.CreateScopedTab(tabType);
     var newTab = vm as TabItemViewModel;
     if (newTab != null && !Tabs.Contains(newTab))
@@ -208,6 +204,29 @@ public partial class TabGroupNodeViewModel
       if (dispose != null)
         _tabDisposers[newTab] = dispose;
     }
+  }
+
+  /// <summary>
+  /// False when <paramref name="tabType"/> is single-instance and the layout already holds one
+  /// (a second 3D viewport is refused: the runtime keeps one camera / presentation engine).
+  /// </summary>
+  public bool CanCreateTab(Type tabType) =>
+    !LayoutTabs().Any(t => t.IsSingleInstance && t.GetType() == tabType);
+
+  /// <summary>Every tab of the whole layout this group belongs to.</summary>
+  public IEnumerable<TabItemViewModel> LayoutTabs()
+  {
+    LayoutNodeViewModelBase root = this;
+    while (root.Parent is not null)
+      root = root.Parent;
+    return Collect(root);
+
+    static IEnumerable<TabItemViewModel> Collect(LayoutNodeViewModelBase node) => node switch
+    {
+      TabGroupNodeViewModel g => g.Tabs,
+      SplitNodeViewModel s => Collect(s.FirstChild).Concat(Collect(s.SecondChild)),
+      _ => [],
+    };
   }
 
   /// <summary>
@@ -248,6 +267,15 @@ public partial class TabItemViewModel : ViewModelBase
 
   [ObservableProperty]
   private bool _canClose = true;
+
+  /// <summary>
+  /// A pinned tab is never closed, replaced or dragged: its view would be torn down and rebuilt,
+  /// and for the 3D viewport that destroys and re-creates the native presentation engine.
+  /// </summary>
+  public virtual bool IsPinned => false;
+
+  /// <summary>At most one tab of this type may live in the layout (the 3D viewport).</summary>
+  public virtual bool IsSingleInstance => false;
 
   [ObservableProperty]
   private bool _isSelected;
@@ -401,6 +429,10 @@ public partial class DockingManagerViewModel
     var draggedTab = message.DraggedTab;
     var targetNode = message.TargetNode;
     var zone = message.Zone;
+
+    // moving a pinned tab rebuilds its view (for the viewport: a new presentation engine)
+    if (draggedTab.IsPinned)
+      return;
 
     var sourceNode = FindNodeContainingTab(RootNode, draggedTab);
 

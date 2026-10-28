@@ -38,6 +38,10 @@ mod scene_dump_tests;
 pub mod structs;
 pub mod time_api;
 const MAX_UNSCALED_DELTA_MS: u32 = 500_u32;
+/// How long [`SimulationContext::seek_epoch_sync`] waits: a seek rebuilds the dust history at the
+/// target (Run to End over a month of jets took longer than the former 2 s, which reported a
+/// failure while the seek went on and left the timeline's label and progress stale).
+const SEEK_SYNC_TIMEOUT_US: i64 = 30_000_000;
 
 /// Holds State for the whole simulation. For now, default drop order (from first to last)
 /// is fine. Threads are first shut down, then data is deallocated.
@@ -129,7 +133,7 @@ impl SimulationContext {
   }
 
   /// Pauses the simulation and jumps it to `epoch` (clamped to the committed range), waiting up
-  /// to 2 s for the logic thread. True when the seek was applied.
+  /// to [`SEEK_SYNC_TIMEOUT_US`] for the logic thread. True when the seek was applied.
   pub fn seek_epoch_sync(&self, scene_id: u64, epoch: hifitime::Epoch) -> bool {
     if !self.pause_simulation_sync(scene_id) {
       return false;
@@ -152,7 +156,7 @@ impl SimulationContext {
     }
     use aethervk_oshal_rlib::os::time::get_monotonic_time;
     let start = get_monotonic_time();
-    while get_monotonic_time() - start < 2_000_000_i64 {
+    while get_monotonic_time() - start < SEEK_SYNC_TIMEOUT_US {
       if done_flag.load(core::sync::atomic::Ordering::Acquire) {
         return succeeded.load(core::sync::atomic::Ordering::Relaxed);
       }

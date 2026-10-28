@@ -92,23 +92,44 @@ namespace AetherVk.Logic.ViewModels
             }
         }
 
-        /// <inheritdoc cref="_isGizmoVisibleIndex"/>
+        /// <inheritdoc cref="_isGizmoVisible"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-        public int IsGizmoVisibleIndex
+        public bool IsGizmoVisible
         {
-            get => _isGizmoVisibleIndex;
+            get => _isGizmoVisible;
             set
             {
-                if (!global::System.Collections.Generic.EqualityComparer<int>.Default.Equals(_isGizmoVisibleIndex, value))
+                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_isGizmoVisible, value))
                 {
-                    OnIsGizmoVisibleIndexChanging(value);
-                    OnIsGizmoVisibleIndexChanging(default, value);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsGizmoVisibleIndex);
-                    _isGizmoVisibleIndex = value;
-                    OnIsGizmoVisibleIndexChanged(value);
-                    OnIsGizmoVisibleIndexChanged(default, value);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsGizmoVisibleIndex);
+                    OnIsGizmoVisibleChanging(value);
+                    OnIsGizmoVisibleChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsGizmoVisible);
+                    _isGizmoVisible = value;
+                    OnIsGizmoVisibleChanged(value);
+                    OnIsGizmoVisibleChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsGizmoVisible);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_showJetAngles"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public bool ShowJetAngles
+        {
+            get => _showJetAngles;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_showJetAngles, value))
+                {
+                    OnShowJetAnglesChanging(value);
+                    OnShowJetAnglesChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.ShowJetAngles);
+                    _showJetAngles = value;
+                    OnShowJetAnglesChanged(value);
+                    OnShowJetAnglesChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.ShowJetAngles);
                 }
             }
         }
@@ -327,28 +348,50 @@ namespace AetherVk.Logic.ViewModels
         /// <remarks>This method is invoked right after the value of <see cref="EnableLegacyExpanders"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnEnableLegacyExpandersChanged(bool oldValue, bool newValue);
-        /// <summary>Executes the logic for when <see cref="IsGizmoVisibleIndex"/> is changing.</summary>
+        /// <summary>Executes the logic for when <see cref="IsGizmoVisible"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="IsGizmoVisibleIndex"/> is changed.</remarks>
+        /// <remarks>This method is invoked right before the value of <see cref="IsGizmoVisible"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnIsGizmoVisibleIndexChanging(int value);
-        /// <summary>Executes the logic for when <see cref="IsGizmoVisibleIndex"/> is changing.</summary>
+        partial void OnIsGizmoVisibleChanging(bool value);
+        /// <summary>Executes the logic for when <see cref="IsGizmoVisible"/> is changing.</summary>
         /// <param name="oldValue">The previous property value that is being replaced.</param>
         /// <param name="newValue">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="IsGizmoVisibleIndex"/> is changed.</remarks>
+        /// <remarks>This method is invoked right before the value of <see cref="IsGizmoVisible"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnIsGizmoVisibleIndexChanging(int oldValue, int newValue);
-        /// <summary>Executes the logic for when <see cref="IsGizmoVisibleIndex"/> just changed.</summary>
+        partial void OnIsGizmoVisibleChanging(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="IsGizmoVisible"/> just changed.</summary>
         /// <param name="value">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="IsGizmoVisibleIndex"/> is changed.</remarks>
+        /// <remarks>This method is invoked right after the value of <see cref="IsGizmoVisible"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnIsGizmoVisibleIndexChanged(int value);
-        /// <summary>Executes the logic for when <see cref="IsGizmoVisibleIndex"/> just changed.</summary>
+        partial void OnIsGizmoVisibleChanged(bool value);
+        /// <summary>Executes the logic for when <see cref="IsGizmoVisible"/> just changed.</summary>
         /// <param name="oldValue">The previous property value that was replaced.</param>
         /// <param name="newValue">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="IsGizmoVisibleIndex"/> is changed.</remarks>
+        /// <remarks>This method is invoked right after the value of <see cref="IsGizmoVisible"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnIsGizmoVisibleIndexChanged(int oldValue, int newValue);
+        partial void OnIsGizmoVisibleChanged(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="ShowJetAngles"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="ShowJetAngles"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnShowJetAnglesChanging(bool value);
+        /// <summary>Executes the logic for when <see cref="ShowJetAngles"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="ShowJetAngles"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnShowJetAnglesChanging(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="ShowJetAngles"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="ShowJetAngles"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnShowJetAnglesChanged(bool value);
+        /// <summary>Executes the logic for when <see cref="ShowJetAngles"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="ShowJetAngles"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnShowJetAnglesChanged(bool oldValue, bool newValue);
         /// <summary>Executes the logic for when <see cref="IsSimulationRunning"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="IsSimulationRunning"/> is changed.</remarks>

@@ -38,31 +38,26 @@ public enum CameraMode
 }
 
 /// <summary>
-/// Controls how the Earth Observer camera's look direction behaves while tracking
-/// a body-fixed surface point on Earth. Does not affect camera position — that is
-/// always derived from the lat/lon anchor rotated by Earth's instantaneous orientation.
+/// How the Earth Observer camera's look direction behaves. The look never turns with the Earth;
+/// the camera sits at the Earth's centre, or on a surface site when topocentric
+/// (<see cref="CameraService.SetEarthObserverTopocentric"/>). Values match the native
+/// <c>EarthObserverMode</c>; 1 and 3 were the retired lock-in modes (old saves read as Free).
 /// </summary>
 public enum EarthObserverOrientationMode
 {
   /// Free look: the look direction is fixed in the heliocentric/ecliptic inertial frame and
   /// dragging changes it.
-  Free,
+  Free = 0,
 
-  /// Telescope on the comet: aims at the comet when entered, then turns with the Earth (the angle
-  /// relative to the ground stays constant).
-  CometLockIn,
-
-  /// Re-aims at the comet's current position every tick, holding while it is below the horizon.
-  CometTracking,
-
-  /// Telescope on the Sun (see <see cref="CometLockIn"/>).
-  SunLockIn,
+  /// Re-aims at the comet every commit: the comet stays at the centre of the view (topocentric:
+  /// faces the horizon under it while it is below).
+  CometTracking = 2,
 
   /// Tracks the Sun (see <see cref="CometTracking"/>).
-  SunTracking,
+  SunTracking = 4,
 }
 
-/// <summary>Body an Earth observer lock-in / tracking submode aims at.</summary>
+/// <summary>Body an Earth observer tracking submode aims at.</summary>
 public enum EarthObserverTarget
 {
   Comet,
@@ -74,21 +69,36 @@ public static class EarthObserverOrientationModeExtensions
   /// <summary>The aimed body, or null for <see cref="EarthObserverOrientationMode.Free"/>.</summary>
   public static EarthObserverTarget? Target(this EarthObserverOrientationMode m) => m switch
   {
-    EarthObserverOrientationMode.CometLockIn or EarthObserverOrientationMode.CometTracking => EarthObserverTarget.Comet,
-    EarthObserverOrientationMode.SunLockIn or EarthObserverOrientationMode.SunTracking => EarthObserverTarget.Sun,
+    EarthObserverOrientationMode.CometTracking => EarthObserverTarget.Comet,
+    EarthObserverOrientationMode.SunTracking => EarthObserverTarget.Sun,
     _ => null,
   };
 
   public static bool IsTracking(this EarthObserverOrientationMode m) =>
     m is EarthObserverOrientationMode.CometTracking or EarthObserverOrientationMode.SunTracking;
-
-  public static bool IsLockIn(this EarthObserverOrientationMode m) =>
-    m is EarthObserverOrientationMode.CometLockIn or EarthObserverOrientationMode.SunLockIn;
 }
 
 /// <summary>
-/// Immutable snapshot of the camera transform state, emitted via <c>SIMULATION_CALLBACK</c>.
+/// The Earth observer's telescope scale (<see cref="CameraService.GetEarthObserverScale"/>): the
+/// angle one physical pixel subtends, the field, the pixel size, and at the comet's distance the
+/// kilometres per pixel (null without a comet).
 /// </summary>
+public sealed record EarthObserverScale(
+  double ArcsecPerPx,
+  double FieldWidthArcmin,
+  double FieldHeightArcmin,
+  double WidthPx,
+  double HeightPx,
+  double? CometDistanceKm,
+  double? KmPerPx)
+{
+  /// <summary>Half-width of the view at the comet (km), null without a comet.</summary>
+  public double? HalfWidthKm => KmPerPx * WidthPx * 0.5;
+
+  /// <summary>Half-height of the view at the comet (km), null without a comet.</summary>
+  public double? HalfHeightKm => KmPerPx * HeightPx * 0.5;
+}
+
 /// <summary>A viewport camera as a savefile records it (<see cref="CameraService.GetPersistedState"/>).</summary>
 public sealed record CameraPersistedState(
   CameraMode Mode,
@@ -101,17 +111,27 @@ public sealed record CameraPersistedState(
   EarthObserverOrientationMode ObserverOrientation,
   /// <summary>Earth observer look in the inertial frame, quaternion x, y, z, w.</summary>
   double[] ObserverInertialLook,
-  /// <summary>Earth observer look in the Earth body-fixed frame, quaternion x, y, z, w.</summary>
+  /// <summary>Retired (lock-in) body-fixed look: written as the inertial look, ignored on restore.</summary>
   double[] ObserverBodyFixedLook,
   /// <summary>The viewport settings' display choices; null in saves that predate them.</summary>
-  ViewportDisplayState? Display = null);
+  ViewportDisplayState? Display = null,
+  /// <summary>Earth observer on its surface site instead of the Earth's centre.</summary>
+  bool ObserverTopocentric = false,
+  /// <summary>The Earth observer's remembered projection while the camera is in another mode
+  /// (re-entering lands on it); null in the Earth observer itself (see Projection) or never entered.</summary>
+  CameraProjectionState? ObserverProjection = null);
 
 /// <summary>
 /// How a viewport's settings panel shows its camera: the distance unit of the orthographic
 /// extents and clip planes (0 AU, 1 km, 2 m), the field-of-view unit (0 deg, 1 arcmin, 2 arcsec),
-/// and whether the orthographic extents keep the viewport's proportions.
+/// whether the orthographic extents keep the viewport's proportions, and whether an orthographic
+/// view also draws what lies behind the camera (a perspective view never can).
 /// </summary>
-public sealed record ViewportDisplayState(int OrthoUnitIndex, int FovUnitIndex, bool OrthoProportionsLocked)
+public sealed record ViewportDisplayState(
+  int OrthoUnitIndex,
+  int FovUnitIndex,
+  bool OrthoProportionsLocked,
+  bool ShowBehindCamera = true)
 {
   public static readonly ViewportDisplayState Default = new(0, 0, true);
 }
@@ -232,9 +252,6 @@ public sealed class CameraService : IDisposable
   // Camera look direction frozen in the inertial frame (Inertial mode anchor).
   private Quaterniond _inertialLookDir = Quaterniond.Identity;
 
-  // Camera look direction in Earth's body-fixed frame (EarthFixed mode anchor).
-  private Quaterniond _earthFixedLookDir = Quaterniond.Identity;
-
   // Current Earth Observer orientation sub-mode.
   private EarthObserverOrientationMode _earthOrientationMode = EarthObserverOrientationMode.Free;
 
@@ -250,21 +267,38 @@ public sealed class CameraService : IDisposable
 
   /// <summary>Fires whenever <see cref="SetEarthObserverLatLon"/> stores a new observer site.</summary>
   public IObservable<(float LatDeg, float LonDeg)> EarthObserverSiteChanged => _observerSiteSubject.AsObservable();
+
+  // false: the Earth observer is at the Earth's centre (translation only, no horizon); true: on the
+  // surface site, carried by the Earth's rotation. The look never turns with the Earth.
+  private readonly BehaviorSubject<bool> _observerTopocentricSubject = new(false);
+
+  /// <summary>Emits whether the Earth observer stands on its surface site, then each change.</summary>
+  public IObservable<bool> EarthObserverTopocentricChanged => _observerTopocentricSubject.AsObservable();
+
+  /// <summary>True when the Earth observer stands on its surface site (else at the Earth's centre).</summary>
+  public bool IsEarthObserverTopocentric => _observerTopocentricSubject.Value;
+
+  // The camera's offset from the Earth's centre, world axes: the site turned by the Earth, or zero.
+  private Vector3d ObserverOffsetWorld() =>
+    _observerTopocentricSubject.Value ? Vector3d.Transform(_earthSurfacePointBf, _earthBodyRot) : Vector3d.Zero;
+
+  // The latitude whose pole the view's up leans to: the site's, the ecliptic north at the centre.
+  private float UpLatDeg => _observerTopocentricSubject.Value ? _observerLatDeg : 0f;
   /// <summary>Observer height above the WGS84 ellipsoid (m), native observer only (0 by default).</summary>
   private double _observerElevM;
   /// <summary>True while the core poses the Earth observer camera in its commits
   /// (<see cref="PushNativeObserver"/>): the UI then never writes the pose per tick.</summary>
   private bool _nativeObserverActive;
 
-  // Projection preset of the active lock-in / tracking submode (target spans 10% of the view);
+  // Projection preset of the active tracking submode (target spans 10% of the view);
   // null in Free mode. Exposed to enable "Restore preset projection".
   private CameraProjectionState? _earthPresetProjection;
   private readonly BehaviorSubject<CameraProjectionState?> _earthPresetSubject = new(null);
 
-  /// <summary>Preset projection of the current lock-in / tracking submode (null in Free).</summary>
+  /// <summary>Preset projection of the current tracking submode (null in Free).</summary>
   public IObservable<CameraProjectionState?> EarthObserverPresetProjection => _earthPresetSubject.AsObservable();
 
-  /// <summary>Fraction of the viewport height a lock-in / tracking target fills on entry.</summary>
+  /// <summary>Fraction of the viewport height a tracking target fills on entry.</summary>
   public const double EarthObserverTargetViewFraction = 0.1;
 
   /// <summary>
@@ -295,16 +329,30 @@ public sealed class CameraService : IDisposable
 
   private readonly BehaviorSubject<ViewportDisplayState> _displaySubject = new(ViewportDisplayState.Default);
 
-  /// <summary>The settings panel's display choices (units, proportions lock): kept here, not in
-  /// the panel, so a savefile records and restores them with the camera.</summary>
+  /// <summary>The settings panel's display choices (units, proportions lock, behind-camera
+  /// geometry): kept here, not in the panel, so a savefile records and restores them with the
+  /// camera.</summary>
   public ViewportDisplayState DisplayState
   {
     get => _displaySubject.Value;
     set
     {
-      if (value != _displaySubject.Value)
-        _displaySubject.OnNext(value);
+      if (value == _displaySubject.Value)
+        return;
+      _displaySubject.OnNext(value);
+      RefreshShading();
     }
+  }
+
+  /// <summary>
+  /// Whether an orthographic view also draws the geometry behind the camera (within the far
+  /// distance), as a telescope image does; on by default. Dust behind the eye is not drawn either
+  /// way, and a perspective view never shows it.
+  /// </summary>
+  public bool ShowBehindCamera
+  {
+    get => DisplayState.ShowBehindCamera;
+    set => DisplayState = DisplayState with { ShowBehindCamera = value };
   }
 
   /// <summary>Emits the current <see cref="DisplayState"/>, then each change.</summary>
@@ -339,8 +387,13 @@ public sealed class CameraService : IDisposable
         _observerElevM,
         _earthOrientationMode,
         [_inertialLookDir.X, _inertialLookDir.Y, _inertialLookDir.Z, _inertialLookDir.W],
-        [_earthFixedLookDir.X, _earthFixedLookDir.Y, _earthFixedLookDir.Z, _earthFixedLookDir.W],
-        DisplayState);
+        [_inertialLookDir.X, _inertialLookDir.Y, _inertialLookDir.Z, _inertialLookDir.W],
+        DisplayState,
+        _observerTopocentricSubject.Value,
+        _modeSubject.Value != CameraMode.EarthPosition
+          && _modeSnapshots.TryGetValue(CameraMode.EarthPosition, out var earth)
+          ? earth.Projection
+          : null);
     }
   }
 
@@ -359,13 +412,25 @@ public sealed class CameraService : IDisposable
       DisplayState = display;
     SetEarthObserverLatLon(state.ObserverLatDeg, state.ObserverLonDeg);
     SetEarthObserverElevation(state.ObserverElevationM);
+    SetEarthObserverTopocentric(state.ObserverTopocentric);
     SetOrbitOffset(state.OrbitOffsetAu);
     lock (_earthPosLock)
     {
       if (state.ObserverInertialLook is { Length: 4 } a)
         _inertialLookDir = Quaterniond.Normalize(new Quaterniond(a[0], a[1], a[2], a[3]));
-      if (state.ObserverBodyFixedLook is { Length: 4 } b)
-        _earthFixedLookDir = Quaterniond.Normalize(new Quaterniond(b[0], b[1], b[2], b[3]));
+    }
+    // the Earth observer's setup saved from another mode: entering it later lands on it, not on
+    // the defaults (and nothing is remembered from before the open)
+    if (state.Mode != CameraMode.EarthPosition && state.ObserverProjection is { } earthProjection)
+      _modeSnapshots[CameraMode.EarthPosition] = new ModeSnapshot(
+        new CameraTransformState(0, 0, 0, 0, 0, 0, 1), earthProjection);
+    else
+      _modeSnapshots.Remove(CameraMode.EarthPosition);
+    if (state.Mode != CameraMode.EarthPosition)
+    {
+      // the tracking submode applies on entering (a comet submode then ejects if none is committed)
+      _earthOrientationMode = state.ObserverOrientation;
+      _earthOrientationModeSubject.OnNext(_earthOrientationMode);
     }
     _pendingRestore = state;
     if (_modeSubject.Value == state.Mode)
@@ -379,9 +444,12 @@ public sealed class CameraService : IDisposable
   // Aspect ratio (W/H) of the Vulkan render target — set by OnViewportReady.
   private float _viewportAspect = 1f;
 
-  // Pixel height of the render target: converts drags to world units (ViewAngularScale).
+  // Physical pixel size of the render target (the swapchain's, not Avalonia DIPs): converts drags
+  // to world units and gives the telescope scale (ViewAngularScale).
   private float _viewportHeightPx = 600f;
+  private float _viewportWidthPx = 800f;
   public float ViewportHeightPx => _viewportHeightPx;
+  public float ViewportWidthPx => _viewportWidthPx;
 
   /// <summary>Exponential zoom rate: extent (or fov) scales by e^(rate·px) per dragged pixel.</summary>
   public const float ZoomExpPerPixel = 0.005f;
@@ -524,7 +592,7 @@ public sealed class CameraService : IDisposable
   /// Emits the new <see cref="CameraMode"/> every time <see cref="SetCameraMode"/> causes
   /// an actual transition. Observed on the main thread.
   /// </summary>
-  /// <summary>Whether a comet is committed (gates the comet snap / lock-in targets).</summary>
+  /// <summary>Whether a comet is committed (gates the comet snap / tracking targets).</summary>
   public IObservable<bool> CometCommitted => _cometConfigService.IsAlmanacCommitted;
 
   public IObservable<CameraMode> CameraModeChanged =>
@@ -785,11 +853,31 @@ public sealed class CameraService : IDisposable
     return (Math.Max(1e-12f, orbitMag * 0.05f), orbitMag * 200f);
   }
 
+  private readonly BehaviorSubject<bool> _comparisonLockSubject = new(false);
+
+  /// <summary>
+  /// "Lock viewport for comparison": once a telescope image is matched, mouse orbit, pan and zoom
+  /// are refused (and the settings panel greys the projection) so the view cannot drift from the
+  /// image. Programmatic poses and projections (match, seek, tracking) still apply.
+  /// </summary>
+  public bool IsComparisonLocked
+  {
+    get => _comparisonLockSubject.Value;
+    set
+    {
+      if (value != _comparisonLockSubject.Value)
+        _comparisonLockSubject.OnNext(value);
+    }
+  }
+
+  /// <summary>Emits <see cref="IsComparisonLocked"/>, then each change.</summary>
+  public IObservable<bool> ComparisonLockChanged => _comparisonLockSubject.AsObservable();
+
   // ── Mode-gate predicates (public — also checked by ViewportBaseOperator at push time) ────
 
   /// <summary>True when the current mode permits orbit (rotation around a pivot).</summary>
   public bool IsOrbitAllowed() =>
-    _modeSubject.Value switch
+    !_comparisonLockSubject.Value && _modeSubject.Value switch
     {
       CameraMode.EarthPosition => true,
       CameraMode.CometOrbiting => true,  // drag rotates orbit offset around comet
@@ -799,7 +887,7 @@ public sealed class CameraService : IDisposable
 
   /// <summary>Pan (lateral translate) is permitted only in <see cref="CameraMode.UpZenith"/>.</summary>
   public bool IsPanAllowed() =>
-    _modeSubject.Value switch
+    !_comparisonLockSubject.Value && _modeSubject.Value switch
     {
       CameraMode.UpZenith => true,
       CameraMode.EarthPosition => false, // orbit changes orientation only
@@ -809,7 +897,7 @@ public sealed class CameraService : IDisposable
 
   /// <summary>True when the current mode permits dolly zoom.</summary>
   public bool IsZoomAllowed() =>
-    _modeSubject.Value switch
+    !_comparisonLockSubject.Value && _modeSubject.Value switch
     {
       CameraMode.EarthPosition  => true,  // telescope zoom: field of view / ortho extents
       CameraMode.CometOrbiting  => true,
@@ -869,12 +957,17 @@ public sealed class CameraService : IDisposable
     else if (mode == CameraMode.EarthPosition)
     {
       pivotEntityId = _runtimeService.EarthEntityId;
+      // re-entering keeps the observer as it was left: look, projection (the orientation submode,
+      // site and topocentric choice are fields that never reset); Reset camera drops the memory
+      var remembered = restore is null && _modeSnapshots.TryGetValue(CameraMode.EarthPosition, out var snap)
+        ? snap
+        : null;
       lock (_earthPosLock)
       {
-        var surfaceWorld = Vector3d.Transform(_earthSurfacePointBf, _earthBodyRot);
-        if (restore is not null)
+        var surfaceWorld = ObserverOffsetWorld();
+        if (restore is not null || remembered is not null)
         {
-          // the saved inertial look (lock-in / tracking sub-modes re-aim when they are re-applied)
+          // the saved inertial look (tracking sub-modes re-aim when they are re-applied)
           _earthRotation = _inertialLookDir;
         }
         else
@@ -882,12 +975,13 @@ public sealed class CameraService : IDisposable
           // look at the Sun, levelled to the ecliptic (camera assertions)
           _earthRotation = EarthObserverLookAt(-(_lastEarthPos + surfaceWorld));
           _inertialLookDir = _earthRotation;
-          _earthFixedLookDir = WorldLookDirToBodyFixed(_earthBodyRot, _earthRotation);
         }
         targetPos = surfaceWorld; // Use the local offset
         targetRot = _earthRotation;
       }
-      deferredProjection = ApplyDefaultPerspectiveProjection;
+      deferredProjection = remembered?.Projection is { } rp
+        ? () => ApplyProjectionSnapshot(rp)
+        : ApplyDefaultPerspectiveProjection;
     }
     else if (mode == CameraMode.UpZenith)
     {
@@ -1206,17 +1300,16 @@ public sealed class CameraService : IDisposable
       {
         // Yaw about the ecliptic pole the view is levelled to (the right vector stays in the
         // ecliptic plane), pitch about the camera's local X; then re-assert the frame.
-        var pole = _observerLatDeg >= 0f ? Vector3d.UnitZ : -Vector3d.UnitZ;
+        var pole = UpLatDeg >= 0f ? Vector3d.UnitZ : -Vector3d.UnitZ;
         var yaw   = Quaterniond.CreateFromAxisAngle(pole, earthYawRad);
         var pitch = Quaterniond.CreateFromAxisAngle(Vector3d.UnitX, earthPitchRad);
 
         // Apply yaw in world space (pre-multiply), and pitch in local space (post-multiply).
-        var newRot = EarthObserverOrient(Quaterniond.Normalize(yaw * _earthRotation * pitch), _observerLatDeg);
+        var newRot = EarthObserverOrient(Quaterniond.Normalize(yaw * _earthRotation * pitch), UpLatDeg);
 
         // Update all cached look directions so a later mode switch has fresh anchors.
         _earthRotation     = newRot;
         _inertialLookDir   = newRot;
-        _earthFixedLookDir = WorldLookDirToBodyFixed(_earthBodyRot, newRot);
 
         // Apply the rotation directly without animation: CameraSetRotoTranslate succeeds
         // in EarthPosition mode because no tracking animation is permanently in-flight.
@@ -1228,7 +1321,7 @@ public sealed class CameraService : IDisposable
         }
         else
         {
-          var surfaceWorld = Vector3d.Transform(_earthSurfacePointBf, _earthBodyRot);
+          var surfaceWorld = ObserverOffsetWorld();
           var camPos       = _lastEarthPos + surfaceWorld;
           RotoTranslateDirect(camPos.X, camPos.Y, camPos.Z, newRot);
         }
@@ -1429,6 +1522,26 @@ public sealed class CameraService : IDisposable
   }
 
   /// <summary>
+  /// Puts the Earth observer on its surface site (<paramref name="topocentric"/>: diurnal parallax,
+  /// a horizon) or back at the Earth's centre (the default). The look direction is kept; re-pushed
+  /// right away in Earth observer mode.
+  /// </summary>
+  public void SetEarthObserverTopocentric(bool topocentric)
+  {
+    lock (_earthPosLock)
+    {
+      if (_observerTopocentricSubject.Value == topocentric)
+        return;
+      _observerTopocentricSubject.OnNext(topocentric);
+      if (_modeSubject.Value == CameraMode.EarthPosition)
+      {
+        SnapCameraToEarth(_lastEarthPos);
+        PushNativeObserver();
+      }
+    }
+  }
+
+  /// <summary>
   /// Sets the observer's height above the WGS84 ellipsoid (metres, e.g. a FITS <c>SITEELEV</c>).
   /// Only the native observer uses it (the UI's own spherical pose ignores it); re-pushed right
   /// away in Earth observer mode.
@@ -1451,7 +1564,7 @@ public sealed class CameraService : IDisposable
   {
     lock (_earthPosLock)
     {
-      var surfaceWorld = Vector3d.Transform(_earthSurfacePointBf, _earthBodyRot);
+      var surfaceWorld = ObserverOffsetWorld();
       var camPos = _lastEarthPos + surfaceWorld;
 
       // A comet submode without a committed comet ejects to Free (radios follow the subject).
@@ -1461,25 +1574,16 @@ public sealed class CameraService : IDisposable
       {
         _ = _breadcrumbService.ShowMessageAsync(
           "No comet committed",
-          "Commit a comet in the Comet tab to lock onto or track it. Back to free look.",
+          "Commit a comet in the Comet tab to track it. Back to free look.",
           TimeSpan.FromSeconds(4),
           status: 2 // Warning
         );
         mode = EarthObserverOrientationMode.Free;
       }
 
-      // Snapshot / aim the anchor the new mode uses, so the switch has no jump (Free) or lands on
-      // the target (lock-in: aim now, then turn with the Earth like a ground telescope).
+      // Free keeps the current look, so the switch has no jump; tracking re-aims every commit.
       if (mode == EarthObserverOrientationMode.Free)
-      {
         _inertialLookDir = _earthRotation;
-      }
-      else if (mode.IsLockIn() && targetPos is { } aim)
-      {
-        var aimed = EarthObserverLookAt(aim - camPos);
-        _earthRotation = aimed;
-        _earthFixedLookDir = WorldLookDirToBodyFixed(_earthBodyRot, aimed);
-      }
 
       _earthOrientationMode = mode;
       _earthOrientationModeSubject.OnNext(mode);
@@ -1501,11 +1605,9 @@ public sealed class CameraService : IDisposable
   }
 
   /// <summary>
-  /// "Lock to image" (sky image overlay): the telescope lock-in (the Earth-fixed anchor of
-  /// <see cref="EarthObserverOrientationMode.CometLockIn"/>) aimed at a world direction (ecliptic
-  /// J2000, e.g. a telescope image's CRVAL) instead of the comet; it then turns with the Earth like
-  /// a ground telescope. Only in <see cref="CameraMode.EarthPosition"/>: returns <c>false</c>
-  /// otherwise.
+  /// "Orient to image": a free look aimed at a world direction (ecliptic J2000, e.g. a telescope
+  /// image's CRVAL); it stays fixed among the stars. Only in <see cref="CameraMode.EarthPosition"/>:
+  /// returns <c>false</c> otherwise.
   /// </summary>
   public bool LockEarthObserverToDirection(Vector3d worldDirection)
   {
@@ -1513,10 +1615,10 @@ public sealed class CameraService : IDisposable
     {
       if (_modeSubject.Value != CameraMode.EarthPosition || !(worldDirection.Length() > 1e-12))
         return false;
-      var aimed = EarthObserverLookAt(worldDirection);
+      var aimed = EarthObserverOrient(EarthObserverLookAt(worldDirection), UpLatDeg);
       _earthRotation = aimed;
-      _earthFixedLookDir = WorldLookDirToBodyFixed(_earthBodyRot, aimed);
-      _earthOrientationMode = EarthObserverOrientationMode.CometLockIn;
+      _inertialLookDir = aimed;
+      _earthOrientationMode = EarthObserverOrientationMode.Free;
       _earthOrientationModeSubject.OnNext(_earthOrientationMode);
       SnapCameraToEarth(_lastEarthPos);
       PushNativeObserver();
@@ -1541,10 +1643,12 @@ public sealed class CameraService : IDisposable
       return;
     }
     var mode = _earthOrientationMode;
-    var look = mode.IsLockIn() ? _earthFixedLookDir : _inertialLookDir;
-    ulong comet = mode.Target() == EarthObserverTarget.Comet ? _runtimeService.CometEntityId ?? 0 : 0;
+    // the comet in every submode: the core draws it (and its dust) light-time retarded and reports
+    // where it is on screen, also in a free look aimed at a telescope image; only CometTracking aims
+    ulong comet = _cometConfigService.IsAlmanacCommittedValue ? _runtimeService.CometEntityId ?? 0 : 0;
     _nativeObserverActive = _runtimeService.SetEarthObserver(
-      cam, (int)mode, earth, comet, _observerLatDeg, _observerLonDeg, _observerElevM, look);
+      cam, (int)mode, earth, comet, _observerTopocentricSubject.Value,
+      _observerLatDeg, _observerLonDeg, _observerElevM, _inertialLookDir);
     if (!_nativeObserverActive)
       Console.WriteLine($"[CameraService] native Earth observer refused ({mode}, earth {earth}, comet {comet}): the UI poses the camera");
   }
@@ -1554,13 +1658,13 @@ public sealed class CameraService : IDisposable
   {
     if (!_nativeObserverActive)
       return;
-    _runtimeService.SetEarthObserver(CameraEntityId ?? 0, -1, 0, 0, 0, 0, 0, Quaterniond.Identity);
+    _runtimeService.SetEarthObserver(CameraEntityId ?? 0, -1, 0, 0, false, 0, 0, 0, Quaterniond.Identity);
     _nativeObserverActive = false;
   }
 
   /// <summary>
   /// "Restore preset projection": re-measures the target (the coma grows as the dust history fills)
-  /// and the distance, then applies the preset of the current lock-in / tracking submode.
+  /// and the distance, then applies the preset of the current tracking submode.
   /// </summary>
   public void RestoreEarthPresetProjection()
   {
@@ -1569,7 +1673,7 @@ public sealed class CameraService : IDisposable
       var mode = _earthOrientationMode;
       if (mode.Target() is { } target && ResolveEarthObserverTarget(target) is { } tp)
       {
-        var camPos = _lastEarthPos + Vector3d.Transform(_earthSurfacePointBf, _earthBodyRot);
+        var camPos = _lastEarthPos + ObserverOffsetWorld();
         _earthPresetProjection = ComputeTargetPresetProjection(
           EarthObserverFramingRadiusAu(target), (float)(tp - camPos).Length());
         _earthPresetSubject.OnNext(_earthPresetProjection);
@@ -1578,7 +1682,7 @@ public sealed class CameraService : IDisposable
     ApplyEarthPresetProjection();
   }
 
-  /// <summary>Re-applies the preset projection of the current lock-in / tracking submode.</summary>
+  /// <summary>Re-applies the preset projection of the current tracking submode.</summary>
   public void ApplyEarthPresetProjection()
   {
     var p = _earthPresetProjection;
@@ -1668,25 +1772,131 @@ public sealed class CameraService : IDisposable
   /// <summary>
   /// Elevation of the tracked target above the observer's horizon and the surface point that has
   /// it at the zenith (same frames as <see cref="SnapCameraToEarth"/>). Null outside a tracking
-  /// submode of the Earth observer, or without a target.
+  /// submode of a topocentric Earth observer (the Earth's centre has no horizon), or without a target.
   /// </summary>
   public EarthObserverTargetVisibility? GetEarthObserverTargetVisibility()
   {
     lock (_earthPosLock)
     {
       var mode = _earthOrientationMode;
-      if (_modeSubject.Value != CameraMode.EarthPosition || !mode.IsTracking())
+      if (_modeSubject.Value != CameraMode.EarthPosition || !mode.IsTracking() || !_observerTopocentricSubject.Value)
         return null;
       var target = mode.Target()!.Value;
       if (ResolveEarthObserverTarget(target) is not { } targetPos)
         return null;
-      var surfaceWorld = Vector3d.Transform(_earthSurfacePointBf, _earthBodyRot);
+      var surfaceWorld = ObserverOffsetWorld();
       var zenith = Vector3d.Normalize(surfaceWorld);
       var toTarget = Vector3d.Normalize(targetPos - (_lastEarthPos + surfaceWorld));
       double elevationDeg = Math.Asin(Math.Max(-1.0, Math.Min(1.0, Vector3d.Dot(toTarget, zenith)))) * 180.0 / Math.PI;
       var (lat, lon) = SubTargetLatLon(_lastEarthPos, _earthBodyRot, targetPos);
       return new EarthObserverTargetVisibility(target, elevationDeg, lat, lon);
     }
+  }
+
+  /// <summary>
+  /// The Earth observer's telescope scale from the projection actually pushed and the physical
+  /// pixel size: arcsec per pixel, the field in arcmin, and at the comet's distance km per pixel and
+  /// the half-extents in km. Null outside the Earth observer, before a projection, or in orthographic
+  /// without a comet (an orthographic view has no angle without a distance).
+  /// </summary>
+  public EarthObserverScale? GetEarthObserverScale()
+  {
+    var proj = _projectionSubject.Value;
+    if (_modeSubject.Value != CameraMode.EarthPosition || proj is null)
+      return null;
+    double? distanceAu;
+    lock (_earthPosLock)
+    {
+      var cam = _lastEarthPos + ObserverOffsetWorld();
+      distanceAu = ResolveEarthObserverTarget(EarthObserverTarget.Comet) is { } c ? (c - cam).Length() : null;
+    }
+    return ComputeEarthObserverScale(proj, _viewportWidthPx, _viewportHeightPx, distanceAu);
+  }
+
+  private (double X, double Y)? _viewportScreenOriginPx;
+
+  /// <summary>The viewport's top-left corner on the desktop (physical px, the billboards'
+  /// coordinates); null until the control reports it.</summary>
+  public (double X, double Y)? ViewportScreenOriginPx
+  {
+    get => _viewportScreenOriginPx;
+    set => _viewportScreenOriginPx = value;
+  }
+
+  /// <summary>Where the Earth observer draws its comet on this viewport (physical px from its
+  /// top-left corner). Null outside the Earth observer or when the core has no observed comet.</summary>
+  public CometScreenPosition? GetCometScreenPosition()
+  {
+    ulong cam = CameraEntityId ?? 0;
+    if (cam == 0 || _modeSubject.Value != CameraMode.EarthPosition)
+      return null;
+    return _runtimeService.GetCometScreenPosition(
+      cam, (uint)Math.Max(1f, _viewportWidthPx), (uint)Math.Max(1f, _viewportHeightPx));
+  }
+
+  /// <summary>
+  /// Sets the Earth observer's projection so the viewport shows <paramref name="arcsecPerPx"/>
+  /// arcsec per physical pixel ("Match camera to image"): the vertical field is height px × scale;
+  /// an orthographic view takes the half-height that subtends it at the comet's distance. The
+  /// projection type and clip planes are kept. False outside the Earth observer, for an unusable
+  /// scale, or in orthographic without a comet.
+  /// </summary>
+  public bool SetEarthObserverArcsecPerPx(double arcsecPerPx)
+  {
+    const double RadToArcsec = 180.0 * 3600.0 / Math.PI;
+    if (_modeSubject.Value != CameraMode.EarthPosition || !(arcsecPerPx > 0) || double.IsInfinity(arcsecPerPx))
+      return false;
+    double fovH = arcsecPerPx * Math.Max(1f, _viewportHeightPx) / RadToArcsec;
+    if (!(fovH < Math.PI * 0.9))
+      return false;
+    var proj = _projectionSubject.Value;
+    float near = proj?.Near ?? 1e-9f, far = proj?.Far ?? 10f;
+    if (proj?.IsPerspective ?? true)
+      return RequestPerspectiveProjection((float)fovH, _viewportAspect, near, far);
+    double? distanceAu;
+    lock (_earthPosLock)
+    {
+      var cam = _lastEarthPos + ObserverOffsetWorld();
+      distanceAu = ResolveEarthObserverTarget(EarthObserverTarget.Comet) is { } c ? (c - cam).Length() : null;
+    }
+    if (distanceAu is not { } d || !(d > 0))
+      return false;
+    float halfH = (float)(d * Math.Tan(fovH * 0.5)), halfW = halfH * _viewportAspect;
+    return RequestOrthographicProjection(-halfW, halfW, -halfH, halfH, near, far);
+  }
+
+  /// <summary>See <see cref="GetEarthObserverScale"/>: the scale of a projection on a
+  /// <paramref name="widthPx"/> × <paramref name="heightPx"/> target, the comet at
+  /// <paramref name="cometDistanceAu"/> (null: unknown).</summary>
+  internal static EarthObserverScale? ComputeEarthObserverScale(
+    CameraProjectionState proj, double widthPx, double heightPx, double? cometDistanceAu)
+  {
+    const double AuToKm = 149_597_870.7;
+    const double RadToArcsec = 180.0 * 3600.0 / Math.PI;
+    double w = Math.Max(1.0, widthPx), h = Math.Max(1.0, heightPx);
+    double? d = cometDistanceAu is { } dist && dist > 0.0 ? dist : null;
+    double fovH, fovW;
+    if (proj.IsPerspective)
+    {
+      fovH = proj.Fov;
+      fovW = 2.0 * Math.Atan(Math.Tan(proj.Fov * 0.5) * w / h);
+    }
+    else
+    {
+      if (d is not { } od)
+        return null;
+      fovH = 2.0 * Math.Atan(0.5 * Math.Abs(proj.Top - proj.Bottom) / od);
+      fovW = 2.0 * Math.Atan(0.5 * Math.Abs(proj.Right - proj.Left) / od);
+    }
+    double? kmPerPx = d is { } dk ? ViewAngularScale.WorldPerPixel(proj, dk, h) * AuToKm : null;
+    return new EarthObserverScale(
+      fovH / h * RadToArcsec,
+      fovW * RadToArcsec / 60.0,
+      fovH * RadToArcsec / 60.0,
+      w,
+      h,
+      d * AuToKm,
+      kmPerPx);
   }
 
   /// <summary>
@@ -1712,7 +1922,7 @@ public sealed class CameraService : IDisposable
     StripRoll(q, latDeg >= 0f ? Vector3d.UnitZ : -Vector3d.UnitZ);
 
   private Quaterniond EarthObserverLookAt(Vector3d direction) =>
-    LookAtOriginFrom(-Vector3d.Normalize(direction), _observerLatDeg >= 0f ? Vector3d.UnitZ : -Vector3d.UnitZ);
+    LookAtOriginFrom(-Vector3d.Normalize(direction), UpLatDeg >= 0f ? Vector3d.UnitZ : -Vector3d.UnitZ);
 
 
 
@@ -1887,6 +2097,10 @@ public sealed class CameraService : IDisposable
   /// <summary>Shading bit: physical lighting (<c>scene::CAMERA_SHADING_PHYSICAL</c>).</summary>
   public const uint ShadingPhysical = 1u << 0;
 
+  /// <summary>Camera flag: an orthographic view drops what lies behind the eye
+  /// (<c>scene::CAMERA_HIDE_BEHIND</c>).</summary>
+  public const uint HideBehindCamera = 1u << 1;
+
   private bool _physicalLighting;
 
   /// <summary>
@@ -1906,9 +2120,10 @@ public sealed class CameraService : IDisposable
     }
   }
 
-  /// <summary>The shading flags a camera in <paramref name="mode"/> uses.</summary>
-  internal static uint ShadingFor(CameraMode mode, bool physicalLighting) =>
-    physicalLighting && mode == CameraMode.CometOrbiting ? ShadingPhysical : 0u;
+  /// <summary>The camera flags (shading, behind-camera) a camera in <paramref name="mode"/> uses.</summary>
+  internal static uint ShadingFor(CameraMode mode, bool physicalLighting, bool showBehindCamera = true) =>
+    (physicalLighting && mode == CameraMode.CometOrbiting ? ShadingPhysical : 0u)
+    | (showBehindCamera ? 0u : HideBehindCamera);
 
   // last (camera, flags) the runtime accepted (null: unknown, resend)
   private (ulong Camera, uint Flags)? _shadingSent;
@@ -1919,7 +2134,7 @@ public sealed class CameraService : IDisposable
     ulong cam = CameraEntityId ?? 0;
     if (cam == 0)
       return;
-    uint flags = ShadingFor(_modeSubject.Value, _physicalLighting);
+    uint flags = ShadingFor(_modeSubject.Value, _physicalLighting, DisplayState.ShowBehindCamera);
     if (_shadingSent == (cam, flags))
       return;
     if (_runtimeService.SetCameraShading(cam, flags))
@@ -2107,6 +2322,7 @@ public sealed class CameraService : IDisposable
     _cameraServiceRegistry.RegisterSelf(cameraEntityId, this);
     _viewportAspect = viewportHeight > 0 ? (float)viewportWidth / viewportHeight : 1f;
     if (viewportHeight > 0) _viewportHeightPx = viewportHeight;
+    if (viewportWidth > 0) _viewportWidthPx = viewportWidth;
     RegisterSimListeners(cameraEntityId);
     RegisterEarthListener();
     RefreshCometIndicator();
@@ -2121,6 +2337,7 @@ public sealed class CameraService : IDisposable
   {
     _viewportAspect = viewportHeight > 0 ? (float)viewportWidth / viewportHeight : 1f;
     if (viewportHeight > 0) _viewportHeightPx = viewportHeight;
+    if (viewportWidth > 0) _viewportWidthPx = viewportWidth;
     ViewportResized?.Invoke();
 
     // We must resend the projection matrix when the viewport aspect ratio changes
@@ -2380,10 +2597,11 @@ dump_context()
     if (camId is null)
       return;
 
-    // Transform the body-fixed surface anchor into world space using Earth's
-    // current orientation (updated from the BPC callback).
-    var surfaceWorld = Vector3d.Transform(_earthSurfacePointBf, _earthBodyRot);
-    var zenith = Vector3d.Normalize(surfaceWorld);
+    // The camera's offset from the Earth's centre: the surface anchor turned by Earth's current
+    // orientation (BPC callback) when topocentric, else none (geocentric: translation only).
+    var surfaceWorld = ObserverOffsetWorld();
+    bool topocentric = _observerTopocentricSubject.Value;
+    var zenith = topocentric ? Vector3d.Normalize(surfaceWorld) : Vector3d.Zero;
     var camPos = earthPos + surfaceWorld;
 
     // Resolve look direction from the current orientation sub-mode.
@@ -2396,7 +2614,7 @@ dump_context()
       // Below the horizon the Earth is in the way: face the horizon under the target's azimuth
       // (mirror of the native observer, `earth_observer::pose`).
       var toTarget = targetPos - camPos;
-      if (IsBelowHorizon(toTarget, zenith))
+      if (topocentric && IsBelowHorizon(toTarget, zenith))
       {
         var h = toTarget - Vector3d.Dot(toTarget, zenith) * zenith;
         camRot = h.LengthSquared() > 1e-30 ? EarthObserverLookAt(h) : _earthRotation;
@@ -2406,17 +2624,14 @@ dump_context()
         camRot = EarthObserverLookAt(toTarget);
       }
     }
-    else if (mode.IsLockIn())
-    {
-      camRot = Quaterniond.Normalize(_earthBodyRot * _earthFixedLookDir);
-    }
     else
     {
       camRot = _inertialLookDir;
     }
 
-    // Camera assertions: right vector in the ecliptic plane, up towards the latitude's pole.
-    camRot = EarthObserverOrient(camRot, _observerLatDeg);
+    // Camera assertions: right vector in the ecliptic plane, up towards the latitude's pole (the
+    // ecliptic north at the Earth's centre).
+    camRot = EarthObserverOrient(camRot, UpLatDeg);
     _earthRotation = camRot;
 
     // The core poses the camera in its own commits (same scene write as the Earth and the comet):
@@ -2451,17 +2666,6 @@ dump_context()
   internal static bool IsBelowHorizon(Vector3d direction, Vector3d zenith) =>
     Vector3d.Dot(direction, zenith) < 0.0;
 
-  /// <summary>
-  /// Converts a world-space look-direction quaternion into Earth's body-fixed frame.
-  /// Used to snapshot the current look direction when switching to
-  /// <see cref="EarthObserverOrientationMode.EarthFixed"/>.
-  /// </summary>
-  private static Quaterniond WorldLookDirToBodyFixed(Quaterniond earthBodyRot, Quaterniond worldLookDir)
-  {
-    // q_bf = inv(earthBodyRot) · worldLookDir
-    return Quaterniond.Normalize(Quaterniond.Inverse(earthBodyRot) * worldLookDir);
-  }
-
   // ── IDisposable ────────────────────────────────────────────────────────────
 
   // subscriptions to singleton services; a disposed camera must stop reacting to them
@@ -2484,5 +2688,7 @@ dump_context()
     _projectionSubject.Dispose();
     _modeSubject.Dispose();
     _earthPresetSubject.Dispose();
+    _observerTopocentricSubject.Dispose();
+    _comparisonLockSubject.Dispose();
   }
 }

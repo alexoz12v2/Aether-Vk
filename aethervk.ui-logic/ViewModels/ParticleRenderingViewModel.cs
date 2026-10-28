@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using AetherVk.Logic.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -15,8 +16,12 @@ namespace AetherVk.Logic.ViewModels;
 /// ones; faster, the dust tails a little straighter). Visual only.
 ///
 /// <b>Temporal reuse tolerance</b>: dust that moved less than this many pixels since it was drawn
-/// is reused instead of drawn again; Off (0, the default) draws every frame fresh, 1 up to 16 px
+/// is reused instead of drawn again; Off (0) draws every frame fresh, 1 up to 16 px (the default)
 /// are faster but can smear moving dust. Visual only.
+///
+/// <b>Quality</b>: five presets (<see cref="Presets"/>) over those four values, 1 (lowest, where the
+/// app starts) to 5 (ultra); editing a value by hand turns it to custom (0), unless the values match
+/// a preset again.
 ///
 /// Both are application preferences (<c>preferences.json</c>, <see cref="PreferencesService.DustVolumeDetail"/>,
 /// <see cref="PreferencesService.DustReuseTolerance"/>), not part of a save: the app pushes the
@@ -98,11 +103,72 @@ public partial class ParticleRenderingViewModel : ObservableObject
     return p;
   }
 
+  /// <summary>One quality preset: the four dust values it sets.</summary>
+  public sealed record QualityPreset(string Name, int VolumeDetail, int PropagateDetail, int HazeDetail, int ReuseTolerance);
+
+  public const int QualityCustom = 0;
+  public const int QualityMin = 1;
+  public const int QualityMax = 5;
+  /// <summary>The app starts on the lowest preset (missing preference).</summary>
+  public const int QualityDefault = QualityMin;
+
+  /// <summary>Presets 1 … 5, lowest first.</summary>
+  public static readonly IReadOnlyList<QualityPreset> Presets = new QualityPreset[]
+  {
+    new("Lowest", 1, 5, 1, 16),
+    new("Low", 2, 5, 2, 16),
+    new("Medium", 4, 9, 4, 8),
+    new("High", 8, 17, 8, 4),
+    new("Ultra", 16, 17, 16, 0),
+  };
+
+  /// <summary>The preset of level <paramref name="quality"/> (1 … 5), <c>null</c> for custom.</summary>
+  public static QualityPreset? PresetFor(int quality) =>
+    quality >= QualityMin && quality <= QualityMax ? Presets[quality - 1] : null;
+
+  /// <summary>The level whose values are these, else <see cref="QualityCustom"/>.</summary>
+  public static int MatchQuality(int volume, int propagate, int haze, int reuse)
+  {
+    for (int i = 0; i < Presets.Count; i++)
+    {
+      var p = Presets[i];
+      if (p.VolumeDetail == volume && p.PropagateDetail == propagate && p.HazeDetail == haze && p.ReuseTolerance == reuse)
+        return i + 1;
+    }
+    return QualityCustom;
+  }
+
   private readonly INativeRuntimeService? _runtimeService;
   private readonly PreferencesService? _preferences;
 
   /// <summary>Suppresses the push while the VM itself loads the stored value.</summary>
   private bool _suppressDispatch;
+
+  /// <summary>Set while a preset writes the four values (they must not turn it to custom).</summary>
+  private bool _applyingPreset;
+
+  /// <summary>The quality level: 1 … 5, or 0 (custom).</summary>
+  [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(QualityLabel))]
+  [NotifyPropertyChangedFor(nameof(QualitySliderValue))]
+  private int _quality = QualityDefault;
+
+  private int _lastPresetLevel = QualityDefault;
+
+  /// <summary>The slider's position, 1 … 5: the level, or the last one while custom.</summary>
+  public double QualitySliderValue
+  {
+    get => Quality == QualityCustom ? _lastPresetLevel : Quality;
+    set
+    {
+      int level = (int)Math.Round(value);
+      if (level >= QualityMin && level <= QualityMax && level != Quality)
+        Quality = level;
+    }
+  }
+
+  /// <summary>"Lowest" … "Ultra", or "Custom".</summary>
+  public string QualityLabel => PresetFor(Quality)?.Name ?? "Custom";
 
   /// <summary>Volume detail: 16, 8, 4, 2 or 1 (other values clamp to a step).</summary>
   [ObservableProperty]
@@ -229,11 +295,46 @@ public partial class ParticleRenderingViewModel : ObservableObject
     _preferences = preferences;
     // the runtime already has the stored value (App startup): no push
     _suppressDispatch = true;
-    VolumeDetail = preferences?.DustVolumeDetail ?? VolumeDetailDefault;
-    PropagateDetail = preferences?.DustPropagateDetail ?? PropagateDetailDefault;
-    HazeDetail = preferences?.DustHazeDetail ?? HazeDetailDefault;
-    ReuseTolerance = preferences?.DustReuseTolerance ?? ReuseToleranceDefault;
+    // without preferences (designer) the start level's values
+    var start = PresetFor(QualityDefault)!;
+    VolumeDetail = preferences?.DustVolumeDetail ?? start.VolumeDetail;
+    PropagateDetail = preferences?.DustPropagateDetail ?? start.PropagateDetail;
+    HazeDetail = preferences?.DustHazeDetail ?? start.HazeDetail;
+    ReuseTolerance = preferences?.DustReuseTolerance ?? start.ReuseTolerance;
+    Quality = preferences?.ParticleQuality ?? QualityDefault;
+    if (Quality != QualityCustom)
+      _lastPresetLevel = Quality;
     _suppressDispatch = false;
+  }
+
+  partial void OnQualityChanged(int value)
+  {
+    if (_suppressDispatch)
+      return;
+    _preferences?.SetParticleQuality(value);
+    if (PresetFor(value) is not { } p)
+      return;
+    _lastPresetLevel = value;
+    _applyingPreset = true;
+    try
+    {
+      VolumeDetail = p.VolumeDetail;
+      PropagateDetail = p.PropagateDetail;
+      HazeDetail = p.HazeDetail;
+      ReuseTolerance = p.ReuseTolerance;
+    }
+    finally
+    {
+      _applyingPreset = false;
+    }
+  }
+
+  /// <summary>A value edited by hand: the matching preset, else custom.</summary>
+  private void OnValueEdited()
+  {
+    if (_applyingPreset)
+      return;
+    Quality = MatchQuality(VolumeDetail, PropagateDetail, HazeDetail, ReuseTolerance);
   }
 
   partial void OnVolumeDetailChanged(int value)
@@ -248,6 +349,7 @@ public partial class ParticleRenderingViewModel : ObservableObject
       return;
     _preferences?.SetDustVolumeDetail(d);
     _runtimeService?.SetDustVolumeDetail(d);
+    OnValueEdited();
   }
 
   partial void OnPropagateDetailChanged(int value)
@@ -262,6 +364,7 @@ public partial class ParticleRenderingViewModel : ObservableObject
       return;
     _preferences?.SetDustPropagateDetail(d);
     _runtimeService?.SetDustPropagateDetail(d);
+    OnValueEdited();
   }
 
   partial void OnHazeDetailChanged(int value)
@@ -276,6 +379,7 @@ public partial class ParticleRenderingViewModel : ObservableObject
       return;
     _preferences?.SetDustHazeDetail(d);
     _runtimeService?.SetDustHazeDetail(d);
+    OnValueEdited();
   }
 
   partial void OnReuseToleranceChanged(int value)
@@ -290,5 +394,6 @@ public partial class ParticleRenderingViewModel : ObservableObject
       return;
     _preferences?.SetDustReuseTolerance(px);
     _runtimeService?.SetDustReuseTolerance(px);
+    OnValueEdited();
   }
 }

@@ -317,6 +317,9 @@ pub struct GridPushConstants {
 pub const SPHERE_GIZMO_STYLE_SPHERE: f32 = 0.0;
 /// `SphereGizmoDataGpu::style`: a dashed line along local Z, `±radius` (the Earth's polar axis).
 pub const SPHERE_GIZMO_STYLE_POLAR_AXIS: f32 = 1.0;
+/// `SphereGizmoDataGpu::style`: a solid line along local +Z from the centre to `radius`, in
+/// `color` (a jet's direction, `JetDirectionLineComponent`).
+pub const SPHERE_GIZMO_STYLE_JET_LINE: f32 = 2.0;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
@@ -332,6 +335,8 @@ pub struct SphereGizmoDataGpu {
   /// Clip position of the gizmo center composed in f64 (see `ObjectData::center_clip`); all zero:
   /// computed by the shader in f32.
   pub center_clip: [f32; 4],
+  /// Jet-line style: the line's colour (rgb; a unused).
+  pub color: [f32; 4],
 }
 
 /// push constant layout for `sphere_gizmo.frag/vert`

@@ -619,6 +619,40 @@ pub unsafe extern "C" fn avkSimulationContext_setCameraRenderMask(
   ctx_ref.set_camera_render_mask(scene_id, camera_entity, mask)
 }
 
+/// Where the Earth observer camera `camera_entity` draws its comet on a `width_px` × `height_px`
+/// (physical px) viewport: writes `x_px`/`y_px` from the top-left corner when projectable.
+/// Returns 1 on screen, 0 projectable but outside the viewport, −1 unavailable (no observer comet,
+/// missing scene/camera, behind a perspective eye, null pointers).
+///
+/// # Safety
+/// FFI Contract: `x_px` and `y_px` are valid for writes.
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_cometScreenPosition(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  camera_entity: u64,
+  width_px: u32,
+  height_px: u32,
+  x_px: *mut f64,
+  y_px: *mut f64,
+) -> i32 {
+  if ctx.is_null() || x_px.is_null() || y_px.is_null() {
+    return -1;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  match ctx_ref.comet_screen_position(scene_id, camera_entity, width_px, height_px) {
+    Some(p) => {
+      unsafe {
+        *x_px = p.x_px;
+        *y_px = p.y_px;
+      }
+      p.on_screen as i32
+    }
+    None => -1,
+  }
+}
+
 /// Sets how `camera_entity` shades meshes (`CameraShadingComponent`): bit 0 physical lighting
 /// (direct sunlight only, (1 AU / r)², unlit fragments in a debug tint). Returns false when the
 /// scene is missing or the entity is not a camera.
@@ -641,11 +675,12 @@ pub unsafe extern "C" fn avkSimulationContext_setCameraShading(
 }
 
 /// Sets the native Earth observer (camera posed in every logic commit, see
-/// `simulation_api::earth_observer`): `mode` 0 Free, 1 CometLockIn, 2 CometTracking, 3 SunLockIn,
-/// 4 SunTracking (C# `EarthObserverOrientationMode`), `u32::MAX` clears it (C# poses the camera).
-/// `look` points to 4 f64 (xyzw): Free inertial world look, or lock-in body-fixed look. The site
-/// is geodetic `lat_deg` / `lon_deg` (east positive) on the WGS84 ellipsoid, `elev_m` metres above
-/// it. With a comet, the comet and its dust are drawn at the light-time retarded epoch.
+/// `simulation_api::earth_observer`): `mode` 0 Free, 2 CometTracking, 4 SunTracking (C#
+/// `EarthObserverOrientationMode`; the retired lock-in values 1 / 3 read as Free), `u32::MAX`
+/// clears it (C# poses the camera). `look` points to 4 f64 (xyzw): the Free inertial world look.
+/// The camera is at the Earth's centre, or with `topocentric` at geodetic `lat_deg` / `lon_deg`
+/// (east positive) on the WGS84 ellipsoid, `elev_m` metres above it; the Earth's rotation never
+/// turns the look. With a comet, the comet and its dust are drawn at the light-time retarded epoch.
 ///
 /// # Safety
 /// FFI Contract: `look` is null or points to 4 readable f64
@@ -658,6 +693,7 @@ pub unsafe extern "C" fn avkSimulationContext_setEarthObserver(
   mode: u32,
   earth_id: u64,
   comet_id: u64,
+  topocentric: bool,
   lat_deg: f64,
   lon_deg: f64,
   elev_m: f64,
@@ -675,7 +711,7 @@ pub unsafe extern "C" fn avkSimulationContext_setEarthObserver(
   };
   let mode = aethervk_core_rlib::simulation_api::earth_observer::EarthObserverMode::from_u32(mode);
   ctx_ref.set_earth_observer(
-    scene_id, camera_id, mode, earth_id, comet_id, lat_deg, lon_deg, elev_m, look,
+    scene_id, camera_id, mode, earth_id, comet_id, topocentric, lat_deg, lon_deg, elev_m, look,
   )
 }
 
@@ -1779,30 +1815,14 @@ pub unsafe extern "C" fn avkSimulationContext_addParticleSystem(
     },
   );
 
-  static JET_PREVIEW_MESH: spin::Once<
-    alloc::sync::Arc<aethervk_core_rlib::simulation::comet::Comet>,
-  > = spin::Once::new();
-  let sphere_mesh = alloc::sync::Arc::clone(JET_PREVIEW_MESH.call_once(|| {
-    alloc::sync::Arc::new(aethervk_core_rlib::simulation::comet::generate_uv_sphere(
-      1.0, 16, 16, 1.0, false,
-    ))
-  }));
-
+  // the jet's direction line from the nucleus centre (no marker mesh on the site any more)
   let _ = scene_guard.scene.add_component(
     jet_entity,
-    aethervk_core_rlib::scene::StaticMeshComponent {
-      asset_path: alloc::string::String::from("__internal_jet__"),
-      mesh: sphere_mesh,
-      emissive_color: ps_dto.stream_color,
+    aethervk_core_rlib::scene::JetDirectionLineComponent {
+      color: ps_dto.stream_color,
       is_visible: true,
+      show_angles: false,
     },
-  );
-  debug_assert!(
-    scene_guard
-      .scene
-      .has_component::<aethervk_core_rlib::scene::StaticMeshComponent>(jet_entity)
-      == aethervk_core_rlib::scene::HasComponentResultEnum::EntityHasComponent,
-    "jet entity must have StaticMeshComponent before ParticleSystemComponent is created"
   );
 
   let emit_params = aethervk_core_rlib::scene::particles::ParticleSystemEmitParams {
@@ -1982,8 +2002,8 @@ pub unsafe extern "C" fn avkSimulationContext_modifyParticleSystem(
 
   scene_guard.scene.with_component_mut(
     jet_eid,
-    |s: &mut aethervk_core_rlib::scene::StaticMeshComponent| {
-      s.emissive_color = ps_dto.stream_color;
+    |l: &mut aethervk_core_rlib::scene::JetDirectionLineComponent| {
+      l.color = ps_dto.stream_color;
     },
   );
 
@@ -3131,13 +3151,47 @@ pub unsafe extern "C" fn avkSimulationContext_setJetPreviewVisibility(
   let mut changed = false;
   scene_guard.scene.with_component_mut(
     entity_id,
-    |static_mesh: &mut aethervk_core_rlib::scene::StaticMeshComponent| {
-      static_mesh.is_visible = is_visible;
+    |line: &mut aethervk_core_rlib::scene::JetDirectionLineComponent| {
+      line.is_visible = is_visible;
       changed = true;
     },
   );
 
   changed
+}
+
+/// Shows (or hides) the latitude/longitude arcs and degree labels of one jet (the C# side keeps
+/// them on the selected jet only). False when `jet_entity_id` is not a jet.
+///
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setJetAngleVisibility(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  jet_entity_id: u64,
+  is_visible: bool,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { ctx.as_ref().unwrap() };
+  let scene_arc = match ctx_ref.scenes.read().get_scene(scene_id) {
+    Some(s) => s,
+    None => return false,
+  };
+  let scene_guard = scene_arc.read();
+  let entity_id = aethervk_core_rlib::scene::EntityId::from_ffi(jet_entity_id);
+  scene_guard
+    .scene
+    .with_component_mut(
+      entity_id,
+      |line: &mut aethervk_core_rlib::scene::JetDirectionLineComponent| {
+        line.show_angles = is_visible;
+      },
+    )
+    .is_some()
 }
 
 /// # Safety

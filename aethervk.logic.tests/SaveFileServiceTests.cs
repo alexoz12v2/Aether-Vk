@@ -344,4 +344,28 @@ public sealed class SaveFileServiceTests : IDisposable
     host.Comet = Spk67P(radius: 5);                   // unknown configuration: nothing to reuse
     Assert.False(await svc.TryReuseStateAsync());
   }
+
+  /// The Earth observer setup is a change: topocentric, and a free look (a tracking look is not,
+  /// it re-aims by itself); f64 noise in the look is not.
+  [Fact]
+  public void Dirty_FollowsTheObserverSetup()
+  {
+    var host = new FakeSaveFileHost(_root)
+    {
+      Viewports = [new ViewportDto { Mode = "earth_position", Observer = new ObserverDto { InertialLook = [0, 0, 0, 1] } }],
+    };
+    var svc = new SaveFileService(host, new Clock());
+    Assert.False(svc.IsDirty);
+    host.Viewports[0].Observer!.InertialLook = [1e-12, 0, 0, 1];
+    Assert.False(svc.IsDirty);
+    host.Viewports[0].Observer!.InertialLook = [0.1, 0, 0, 0.995];
+    Assert.True(svc.IsDirty);
+    host.Viewports[0].Observer!.Orientation = "sun_tracking";
+    host.Viewports[0].Observer!.InertialLook = [0, 0, 0, 1];
+    Assert.True(svc.IsDirty); // the submode itself
+    host.Viewports[0].Observer!.Orientation = "free";
+    Assert.False(svc.IsDirty);
+    host.Viewports[0].Observer!.Topocentric = true;
+    Assert.True(svc.IsDirty);
+  }
 }
