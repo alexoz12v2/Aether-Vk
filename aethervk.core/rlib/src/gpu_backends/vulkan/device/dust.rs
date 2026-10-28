@@ -394,6 +394,13 @@ pub struct DustViewHost {
   pub refine: u32,
   /// frames since the inputs last changed or the refinement last stepped
   refine_static: u32,
+  /// the warm-up after a reset ([`Self::reset_feedback`]), per side (volume, EWA): from its
+  /// coarsest level the side lowers while the remembered step keeps the lower level under the
+  /// budget, not only below the band (which stopped the descent a level coarser than a cold
+  /// start's ascent: EWA 4 against the live session's 3), by [`warmup_lower`] levels at once
+  /// (the raise's rule mirrored: a readback lags `DUST_READBACK_SLOTS` frames); the first
+  /// readback that does not lower ends it
+  warmup: [bool; 2],
   /// the newest readback's `(EWA bias, texels)`: what the image the view now shows cost
   pub refine_seen: Option<(u32, u64)>,
   /// the last drawn image was refined (a reused frame shows it)
@@ -596,6 +603,20 @@ pub const DUST_FEEDBACK_TOP_HOLD: u32 = 8;
 pub const DUST_FEEDBACK_STEP_DEFAULT: f64 = 4.0;
 
 impl FeedbackSet {
+  /// The warm-up start of a reset ([`DustViewHost::reset_feedback`]): the cheapest state (no
+  /// split, the coarsest volume bias and feedback EWA bias), memory empty. The feedback lowers
+  /// from there to the view's steady state within a few readbacks, so a reset never draws a cold
+  /// frame at the finest levels (3 s at 1 km on the GTX 1070, past Windows' 2 s TDR). A new view
+  /// still starts cold ([`FeedbackSet::default`]).
+  pub fn coarse() -> Self {
+    Self {
+      split_depth: 0,
+      volume_bias: dust::DUST_VOLUME_BIAS_MAX,
+      ewa_bias: dust::DUST_EWA_BIAS_FEEDBACK_MAX,
+      ..Self::default()
+    }
+  }
+
   /// Folds a readback drawn at `bias` with `work` into the memory of `step_q8` / `prev`: the
   /// readback after a raise of `k` steps records the per-step ratio (geometric) at the new bias.
   fn feedback_remember(step_q8: &mut [u32], prev: &mut (u32, u64), bias: u32, work: u64) {
@@ -911,14 +932,23 @@ impl DustViewHost {
   }
 
   /// Forgets what the feedback learned: the split depth, the volume and EWA biases and their
-  /// memory return to a cold start, the readbacks in flight are dropped and the next frame draws.
-  /// After a discontinuity (a restored save, a seek) the feedback otherwise keeps what a transient
-  /// frame measured: the whole history appears in one tick, while the camera still moves to its
-  /// restored pose, the EWA bias climbed 0 → 5 against the live session's 3, and the band's
-  /// hysteresis kept it there (blocky dust after Open). The white point, the unit and the queue
-  /// estimates stay: they follow each readback.
+  /// memory restart from the warm-up state ([`FeedbackSet::coarse`]: cheap frames, the feedback
+  /// lowering the biases back to the steady state), the readbacks in flight are dropped and the
+  /// next frame draws. After a discontinuity (a restored save, a seek past a day) the feedback
+  /// otherwise keeps what a transient frame measured: the whole history appears in one tick, while
+  /// the camera still moves to its restored pose, the EWA bias climbed 0 → 5 against the live
+  /// session's 3, and the band's hysteresis kept it there (blocky dust after Open); its memory
+  /// is what the reset drops. The white point, the unit and the queue estimates stay: they follow
+  /// each readback.
+  /// Whether the feedback absorbed a readback since the view's cold start or its last reset
+  /// (the volume or EWA memory holds one): [`Device::dust_sync_feedback_gen`] resets only such a
+  /// view, so a new view keeps its cold start ([`FeedbackSet::default`]).
+  pub fn feedback_measured(&self) -> bool {
+    self.fb_memory.volume_prev != (0, 0) || self.fb_memory.ewa_prev != (0, 0)
+  }
+
   pub fn reset_feedback(&mut self) {
-    let cold = FeedbackSet::default();
+    let cold = FeedbackSet::coarse();
     self.split_depth = cold.split_depth;
     self.split_depth_over = cold.split_depth_over;
     self.volume_bias = cold.volume_bias;
@@ -933,6 +963,7 @@ impl DustViewHost {
     self.refine = 0;
     self.refine_static = 0;
     self.refine_seen = None;
+    self.warmup = [true; 2];
   }
 
   /// Static refinement's step for a frame about to begin: `same_inputs` (its draw inputs equal the
@@ -964,6 +995,18 @@ impl DustViewHost {
   }
 }
 
+/// The warm-up's lower bias ([`DustViewHost::reset_feedback`]): from `bias`, whose frame did
+/// `work` against `budget`, down by ⌊log₄(budget / work)⌋ levels (a level quadruples the work),
+/// at least one (the caller checked the remembered step allows it).
+fn warmup_lower(bias: u32, work: u64, budget: u64) -> u32 {
+  let down = if work == 0 {
+    bias
+  } else {
+    ((budget as f64 / work as f64).ln() / 4f64.ln()).floor().max(1.0) as u32
+  };
+  bias.saturating_sub(down)
+}
+
 /// how long the pyramid download (diagnostics, `download_dust_pyramid`) waits for the graphics
 /// queue: the frames already in flight complete first, and a perspective frame inside the coma
 /// takes seconds (5 s lost every dump of the near-field runs)
@@ -987,6 +1030,7 @@ impl Default for DustViewHost {
       absorb_refined: false,
       refine: 0,
       refine_static: 0,
+      warmup: [false; 2],
       refine_seen: None,
       image_refined: false,
       slot_refined: [false; DUST_READBACK_SLOTS],
@@ -1207,6 +1251,12 @@ impl DustViewHost {
       } else {
         self.volume_bias
       }
+    } else if self.warmup[0]
+      && vol.bias > 0
+      && FeedbackSet::feedback_allows_lower(&self.fb_memory.volume_step_q8, vol.bias, vol.evals as u64, vol_budget as u64)
+    {
+      self.fb_memory.top_under = 0;
+      warmup_lower(vol.bias, vol.evals as u64, vol_budget as u64).min(self.volume_bias)
     } else if vol.evals < vol_budget / 8
       && FeedbackSet::feedback_allows_lower(&self.fb_memory.volume_step_q8, vol.bias, vol.evals as u64, vol_budget as u64)
     {
@@ -1217,6 +1267,8 @@ impl DustViewHost {
       self.fb_memory.top_under = 0;
       self.volume_bias
     };
+    // (the warm-up ends at its first readback that does not lower)
+    self.warmup[0] &= bias < vol.bias;
     if bias != self.volume_bias {
       aethervk_oshal_rlib::log!(
         "[Dust volume] {} ray-integral evaluations at bias {} (budget {}): bias {} for the next frames (haze {}, top {}, edge ×{:.1})",
@@ -1247,9 +1299,15 @@ impl DustViewHost {
         && FeedbackSet::feedback_allows_lower(&self.fb_memory.ewa_step_q8, ewa.bias, ewa.texels, ewa_budget))
     {
       ewa.suggested_bias_for(ewa_budget)
+    } else if self.warmup[1]
+      && ewa.bias > 0
+      && FeedbackSet::feedback_allows_lower(&self.fb_memory.ewa_step_q8, ewa.bias, ewa.texels, ewa_budget)
+    {
+      warmup_lower(ewa.bias, ewa.texels, ewa_budget).min(self.ewa_bias)
     } else {
       self.ewa_bias
     };
+    self.warmup[1] &= ewa_bias < ewa.bias;
     if ewa_bias != self.ewa_bias {
       aethervk_oshal_rlib::log!(
         "[Dust EWA] {:.3e} texels at bias {} (budget {:.3e}): bias {} for the next frames (memory: step ×{:.1} at {}, previous readback {:?})",
@@ -2170,6 +2228,10 @@ impl Device {
       return false;
     }
     host.feedback_gen = generation;
+    // a view that measured nothing yet is at its cold start: it keeps it
+    if !host.feedback_measured() {
+      return false;
+    }
     host.reset_feedback();
     aethervk_oshal_rlib::log!("[Dust] view {}: feedback reset (generation {generation})", pe.0);
     true

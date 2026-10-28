@@ -30,7 +30,6 @@ public sealed class FitsImageService : IDisposable
   // asset id → the stretch it renders (absent: the import's default) or is being re-stretched to
   private readonly Dictionary<ulong, FitsStretch> _rendered = [];
   // asset ids known not to be FITS (the probe is a native call)
-  private readonly HashSet<ulong> _notFits = [];
 
   public FitsImageService(
     INativeRuntimeService runtime,
@@ -51,22 +50,12 @@ public sealed class FitsImageService : IDisposable
   }
 
   /// <summary>Header metadata of texture <paramref name="assetId"/>; null when it is not FITS (or
-  /// the library is busy: ask again after the next textures change).</summary>
+  /// the library is busy: ask again after the next textures change). Never cached: "not FITS" and
+  /// "busy" look alike (a re-stretch holds the library too).</summary>
   public FitsMetadata? GetMetadata(ulong assetId)
   {
-    lock (_gate)
-      if (_notFits.Contains(assetId))
-        return null;
     var json = _runtime.GetFitsMetadataJson(assetId);
-    if (json is null)
-    {
-      // "not FITS" and "library busy" look alike: only trust it when nothing holds the library
-      if (!_assets.IsBusyValue)
-        lock (_gate)
-          _notFits.Add(assetId);
-      return null;
-    }
-    return FitsMetadata.Parse(json);
+    return json is null ? null : FitsMetadata.Parse(json);
   }
 
   /// <summary>
@@ -125,9 +114,9 @@ public sealed class FitsImageService : IDisposable
       // the stretch belongs to the texture; billboards of one texture agree (the last edit wins)
       var wanted = group.Select(b => b.FitsStretch).LastOrDefault(s => s is not null) ?? FitsStretch.Default;
       var rendered = _rendered.TryGetValue(texture.Id, out var r) ? r : null;
+      // (only a FITS texture's billboards carry a non-default stretch: no metadata probe, which a
+      // busy library would answer "not FITS")
       if (wanted.SameAs(rendered ?? FitsStretch.Default))
-        continue;
-      if (GetMetadata(texture.Id) is null)
         continue;
       _ = ApplyAsync(texture.Id, wanted);
     }

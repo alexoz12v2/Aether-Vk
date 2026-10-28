@@ -786,8 +786,9 @@ impl SimulationContext {
   /// (`topocentric`) on the WGS84 ellipsoid at geodetic `lat_deg` / `lon_deg`, `elev_m` metres above
   /// it ([`crate::simulation_api::astrometry::wgs84_surface_point_bf`]). With a comet, the comet and
   /// its dust are drawn at the light-time retarded epoch (the comet's velocity is taken from the
-  /// almanac at the scene's current epoch here, then from every commit). Returns false when the
-  /// scene or an entity is missing.
+  /// almanac at the scene's current epoch here, then from every commit). `up`: the screen-up
+  /// convention of every pose (ecliptic pole by the latitude's sign, or celestial north). Returns
+  /// false when the scene or an entity is missing.
   #[allow(clippy::too_many_arguments)]
   pub fn set_earth_observer(
     &self,
@@ -801,6 +802,7 @@ impl SimulationContext {
     lon_deg: f64,
     elev_m: f64,
     look: [f64; 4],
+    up: crate::simulation_api::earth_observer::ObserverUp,
   ) -> bool {
     use crate::simulation_api::earth_observer::{EarthObserverState, clear_light_time_view};
     let (scene_arc, epoch) = {
@@ -867,6 +869,7 @@ impl SimulationContext {
       ],
     );
     state.comet_vel_km_s = comet_vel_km_s;
+    state.up = up;
     if crate::simulation_api::earth_observer::apply(&guard.scene, &mut state).is_none() {
       return false;
     }

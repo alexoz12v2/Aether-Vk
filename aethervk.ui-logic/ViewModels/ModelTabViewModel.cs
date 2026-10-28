@@ -105,6 +105,7 @@ public partial class ModelTabViewModel
   // comet to reach): apply the stored choice once the comet exists
   partial void OnIsCometCommittedChanged(bool value)
   {
+    RefreshDustCurves();
     if (value)
       _runtimeService?.SetSphereGizmoVisibility(IsGizmoVisible);
   }
@@ -128,7 +129,8 @@ public partial class ModelTabViewModel
     ICometMessenger cometMessenger,
     IPlatformWindowService platformWindowService,
     TimelineService timelineService,
-    ICameraServiceRegistry? cameras = null)
+    ICameraServiceRegistry? cameras = null,
+    CometPositionTrackerService? cometTracker = null)
     : base("Model", sessionService, cometMessenger)
   {
     _translationService = translationService;
@@ -172,6 +174,18 @@ public partial class ModelTabViewModel
     // that subscription with one that uses the correct injected scheduler.
     if (CurrentSession is not null)
       WireModelSessionChanges(CurrentSession);
+
+    // the comet's distance from the Sun, for the Afρ plot marker and the "Afρ now" read-out
+    cometTracker?.CometPosition
+      .Subscribe(p =>
+      {
+        double r = p is { } v ? v.Length() : double.NaN;
+        double old = HeliocentricDistanceAu;
+        // the sim ticks every frame: redraw the plot only when r_h moved visibly
+        if (double.IsNaN(r) != double.IsNaN(old) || Math.Abs(r - old) > 1e-4)
+          HeliocentricDistanceAu = r;
+      })
+      .AddDisposableTo(_disposables);
 
     // Seed with current committed state and subscribe to future changes.
     IsCometCommitted = cometConfigService.IsAlmanacCommittedValue;
@@ -422,8 +436,101 @@ public partial class ModelTabViewModel
     }
   }
 
+  // ── Dust curves (Afρ(r_h) and the grain size law) ────────────────────────────
+
+  /// <summary>Afρ(r_h) of the shared model (engine law), with a marker at the comet's r_h.</summary>
+  [ObservableProperty]
+  private CurvePlotModel? _afrhoPlot;
+
+  /// <summary>Grain size PDFs by number and by cross-section.</summary>
+  [ObservableProperty]
+  private CurvePlotModel? _sizeDistributionPlot;
+
+  /// <summary>"Afρ now: X cm → Q_d ≈ Y kg/s" for the comet's current r_h and the selected jet.</summary>
+  [ObservableProperty]
+  private string _afrhoNowText = "";
+
+  /// <summary>The comet's heliocentric distance (AU); NaN when unknown.</summary>
+  [ObservableProperty]
+  private double _heliocentricDistanceAu = double.NaN;
+
+  partial void OnHeliocentricDistanceAuChanged(double value) => RefreshDustCurves();
+
+  private static readonly System.Collections.Generic.HashSet<string?> CurveInputs = new()
+  {
+    nameof(ModelSession.Afrho0Cm), nameof(ModelSession.AfrhoPower), nameof(ModelSession.AfrhoCutoffAu),
+    nameof(ModelSession.AfrhoMaxValueCm), nameof(ModelSession.DiametreUm), nameof(ModelSession.SizeRange),
+    nameof(ModelSession.SizeQ),
+  };
+
+  private ModelSession? _curvesHooked;
+  private JetViewModel? _rateHooked;
+
+  private void HookCurveSession(ModelSession? session)
+  {
+    if (ReferenceEquals(_curvesHooked, session))
+      return;
+    if (_curvesHooked is not null)
+      _curvesHooked.PropertyChanged -= OnCurveInputChanged;
+    _curvesHooked = session;
+    if (session is not null)
+      session.PropertyChanged += OnCurveInputChanged;
+  }
+
+  private void OnCurveInputChanged(object? sender, PropertyChangedEventArgs e)
+  {
+    if (e.PropertyName is null || CurveInputs.Contains(e.PropertyName))
+      RefreshDustCurves();
+  }
+
+  partial void OnSelectedJetChanged(JetViewModel? oldValue, JetViewModel? newValue)
+  {
+    if (_rateHooked is not null)
+      _rateHooked.PropertyChanged -= OnJetRateChanged;
+    _rateHooked = newValue;
+    if (newValue is not null)
+      newValue.PropertyChanged += OnJetRateChanged;
+    RefreshAfrhoNowText();
+  }
+
+  // the rate is written from the native-push thread: refresh on the UI thread
+  private void OnJetRateChanged(object? sender, PropertyChangedEventArgs e)
+  {
+    if (e.PropertyName == nameof(JetViewModel.DustProductionRateAt1AuKgs))
+    {
+      if (_dispatcher is null) RefreshAfrhoNowText();
+      else _dispatcher.Dispatch(RefreshAfrhoNowText);
+    }
+  }
+
+  private double CurrentRhAu => IsCometCommitted ? HeliocentricDistanceAu : double.NaN;
+
+  private void RefreshDustCurves()
+  {
+    if (CurrentSession is not { } s)
+      return;
+    AfrhoPlot = DustCurves.AfrhoPlot(s.Afrho0Cm, s.AfrhoPower, s.AfrhoCutoffAu, s.AfrhoMaxValueCm, CurrentRhAu);
+    SizeDistributionPlot = DustCurves.SizeDistributionPlot(s.DiametreUm, s.SizeRange, s.SizeQ);
+    RefreshAfrhoNowText();
+  }
+
+  private void RefreshAfrhoNowText()
+  {
+    if (CurrentSession is not { } s)
+      return;
+    // the selected jet's rate (each jet has its own: it depends on its speed), else the first jet
+    var jet = SelectedJet ?? (s.Jets.Count > 0 ? s.Jets[0] : null);
+    double rate = jet is { NativePsId: not 0 } ? jet.DustProductionRateAt1AuKgs : double.NaN;
+    AfrhoNowText = DustCurves.AfrhoNowText(CurrentRhAu, s.Afrho0Cm, s.AfrhoPower, s.AfrhoCutoffAu,
+      s.AfrhoMaxValueCm, rate, jet?.DisplayIndex ?? 0);
+  }
+
   public override void Dispose()
   {
+    HookCurveSession(null);
+    if (_rateHooked is not null)
+      _rateHooked.PropertyChanged -= OnJetRateChanged;
+    _rateHooked = null;
     if (_restoredHooked is not null)
       _restoredHooked.Restored -= OnSessionRestored;
     _restoredHooked = null;
@@ -453,6 +560,8 @@ public partial class ModelTabViewModel
       _restoredHooked = session;
     }
     ManualNucleusRadiusKm = session.ManualNucleusRadiusKm;
+    HookCurveSession(session);
+    RefreshDustCurves();
     EnsureJetSubscriptions(session);
     // tabs are scoped: a reopened tab gets a new VM over the same session (native still has it on)
     ShowReferencePositionError = session.ShowReferencePositionError;

@@ -510,22 +510,34 @@ public class DesktopBillboardTests
 
   // ── physical size and piloting (Earth observer) ────────────────────────────────────────────
 
+  /// A perspective Earth observer viewport: Match sets its vertical field to the angle; a resize
+  /// keeps the field, so the angle per px changes with the height.
   private sealed class FakeProbe : IBillboardViewportProbe
   {
     public double? ArcsecPerPx { get; set; }
     public PointD? CometDesktopPx { get; set; }
-    public List<double> Matched { get; } = [];
-    public bool MatchArcsecPerPx(double arcsecPerPx)
+    public double? CometDistanceKm { get; set; }
+    public double ViewportHeightPx { get; private set; } = 1000;
+    public List<(double HeightKm, double AngleRad)> Matched { get; } = [];
+    private double _fieldRad;
+    public bool MatchField(double heightKm, double angleRad)
     {
-      Matched.Add(arcsecPerPx);
-      ArcsecPerPx = arcsecPerPx;
+      Matched.Add((heightKm, angleRad));
+      _fieldRad = angleRad;
+      ArcsecPerPx = angleRad / ViewportHeightPx / DesktopBillboardGeometry.ArcsecToRad;
       return true;
+    }
+    public void Resize(double heightPx)
+    {
+      ViewportHeightPx = heightPx;
+      ArcsecPerPx = _fieldRad / heightPx / DesktopBillboardGeometry.ArcsecToRad;
     }
     public bool IsEarthObserver => true;
     public bool EnterEarthObserver() => true;
     public void SetObserverSite(double latDeg, double lonDeg, double? elevM) { }
     public bool LockToDirection(Vector3d worldDirection) => true;
     public bool ViewUpIsEclipticSouth => false;
+    public bool ViewUpIsCelestialNorth => true;
     public PointD? ViewportCenterDesktopPx => null;
     public bool IsComparisonLocked { get; set; }
   }
@@ -579,8 +591,8 @@ public class DesktopBillboardTests
   }
 
   /// The rows pilot the billboard from the viewport: Center needs the comet on screen, Apply is
-  /// off while bound and back after a manual resize, Match sets the viewport's scale to the
-  /// image's and shows it 1:1 on the comet.
+  /// off while bound and back after a manual resize, Match sets the viewport's field to the image's
+  /// height and the billboard fills the viewport's height on the comet, following a resize.
   [Fact]
   public void Rows_CenterOnComet_ApplyPhysicalSize_AndMatchTheCamera()
   {
@@ -593,7 +605,7 @@ public class DesktopBillboardTests
     Assert.False(row.CenterOnCometCommand.CanExecute(null));
     Assert.False(row.ApplyPhysicalSizeCommand.CanExecute(null)); // no viewport scale, no plate scale
     Assert.False(row.MatchCameraToImageCommand.CanExecute(null));
-    Assert.Contains("set the plate scale", row.PhysicalSizeLabel);
+    Assert.Contains("set the image height (km) or the plate scale", row.PhysicalSizeLabel);
 
     probe.ArcsecPerPx = 2.0;
     probe.CometDesktopPx = new PointD(700, 300);
@@ -625,13 +637,23 @@ public class DesktopBillboardTests
     probe.CometDesktopPx = new PointD(960, 540);
     row.MatchCameraToImageCommand.Execute(null);
     fake.Drain();
-    Assert.Equal([0.5], probe.Matched);
+    // the 400 px image height at 0.5″/px is 200″: the viewport's 1000 px show it; no comet
+    // distance, so no km field (an orthographic view would refuse)
+    var (heightKm, angle) = Assert.Single(probe.Matched);
+    Near(400 * 0.5 * DesktopBillboardGeometry.ArcsecToRad, angle, 1e-15);
+    Assert.True(double.IsNaN(heightKm));
     var m = svc.Current[0];
-    Near(800, m.WidthPx);
-    Near(400, m.HeightPx);
+    Near(2000, m.WidthPx);
+    Near(1000, m.HeightPx); // the viewport's height (the image's aspect kept)
     Assert.True(m.PhysicalSizeBound);
     Near(960, m.CenterX);
     Near(540, m.CenterY);
+    // a resize keeps the field: the bound billboard keeps filling the viewport's height
+    probe.Resize(700);
+    vm.Probe();
+    fake.Drain();
+    Near(700, svc.Current[0].HeightPx);
+    Near(1400, svc.Current[0].WidthPx);
 
     // the comet leaves the viewport: Center is off
     probe.CometDesktopPx = null;
@@ -644,5 +666,105 @@ public class DesktopBillboardTests
     fake.Drain();
     Assert.Null(svc.Current[0].ImageArcsecPerPx);
     Assert.False(svc.Current[0].PhysicalSizeBound);
+  }
+  // ── image field: km or plate scale ─────────────────────────────────────────────────────────
+
+  private const double AuToKm = 149_597_870.7;
+
+  /// The image's angular height: 2·atan(H / 2 / D) from the km height (it wins once the distance is
+  /// known), else height px × ″/px; the two agree for the same field, and the km height at the comet
+  /// is 2·D·tan(α / 2) either way.
+  [Fact]
+  public void ImageAngularHeight_KmAndPlateScaleAgree_AndKmWins()
+  {
+    double d = 0.47 * AuToKm;
+    var b = Bb() with { ImageWidthPx = 1300, ImageHeightPx = 1200 };
+    Assert.Null(DesktopBillboardGeometry.ImageAngularHeightRad(b, d));
+    var km = b with { ImageHeightKm = 120000 };
+    double want = 2.0 * Math.Atan(60000 / d);
+    Near(want, DesktopBillboardGeometry.ImageAngularHeightRad(km, d)!.Value, 1e-15);
+    Assert.Null(DesktopBillboardGeometry.ImageAngularHeightRad(km, null)); // km needs the distance
+    Near(120000, DesktopBillboardGeometry.ImageHeightAtCometKm(km, null)!.Value);
+
+    // the plate scale giving the same field
+    double scale = want / DesktopBillboardGeometry.ArcsecToRad / 1200;
+    var plate = b with { ImageArcsecPerPx = scale };
+    Near(want, DesktopBillboardGeometry.ImageAngularHeightRad(plate, d)!.Value, 1e-15);
+    Near(want, DesktopBillboardGeometry.ImageAngularHeightRad(plate, null)!.Value, 1e-15);
+    Near(120000, DesktopBillboardGeometry.ImageHeightAtCometKm(plate, d)!.Value, 1e-6);
+    Assert.Null(DesktopBillboardGeometry.ImageHeightAtCometKm(plate, null));
+
+    // both set: km wins with a distance, the plate scale without one
+    var both = km with { ImageArcsecPerPx = 1.0 };
+    Near(want, DesktopBillboardGeometry.ImageAngularHeightRad(both, d)!.Value, 1e-15);
+    Near(1200 * DesktopBillboardGeometry.ArcsecToRad, DesktopBillboardGeometry.ImageAngularHeightRad(both, null)!.Value, 1e-15);
+
+    // the physical size: the angle over the viewport's angle per px, the width from the aspect
+    double vp = want / 900 / DesktopBillboardGeometry.ArcsecToRad; // the image spans 900 px
+    var size = DesktopBillboardGeometry.PhysicalSize(km, vp, d)!.Value;
+    Near(900, size.HeightPx, 1e-9);
+    Near(900 * 1300.0 / 1200.0, size.WidthPx, 1e-9);
+    Near(size.HeightPx, DesktopBillboardGeometry.PhysicalSize(plate, vp, d)!.Value.HeightPx, 1e-9);
+  }
+
+  /// "Match camera to image" from the km input (a JPEG) and from the plate scale (a FITS) asks the
+  /// viewport for the same field (height km at the comet and its angle); the billboard then fills
+  /// the viewport's height, bound, and follows a change of the viewport's height. The label shows
+  /// the angular field and the km field.
+  [Fact]
+  public void MatchCameraToImage_KmAndPlateScaleGiveTheSameField_AndTheBillboardFillsTheHeight()
+  {
+    var (vm, svc, fake, _) = BuildVm(); // the 800 × 400 texture
+    vm.CreateCommand.Execute(null);
+    vm.CreateCommand.Execute(null);
+    fake.Drain();
+    var (jpeg, fits) = (vm.Items[0], vm.Items[1]);
+    double d = 0.47 * AuToKm;
+    var probe = new FakeProbe { ArcsecPerPx = 2.0, CometDistanceKm = d, CometDesktopPx = new PointD(900, 500) };
+    vm.AttachViewport(probe, poll: false);
+    Assert.False(jpeg.MatchCameraToImageCommand.CanExecute(null)); // no size yet
+
+    jpeg.ImageHeightKmText = "120000";
+    fake.Drain();
+    Assert.Equal(120000, svc.Current[0].ImageHeightKm);
+    double angle = 2.0 * Math.Atan(60000 / d);
+    double arcmin = angle / DesktopBillboardGeometry.ArcsecToRad / 60.0;
+    Assert.Equal(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+      "{0:F2}′ × {1:F2}′ · 240000 × 120000 km · 800 × 400 px", arcmin * 2, arcmin), jpeg.PhysicalSizeLabel);
+    Assert.True(jpeg.MatchCameraToImageCommand.CanExecute(null));
+    jpeg.MatchCameraToImageCommand.Execute(null);
+    fake.Drain();
+    Near(120000, probe.Matched[0].HeightKm);
+    Near(angle, probe.Matched[0].AngleRad, 1e-15);
+    var j = svc.Current[0];
+    Near(probe.ViewportHeightPx, j.HeightPx);
+    Near(2 * probe.ViewportHeightPx, j.WidthPx);
+    Assert.True(j.PhysicalSizeBound);
+    Near(900, j.CenterX);
+
+    // the plate scale of the same field: the same request
+    fits.ImageArcsecPerPxText = (angle / DesktopBillboardGeometry.ArcsecToRad / 400).ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+    fake.Drain();
+    fits.MatchCameraToImageCommand.Execute(null);
+    fake.Drain();
+    Near(probe.Matched[0].HeightKm, probe.Matched[1].HeightKm, 1e-6);
+    Near(probe.Matched[0].AngleRad, probe.Matched[1].AngleRad, 1e-15);
+
+    // the viewport's height changes (resize, field kept): both bound billboards fill it
+    probe.Resize(640);
+    vm.Probe();
+    fake.Drain();
+    Near(640, svc.Current[0].HeightPx, 1e-6);
+    Near(640, svc.Current[1].HeightPx, 1e-6);
+    Near(1280, svc.Current[1].WidthPx, 1e-6);
+
+    // clearing the km keeps the binding while the plate scale is there, drops it without one
+    jpeg.ImageHeightKmText = "";
+    fake.Drain();
+    Assert.Null(svc.Current[0].ImageHeightKm);
+    Assert.False(svc.Current[0].PhysicalSizeBound);
+    fits.ImageHeightKmText = "";
+    fake.Drain();
+    Assert.True(svc.Current[1].PhysicalSizeBound);
   }
 }

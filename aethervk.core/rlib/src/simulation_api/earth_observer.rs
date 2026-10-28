@@ -73,10 +73,35 @@ impl EarthObserverMode {
   }
 }
 
+/// Which way is up on the observer's screen (C# `ObserverUp`, same integer values over FFI).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(u32)]
+pub enum ObserverUp {
+  /// right vector in the ecliptic plane, up towards the ecliptic pole on the latitude's side
+  /// (`pole(lat)`): the original view
+  #[default]
+  Ecliptic = 0,
+  /// up towards the J2000 celestial north pole (`(0, sin ε, cos ε)` in the ecliptic world frame),
+  /// whatever the latitude: the astronomical image convention (north up, east left)
+  CelestialNorth = 1,
+}
+
+impl ObserverUp {
+  /// unknown values read as `Ecliptic` (old callers)
+  pub fn from_u32(v: u32) -> Self {
+    match v {
+      1 => Self::CelestialNorth,
+      _ => Self::Ecliptic,
+    }
+  }
+}
+
 /// Earth observer posed natively each commit (see the module doc).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EarthObserverState {
   pub mode: EarthObserverMode,
+  /// screen-up convention of every pose ([`ObserverUp`]; `new` takes `Ecliptic`)
+  pub up: ObserverUp,
   pub camera: EntityId,
   pub earth: EntityId,
   /// comet body (comet submodes); the Sun is the origin
@@ -126,6 +151,7 @@ impl EarthObserverState {
   ) -> Self {
     Self {
       mode,
+      up: ObserverUp::Ecliptic,
       camera,
       earth,
       comet,
@@ -362,14 +388,42 @@ fn pole(lat_deg: f64) -> V3 {
   }
 }
 
+/// J2000 celestial north pole in the ecliptic world frame: `R1(ε)·ẑ = (0, sin ε, cos ε)`, with the
+/// engine's one obliquity ([`super::astrometry::OBLIQUITY_J2000_RAD`], = C# `SkyMath.ObliquityRad`).
+pub fn celestial_north() -> V3 {
+  let (s, c) = super::astrometry::OBLIQUITY_J2000_RAD.sin_cos();
+  [0.0, s, c]
+}
+
+/// Up hint of the [`ObserverUp`] convention: the latitude's ecliptic pole (`Ecliptic`, exactly the
+/// former `pole(lat)`), or the celestial north pole whatever the latitude (`CelestialNorth`).
+pub fn up_hint(up: ObserverUp, lat_deg: f64) -> V3 {
+  match up {
+    ObserverUp::Ecliptic => pole(lat_deg),
+    ObserverUp::CelestialNorth => celestial_north(),
+  }
+}
+
 /// C# `EarthObserverOrient`: right vector in the ecliptic plane, up towards the latitude's pole.
 pub fn orient(q: Q, lat_deg: f64) -> Q {
-  strip_roll(q, Some(pole(lat_deg)))
+  orient_up(q, ObserverUp::Ecliptic, lat_deg)
+}
+
+/// [`orient`] with the `up` convention: zero roll about [`up_hint`].
+pub fn orient_up(q: Q, up: ObserverUp, lat_deg: f64) -> Q {
+  strip_roll(q, Some(up_hint(up, lat_deg)))
 }
 
 /// C# `EarthObserverLookAt`: forward along `direction`.
 pub fn look_at(direction: V3, lat_deg: f64) -> Q {
-  look_at_origin_from(scale(normalize(direction), -1.0), Some(pole(lat_deg)))
+  look_at_up(direction, ObserverUp::Ecliptic, lat_deg)
+}
+
+/// [`look_at`] with the `up` convention: forward along `direction`, screen up towards
+/// [`up_hint`] (`CelestialNorth`: the projected celestial north is exactly screen up, so east is
+/// screen left).
+pub fn look_at_up(direction: V3, up: ObserverUp, lat_deg: f64) -> Q {
+  look_at_origin_from(scale(normalize(direction), -1.0), Some(up_hint(up, lat_deg)))
 }
 
 /// C# `IsBelowHorizon`
@@ -401,12 +455,12 @@ pub fn pose(s: &EarthObserverState, earth_pos: V3, earth_rot: Q, target: Option<
           // and where it will rise), not whatever direction the camera had
           let h = sub(to, scale(zenith, dot(to, zenith)));
           if dot(h, h) > 1e-30 {
-            look_at(h, up_lat)
+            look_at_up(h, s.up, up_lat)
           } else {
             s.last
           }
         } else {
-          look_at(to, up_lat)
+          look_at_up(to, s.up, up_lat)
         }
       }
       None => s.last,
@@ -414,7 +468,7 @@ pub fn pose(s: &EarthObserverState, earth_pos: V3, earth_rot: Q, target: Option<
   } else {
     s.look
   };
-  (cam_pos, orient(rot, up_lat))
+  (cam_pos, orient_up(rot, s.up, up_lat))
 }
 
 fn v3(v: Vec3f64) -> V3 {
@@ -532,6 +586,115 @@ mod tests {
     let q = look_at_origin_from([0.0, 0.0, 1.0], Some([1.0, 0.0, 0.0]));
     for (a, b) in q.iter().zip([0.5, 0.5, 0.5, 0.5]) {
       assert!((a - b).abs() < 1e-12, "{q:?}");
+    }
+  }
+
+  /// `CelestialNorth`: for targets all over the sky (RA/Dec → equatorial → ecliptic world), the
+  /// view axis is on the target, the celestial north projected on the image plane is exactly screen
+  /// up (zero roll), and east (increasing RA) is screen left; the latitude's sign changes nothing.
+  /// Engine screen axes as `gpu::frame::camera_screen_axes`: right = local −X, up = local +Z.
+  #[test]
+  fn celestial_north_up_puts_north_up_and_east_left() {
+    use super::super::astrometry::{dir_of_ra_dec, equatorial_to_ecliptic_j2000};
+    let north = celestial_north();
+    // the pole is the equatorial +Z
+    assert!(angle(north, equatorial_to_ecliptic_j2000([0.0, 0.0, 1.0])) < 1e-15);
+    for (ra, dec) in [
+      (0.0, 0.0),
+      (45.0, 30.0),
+      (120.0, -50.0),
+      (200.0, 10.0),
+      (285.0, 70.0),
+      (270.0, -20.0),
+      (90.0, 66.5),
+      (350.0, -75.0),
+    ] {
+      let (ra, dec) = (f64::to_radians(ra), f64::to_radians(dec));
+      let d = equatorial_to_ecliptic_j2000(dir_of_ra_dec(ra, dec));
+      // east: dα > 0 at fixed Dec, unit (−sin α, cos α, 0) on the equatorial axes
+      let east = equatorial_to_ecliptic_j2000([-ra.sin(), ra.cos(), 0.0]);
+      let d_east = equatorial_to_ecliptic_j2000(dir_of_ra_dec(ra + 1e-4, dec));
+      for lat in [45.0, -30.0, 0.0] {
+        let r = look_at_up(d, ObserverUp::CelestialNorth, lat);
+        assert!(angle(forward(r), d) < 1e-12, "({ra}, {dec}): off target");
+        let right = rotate(r, [-1.0, 0.0, 0.0]);
+        let up = rotate(r, [0.0, 0.0, 1.0]);
+        let n_proj = normalize(sub(north, scale(d, dot(north, d))));
+        assert!(dot(up, north) > 0.0, "({ra}, {dec}, {lat}): north not up");
+        assert!(
+          angle(up, n_proj) < 1e-12,
+          "({ra}, {dec}, {lat}): roll error {} rad",
+          angle(up, n_proj)
+        );
+        assert!(dot(right, n_proj).abs() < 1e-12);
+        assert!(dot(east, right) < 0.0, "({ra}, {dec}, {lat}): east not left");
+        assert!(angle(east, scale(right, -1.0)) < 1e-12, "east exactly screen left");
+        assert!(dot(sub(d_east, d), right) < 0.0, "increasing RA moves left");
+        // orient keeps a north-up rotation (idempotent), and repairs a rolled one
+        let o = orient_up(r, ObserverUp::CelestialNorth, lat);
+        assert!(angle(forward(o), d) < 1e-12 && angle(rotate(o, [0.0, 0.0, 1.0]), n_proj) < 1e-12);
+        let rolled = qmul(r, [0.0, (0.3f64).sin(), 0.0, (0.3f64).cos()]);
+        let o = orient_up(rolled, ObserverUp::CelestialNorth, lat);
+        assert!(angle(rotate(o, [0.0, 0.0, 1.0]), n_proj) < 1e-12, "roll stripped");
+      }
+    }
+    // the posed observer (tracking, geocentric and topocentric) uses the same convention
+    let earth = [0.98, 0.17, 0.0];
+    let comet = [1.3, -0.9, 0.05];
+    for topocentric in [false, true] {
+      let mut s = topo(EarthObserverMode::CometTracking, topocentric);
+      s.up = ObserverUp::CelestialNorth;
+      let (p, r) = pose(&s, earth, spin(0.0), Some(comet));
+      let to = normalize(sub(comet, p));
+      let zenith = normalize(rotate(spin(0.0), s.zenith_bf));
+      if topocentric && below_horizon(to, zenith) {
+        continue;
+      }
+      let n_proj = normalize(sub(north, scale(to, dot(north, to))));
+      assert!(angle(rotate(r, [0.0, 0.0, 1.0]), n_proj) < 1e-12, "pose: north up");
+    }
+    assert_eq!(ObserverUp::from_u32(0), ObserverUp::Ecliptic);
+    assert_eq!(ObserverUp::from_u32(1), ObserverUp::CelestialNorth);
+    assert_eq!(ObserverUp::from_u32(7), ObserverUp::Ecliptic, "unknown reads as Ecliptic");
+  }
+
+  /// `Ecliptic` (the default) is bit for bit the former `pole(lat)` formula in `look_at`, `orient`
+  /// and `pose`.
+  #[test]
+  fn ecliptic_up_is_unchanged() {
+    let earth = [0.98, 0.17, 0.0];
+    for d in [
+      [1.0, 2.0, 0.3],
+      [-0.2, 0.1, -0.9],
+      [0.0, 1.0, 0.0],
+      [3.0, -1.0, 0.01],
+      [0.0, 0.0, 1.0],
+    ] {
+      for lat in [45.0, -30.0, 0.0] {
+        let old = look_at_origin_from(scale(normalize(d), -1.0), Some(pole(lat)));
+        assert_eq!(look_at(d, lat), old);
+        assert_eq!(look_at_up(d, ObserverUp::Ecliptic, lat), old);
+        let q = qnormalize([0.1, -0.4, 0.7, 0.5]);
+        assert_eq!(orient(q, lat), strip_roll(q, Some(pole(lat))));
+        assert_eq!(orient_up(q, ObserverUp::Ecliptic, lat), strip_roll(q, Some(pole(lat))));
+      }
+      for topocentric in [false, true] {
+        let s = topo(EarthObserverMode::CometTracking, topocentric);
+        assert_eq!(s.up, ObserverUp::Ecliptic);
+        let target = add(earth, d);
+        let (p, r) = pose(&s, earth, spin(1234.0), Some(target));
+        let to = sub(target, p);
+        let zenith = normalize(rotate(spin(1234.0), s.zenith_bf));
+        if topocentric && below_horizon(to, zenith) {
+          continue;
+        }
+        let lat = s.up_lat_deg();
+        let old = strip_roll(
+          look_at_origin_from(scale(normalize(to), -1.0), Some(pole(lat))),
+          Some(pole(lat)),
+        );
+        assert_eq!(r, old, "pose d {d:?} topocentric {topocentric}");
+      }
     }
   }
 

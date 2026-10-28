@@ -90,24 +90,49 @@ public sealed class DesktopBillboardService : IDisposable
   /// <paramref name="viewportArcsecPerPx"/> (see <see cref="DesktopBillboardGeometry.PhysicalSize"/>)
   /// and binds it, so <see cref="RescaleBound"/> keeps it matched. False without a physical size.
   /// </summary>
-  public bool ApplyPhysicalSize(Guid id, double viewportArcsecPerPx)
+  public bool ApplyPhysicalSize(Guid id, double viewportArcsecPerPx, double? cometDistanceKm = null)
   {
     lock (_gate)
     {
-      if (Find(id) is not { } b || DesktopBillboardGeometry.PhysicalSize(b, viewportArcsecPerPx) is not { } size)
+      if (Find(id) is not { } b
+          || DesktopBillboardGeometry.PhysicalSize(b, viewportArcsecPerPx, cometDistanceKm) is not { } size)
         return false;
       return Replace(b with { WidthPx = size.WidthPx, HeightPx = size.HeightPx, PhysicalSizeBound = true }, keepBinding: true);
     }
   }
 
-  /// <summary>Re-sizes every bound billboard for a new viewport scale (zoom, resize).</summary>
-  public void RescaleBound(double viewportArcsecPerPx)
+  /// <summary>
+  /// "Match camera to image": the billboard fills <paramref name="viewportHeightPx"/> (the
+  /// viewport's height, now the image's field), the width from the image's aspect, and is bound so
+  /// <see cref="RescaleBound"/> keeps it matched. False without the billboard or a height.
+  /// </summary>
+  public bool ApplyViewportHeight(Guid id, double viewportHeightPx)
+  {
+    lock (_gate)
+    {
+      if (Find(id) is not { } b || !(viewportHeightPx > 0) || double.IsInfinity(viewportHeightPx))
+        return false;
+      double aspect = b.ImageWidthPx > 0 && b.ImageHeightPx > 0
+        ? (double)b.ImageWidthPx / b.ImageHeightPx
+        : b.HeightPx > 0 ? b.WidthPx / b.HeightPx : 1.0;
+      return Replace(
+        b with { WidthPx = viewportHeightPx * aspect, HeightPx = viewportHeightPx, PhysicalSizeBound = true },
+        keepBinding: true);
+    }
+  }
+
+  /// <summary>
+  /// Re-sizes every bound billboard for a new viewport scale (zoom, resize) or comet distance:
+  /// its height stays the image's angular height over the viewport's angle per px, so a billboard
+  /// matched to the viewport's field keeps filling it.
+  /// </summary>
+  public void RescaleBound(double viewportArcsecPerPx, double? cometDistanceKm = null)
   {
     lock (_gate)
     {
       var list = Current;
       var next = list.Select(b =>
-        b.PhysicalSizeBound && DesktopBillboardGeometry.PhysicalSize(b, viewportArcsecPerPx) is { } size
+        b.PhysicalSizeBound && DesktopBillboardGeometry.PhysicalSize(b, viewportArcsecPerPx, cometDistanceKm) is { } size
           ? Sanitize(b with { WidthPx = size.WidthPx, HeightPx = size.HeightPx })
           : b).ToImmutableArray();
       if (!next.SequenceEqual(list))
@@ -157,6 +182,7 @@ public sealed class DesktopBillboardService : IDisposable
       HeightPx = Math.Max(DesktopBillboardGeometry.MinSidePx, b.HeightPx),
       RotationDeg = DesktopBillboardGeometry.NormalizeDeg(b.RotationDeg),
       ImageArcsecPerPx = b.ImageArcsecPerPx is { } a && a > 0 && !double.IsInfinity(a) ? a : null,
+      ImageHeightKm = b.ImageHeightKm is { } km && km > 0 && !double.IsInfinity(km) ? km : null,
       ImageWidthPx = Math.Max(0, b.ImageWidthPx),
       ImageHeightPx = Math.Max(0, b.ImageHeightPx),
     };

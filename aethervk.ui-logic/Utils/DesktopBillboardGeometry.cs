@@ -45,19 +45,55 @@ public readonly record struct HandleSpot(BillboardHandle Kind, PointD Center, do
 /// </summary>
 public static class DesktopBillboardGeometry
 {
+  /// <summary>Radians per arcsecond (π / 648000).</summary>
+  public const double ArcsecToRad = Math.PI / 648000.0;
+
+  private static bool Usable(double? v) => v is { } x && x > 0 && !double.IsInfinity(x);
+
+  /// <summary>
+  /// The angle (rad) the image's height subtends from the observer, the comet at
+  /// <paramref name="cometDistanceKm"/>: from the image height at the comet
+  /// (<see cref="DesktopBillboard.ImageHeightKm"/>, 2·atan(H / 2 / D)) when it and the distance are
+  /// known (km wins), else from the plate scale (image height px × ″/px). Null when neither applies.
+  /// </summary>
+  public static double? ImageAngularHeightRad(DesktopBillboard b, double? cometDistanceKm)
+  {
+    if (Usable(b.ImageHeightKm) && Usable(cometDistanceKm))
+      return 2.0 * Math.Atan(b.ImageHeightKm!.Value * 0.5 / cometDistanceKm!.Value);
+    if (Usable(b.ImageArcsecPerPx) && b.ImageHeightPx > 0)
+      return b.ImageHeightPx * b.ImageArcsecPerPx!.Value * ArcsecToRad;
+    return null;
+  }
+
+  /// <summary>
+  /// The image's height at the comet (km): <see cref="DesktopBillboard.ImageHeightKm"/> when set,
+  /// else the plate-scale angle at <paramref name="cometDistanceKm"/> (2·D·tan(α / 2)). Null
+  /// without either.
+  /// </summary>
+  public static double? ImageHeightAtCometKm(DesktopBillboard b, double? cometDistanceKm)
+  {
+    if (Usable(b.ImageHeightKm))
+      return b.ImageHeightKm;
+    if (!Usable(cometDistanceKm) || ImageAngularHeightRad(b, null) is not { } a)
+      return null;
+    return 2.0 * cometDistanceKm!.Value * Math.Tan(a * 0.5);
+  }
+
   /// <summary>
   /// The on-screen size (desktop physical px) at which <paramref name="b"/> covers the sky its
   /// image covers, on a viewport of <paramref name="viewportArcsecPerPx"/> arcsec per physical px:
-  /// image px × image scale ÷ viewport scale. Null without a plate scale, a native size or a scale.
+  /// the image's angular height (<see cref="ImageAngularHeightRad"/>) over the viewport's angle per
+  /// px, the width from the image's aspect. With only a plate scale this is image px × image scale
+  /// ÷ viewport scale. Null without an angular height, a native size or a scale.
   /// </summary>
-  public static (double WidthPx, double HeightPx)? PhysicalSize(DesktopBillboard b, double viewportArcsecPerPx)
+  public static (double WidthPx, double HeightPx)? PhysicalSize(
+    DesktopBillboard b, double viewportArcsecPerPx, double? cometDistanceKm = null)
   {
-    if (b.ImageArcsecPerPx is not { } img || !(img > 0) || double.IsInfinity(img)
-        || b.ImageWidthPx <= 0 || b.ImageHeightPx <= 0
-        || !(viewportArcsecPerPx > 0) || double.IsInfinity(viewportArcsecPerPx))
+    if (b.ImageWidthPx <= 0 || b.ImageHeightPx <= 0 || !Usable(viewportArcsecPerPx)
+        || ImageAngularHeightRad(b, cometDistanceKm) is not { } angle)
       return null;
-    double k = img / viewportArcsecPerPx;
-    return (b.ImageWidthPx * k, b.ImageHeightPx * k);
+    double h = angle / (viewportArcsecPerPx * ArcsecToRad);
+    return (h * b.ImageWidthPx / b.ImageHeightPx, h);
   }
 
   /// <summary>Room around the rotated image for the gizmo handles, px.</summary>

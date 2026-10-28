@@ -296,6 +296,20 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
   [ObservableProperty]
   private bool _isEarthObserverTopocentric;
 
+  /// <summary>
+  /// "North up": the Earth observer's view is levelled to J2000 celestial north (a telescope
+  /// image's orientation; <see cref="ObserverUp.CelestialNorth"/>, the default), else to the
+  /// ecliptic pole. Two-way bound to <see cref="CameraService"/>, saved with the viewport camera.
+  /// </summary>
+  [ObservableProperty]
+  private bool _isEarthObserverNorthUp = true;
+
+  partial void OnIsEarthObserverNorthUpChanged(bool value)
+  {
+    if (!_isUpdatingFromRuntime)
+      _cameraService.SetEarthObserverUp(value ? ObserverUp.CelestialNorth : ObserverUp.Ecliptic);
+  }
+
   /// <summary>"Lock viewport for comparison": no mouse orbit / pan / zoom, projection greyed
   /// (<see cref="CameraService.IsComparisonLocked"/>).</summary>
   [ObservableProperty]
@@ -410,6 +424,23 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
         try
         {
           IsComparisonLocked = locked;
+        }
+        finally
+        {
+          _isUpdatingFromRuntime = false;
+        }
+      })
+      .AddDisposableTo(_disposables);
+
+    // Mirror the view up set elsewhere (opened saves).
+    _cameraService
+      .EarthObserverUpChanged.ObserveOn(schedulerProvider.MainThread)
+      .Subscribe(up =>
+      {
+        _isUpdatingFromRuntime = true;
+        try
+        {
+          IsEarthObserverNorthUp = up == ObserverUp.CelestialNorth;
         }
         finally
         {

@@ -185,10 +185,11 @@ public class CameraServiceTests
     var (service, runtime, _) = BuildService();
     var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
     runtime.Setup(r => r.CometEntityId).Returns(77UL);
-    var calls = new System.Collections.Generic.List<(int Mode, ulong Earth, ulong Comet, bool Topo, Quaterniond Look)>();
+    var calls = new System.Collections.Generic.List<(int Mode, ulong Earth, ulong Comet, bool Topo, Quaterniond Look, ObserverUp Up)>();
     runtime.Setup(r => r.SetEarthObserver(It.IsAny<ulong>(), It.IsAny<int>(), It.IsAny<ulong>(), It.IsAny<ulong>(),
-        It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<Quaterniond>()))
-      .Callback<ulong, int, ulong, ulong, bool, double, double, double, Quaterniond>((_, m, e, c, t, _, _, _, l) => calls.Add((m, e, c, t, l)))
+        It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<Quaterniond>(), It.IsAny<ObserverUp>()))
+      .Callback<ulong, int, ulong, ulong, bool, double, double, double, Quaterniond, ObserverUp>(
+        (_, m, e, c, t, _, _, _, l, u) => calls.Add((m, e, c, t, l, u)))
       .Returns(true);
     var cometConfig = (CometConfigService)typeof(CameraService).GetField("_cometConfigService", flags)!.GetValue(service)!;
     ((System.Reactive.Subjects.BehaviorSubject<bool>)typeof(CometConfigService)
@@ -202,7 +203,13 @@ public class CameraServiceTests
     service.SetEarthObserverOrientationMode(EarthObserverOrientationMode.CometTracking);
 
     Assert.Contains(calls, c => c.Mode == (int)EarthObserverOrientationMode.CometTracking && c.Earth == 42UL
-      && c.Comet == 77UL && !c.Topo); // geocentric by default
+      && c.Comet == 77UL && !c.Topo && c.Up == ObserverUp.CelestialNorth); // geocentric, north up by default
+    // the "North up" toggle re-pushes the up hint at once
+    service.SetEarthObserverUp(ObserverUp.Ecliptic);
+    Assert.Equal(ObserverUp.Ecliptic, calls[^1].Up);
+    Assert.Equal(ObserverUp.Ecliptic, service.GetPersistedState().ObserverUp);
+    service.SetEarthObserverUp(ObserverUp.CelestialNorth);
+    Assert.Equal(ObserverUp.CelestialNorth, calls[^1].Up);
 
     // per-tick Earth callback: no camera write from the UI any more
     runtime.Invocations.Clear();
@@ -471,11 +478,13 @@ public class CameraServiceTests
     Assert.True(ok);
 
     // The world-space right vector = Transform(+X, rotation).
-    // A pure pitch leaves the right vector in the XY plane: Z component should be ≈ 0.
-    var right = (Vector3)Vector3d.Transform(Vector3d.UnitX, capturedRot);
+    // A pure pitch leaves the right vector in the up hint's equator (celestial north by default):
+    // its component along the hint should be ≈ 0.
+    var right = Vector3d.Transform(Vector3d.UnitX, capturedRot);
+    double along = Vector3d.Dot(right, CameraService.ObserverUpHint(service.EarthObserverUp, 0f));
     Assert.True(
-      Math.Abs(right.Z) < 0.01f,
-      $"Vertical drag yawed the camera: right.Z = {right.Z:F4} (expected ≈ 0)"
+      Math.Abs(along) < 0.01,
+      $"Vertical drag yawed the camera: right · up hint = {along:F4} (expected ≈ 0)"
     );
   }
 
@@ -1549,6 +1558,113 @@ public class CameraServiceTests
     Assert.False(service.SetEarthObserverArcsecPerPx(0));
     Assert.False(service.SetEarthObserverArcsecPerPx(double.NaN));
     Assert.Equal(new CometScreenPosition(800, 500, true), service.GetCometScreenPosition());
+  }
+
+  /// A camera with a committed comet at (1.3, −0.4, 0.05) AU (the Earth at its default (1, 0, 0)),
+  /// in the Earth observer on a 1600 × 1000 px viewport, recording the projection requests.
+  private static (CameraService Service, Mock<INativeRuntimeService> Runtime, System.Collections.Generic.List<CameraProjectionState> Requests)
+    BuildObserverWithComet(bool perspective)
+  {
+    var (service, runtime, _) = BuildService();
+    var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+    runtime.Setup(r => r.CometEntityId).Returns(77UL);
+    var cometConfig = (CometConfigService)typeof(CameraService).GetField("_cometConfigService", flags)!.GetValue(service)!;
+    ((System.Reactive.Subjects.BehaviorSubject<bool>)typeof(CometConfigService)
+      .GetField("_isCommittedSubject", flags)!.GetValue(cometConfig)!).OnNext(true);
+    var tracker = typeof(CameraService).GetField("_cometTracker", flags)!.GetValue(service)!;
+    tracker.GetType().GetField("_lastKnownCometPositionF64", flags)!
+      .SetValue(tracker, ((double X, double Y, double Z)?)(1.3, -0.4, 0.05));
+    service.OnViewportResized(1600, 1000);
+    service.SetCameraMode(CameraMode.EarthPosition);
+    ((System.Reactive.Subjects.BehaviorSubject<CameraProjectionState?>)typeof(CameraService)
+      .GetField("_projectionSubject", flags)!.GetValue(service)!)
+      .OnNext(perspective
+        ? new CameraProjectionState(true, 0.1f, 1.6f, 1e-9f, 10f, 0, 0, 0, 0, 1f)
+        : new CameraProjectionState(false, 0, 1.6f, 1e-9f, 10f, -1.6e-3f, 1.6e-3f, -1e-3f, 1e-3f, 1f));
+    var requests = new System.Collections.Generic.List<CameraProjectionState>();
+    runtime.Setup(r => r.CameraSetPerspective(100UL, It.IsAny<float>(), It.IsAny<float>(), It.IsAny<float>(), It.IsAny<float>()))
+      .Callback<ulong, float, float, float, float>((_, f, a, n, fa) =>
+        requests.Add(new CameraProjectionState(true, f, a, n, fa, 0, 0, 0, 0, 1f)))
+      .Returns(true);
+    runtime.Setup(r => r.CameraSetOrthographic(100UL, It.IsAny<float>(), It.IsAny<float>(), It.IsAny<float>(),
+        It.IsAny<float>(), It.IsAny<float>(), It.IsAny<float>()))
+      .Callback<ulong, float, float, float, float, float, float>((_, l, r, b, t, n, f) =>
+        requests.Add(new CameraProjectionState(false, 0, 0, n, f, l, r, b, t, 1f)))
+      .Returns(true);
+    return (service, runtime, requests);
+  }
+
+  /// "Match camera to image", orthographic: the half-height is exactly half the image's height at
+  /// the comet (120 000 km → 60 000 km, no distance in it), the half-width × the viewport's px
+  /// aspect; the observer tracks the comet and the clip planes are kept.
+  [Fact]
+  public void SetEarthObserverField_Orthographic_HalfHeightIsHalfTheImageHeight()
+  {
+    const double AuToKm = 149_597_870.7;
+    var (service, _, requests) = BuildObserverWithComet(perspective: false);
+    Assert.True(service.SetEarthObserverField(120_000, 1e-3));
+    Assert.Equal(EarthObserverOrientationMode.CometTracking, service.GetPersistedState().ObserverOrientation);
+    var p = requests[^1];
+    Assert.False(p.IsPerspective);
+    Assert.Equal((float)(60_000 / AuToKm), p.Top);
+    Assert.Equal(-(float)(60_000 / AuToKm), p.Bottom);
+    Assert.Equal((float)(60_000 / AuToKm * 1.6), p.Right);
+    Assert.Equal((1e-9f, 10f), (p.Near, p.Far));
+    Assert.False(service.SetEarthObserverField(double.NaN, 1e-3)); // orthographic needs the km
+    Assert.False(service.SetEarthObserverField(0, 1e-3));
+  }
+
+  /// Perspective: the vertical fov is the image's angle, 2·atan(60 000 km / D) for a 120 000 km
+  /// image at the comet's distance D (|comet − observer|); refused from 0.9 π and outside the
+  /// Earth observer.
+  [Fact]
+  public void SetEarthObserverField_Perspective_FovIsTheImageAngle()
+  {
+    const double AuToKm = 149_597_870.7;
+    var (service, _, requests) = BuildObserverWithComet(perspective: true);
+    double d = service.GetEarthObserverCometDistanceKm()!.Value;
+    Assert.Equal(new Vector3d(0.3, -0.4, 0.05).Length() * AuToKm, d, 3);
+    double angle = 2.0 * Math.Atan(60_000 / d);
+    Assert.True(service.SetEarthObserverField(120_000, angle));
+    var p = requests[^1];
+    Assert.True(p.IsPerspective);
+    Assert.Equal((float)angle, p.Fov);
+    Assert.Equal(EarthObserverOrientationMode.CometTracking, service.GetPersistedState().ObserverOrientation);
+    Assert.False(service.SetEarthObserverField(120_000, Math.PI * 0.9));
+    Assert.False(service.SetEarthObserverField(120_000, double.NaN));
+    service.SetCameraMode(CameraMode.UpZenith);
+    Assert.False(service.SetEarthObserverField(120_000, angle));
+    Assert.Null(service.GetEarthObserverCometDistanceKm());
+  }
+
+  /// The C# mirror of the native look-at with north up: for targets all over the sky the view up is
+  /// celestial north on the sky there (position angle 0) and east is to the left (screen right is
+  /// −east); the ecliptic up keeps the right vector in the ecliptic plane.
+  [Fact]
+  public void NorthUpHint_PutsCelestialNorthUpAndEastLeft()
+  {
+    var north = CameraService.ObserverUpHint(ObserverUp.CelestialNorth, -30f); // latitude ignored
+    var pole = SkyMath.EclipticDirection(0, 90);
+    Assert.True(Vector3d.Cross(north, pole).Length() < 1e-15 && Vector3d.Dot(north, pole) > 0, $"{north} vs {pole}");
+    Assert.Equal(-Vector3d.UnitZ, CameraService.ObserverUpHint(ObserverUp.Ecliptic, -30f));
+    foreach (var (ra, dec) in new[] { (0.0, 0.0), (135.6, 28.1), (270.0, -45.0), (45.0, 80.0), (200.0, -10.0) })
+    {
+      var d = SkyMath.EclipticDirection(ra, dec);
+      var q = CameraService.EarthObserverOrient(CameraService.EarthObserverLookAt(d, north), north);
+      var fwd = Vector3d.Transform(-Vector3d.UnitY, q);
+      var up = Vector3d.Transform(Vector3d.UnitZ, q);
+      var right = Vector3d.Transform(-Vector3d.UnitX, q); // screen right
+      Assert.True(Vector3d.Dot(fwd, d) > 1 - 1e-12, $"forward {fwd} at RA {ra} Dec {dec}");
+      var northTangent = Vector3d.Normalize(pole - Vector3d.Dot(pole, d) * d);
+      var east = Vector3d.Normalize(Vector3d.Cross(pole, d));
+      Assert.True(Vector3d.Dot(up, northTangent) > 1 - 1e-12, $"up {up} vs north {northTangent} at RA {ra} Dec {dec}");
+      Assert.True(Vector3d.Dot(right, east) < -1 + 1e-12, $"right {right} vs east {east} at RA {ra} Dec {dec}");
+      Assert.Equal(0.0, SkyMath.PositionAngleDeg(ra, dec, up), 9);
+
+      var ecl = CameraService.EarthObserverOrient(
+        CameraService.EarthObserverLookAt(d, CameraService.ObserverUpHint(ObserverUp.Ecliptic, 10f)), 10f);
+      Assert.True(Math.Abs(Vector3d.Transform(-Vector3d.UnitX, ecl).Z) < 1e-12);
+    }
   }
 
   /// The comparison lock refuses mouse orbit, pan and zoom in every mode, and lifts cleanly.

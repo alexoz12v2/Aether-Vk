@@ -27,7 +27,8 @@ public interface IScreenInfoProvider
 
 /// <summary>
 /// What a billboard needs from the Earth observer viewport to match a telescope image: the
-/// viewport's scale, where the comet is on the desktop, and a way to set the scale.
+/// viewport's scale and height, the comet's distance and where it is on the desktop, and a way to
+/// set the field.
 /// </summary>
 public interface IBillboardViewportProbe
 {
@@ -37,8 +38,18 @@ public interface IBillboardViewportProbe
   /// <summary>The observed comet on the desktop (physical px) while it is inside the viewport.</summary>
   PointD? CometDesktopPx { get; }
 
-  /// <summary>Sets the viewport's arcsec per px (the projection); false when it cannot.</summary>
-  bool MatchArcsecPerPx(double arcsecPerPx);
+  /// <summary>The comet's distance from the Earth observer (km); null outside it or without a comet.</summary>
+  double? CometDistanceKm { get; }
+
+  /// <summary>The viewport's height, physical px.</summary>
+  double ViewportHeightPx { get; }
+
+  /// <summary>
+  /// "Match camera to image": the viewport's height shows a field <paramref name="heightKm"/> tall
+  /// at the comet (orthographic; NaN when unknown) subtending <paramref name="angleRad"/>
+  /// (perspective), aimed at the comet. False when it cannot.
+  /// </summary>
+  bool MatchField(double heightKm, double angleRad);
 
   // ── FITS purpose buttons ──
 
@@ -59,6 +70,10 @@ public interface IBillboardViewportProbe
   /// equator), else the north one.</summary>
   bool ViewUpIsEclipticSouth { get; }
 
+  /// <summary>The view is celestial-north up (<see cref="ObserverUp.CelestialNorth"/>): the
+  /// ecliptic pole does not apply.</summary>
+  bool ViewUpIsCelestialNorth { get; }
+
   /// <summary>The viewport's centre on the desktop (physical px); null until it is known.</summary>
   PointD? ViewportCenterDesktopPx { get; }
 
@@ -76,7 +91,11 @@ public sealed class CameraBillboardProbe(CameraService camera) : IBillboardViewp
       ? new PointD(o.X + c.XPx, o.Y + c.YPx)
       : null;
 
-  public bool MatchArcsecPerPx(double arcsecPerPx) => camera.SetEarthObserverArcsecPerPx(arcsecPerPx);
+  public double? CometDistanceKm => camera.GetEarthObserverCometDistanceKm();
+
+  public double ViewportHeightPx => camera.ViewportHeightPx;
+
+  public bool MatchField(double heightKm, double angleRad) => camera.SetEarthObserverField(heightKm, angleRad);
 
   public bool IsEarthObserver => camera.CurrentMode == CameraMode.EarthPosition;
 
@@ -107,6 +126,8 @@ public sealed class CameraBillboardProbe(CameraService camera) : IBillboardViewp
       return camera.IsEarthObserverTopocentric && lat < 0f;
     }
   }
+
+  public bool ViewUpIsCelestialNorth => camera.EarthObserverUp == ObserverUp.CelestialNorth;
 
   public PointD? ViewportCenterDesktopPx =>
     camera.ViewportScreenOriginPx is { } o
@@ -145,6 +166,9 @@ public partial class DesktopBillboardsViewModel : ObservableObject, IDisposable
 
   /// <summary>The observed comet on the desktop while it is on screen.</summary>
   public PointD? CometDesktopPx { get; private set; }
+
+  /// <summary>The comet's distance from the Earth observer, km (null outside it).</summary>
+  public double? CometDistanceKm { get; private set; }
 
   /// <summary>Textures a billboard can show (uncompressed: the window draws their texels).</summary>
   public ObservableCollection<ImportedAsset> TextureOptions { get; } = [];
@@ -231,8 +255,9 @@ public partial class DesktopBillboardsViewModel : ObservableObject, IDisposable
       return;
     ViewportArcsecPerPx = p.ArcsecPerPx is { } a && a > 0 && !double.IsInfinity(a) ? a : null;
     CometDesktopPx = p.CometDesktopPx;
+    CometDistanceKm = p.CometDistanceKm is { } d && d > 0 && !double.IsInfinity(d) ? d : null;
     if (ViewportArcsecPerPx is { } scale)
-      _service.RescaleBound(scale);
+      _service.RescaleBound(scale, CometDistanceKm);
     foreach (var item in Items)
       item.RefreshPilot();
   }
@@ -241,16 +266,27 @@ public partial class DesktopBillboardsViewModel : ObservableObject, IDisposable
     CometDesktopPx is { } c && _service.Update(id, b => b with { CenterX = c.X, CenterY = c.Y });
 
   internal bool ApplyPhysicalSize(Guid id) =>
-    ViewportArcsecPerPx is { } scale && _service.ApplyPhysicalSize(id, scale);
+    ViewportArcsecPerPx is { } scale && _service.ApplyPhysicalSize(id, scale, CometDistanceKm);
 
-  /// <summary>"Match camera to image": the viewport takes the image's plate scale, the billboard
-  /// its native pixel size (bound) and the comet's position.</summary>
+  /// <summary>
+  /// "Match camera to image": the viewport's height becomes the image's field (aimed at the comet,
+  /// <see cref="IBillboardViewportProbe.MatchField"/>): the image's height at the comet (km input,
+  /// or the plate-scale angle at the comet's distance) and its angle. The billboard then fills the
+  /// viewport's height (aspect kept), bound so it keeps filling it on zoom and resize, centred on
+  /// the comet.
+  /// </summary>
   internal bool MatchCameraToImage(Guid id)
   {
-    if (_probe is not { } p || _service.Find(id)?.ImageArcsecPerPx is not { } scale || !p.MatchArcsecPerPx(scale))
+    if (_probe is not { } p || _service.Find(id) is not { } b)
       return false;
-    _service.ApplyPhysicalSize(id, scale);
-    Probe();
+    double? d = p.CometDistanceKm is { } dk && dk > 0 && !double.IsInfinity(dk) ? dk : null;
+    if (DesktopBillboardGeometry.ImageAngularHeightRad(b, d) is not { } angle)
+      return false;
+    double heightKm = DesktopBillboardGeometry.ImageHeightAtCometKm(b, d) ?? double.NaN;
+    if (!p.MatchField(heightKm, angle))
+      return false;
+    Probe(); // the comet's place and the scale as the matched view reports them
+    _service.ApplyViewportHeight(id, p.ViewportHeightPx);
     CenterOnComet(id);
     return true;
   }
@@ -333,7 +369,12 @@ public partial class DesktopBillboardItemViewModel : ObservableObject, IDisposab
   [ObservableProperty]
   private string _imageArcsecPerPxText = string.Empty;
 
-  /// <summary>"6.07′ × 6.07′ · 1200 × 1200 px", or a hint while the scale is unset.</summary>
+  /// <summary>Physical size: the image's height at the comet in km, as typed (empty: not set; dot
+  /// decimals). For an image without a WCS (a JPEG); it wins over the plate scale.</summary>
+  [ObservableProperty]
+  private string _imageHeightKmText = string.Empty;
+
+  /// <summary>"6.07′ × 6.07′ · 120000 × 120000 km · 1200 × 1200 px", or a hint while the size is unset.</summary>
   [ObservableProperty]
   private string _physicalSizeLabel = string.Empty;
 
@@ -430,7 +471,9 @@ public partial class DesktopBillboardItemViewModel : ObservableObject, IDisposab
       IsPhysicalSizeBound = b.PhysicalSizeBound;
       if (ParseScale(ImageArcsecPerPxText) != b.ImageArcsecPerPx)
         ImageArcsecPerPxText = b.ImageArcsecPerPx is { } a ? a.ToString("G6", CultureInfo.InvariantCulture) : string.Empty;
-      PhysicalSizeLabel = FormatPhysicalSize(b);
+      if (ParseScale(ImageHeightKmText) != b.ImageHeightKm)
+        ImageHeightKmText = b.ImageHeightKm is { } km ? km.ToString("G9", CultureInfo.InvariantCulture) : string.Empty;
+      PhysicalSizeLabel = FormatPhysicalSize(b, _owner?.CometDistanceKm);
     }
     finally
     {
@@ -442,6 +485,7 @@ public partial class DesktopBillboardItemViewModel : ObservableObject, IDisposab
   /// <summary>Re-evaluates the Center / Apply / Match commands (the viewport changed).</summary>
   public void RefreshPilot()
   {
+    PhysicalSizeLabel = FormatPhysicalSize(_current, _owner?.CometDistanceKm); // the distance moves
     CenterOnCometCommand.NotifyCanExecuteChanged();
     ApplyPhysicalSizeCommand.NotifyCanExecuteChanged();
     MatchCameraToImageCommand.NotifyCanExecuteChanged();
@@ -453,15 +497,26 @@ public partial class DesktopBillboardItemViewModel : ObservableObject, IDisposab
       ? v
       : null;
 
-  internal static string FormatPhysicalSize(DesktopBillboard b)
+  /// <summary>
+  /// The image's field: angular (′, width × height) and, with the comet's distance
+  /// <paramref name="cometDistanceKm"/> or a km height, at the comet (km), then the image's px.
+  /// </summary>
+  internal static string FormatPhysicalSize(DesktopBillboard b, double? cometDistanceKm = null)
   {
     if (b.ImageWidthPx <= 0 || b.ImageHeightPx <= 0)
       return "Image size unknown";
-    if (b.ImageArcsecPerPx is not { } a)
-      return $"{b.ImageWidthPx} × {b.ImageHeightPx} px · set the plate scale (″/px) to size it on the sky";
     var ci = CultureInfo.InvariantCulture;
-    return string.Format(ci, "{0:F2}′ × {1:F2}′ · {2} × {3} px",
-      b.ImageWidthPx * a / 60.0, b.ImageHeightPx * a / 60.0, b.ImageWidthPx, b.ImageHeightPx);
+    double aspect = (double)b.ImageWidthPx / b.ImageHeightPx;
+    string px = string.Format(ci, "{0} × {1} px", b.ImageWidthPx, b.ImageHeightPx);
+    double? km = DesktopBillboardGeometry.ImageHeightAtCometKm(b, cometDistanceKm);
+    string kmText = km is { } h ? string.Format(ci, "{0:F0} × {1:F0} km", h * aspect, h) : string.Empty;
+    if (DesktopBillboardGeometry.ImageAngularHeightRad(b, cometDistanceKm) is not { } angle)
+      return km is not null
+        ? $"{kmText} · {px} · the comet's distance sizes it on the sky (Earth observer)"
+        : $"{px} · set the image height (km) or the plate scale (″/px) to size it on the sky";
+    double hArcmin = angle / DesktopBillboardGeometry.ArcsecToRad / 60.0;
+    return string.Format(ci, "{0:F2}′ × {1:F2}′ · ", hArcmin * aspect, hArcmin)
+      + (km is not null ? kmText + " · " : string.Empty) + px;
   }
 
   partial void OnImageArcsecPerPxTextChanged(string value)
@@ -472,7 +527,25 @@ public partial class DesktopBillboardItemViewModel : ObservableObject, IDisposab
     if (scale is null && !string.IsNullOrWhiteSpace(value))
       return; // still typing: keep the last valid scale
     // a new scale changes the physical size: the binding re-applies with it
-    Send(b => b with { ImageArcsecPerPx = scale, PhysicalSizeBound = b.PhysicalSizeBound && scale is not null });
+    Send(b => b with
+    {
+      ImageArcsecPerPx = scale,
+      PhysicalSizeBound = b.PhysicalSizeBound && (scale is not null || b.ImageHeightKm is not null),
+    });
+  }
+
+  partial void OnImageHeightKmTextChanged(string value)
+  {
+    if (_applying)
+      return;
+    var km = ParseScale(value);
+    if (km is null && !string.IsNullOrWhiteSpace(value))
+      return; // still typing: keep the last valid height
+    Send(b => b with
+    {
+      ImageHeightKm = km,
+      PhysicalSizeBound = b.PhysicalSizeBound && (km is not null || b.ImageArcsecPerPx is not null),
+    });
   }
 
   private bool CanCenterOnComet() => _owner?.CometDesktopPx is not null;
@@ -483,7 +556,7 @@ public partial class DesktopBillboardItemViewModel : ObservableObject, IDisposab
 
   private bool CanApplyPhysicalSize() =>
     !_current.PhysicalSizeBound && _owner?.ViewportArcsecPerPx is { } s
-    && DesktopBillboardGeometry.PhysicalSize(_current, s) is not null;
+    && DesktopBillboardGeometry.PhysicalSize(_current, s, _owner.CometDistanceKm) is not null;
 
   /// <summary>Sizes the billboard to the sky its image covers and keeps it so (until a manual
   /// resize).</summary>
@@ -491,11 +564,11 @@ public partial class DesktopBillboardItemViewModel : ObservableObject, IDisposab
   private void ApplyPhysicalSize() => _owner?.ApplyPhysicalSize(Id);
 
   private bool CanMatchCameraToImage() =>
-    _owner?.ViewportArcsecPerPx is not null && _current.ImageArcsecPerPx is not null
-    && DesktopBillboardGeometry.PhysicalSize(_current, _current.ImageArcsecPerPx.Value) is not null;
+    _owner?.ViewportArcsecPerPx is not null && _current.ImageWidthPx > 0 && _current.ImageHeightPx > 0
+    && DesktopBillboardGeometry.ImageAngularHeightRad(_current, _owner.CometDistanceKm) is not null;
 
-  /// <summary>The viewport takes the image's plate scale; the billboard shows the image 1:1 on
-  /// the comet.</summary>
+  /// <summary>The viewport's height takes the image's field (aimed at the comet); the billboard
+  /// fills it, bound, on the comet.</summary>
   [RelayCommand(CanExecute = nameof(CanMatchCameraToImage))]
   private void MatchCameraToImage() => _owner?.MatchCameraToImage(Id);
 

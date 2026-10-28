@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RunSettings>
+  <!-- the repo .runsettings dumps after 60 s of silence; a Horizons download or a run to the
+       observation epoch takes minutes -->
+  <DataCollectionRunSettings>
+    <DataCollectors>
+      <DataCollector friendlyName="blame" enabled="True">
+        <Configuration>
+          <CollectDumpOnTestSessionHang TestTimeout="45m" HangDumpType="Mini" />
+        </Configuration>
+      </DataCollector>
+    </DataCollectors>
+  </DataCollectionRunSettings>
+</RunSettings>

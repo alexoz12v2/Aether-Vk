@@ -211,6 +211,16 @@ impl Pose {
 /// `--pose inside`: the camera's field of view (full, degrees) unless `--fov-deg` is given
 const INSIDE_FOV_DEG: f64 = 60.0;
 
+/// `--jet`: one Model-tab jet (see [`Args::jets`])
+#[derive(Clone, Copy, Debug)]
+struct JetSpec {
+  lat_deg: f64,
+  lon_deg: f64,
+  speed_ms: f64,
+  aperture_deg: f64,
+  sigma_frac: f64,
+}
+
 struct Args {
   out: PathBuf,
   days: f64,
@@ -239,6 +249,16 @@ struct Args {
   /// frame's epoch (a fixed longitude at UTC midnight puts it below the horizon half the year)
   lon_deg: Option<f64>,
   elev_m: f64,
+  /// `--north-up` (`--pose earth`): the observer's screen up is the celestial north
+  /// (`ObserverUp::CelestialNorth`: north up, east left) instead of the ecliptic pole
+  north_up: bool,
+  /// `--earth-field-km KM` (`--pose earth`): the full vertical field at the comet (km); perspective
+  /// fov `2·atan(KM/2 / D)` with D the Earth→comet distance at the start epoch, or with `--ortho`
+  /// half-height `KM/2`
+  earth_field_km: Option<f64>,
+  /// `--ortho` (`--pose earth`): an orthographic camera at the observing site aimed at the comet
+  /// (frontal), half-height `--earth-field-km`/2 (else the framing's half-height)
+  earth_ortho: bool,
   /// `--sky-image-check` (`--pose earth`): per frame, a synthetic FITS of crosses at known RA/Dec
   /// loaded as the sky overlay, rendered, the crosses found within 1 px of their WCS pixels
   sky_image_check: bool,
@@ -263,6 +283,17 @@ struct Args {
   ripple_max: Option<f64>,
   /// nucleus rotation period (h); 0 = no rotation model (the jet site faces one direction)
   spin_hours: f64,
+  /// `--jet LAT,LON,SPEED_MS,APERTURE_DEG[,SIGMA_FRAC]` (repeatable): the app's jets (Model tab:
+  /// latitude / longitude deg, mean speed m/s, cone half-angle deg, speed σ = SIGMA_FRAC·speed,
+  /// default 0.2 like the e2e `Jet` record); empty: the one default jet ([`jet_params`])
+  jets: Vec<JetSpec>,
+  /// `--pole RA_DEG,DEC_DEG,W0_DEG,RATE_DEG_PER_DAY`: the app's IAU rotational model (Comet tab,
+  /// pole J2000, prime meridian W0, sidereal rate; pole rates 0, body-fixed), replaces
+  /// `--spin-hours`
+  pole: Option<[f64; 4]>,
+  /// `--no-trajectories`: hides every trajectory line (orbits, the comet's reference track, its
+  /// effective path) and the reference-error annotations, so no line crosses the coma
+  no_trajectories: bool,
   /// `--mc N`: grains of the Monte-Carlo truth per frame (0 = off), see [`monte_carlo_truth`]
   mc: usize,
   /// `--mc-tier K`: the truth and the render hold tier K only (near frames: the old tiers'
@@ -333,8 +364,10 @@ fn usage() -> ! {
   eprintln!(
     "usage: dust_observer --out DIR [--days 30] [--step-hours 24] [--size 1280x800]\n\
      \x20      [--pose up-zenith|anti-sun|earth|inside] [--play SECONDS] [--reemit-every N] [--check] [--dust-budget-ms MS]\n\
-     \x20      [--half-height-km KM] [--fov-deg DEG] [--inside-m D | --inside-km D] [--lat DEG --lon DEG --elev M] [--sky-image-check] [--start YYYY-MM-DD] [--spk FILE.bsp]\n\
-     \x20      [--quiet] [--settle-frames N] [--no-jet] [--hide-sun] [--full-teardown] [--no-sheet]\n\
+     \x20      [--half-height-km KM] [--fov-deg DEG] [--inside-m D | --inside-km D] [--lat DEG --lon DEG --elev M] [--sky-image-check]\n\
+     \x20      [--north-up] [--earth-field-km KM] [--ortho] [--start YYYY-MM-DD[THH:MM:SS[Z]]] [--spk FILE.bsp]\n\
+     \x20      [--quiet] [--settle-frames N] [--no-jet] [--hide-sun] [--no-trajectories] [--full-teardown] [--no-sheet]\n\
+     \x20      [--jet LAT,LON,SPEED_MS,APERTURE_DEG[,SIGMA_FRAC]]... [--pole RA_DEG,DEC_DEG,W0_DEG,RATE_DEG_PER_DAY]\n\
      \x20      [--ignite-days D] [--prestart] [--ripple-max R] [--spin-hours H] [--mc N] [--mc-max R] [--mc-age-min S] [--view-flags F]\n\
      \x20      [--afrho-aperture-km R] [--isotropic]\n\
      \x20      [--path-frames N [--path-fps 60] [--path-speed X | --path-dt-s T] [--orbit-deg-per-s 10 | --eye-step-m S] [--dolly-m-per-frame D] [--path-keep 0,31]]\n\
@@ -363,6 +396,9 @@ fn parse_args() -> Args {
     lon_deg: None,
     elev_m: 0.0,
     sky_image_check: false,
+    north_up: false,
+    earth_field_km: None,
+    earth_ortho: false,
     start: Epoch::from_gregorian_utc(2025, 10, 2, 0, 0, 0, 0),
     spk: None,
     quiet: false,
@@ -375,6 +411,9 @@ fn parse_args() -> Args {
     prestart: false,
     ripple_max: None,
     spin_hours: ROTATION_PERIOD_H,
+    jets: Vec::new(),
+    pole: None,
+    no_trajectories: false,
     afrho_aperture_km: None,
     isotropic: false,
     mc: 0,
@@ -441,10 +480,33 @@ fn parse_args() -> Args {
       "--full-teardown" => a.full_teardown = true,
       "--no-sheet" => a.no_sheet = true,
       "--hide-sun" => a.hide_sun = true,
+      "--no-trajectories" => a.no_trajectories = true,
       "--prestart" => a.prestart = true,
       "--ignite-days" => a.ignite_days = next(&mut i).parse().unwrap_or_else(|_| usage()),
       "--ripple-max" => a.ripple_max = Some(next(&mut i).parse().unwrap_or_else(|_| usage())),
       "--spin-hours" => a.spin_hours = next(&mut i).parse().unwrap_or_else(|_| usage()),
+      "--jet" => {
+        let v: Vec<f64> =
+          next(&mut i).split(',').map(|x| x.trim().parse().unwrap_or_else(|_| usage())).collect();
+        if !(4..=5).contains(&v.len()) {
+          usage();
+        }
+        a.jets.push(JetSpec {
+          lat_deg: v[0],
+          lon_deg: v[1],
+          speed_ms: v[2],
+          aperture_deg: v[3],
+          sigma_frac: v.get(4).copied().unwrap_or(0.2),
+        });
+      }
+      "--pole" => {
+        let v: Vec<f64> =
+          next(&mut i).split(',').map(|x| x.trim().parse().unwrap_or_else(|_| usage())).collect();
+        if v.len() != 4 {
+          usage();
+        }
+        a.pole = Some([v[0], v[1], v[2], v[3]]);
+      }
       "--mc" => a.mc = next(&mut i).parse().unwrap_or_else(|_| usage()),
       "--view-flags" => a.view_flags = next(&mut i).parse().unwrap_or_else(|_| usage()),
       "--mc-tier" => a.mc_tier = Some(next(&mut i).parse().unwrap_or_else(|_| usage())),
@@ -487,6 +549,11 @@ fn parse_args() -> Args {
         a.afrho_aperture_km = Some(next(&mut i).parse().unwrap_or_else(|_| usage()))
       }
       "--sky-image-check" => a.sky_image_check = true,
+      "--north-up" => a.north_up = true,
+      "--ortho" => a.earth_ortho = true,
+      "--earth-field-km" => {
+        a.earth_field_km = Some(next(&mut i).parse().unwrap_or_else(|_| usage()))
+      }
       "--isotropic" => {
         a.isotropic = true;
         a.spin_hours = 0.0;
@@ -505,12 +572,16 @@ fn parse_args() -> Args {
       "--fov-deg" => a.fov_deg = Some(next(&mut i).parse().unwrap_or_else(|_| usage())),
       "--settle-frames" => a.frames_to_wait = next(&mut i).parse().unwrap_or_else(|_| usage()),
       "--start" => {
+        // `YYYY-MM-DD` (00:00 UTC) or `YYYY-MM-DDTHH:MM:SS` (UTC; a trailing `Z` is allowed)
         let s = next(&mut i);
-        let p: Vec<i32> = s.split('-').filter_map(|x| x.parse().ok()).collect();
-        if p.len() != 3 {
+        let (date, time) = s.split_once(['T', ' ']).unwrap_or((s.as_str(), "00:00:00"));
+        let p: Vec<i32> = date.split('-').filter_map(|x| x.parse().ok()).collect();
+        let t: Vec<u8> =
+          time.trim_end_matches('Z').split(':').filter_map(|x| x.parse().ok()).collect();
+        if p.len() != 3 || t.len() != 3 || t[0] > 23 || t[1] > 59 || t[2] > 60 {
           usage();
         }
-        a.start = Epoch::from_gregorian_utc(p[0], p[1] as u8, p[2] as u8, 0, 0, 0, 0);
+        a.start = Epoch::from_gregorian_utc(p[0], p[1] as u8, p[2] as u8, t[0], t[1], t[2], 0);
       }
       "--spk" => a.spk = Some(PathBuf::from(next(&mut i))),
       "-h" | "--help" => usage(),
@@ -546,6 +617,18 @@ fn parse_args() -> Args {
     eprintln!(
       "--sky-image-check needs --pose earth (the overlay is drawn for perspective cameras)"
     );
+    usage();
+  }
+  if (a.north_up || a.earth_ortho || a.earth_field_km.is_some()) && a.pose != Pose::Earth {
+    eprintln!("--north-up / --ortho / --earth-field-km need --pose earth");
+    usage();
+  }
+  if a.earth_field_km.is_some_and(|k| !(k > 0.0 && k.is_finite())) {
+    eprintln!("--earth-field-km: the field must be positive");
+    usage();
+  }
+  if a.earth_ortho && a.sky_image_check {
+    eprintln!("--sky-image-check needs the perspective earth pose (not --ortho)");
     usage();
   }
   if !(a.inside_m > 0.0 && a.inside_m.is_finite()) {
@@ -1637,17 +1720,29 @@ fn set_camera_pose(ctx: &SimulationContext, scene_id: u64, cam: EntityId, pos_au
   );
 }
 
-/// `avkSimulationContext_setBodyRotationalModel`: scene component + cartesian cache + re-emit.
-fn set_rotational_model(ctx: &SimulationContext, scene_id: u64, body: EntityId, period_h: f64) {
-  let model = BodyRotationalModel {
-    pole_ra: 0.0,
-    pole_dec: 90.0,
-    prime_meridian: 0.0,
+/// The app's IAU model as the Comet tab commits it (`CometTabViewModel` →
+/// `BodyRotationalModelDto`: pole rates 0, body-fixed): pole RA / Dec (deg, J2000), prime
+/// meridian W0 (deg), sidereal rate (deg/day).
+fn rotation_model(pole_ra: f64, pole_dec: f64, w0: f64, rate_deg_day: f64) -> BodyRotationalModel {
+  BodyRotationalModel {
+    pole_ra,
+    pole_dec,
+    prime_meridian: w0,
     pole_ra_rate: 0.0,
     pole_dec_rate: 0.0,
-    rotation_rate: 360.0 * 24.0 / period_h,
+    rotation_rate: rate_deg_day,
     body_fixed_orientation: true,
-  };
+  }
+}
+
+/// `avkSimulationContext_setBodyRotationalModel` with the default pole (RA 0, Dec 90, W0 0) and
+/// a `period_h` spin.
+fn set_rotational_model(ctx: &SimulationContext, scene_id: u64, body: EntityId, period_h: f64) {
+  set_rotation(ctx, scene_id, body, rotation_model(0.0, 90.0, 0.0, 360.0 * 24.0 / period_h));
+}
+
+/// `avkSimulationContext_setBodyRotationalModel`: scene component + cartesian cache + re-emit.
+fn set_rotation(ctx: &SimulationContext, scene_id: u64, body: EntityId, model: BodyRotationalModel) {
   let scenes = ctx.scenes.read();
   let Some(scene_arc) = scenes.get_scene(scene_id) else {
     return;
@@ -1700,6 +1795,37 @@ fn jet_params(seed: u32, isotropic: bool) -> ParticleSystemEmitParams {
     afrho_cutoff_au: 15.0,
     afrho_max_value_cm: 100_000.0,
   }
+}
+
+/// `--no-trajectories`: `HiddenComponent` on every entity drawing a trajectory line
+/// (`TrajectoryComponent`, the effective path's `EffectiveTrajectoryComponent`; dedicated entities,
+/// the bodies are skipped so a body is never hidden) and the reference-error annotations off
+/// (`set_reference_error_visible`, the app's toggle). Re-run each frame: the logic thread adds
+/// tracks after the setup. Returns how many entities it newly hid.
+fn hide_trajectories(ctx: &SimulationContext, scene_id: u64, keep: &[EntityId]) -> usize {
+  use aethervk_core_rlib::scene::{
+    HiddenComponent,
+    trajectory::{EffectiveTrajectoryComponent, TrajectoryComponent},
+  };
+  ctx.set_reference_error_visible(scene_id, false);
+  let Some(scene_arc) = ctx.get_scene(scene_id) else {
+    return 0;
+  };
+  let g = scene_arc.read();
+  let mut ids = Vec::new();
+  g.scene.query1(|id, _: &TrajectoryComponent| ids.push(id));
+  g.scene.query1(|id, _: &EffectiveTrajectoryComponent| ids.push(id));
+  ids.sort_unstable_by_key(|id| id.as_ffi());
+  ids.dedup();
+  let mut n = 0;
+  for id in ids.into_iter().filter(|id| !keep.contains(id)) {
+    if g.scene.with_component(id, |_: &HiddenComponent| ()).is_none()
+      && g.scene.add_component(id, HiddenComponent {}).is_ok()
+    {
+      n += 1;
+    }
+  }
+  n
 }
 
 /// `avkSimulationContext_addParticleSystem` recipe.
@@ -1934,7 +2060,9 @@ fn main() {
   ));
 
   // SPK (before the GPU comes up, so a failed download is cheap)
-  let spk = match args.spk.clone().map(Ok).unwrap_or_else(|| find_or_fetch_spk(start, end)) {
+  // a jet ignited before the start (`--ignite-days < 0`) emits from the SPK before it: cover it
+  let spk_from = start + Duration::from_days(args.ignite_days.min(0.0));
+  let spk = match args.spk.clone().map(Ok).unwrap_or_else(|| find_or_fetch_spk(spk_from, end)) {
     Ok(p) => p,
     Err(e) => {
       log_line(&format!("FATAL: 67P SPK unavailable: {e}"));
@@ -2050,17 +2178,61 @@ fn main() {
     std::thread::sleep(std::time::Duration::from_millis(20));
   }
 
-  // rotation model (app default: pole RA 0, Dec 90, 12.4 h, body-fixed); `--spin-hours 0`: none
-  if args.spin_hours > 0.0 {
+  // rotation model: `--pole` (the app's Comet tab model), else the default pole with a
+  // `--spin-hours` period (12.4 h); `--spin-hours 0`: none
+  let rotation_desc = if let Some([ra, dec, w0, rate]) = args.pole {
+    set_rotation(&ctx, scene_id, comet_body, rotation_model(ra, dec, w0, rate));
+    format!(
+      "pole RA {ra}°, Dec {dec}°, W0 {w0}°, rate {rate:.4}°/d (period {:.4} h), body-fixed (--pole)",
+      360.0 * 24.0 / rate
+    )
+  } else if args.spin_hours > 0.0 {
     set_rotational_model(&ctx, scene_id, comet_body, args.spin_hours);
+    format!("pole RA 0°, Dec 90°, W0 0°, period {} h, body-fixed", args.spin_hours)
   } else {
-    log_line("no rotation model (--spin-hours 0)");
-  }
+    String::from("none (--spin-hours 0)")
+  };
+  log_line(&format!("rotation: {rotation_desc}"));
 
-  // one jet, ignited at `start + ignite_days` (nothing before it) unless `--prestart`
+  // the jets (`--jet`, else one default jet), ignited at `start + ignite_days` (nothing before
+  // it) unless `--prestart`. One stream colour for all (the hue ray reads one), seeds 7, 8, …
   let ignition: Option<Epoch> =
     (!args.prestart).then(|| args.start + Duration::from_days(args.ignite_days));
-  let emit = jet_params(7, args.isotropic);
+  let emits: Vec<ParticleSystemEmitParams> = if args.jets.is_empty() {
+    vec![jet_params(7, args.isotropic)]
+  } else {
+    args
+      .jets
+      .iter()
+      .enumerate()
+      .map(|(k, j)| ParticleSystemEmitParams {
+        // `JetNativeSync.BuildJet`: degrees → radians, σ in m/s
+        latitude_rad: (j.lat_deg as f32).to_radians(),
+        longitude_rad: (j.lon_deg as f32).to_radians(),
+        aperture_rad: (j.aperture_deg as f32).to_radians(),
+        start_velocity_mean: j.speed_ms as f32,
+        start_velocity_std: (j.sigma_frac * j.speed_ms) as f32,
+        ..jet_params(7 + k as u32, args.isotropic)
+      })
+      .collect()
+  };
+  let emit = emits[0];
+  let jets_desc = emits
+    .iter()
+    .map(|e| {
+      format!(
+        "lat {:.2}°, lon {:.2}°, aperture {:.2}° (half-angle), v {:.2}±{:.2} m/s, seed {}",
+        e.latitude_rad.to_degrees(),
+        e.longitude_rad.to_degrees(),
+        e.aperture_rad.to_degrees(),
+        e.start_velocity_mean,
+        e.start_velocity_std,
+        e.seed
+      )
+    })
+    .collect::<Vec<_>>()
+    .join("; ");
+  log_line(&format!("jets: {jets_desc}"));
   let jet_color = [1.0, 0.6, 0.2, 1.0];
   if args.no_jet {
     log_line("no jet (--no-jet): dust-free scene");
@@ -2077,18 +2249,13 @@ fn main() {
         format!("start + {:.2} d", args.ignite_days)
       }
     ));
-    match add_jet(
-      &ctx,
-      scene_id,
-      comet_body,
-      emit,
-      jet_color,
-      emission_start_us,
-    ) {
-      Ok(j) => log_line(&format!("jet entity {}", j.as_ffi())),
-      Err(e) => {
-        log_line(&format!("FATAL: add_jet: {e}"));
-        std::process::exit(6);
+    for e in &emits {
+      match add_jet(&ctx, scene_id, comet_body, *e, jet_color, emission_start_us) {
+        Ok(j) => log_line(&format!("jet entity {}", j.as_ffi())),
+        Err(e) => {
+          log_line(&format!("FATAL: add_jet: {e}"));
+          std::process::exit(6);
+        }
       }
     }
   }
@@ -2102,6 +2269,11 @@ fn main() {
       }
       log_line("sun hidden (--hide-sun)");
     }
+  }
+
+  if args.no_trajectories {
+    let n = hide_trajectories(&ctx, scene_id, &[comet_body, earth_body]);
+    log_line(&format!("trajectories hidden (--no-trajectories): {n} entities"));
   }
 
   // view settings
@@ -2257,6 +2429,95 @@ fn main() {
     cam_height_au * AU_KM
   ));
 
+  // `--pose earth` projection (`--earth-field-km`, `--ortho`): from the Earth→comet distance D at
+  // the start epoch (geocentric, geometric: the site's 6 400 km and the light time move D by
+  // ~1e-4 relative). Orthographic: half-height KM/2, distance-free, near/far 0.5·D / 2·D (the
+  // camera stays at the site, aimed at the comet: frontal). Perspective: fov 2·atan(KM/2 / D).
+  // Shadows `fov_deg`, `persp_tan_h`, `half_height_au` for the frames below.
+  let (fov_deg, persp_tan_h, half_height_au, earth_near_au, earth_far_au) = if args.pose
+    == Pose::Earth
+  {
+    let earth_pos = ctx.get_scene(scene_id).and_then(|sc| {
+      let g = sc.read();
+      g.scene
+        .global_transform_f64(earth_body)
+        .map(|t| [t.position.x(), t.position.y(), t.position.z()])
+    });
+    let d_au = earth_pos.map_or(0.0, |e| norm(sub(comet0, e)));
+    if d_au <= 0.0 {
+      problems.push(
+        "earth pose: no Earth transform at the start epoch (Earth→comet distance unknown)".into(),
+      );
+    }
+    let (fov_deg, tan_h, hh_au, near, far) = if args.earth_ortho {
+      let hh_au = args.earth_field_km.map_or(half_height_au, |k| k / 2.0 / AU_KM);
+      let (near, far) = (0.5 * d_au, 2.0 * d_au);
+      let hw = (hh_au * aspect) as f32;
+      let hh = hh_au as f32;
+      ctx
+        .threads
+        .logic_thread
+        .tx()
+        .try_send(LogicCommand::SetCameraTransform {
+          scene_id,
+          camera_id: cam.as_ffi(),
+          transform: None,
+          projection: Some(CameraProjection::Orthographic {
+            left: -hw,
+            right: hw,
+            bottom: -hh,
+            top: hh,
+            near: near as f32,
+            far: far as f32,
+          }),
+        })
+        .expect("SetCameraTransform send");
+      let fov = (2.0 * (hh_au / d_au.max(1e-300)).atan()).to_degrees();
+      (fov, None, hh_au, near, far)
+    } else {
+      let fov_deg = match args.earth_field_km {
+        Some(k) => {
+          let f = (2.0 * (k / 2.0 / (d_au * AU_KM).max(1e-300)).atan()).to_degrees();
+          ctx
+            .threads
+            .logic_thread
+            .tx()
+            .try_send(LogicCommand::SetCameraTransform {
+              scene_id,
+              camera_id: cam.as_ffi(),
+              transform: None,
+              projection: Some(CameraProjection::Perspective {
+                fov: f.to_radians() as f32,
+                aspect_ratio: aspect as f32,
+                near: 1e-5,
+                far: 20.0,
+              }),
+            })
+            .expect("SetCameraTransform send");
+          f
+        }
+        None => fov_deg,
+      };
+      let tan_h = (fov_deg.to_radians() / 2.0).tan();
+      (fov_deg, Some(tan_h), half_height_au, 1e-5, 20.0)
+    };
+    let half_km = match tan_h {
+      Some(t) => d_au * AU_KM * t,
+      None => hh_au * AU_KM,
+    };
+    log_line(&format!(
+      "earth projection: {} half-height {half_km:.1} km at the comet (field {:.1} km), fov {fov_deg:.6}°, D {:.1} km, {:.4}″/px, up {}",
+      if tan_h.is_some() { "perspective" } else { "orthographic" },
+      2.0 * half_km,
+      d_au * AU_KM,
+      fov_deg * 3600.0 / args.height as f64,
+      if args.north_up { "celestial north" } else { "ecliptic" }
+    ));
+    (fov_deg, tan_h, hh_au, near, far)
+  } else {
+    (fov_deg, persp_tan_h, half_height_au, 1e-5, 20.0)
+  };
+
   // `--pose inside`: the near/far of the frame being rendered (AU): the truth clips there too
   let mut inside_far_now = inside_far_au(coma0_km);
   if args.pose == Pose::Inside {
@@ -2394,10 +2655,15 @@ fn main() {
       lon_deg,
       args.elev_m,
       [0.0, 0.0, 0.0, 1.0],
+      if args.north_up {
+        earth_observer::ObserverUp::CelestialNorth
+      } else {
+        earth_observer::ObserverUp::Ecliptic
+      },
     );
     log_line(&format!(
-      "earth observer (comet tracking) set: {ok}, site lat {:.4}° lon {:.4}° elev {:.1} m",
-      args.lat_deg, lon_deg, args.elev_m
+      "earth observer (comet tracking) set: {ok}, site lat {:.4}° lon {:.4}° elev {:.1} m, north-up {}",
+      args.lat_deg, lon_deg, args.elev_m, args.north_up
     ));
   } else {
     let (p, q) = pose_for(comet0);
@@ -2495,6 +2761,12 @@ fn main() {
     if args.pose != Pose::Earth {
       let (p, q) = pose_for(comet);
       set_camera_pose(&ctx, scene_id, cam, p, q);
+    }
+    if args.no_trajectories {
+      let n = hide_trajectories(&ctx, scene_id, &[comet_body, earth_body]);
+      if n > 0 {
+        log_line(&format!("frame {i}: {n} more trajectory entities hidden"));
+      }
     }
     if args.pose == Pose::Earth {
       log_line(
@@ -2845,12 +3117,12 @@ fn main() {
           // the render camera's planes: the orthographic poses' from the projection above, the
           // Earth pose's from `add_perspective_camera`, the inside pose's of this frame
           near_au: match args.pose {
-            Pose::Earth => 1e-5,
+            Pose::Earth => earth_near_au,
             Pose::Inside => inside_truth_near_au,
             _ => cam_height_au * 0.01,
           },
           far_au: match args.pose {
-            Pose::Earth => 20.0,
+            Pose::Earth => earth_far_au,
             Pose::Inside => inside_far_now,
             _ => cam_height_au * 50.0,
           },
@@ -3649,7 +3921,7 @@ fn main() {
       "off"
     };
     md.push_str(&format!(
-      "- start: `{start}`  scene range end: `{end}`\n- frames: {n_frames} every {} h ({} days)\n- size: {}x{}  pose: {:?}\n- play mode: {:?}  reemit-every: {}\n- SPK: `{}`\n- CPU particles: {}\n- jet: lat 20°, lon 0°, aperture 0.5 rad, v 2.0±0.5 m/s, d 100 µm, ρ 0.533 g/cm³, Afρ₀ 100 cm, power 2, cutoff 15 AU, nucleus 2 km, seed 7, colour (1.0, 0.6, 0.2)\n- rotation: pole RA 0°, Dec 90°, period {ROTATION_PERIOD_H} h, body-fixed\n- ignition: {}\n- view: dust flags {} (flow {flow_on}, tracers {tracers_on}), flow speed 1.0, softening 1e-2\n- framing: half-height {half_height_km:.1} km = {half_height_au:.6} AU (3·coma {:.1} km vs β·g·T² {:.1} km, β_ref {:.4}, r₀ {r0_au:.4} AU), camera {:.1} km above the comet along +Z\n- Vulkan validation errors: {vk_errors}\n- wall time: {:.1} s\n\n",
+      "- start: `{start}`  scene range end: `{end}`\n- frames: {n_frames} every {} h ({} days)\n- size: {}x{}  pose: {:?}\n- play mode: {:?}  reemit-every: {}\n- SPK: `{}`\n- CPU particles: {}\n- jets: {jets_desc}; d 100 µm, ρ 0.533 g/cm³, Afρ₀ 100 cm, power 2, cutoff 15 AU, nucleus 2 km, colour (1.0, 0.6, 0.2)\n- rotation: {rotation_desc}\n- ignition: {}\n- view: dust flags {} (flow {flow_on}, tracers {tracers_on}), flow speed 1.0, softening 1e-2\n- framing: half-height {half_height_km:.1} km = {half_height_au:.6} AU (3·coma {:.1} km vs β·g·T² {:.1} km, β_ref {:.4}, r₀ {r0_au:.4} AU), camera {:.1} km above the comet along +Z\n- Vulkan validation errors: {vk_errors}\n- wall time: {:.1} s\n\n",
       args.step_hours,
       args.days,
       args.width,
@@ -3667,7 +3939,7 @@ fn main() {
       cam_height_au * AU_KM,
       t_run.elapsed().as_secs_f64()
     ));
-    if args.pose.is_perspective() {
+    if persp_tan_h.is_some() {
       md.push_str(&format!(
         "- perspective: fov {fov_deg:.2}°{}; metres per pixel at the nucleus per frame in `stats.jsonl` (`camera.m_per_px_nucleus`)\n\n",
         if args.pose == Pose::Inside {

@@ -174,11 +174,20 @@ public sealed record FitsMetadata(
           if (c.ValueKind == JsonValueKind.Object)
             cards.Add(new FitsCard(Str(c, "key") ?? "", Str(c, "value") ?? "", Str(c, "comment") ?? ""));
       var facts = Obj(root, "facts") is { } f ? ParseFacts(f) : new FitsFacts();
+      // the WCS angles are of pixel +j; an unflipped texture (ROWORDER = 'TOP-DOWN') shows −j up:
+      // the facts are made the texture's (half a turn, the other handedness)
+      bool flipped = Bool(root, "flipped") ?? true;
+      if (!flipped)
+        facts = facts with
+        {
+          RotationDeg = facts.RotationDeg is { } r ? (r + 360.0) % 360.0 - 180.0 : null,
+          Mirrored = facts.Mirrored is { } m ? !m : null,
+        };
       return new FitsMetadata(
         (ulong)(Num(root, "assetId") ?? 0),
         (int)(Num(root, "textureWidth") ?? 0),
         (int)(Num(root, "textureHeight") ?? 0),
-        Bool(root, "flipped") ?? false,
+        flipped,
         stretch,
         points,
         cards,

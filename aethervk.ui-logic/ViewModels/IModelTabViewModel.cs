@@ -69,4 +69,13 @@ public partial interface IModelTabViewModel : ICursorWarpingViewModel
   /// The current model session.
   /// </summary>
   AetherVk.Logic.Services.ModelSession? CurrentSession { get; }
+
+  /// <summary>Afρ(r_h) of the shared model (engine law), marker at the comet's r_h.</summary>
+  AetherVk.Logic.Utils.CurvePlotModel? AfrhoPlot { get; }
+
+  /// <summary>Grain size PDFs by number and by cross-section.</summary>
+  AetherVk.Logic.Utils.CurvePlotModel? SizeDistributionPlot { get; }
+
+  /// <summary>"Afρ now: X cm → Q_d ≈ Y kg/s" read-out under the Afρ plot.</summary>
+  string AfrhoNowText { get; }
 }

@@ -315,9 +315,23 @@ public sealed class SaveFileServiceTests : IDisposable
     var host = new FakeSaveFileHost(_root) { Viewports = [] };
     var svc = new SaveFileService(host, new Clock());
     Assert.False(svc.IsDirty);
-    host.Viewports = [new ViewportDto { Observer = new ObserverDto() }];
+    var northUp = SaveIndexMapping.Snake(ObserverUp.CelestialNorth);
+    host.Viewports = [new ViewportDto { Observer = new ObserverDto { Up = northUp } }];
     Assert.False(svc.IsDirty);
     host.Viewports[0].Observer!.LatDeg = 45;
+    Assert.True(svc.IsDirty);
+  }
+
+  /// An otherwise untouched viewport switched to the ecliptic up is a change, kept in the save
+  /// (dropped as fresh, it reloaded north-up).
+  [Fact]
+  public void Dirty_SeesAnUntouchedViewportSwitchedToEclipticUp()
+  {
+    var host = new FakeSaveFileHost(_root) { Viewports = [] };
+    var svc = new SaveFileService(host, new Clock());
+    host.Viewports = [new ViewportDto { Observer = new ObserverDto { Up = SaveIndexMapping.Snake(ObserverUp.CelestialNorth) } }];
+    Assert.False(svc.IsDirty);
+    host.Viewports[0].Observer!.Up = SaveIndexMapping.Snake(ObserverUp.Ecliptic);
     Assert.True(svc.IsDirty);
   }
 

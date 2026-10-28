@@ -109,7 +109,7 @@ public sealed class SaveFileService
           ? new ObserverDto
           {
             LatDeg = o.LatDeg, LonDeg = o.LonDeg, ElevationM = o.ElevationM, Orientation = o.Orientation,
-            Topocentric = o.Topocentric,
+            Topocentric = o.Topocentric, Up = o.Up,
             // a free look is the user's aim (tracking re-aims by itself); rounded past f64 noise
             InertialLook = o.Orientation == new ObserverDto().Orientation
               ? [.. o.InertialLook.Select(x => Math.Round(x, 9))]
@@ -124,13 +124,15 @@ public sealed class SaveFileService
     return SaveIndexIo.ToJson(index);
   }
 
-  /// <summary>A viewport as a new one starts: the default mode, the observer not yet placed.</summary>
+  /// <summary>A viewport as a new one starts: the default mode, the observer not yet placed and
+  /// north-up (the live default; the DTO's "ecliptic" default is for saves older than the field).</summary>
   private static bool IsFresh(ViewportDto v)
   {
     var fresh = new ViewportDto();
     return v.Mode == fresh.Mode
       && (v.Observer is null || (v.Observer.LatDeg == 0 && v.Observer.LonDeg == 0 && v.Observer.ElevationM == 0
-        && v.Observer.Orientation == new ObserverDto().Orientation && !v.Observer.Topocentric));
+        && v.Observer.Orientation == new ObserverDto().Orientation && !v.Observer.Topocentric
+        && v.Observer.Up == SaveIndexMapping.Snake(ObserverUp.CelestialNorth)));
   }
 
   // ── new ────────────────────────────────────────────────────────────────────
@@ -520,7 +522,7 @@ public sealed class SaveFileService
       {
         Id = b.Id, TextureKey = m.Key, CenterX = b.CenterX, CenterY = b.CenterY, WidthPx = b.WidthPx,
         HeightPx = b.HeightPx, Alpha = b.Alpha, RotationDeg = b.RotationDeg, Visible = b.Visible,
-        ImageArcsecPerPx = b.ImageArcsecPerPx, ImageWidthPx = b.ImageWidthPx, ImageHeightPx = b.ImageHeightPx,
+        ImageArcsecPerPx = b.ImageArcsecPerPx, ImageHeightKm = b.ImageHeightKm, ImageWidthPx = b.ImageWidthPx, ImageHeightPx = b.ImageHeightPx,
         PhysicalSizeBound = b.PhysicalSizeBound, FitsStretch = b.FitsStretch,
       }
       : b; // its texture is gone: the billboard keeps its spec as a placeholder

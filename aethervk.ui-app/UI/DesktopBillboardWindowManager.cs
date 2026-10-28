@@ -273,9 +273,20 @@ public sealed class DesktopBillboardWindowManager : IDisposable
     foreach (var kv in stale)
       _bitmaps.Remove(kv.Key);
     RefreshBitmaps();
-    // the windows hold the new bitmaps now
+    // the windows hold the new bitmaps now; a copy that failed (library busy) keeps the old one
+    bool kept = false;
     foreach (var kv in stale)
-      kv.Value.Dispose();
+    {
+      if (_bitmaps.ContainsKey(kv.Key))
+        kv.Value.Dispose();
+      else
+      {
+        _bitmaps[kv.Key] = kv.Value;
+        kept = true;
+      }
+    }
+    if (kept)
+      RefreshBitmaps();
   }
 
   /// <summary>Full-resolution bitmap of the texture with asset key <paramref name="key"/>, cached

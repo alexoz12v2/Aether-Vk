@@ -172,4 +172,37 @@ public class SaveIndexMappingTests
     Assert.Equal(proj, SaveIndexMapping.FromDto(back.Viewports[0]).ObserverProjection);
     Assert.Null(SaveIndexMapping.FromDto(new ViewportDto()).ObserverProjection);
   }
+  /// The Earth observer's view up round-trips; an older save without it opens ecliptic-up (the
+  /// view it was saved with), while a new observer defaults to celestial north.
+  [Fact]
+  public void ObserverUp_RoundTrips_AndOlderSavesAreEcliptic()
+  {
+    var state = new CameraPersistedState(CameraMode.EarthPosition, null, null, Vector3.Zero, 0, 0, 0,
+      EarthObserverOrientationMode.Free, [0, 0, 0, 1], [0, 0, 0, 1], ObserverUp: ObserverUp.CelestialNorth);
+    var json = SaveIndexIo.ToJson(new SaveIndex { Viewports = [SaveIndexMapping.ToDto(state)] });
+    Assert.Contains("\"up\": \"celestial_north\"", json);
+    var back = System.Text.Json.JsonSerializer.Deserialize(json, SaveIndexJsonContext.Default.SaveIndex)!;
+    Assert.Equal(ObserverUp.CelestialNorth, SaveIndexMapping.FromDto(back.Viewports[0]).ObserverUp);
+
+    var node = System.Text.Json.Nodes.JsonNode.Parse(json)!;
+    Assert.True(node["viewports"]![0]!["observer"]!.AsObject().Remove("up")); // a save before the field
+    var older = node.ToJsonString();
+    Assert.DoesNotContain("celestial_north", older);
+    var old = System.Text.Json.JsonSerializer.Deserialize(older, SaveIndexJsonContext.Default.SaveIndex)!;
+    Assert.Equal(ObserverUp.Ecliptic, SaveIndexMapping.FromDto(old.Viewports[0]).ObserverUp);
+    Assert.Equal(ObserverUp.Ecliptic, SaveIndexMapping.FromDto(new ViewportDto()).ObserverUp);
+  }
+
+  /// A billboard's image height at the comet (km) round-trips; older saves have none.
+  [Fact]
+  public void BillboardImageHeightKm_RoundTrips_AndOlderSavesHaveNone()
+  {
+    var b = new AetherVk.Logic.Models.DesktopBillboard(Guid.NewGuid(), "/a.jpg", 1, 2, 300, 300)
+    { ImageHeightKm = 120000, ImageWidthPx = 1300, ImageHeightPx = 1200, PhysicalSizeBound = true };
+    var json = SaveIndexIo.ToJson(new SaveIndex { Billboards = [SaveIndexMapping.ToDto(b)] });
+    Assert.Contains("\"image_height_km\": 120000", json);
+    var back = System.Text.Json.JsonSerializer.Deserialize(json, SaveIndexJsonContext.Default.SaveIndex)!;
+    Assert.Equal(b, SaveIndexMapping.FromDto(back.Billboards[0]));
+    Assert.Null(SaveIndexMapping.FromDto(new BillboardDto { Id = b.Id, TextureKey = "/a.png" }).ImageHeightKm);
+  }
 }
