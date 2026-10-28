@@ -107,6 +107,7 @@ namespace AetherVk.Logic.ViewModels
                     OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsModeEarthPosition);
                     OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsModeUpZenith);
                     OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsModeCometOrbiting);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.FrameLabel);
                     _currentMode = value;
                     OnCurrentModeChanged(value);
                     OnCurrentModeChanged(default, value);
@@ -115,6 +116,30 @@ namespace AetherVk.Logic.ViewModels
                     OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsModeEarthPosition);
                     OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsModeUpZenith);
                     OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsModeCometOrbiting);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.FrameLabel);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_observerUp"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public global::AetherVk.Logic.Services.ObserverUp ObserverUp
+        {
+            get => _observerUp;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<global::AetherVk.Logic.Services.ObserverUp>.Default.Equals(_observerUp, value))
+                {
+                    OnObserverUpChanging(value);
+                    OnObserverUpChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.ObserverUp);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.FrameLabel);
+                    _observerUp = value;
+                    OnObserverUpChanged(value);
+                    OnObserverUpChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.ObserverUp);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.FrameLabel);
                 }
             }
         }
@@ -292,6 +317,28 @@ namespace AetherVk.Logic.ViewModels
         /// <remarks>This method is invoked right after the value of <see cref="CurrentMode"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnCurrentModeChanged(global::AetherVk.Logic.ViewModels.EarthObserverState oldValue, global::AetherVk.Logic.ViewModels.EarthObserverState newValue);
+        /// <summary>Executes the logic for when <see cref="ObserverUp"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="ObserverUp"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnObserverUpChanging(global::AetherVk.Logic.Services.ObserverUp value);
+        /// <summary>Executes the logic for when <see cref="ObserverUp"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="ObserverUp"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnObserverUpChanging(global::AetherVk.Logic.Services.ObserverUp oldValue, global::AetherVk.Logic.Services.ObserverUp newValue);
+        /// <summary>Executes the logic for when <see cref="ObserverUp"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="ObserverUp"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnObserverUpChanged(global::AetherVk.Logic.Services.ObserverUp value);
+        /// <summary>Executes the logic for when <see cref="ObserverUp"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="ObserverUp"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnObserverUpChanged(global::AetherVk.Logic.Services.ObserverUp oldValue, global::AetherVk.Logic.Services.ObserverUp newValue);
         /// <summary>Executes the logic for when <see cref="MeasurementIndicatorText"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="MeasurementIndicatorText"/> is changed.</remarks>

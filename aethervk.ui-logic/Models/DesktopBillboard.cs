@@ -69,4 +69,13 @@ public sealed record DesktopBillboard(
   /// the texture: applying it on one billboard sets it on every billboard of that texture.
   /// </summary>
   public FitsStretch? FitsStretch { get; init; }
+
+  /// <summary>
+  /// Where the comet's nucleus is in the image, in image pixel coordinates: x right, y down from
+  /// the top of the displayed image, the centre of pixel (column i, row j) at (i, j), so the
+  /// image's centre is ((W − 1) / 2, (H − 1) / 2) (<see cref="Utils.NucleusDetector"/>). Null:
+  /// the image's centre. "Center on comet" puts this point on the comet
+  /// (<see cref="Utils.DesktopBillboardGeometry.CenterForNucleusAt"/>).
+  /// </summary>
+  public Utils.PointD? ImageNucleusPx { get; init; }
 }

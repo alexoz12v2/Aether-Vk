@@ -22,6 +22,9 @@ public partial interface IModelTabViewModel : ICursorWarpingViewModel
   /// <summary>Removes the given jet from the list.</summary>
   IRelayCommand<JetViewModel?> RemoveJetCommand { get; }
 
+  /// <summary>Copies the selected jet's grain and activity parameters to every other jet.</summary>
+  IRelayCommand CopyGrainToAllJetsCommand { get; }
+
   /// <summary>
   /// Manual override for nucleus bounding-sphere radius in km.
   /// When &gt; 0, takes precedence over the Horizon-fetched value from CometSession.
@@ -62,6 +65,11 @@ public partial interface IModelTabViewModel : ICursorWarpingViewModel
   bool EnableLegacyExpanders { get; set; }
 
   bool IsGizmoVisible { get; set; }
+  bool ShowGizmoGrid { get; set; }
+  bool ShowGizmoBodyAxes { get; set; }
+  bool ShowGizmoSpinAxis { get; set; }
+  bool ShowGizmoSun { get; set; }
+  bool ShowGizmoVelocity { get; set; }
   bool ShowJetAngles { get; set; }
   string? StrPM { get; set; }
 
@@ -70,12 +78,21 @@ public partial interface IModelTabViewModel : ICursorWarpingViewModel
   /// </summary>
   AetherVk.Logic.Services.ModelSession? CurrentSession { get; }
 
-  /// <summary>Afρ(r_h) of the shared model (engine law), marker at the comet's r_h.</summary>
+  /// <summary>Afρ(r_h) of the defaults for new jets (engine law), marker at the comet's r_h.</summary>
   AetherVk.Logic.Utils.CurvePlotModel? AfrhoPlot { get; }
 
-  /// <summary>Grain size PDFs by number and by cross-section.</summary>
+  /// <summary>Grain size PDFs by number and by cross-section, of the defaults for new jets.</summary>
   AetherVk.Logic.Utils.CurvePlotModel? SizeDistributionPlot { get; }
 
-  /// <summary>"Afρ now: X cm → Q_d ≈ Y kg/s" read-out under the Afρ plot.</summary>
+  /// <summary>Afρ(r_h) of the selected jet; null without a selection.</summary>
+  AetherVk.Logic.Utils.CurvePlotModel? JetAfrhoPlot { get; }
+
+  /// <summary>Grain size PDFs of the selected jet; null without a selection.</summary>
+  AetherVk.Logic.Utils.CurvePlotModel? JetSizeDistributionPlot { get; }
+
+  /// <summary>"Afρ now: X cm → Q_d ≈ Y kg/s" read-out of the selected jet, under its Afρ plot.</summary>
   string AfrhoNowText { get; }
+
+  /// <summary>"Σ Afρ → Σ Q_d" over every jet (the whole comet's activity).</summary>
+  string TotalActivityText { get; }
 }

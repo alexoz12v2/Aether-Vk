@@ -29,25 +29,23 @@ namespace AetherVk.Logic.ViewModels.Debug
             }
         }
 
-        /// <inheritdoc cref="_isDismissed"/>
+        /// <inheritdoc cref="_isExpanded"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-        public bool IsDismissed
+        public bool IsExpanded
         {
-            get => _isDismissed;
+            get => _isExpanded;
             set
             {
-                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_isDismissed, value))
+                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_isExpanded, value))
                 {
-                    OnIsDismissedChanging(value);
-                    OnIsDismissedChanging(default, value);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsDismissed);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsShown);
-                    _isDismissed = value;
-                    OnIsDismissedChanged(value);
-                    OnIsDismissedChanged(default, value);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsDismissed);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsShown);
+                    OnIsExpandedChanging(value);
+                    OnIsExpandedChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsExpanded);
+                    _isExpanded = value;
+                    OnIsExpandedChanged(value);
+                    OnIsExpandedChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsExpanded);
                 }
             }
         }
@@ -294,28 +292,28 @@ namespace AetherVk.Logic.ViewModels.Debug
         /// <remarks>This method is invoked right after the value of <see cref="IsVisible"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnIsVisibleChanged(bool oldValue, bool newValue);
-        /// <summary>Executes the logic for when <see cref="IsDismissed"/> is changing.</summary>
+        /// <summary>Executes the logic for when <see cref="IsExpanded"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="IsDismissed"/> is changed.</remarks>
+        /// <remarks>This method is invoked right before the value of <see cref="IsExpanded"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnIsDismissedChanging(bool value);
-        /// <summary>Executes the logic for when <see cref="IsDismissed"/> is changing.</summary>
+        partial void OnIsExpandedChanging(bool value);
+        /// <summary>Executes the logic for when <see cref="IsExpanded"/> is changing.</summary>
         /// <param name="oldValue">The previous property value that is being replaced.</param>
         /// <param name="newValue">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="IsDismissed"/> is changed.</remarks>
+        /// <remarks>This method is invoked right before the value of <see cref="IsExpanded"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnIsDismissedChanging(bool oldValue, bool newValue);
-        /// <summary>Executes the logic for when <see cref="IsDismissed"/> just changed.</summary>
+        partial void OnIsExpandedChanging(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="IsExpanded"/> just changed.</summary>
         /// <param name="value">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="IsDismissed"/> is changed.</remarks>
+        /// <remarks>This method is invoked right after the value of <see cref="IsExpanded"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnIsDismissedChanged(bool value);
-        /// <summary>Executes the logic for when <see cref="IsDismissed"/> just changed.</summary>
+        partial void OnIsExpandedChanged(bool value);
+        /// <summary>Executes the logic for when <see cref="IsExpanded"/> just changed.</summary>
         /// <param name="oldValue">The previous property value that was replaced.</param>
         /// <param name="newValue">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="IsDismissed"/> is changed.</remarks>
+        /// <remarks>This method is invoked right after the value of <see cref="IsExpanded"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnIsDismissedChanged(bool oldValue, bool newValue);
+        partial void OnIsExpandedChanged(bool oldValue, bool newValue);
         /// <summary>Executes the logic for when <see cref="ActualDistanceKm"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="ActualDistanceKm"/> is changed.</remarks>

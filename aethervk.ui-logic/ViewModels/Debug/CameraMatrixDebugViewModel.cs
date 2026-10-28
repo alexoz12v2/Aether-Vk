@@ -14,6 +14,14 @@ namespace AetherVk.Logic.ViewModels.Debug;
 public sealed partial class CameraMatrixDebugViewModel : ObservableObject, IDisposable
 {
     private readonly CompositeDisposable _disposables = new();
+    private readonly PreferencesService? _preferences;
+
+    /// <summary>Panel body open (true) or collapsed to its icon.</summary>
+    [ObservableProperty] private bool _isExpanded = true;
+
+    partial void OnIsExpandedChanged(bool value) => _preferences?.SetHudCameraExpanded(value);
+
+    [RelayCommand] private void ToggleExpanded() => IsExpanded = !IsExpanded;
 
     /// <summary>Dust history per age tier (<see cref="FormatDustHistory"/>), empty without dust.</summary>
     [ObservableProperty] private string _dustHistory = string.Empty;
@@ -33,14 +41,24 @@ public sealed partial class CameraMatrixDebugViewModel : ObservableObject, IDisp
 
     private const double AuToKm = 149_597_870.7;
 
-    public CameraMatrixDebugViewModel(INativeRuntimeService runtimeService, ISchedulerProvider schedulerProvider)
+    /// <param name="cometScreen">The comet's screen position in the viewport and the viewport's
+    /// physical size (<see cref="CameraService.GetCometScreenPosition"/>), appended to the observer
+    /// line; null leaves it out.</param>
+    public CameraMatrixDebugViewModel(INativeRuntimeService runtimeService, ISchedulerProvider schedulerProvider, PreferencesService? preferences = null,
+        Func<(CometScreenPosition? Position, float WidthPx, float HeightPx)>? cometScreen = null)
     {
+        _preferences = preferences;
+        _isExpanded = preferences?.HudCameraExpanded ?? true;
         _disposables.Add(
             Observable.Timer(TimeSpan.Zero, TimeSpan.FromMilliseconds(500), schedulerProvider.Background)
                 .Select(_ =>
                 {
                     string dust = FormatDustHistory(runtimeService.DustStats());
-                    string earth = FormatEarthObserver(runtimeService.EarthObserverStatus());
+                    var status = runtimeService.EarthObserverStatus();
+                    var screen = status is not null && cometScreen is not null
+                        ? cometScreen()
+                        : default((CometScreenPosition? Position, float WidthPx, float HeightPx)?);
+                    string earth = FormatEarthObserver(status, screen?.Position, screen?.WidthPx ?? 0f, screen?.HeightPx ?? 0f);
                     bool hasCam = false;
                     double px = 0, py = 0, pz = 0, rx = 0, ry = 0, rz = 0, rw = 0;
                     if (runtimeService.CameraEntityId.HasValue &&
@@ -79,10 +97,14 @@ public sealed partial class CameraMatrixDebugViewModel : ObservableObject, IDisp
     /// emission window due so far exists yet.
     /// </summary>
     /// <summary>
-    /// e.g. <c>CometTracking · aim 2.1e-10 rad · target +34.2°</c>, or
-    /// <c>SunTracking · target −12.0° below horizon: facing its azimuth</c>.
+    /// e.g. <c>CometTracking · aim 2.1e-10 rad · target +34.2° · screen (561.5, 347.0) px of 1123×694</c>,
+    /// or <c>SunTracking · target −12.0° below horizon: facing its azimuth</c>. The aim is the
+    /// camera's view axis against the comet as drawn (light-time retarded), measured on the camera's
+    /// current pose; the screen part is where the comet is drawn (physical px from the top-left;
+    /// centred = half the viewport), present when <paramref name="screen"/> is.
     /// </summary>
-    public static string FormatEarthObserver(EarthObserverStatus? s)
+    public static string FormatEarthObserver(EarthObserverStatus? s, CometScreenPosition? screen = null,
+        float viewportWidthPx = 0f, float viewportHeightPx = 0f)
     {
         if (s is null)
             return string.Empty;
@@ -90,9 +112,13 @@ public sealed partial class CameraMatrixDebugViewModel : ObservableObject, IDisp
         double elevDeg = s.TargetElevationRad * 180.0 / Math.PI;
         bool tracking = s.Mode == (int)EarthObserverOrientationMode.CometTracking
                      || s.Mode == (int)EarthObserverOrientationMode.SunTracking;
+        string where = screen is null
+            ? string.Empty
+            : FormattableString.Invariant(
+                $" · screen ({screen.XPx:0.0}, {screen.YPx:0.0}) px of {viewportWidthPx:0}×{viewportHeightPx:0}{(screen.OnScreen ? "" : " off-screen")}");
         if (tracking && elevDeg < 0.0)
-            return FormattableString.Invariant($"{mode} · target {elevDeg:+0.0;-0.0}° below horizon: facing its azimuth");
-        return FormattableString.Invariant($"{mode} · aim {s.AimErrorRad:0.0e+0} rad · target {elevDeg:+0.0;-0.0}°");
+            return FormattableString.Invariant($"{mode} · target {elevDeg:+0.0;-0.0}° below horizon: facing its azimuth{where}");
+        return FormattableString.Invariant($"{mode} · aim {s.AimErrorRad:0.0e+0} rad · target {elevDeg:+0.0;-0.0}°{where}");
     }
 
     public static string FormatDustHistory(System.Collections.Generic.IReadOnlyList<DustTierStats>? tiers)

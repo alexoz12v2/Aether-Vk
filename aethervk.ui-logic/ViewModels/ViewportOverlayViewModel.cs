@@ -46,9 +46,41 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
     nameof(CameraModeName),
     nameof(IsModeEarthPosition),
     nameof(IsModeUpZenith),
-    nameof(IsModeCometOrbiting)
+    nameof(IsModeCometOrbiting),
+    nameof(FrameLabel)
   )]
   private EarthObserverState _currentMode = EarthObserverState.UpZenith;
+
+  /// <summary>The Earth observer's up, for <see cref="FrameLabel"/>.</summary>
+  [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(FrameLabel))]
+  private ObserverUp _observerUp = ObserverUp.Ecliptic;
+
+  /// <summary>
+  /// The reference frame the view is drawn in (feedback #16), shown under the epoch: which way is
+  /// up and whether the view turns with the nucleus.
+  /// </summary>
+  public string FrameLabel => FrameLabelFor(CurrentMode, ObserverUp);
+
+  internal static string FrameLabelFor(EarthObserverState mode, ObserverUp up) => mode switch
+  {
+    EarthObserverState.UpZenith => "Ecliptic J2000, seen from above (ecliptic north up)",
+    EarthObserverState.CometOrbiting => "Nucleus body frame (turns with the nucleus, spin axis up)",
+    EarthObserverState.EarthPositioning => up == ObserverUp.CelestialNorth
+      ? "From Earth, celestial north up (J2000)"
+      : "From Earth, ecliptic north up",
+    _ => string.Empty,
+  };
+
+  // ── Mode buttons (feedback #20): Orbit / Nucleus / Model ─────────────────────
+  [RelayCommand]
+  private void SelectOrbitView() => _cameraService.SetCameraMode(CameraMode.UpZenith);
+
+  [RelayCommand]
+  private void SelectNucleusView() => _cameraService.SetCameraMode(CameraMode.CometOrbiting);
+
+  [RelayCommand]
+  private void SelectModelView() => _cameraService.EnterModelView();
 
   public string CameraModeName =>
     CurrentMode switch
@@ -116,7 +148,8 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
     Viewport3DViewModel viewportVm,
     ISchedulerProvider schedulerProvider,
     TimelineService timelineService,
-    ITabStateService<ModelSession> modelSessionService
+    ITabStateService<ModelSession> modelSessionService,
+    PreferencesService? preferences = null
   )
   {
     _cameraService = cameraService;
@@ -131,8 +164,13 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
     RenderDoc        = new RenderDocCaptureViewModel(runtimeService, timelineService, modelSessionService, schedulerProvider);
     DebugTelemetry   = new DebugTelemetryPanelViewModel(runtimeService);
 #endif
-    CameraMatrixDebug = new CameraMatrixDebugViewModel(runtimeService, schedulerProvider);
-    CometOrbitDebug   = new CometOrbitDebugViewModel();
+    CameraMatrixDebug = new CameraMatrixDebugViewModel(runtimeService, schedulerProvider, preferences,
+      () => (_cameraService.GetCometScreenPosition(), _cameraService.ViewportWidthPx, _cameraService.ViewportHeightPx));
+    CometOrbitDebug   = new CometOrbitDebugViewModel(preferences);
+
+    _cameraService
+      .EarthObserverUpChanged.Subscribe(up => _dispatcher.Dispatch(() => ObserverUp = up))
+      .AddDisposableTo(_disposables);
 
     _cameraService
       .CameraProjection.Subscribe(proj =>

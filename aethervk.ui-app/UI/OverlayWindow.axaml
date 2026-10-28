@@ -27,10 +27,21 @@
             Classes.expanded="{Binding IsModeIndicatorExpanded}">
       <Border.Styles>
         <Style Selector="Border">
-          <Setter Property="MaxWidth" Value="44"/>
+          <Setter Property="MaxWidth" Value="122"/>
         </Style>
         <Style Selector="Border.expanded">
-          <Setter Property="MaxWidth" Value="210"/>
+          <Setter Property="MaxWidth" Value="290"/>
+        </Style>
+        <Style Selector="Button.mode">
+          <Setter Property="Background" Value="Transparent"/>
+          <Setter Property="Padding" Value="5"/>
+          <Setter Property="Margin" Value="0"/>
+          <Setter Property="CornerRadius" Value="6"/>
+          <Setter Property="Opacity" Value="0.55"/>
+        </Style>
+        <Style Selector="Button.mode.active">
+          <Setter Property="Background" Value="{DynamicResource Bg.Outline}"/>
+          <Setter Property="Opacity" Value="1"/>
         </Style>
       </Border.Styles>
       <Border.Transitions>
@@ -39,33 +50,51 @@
         </Transitions>
       </Border.Transitions>
 
-      <StackPanel Orientation="Horizontal" Spacing="0" Margin="12,8">
-        <Viewbox Width="20" Height="20" Stretch="Uniform">
-          <Grid>
-            <Canvas Width="16" Height="16" IsVisible="{Binding IsModeEarthPosition}">
-              <Path Stroke="{DynamicResource Text.Primary}" StrokeThickness="1.2" Fill="Transparent"
-                    Data="M 8 1 A 7 7 0 1 1 7.999 1 Z
-                    M 1 8 L 15 8
-                    M 8 1 C 12 1 12 15 8 15
-                    M 8 1 C 4 1 4 15 8 15"/>
-            </Canvas>
-
-            <Canvas Width="16" Height="16" IsVisible="{Binding IsModeUpZenith}">
+      <!-- Three mode buttons (feedback #20): Orbit (UpZenith), Nucleus (CometOrbiting), Model (Earth observer) -->
+      <StackPanel Orientation="Horizontal" Spacing="2" Margin="6,4">
+        <Button Classes="mode" Classes.active="{Binding IsModeUpZenith}"
+                AutomationProperties.AutomationId="ModeOrbitButton"
+                Command="{Binding SelectOrbitViewCommand}"
+                ToolTip.Tip="Orbit: the ecliptic seen from above (Numpad 2)">
+          <Viewbox Width="20" Height="20" Stretch="Uniform">
+            <Canvas Width="16" Height="16">
               <Path Stroke="{DynamicResource Text.Primary}" StrokeThickness="1.2"
                     StrokeLineCap="Round" StrokeJoin="Round" Fill="Transparent"
                     Data="M 0 15 L 16 15
                     M 8 13 L 8 2
                     M 4 7 L 8 2 L 12 7"/>
             </Canvas>
+          </Viewbox>
+        </Button>
 
-            <Canvas Width="16" Height="16" IsVisible="{Binding IsModeCometOrbiting}">
+        <Button Classes="mode" Classes.active="{Binding IsModeCometOrbiting}"
+                AutomationProperties.AutomationId="ModeNucleusButton"
+                Command="{Binding SelectNucleusViewCommand}"
+                ToolTip.Tip="Nucleus: orbit the nucleus in its body frame (Numpad 3)">
+          <Viewbox Width="20" Height="20" Stretch="Uniform">
+            <Canvas Width="16" Height="16">
               <Path Stroke="{DynamicResource Text.Primary}" StrokeThickness="1.2" Fill="Transparent"
                     Data="M 1 8 A 7 3.5 0 0 1 15 8 A 7 3.5 0 0 1 1 8 Z"/>
               <Ellipse Canvas.Left="11" Canvas.Top="5" Width="4" Height="4"
                        Fill="{DynamicResource Text.Primary}"/>
             </Canvas>
-          </Grid>
-        </Viewbox>
+          </Viewbox>
+        </Button>
+
+        <Button Classes="mode" Classes.active="{Binding IsModeEarthPosition}"
+                AutomationProperties.AutomationId="ModeModelButton"
+                Command="{Binding SelectModelViewCommand}"
+                ToolTip.Tip="Model: the comet seen from Earth, celestial north up, as in a telescope image">
+          <Viewbox Width="20" Height="20" Stretch="Uniform">
+            <Canvas Width="16" Height="16">
+              <Path Stroke="{DynamicResource Text.Primary}" StrokeThickness="1.2" Fill="Transparent"
+                    Data="M 8 1 A 7 7 0 1 1 7.999 1 Z
+                    M 1 8 L 15 8
+                    M 8 1 C 12 1 12 15 8 15
+                    M 8 1 C 4 1 4 15 8 15"/>
+            </Canvas>
+          </Viewbox>
+        </Button>
 
         <TextBlock Text="{Binding CameraModeName}"
                    FontSize="13" FontWeight="SemiBold"
@@ -91,15 +120,14 @@
     </Border>
 
     <!-- Camera global position tracker (all builds, polled at 2 Hz) -->
-    <Border x:CompileBindings="False"
+    <controls:CollapsibleHudPanel x:CompileBindings="False"
             DataContext="{ReflectionBinding CameraMatrixDebug}"
+            IsExpanded="{ReflectionBinding IsExpanded, Mode=TwoWay}"
+            ToggleAutomationId="CameraHudCollapseButton"
             HorizontalAlignment="Right" VerticalAlignment="Top"
-            Margin="10,60,10,0"
-            Background="{DynamicResource Bg.Surface}" Opacity="0.85"
-            BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1"
-            CornerRadius="8" Padding="12,8">
+            Margin="10,60,10,0">
       <ui:CameraMatrixDebugPanel />
-    </Border>
+    </controls:CollapsibleHudPanel>
 
     <ItemsControl ItemsSource="{Binding Billboards}">
       <ItemsControl.ItemsPanel>
@@ -138,6 +166,7 @@
                     Width="20" Height="20" Padding="0"
                     Background="{DynamicResource Sem.Error}" Foreground="White"
                     CornerRadius="10" FontSize="10" Content="✕"
+                    ToolTip.Tip="Remove this billboard."
                     Command="{Binding $parent[ItemsControl].((vm:ViewportOverlayViewModel)DataContext).RemoveBillboardCommand}"
                     CommandParameter="{Binding}"
                     Margin="0,-12,-12,0" />
@@ -279,6 +308,10 @@
         </DataTemplate>
       </ContentControl.DataTemplates>
     </ContentControl>
+    <!-- Reference frame of the view (feedback #16), under the epoch -->
+    <TextBlock AutomationProperties.AutomationId="ViewportFrameLabel" Text="{Binding FrameLabel}"
+               HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,2"
+               Foreground="LightGray" FontSize="11" IsHitTestVisible="False" />
 
     <!-- Jet Preview Size Overlay -->
     <ContentControl Content="{Binding JetPreviewSizeString}" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,10,10,0">

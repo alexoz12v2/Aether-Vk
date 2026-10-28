@@ -124,6 +124,10 @@ public sealed class StateDto
   public bool Latest { get; set; }
 }
 
+/// <summary>
+/// The Model tab. The grain and activity values (diameter … Afρ₀) are the defaults for new jets,
+/// and what each jet of an older save (without its own, <see cref="JetDto"/>) inherits on load.
+/// </summary>
 public sealed class ModelDto
 {
   public float DiametreUm { get; set; } = 100;
@@ -141,6 +145,7 @@ public sealed class ModelDto
   public bool DustFlow { get; set; }
   public double DustFlowSpeed { get; set; } = 1;
   public bool SphereGizmoVisible { get; set; } = true;
+  public uint SphereGizmoParts { get; set; } = Models.SphereGizmoPart.Default;
   public bool ShowJetAngles { get; set; }
   public bool ShowReferencePositionError { get; set; }
   /// <summary>The Model tab's manual nucleus radius (used when Horizons has none).</summary>
@@ -157,6 +162,16 @@ public sealed class JetDto
   public float[] StreamColor { get; set; } = [1, 1, 1, 1];
   public bool PreviewVisible { get; set; } = true;
   public uint Seed { get; set; }
+
+  // the jet's own grain and activity; null in saves written before jets had their own: the jet
+  // then inherits the model's value (ModelDto)
+  public float? DiametreUm { get; set; }
+  public float? DensityGCm3 { get; set; }
+  public float? ScatteringEfficiency { get; set; }
+  public float? GeometricAlbedo { get; set; }
+  public float? SizeQ { get; set; }
+  public float? SizeRange { get; set; }
+  public float? Afrho0Cm { get; set; }
 }
 
 /// <summary>
@@ -276,6 +291,10 @@ public sealed class BillboardDto
   public bool PhysicalSizeBound { get; set; }
   /// <summary>FITS texture stretch (absent / null: the import's zscale, linear).</summary>
   public FitsStretchDto? FitsStretch { get; set; }
+  /// <summary>The nucleus pixel, image px (x right, y down, pixel centres at whole numbers);
+  /// absent / null in either: the image centre (older saves).</summary>
+  public double? ImageNucleusX { get; set; }
+  public double? ImageNucleusY { get; set; }
 }
 
 /// <summary>A FITS billboard's stretch; enum values snake_case.</summary>

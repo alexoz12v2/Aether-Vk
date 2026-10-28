@@ -825,16 +825,11 @@ impl SimulationContext {
         .with_component(c, |p: &crate::scene::AlmanacPlanet| p.naif_id)
     });
     let comet_vel_km_s = match (comet_naif, epoch) {
-      (Some(naif), Some(epoch)) => {
-        let frame = crate::simulation::almanac::SUN_ECLIPJ2000;
-        self
-          .logic_state
-          .read()
-          .almanac_data
-          .get_cartesian_state(naif, frame.orientation_id, frame.ephemeris_id, epoch, false)
-          .ok()
-          .map(|s| [s.velocity_km_s[0], s.velocity_km_s[1], s.velocity_km_s[2]])
-      }
+      (Some(naif), Some(epoch)) => crate::simulation_api::earth_observer::comet_velocity_at(
+        &self.logic_state.read().almanac_data,
+        naif,
+        epoch,
+      ),
       _ => None,
     };
     let mut guard = scene_arc.write();
@@ -844,9 +839,18 @@ impl SimulationContext {
       }
       return true;
     };
+    // refused (an entity missing): no observer at all, so the UI that poses the camera instead
+    // is never overridden by a previous one (`LogicCommand::AnimateCameraTo` and the transform
+    // writes leave an observer's camera alone)
+    let refuse = |guard: &mut crate::simulation_api::structs::SceneContext| {
+      if let Some(old) = guard.earth_observer.take() {
+        clear_light_time_view(&guard.scene, old.camera);
+      }
+      false
+    };
     let camera = EntityId::from_ffi(camera);
     let Some(cam) = guard.scene.global_transform_f64(camera) else {
-      return false;
+      return refuse(&mut guard);
     };
     if let Some(old) = guard.earth_observer.filter(|o| o.camera != camera) {
       clear_light_time_view(&guard.scene, old.camera);
@@ -871,7 +875,7 @@ impl SimulationContext {
     state.comet_vel_km_s = comet_vel_km_s;
     state.up = up;
     if crate::simulation_api::earth_observer::apply(&guard.scene, &mut state).is_none() {
-      return false;
+      return refuse(&mut guard);
     }
     guard.earth_observer = Some(state);
     guard.mark_component_changed(
@@ -881,8 +885,11 @@ impl SimulationContext {
     true
   }
 
-  /// Native Earth observer status of `scene_id`: `(mode, aim error rad, target elevation rad)` of
-  /// the last pose, `None` when the UI poses the camera (not handed over).
+  /// Native Earth observer status of `scene_id`: `(mode, aim error rad, target elevation rad)`,
+  /// `None` when the UI poses the camera (not handed over). The aim is measured on the camera as
+  /// it is now ([`crate::simulation_api::earth_observer::current_aim`]), not on the last pose: a
+  /// later write to the camera shows up instead of a stale "aimed" (a Free look reports the last
+  /// pose's values).
   pub fn earth_observer_status(
     &self,
     scene_id: u64,
@@ -893,7 +900,11 @@ impl SimulationContext {
   )> {
     let scene_arc = self.scenes.read().get_scene(scene_id)?;
     let g = scene_arc.read();
-    g.earth_observer.map(|o| (o.mode, o.last_error, o.last_elevation))
+    g.earth_observer.map(|o| {
+      let (error, elevation) = crate::simulation_api::earth_observer::current_aim(&g.scene, &o)
+        .unwrap_or((o.last_error, o.last_elevation));
+      (o.mode, error, elevation)
+    })
   }
 
   /// Radius (km) of the visible dust coma of `scene_id` (largest over its particle systems, see
@@ -1250,6 +1261,60 @@ impl SimulationContext {
       .is_none()
     {
       let _ = guard.scene.add_component(camera, component);
+    }
+    true
+  }
+
+  /// Sets the linear factor the camera `camera_entity` (FFI id) multiplies the sunlight on meshes by
+  /// (`CameraExposureComponent`; finite, > 0). Synchronous; false when the scene is missing, the
+  /// entity has no camera or the factor is invalid.
+  pub fn set_camera_exposure(&self, scene_id: u64, camera_entity: u64, factor: f32) -> bool {
+    if !factor.is_finite() || factor <= 0.0 {
+      return false;
+    }
+    let Some(scene_arc) = self.scenes.read().get_scene(scene_id) else {
+      return false;
+    };
+    let guard = scene_arc.read();
+    let camera: EntityId = slotmap::KeyData::from_ffi(camera_entity).into();
+    if guard.scene.has_component::<crate::scene::CameraComponent>(camera)
+      != crate::scene::HasComponentResultEnum::EntityHasComponent
+    {
+      return false;
+    }
+    let component = crate::scene::CameraExposureComponent(factor);
+    if guard
+      .scene
+      .with_component_mut(camera, |m: &mut crate::scene::CameraExposureComponent| *m = component)
+      .is_none()
+    {
+      let _ = guard.scene.add_component(camera, component);
+    }
+    true
+  }
+
+  /// Sets which parts of the sphere gizmo on `entity` (FFI id) are drawn (`SPHERE_GIZMO_PART_*`
+  /// bits, `SphereGizmoPartsComponent`; the velocity direction is kept). Synchronous; false when
+  /// the scene is missing or the entity has no sphere gizmo.
+  pub fn set_sphere_gizmo_parts(&self, scene_id: u64, entity: u64, parts: u32) -> bool {
+    let Some(scene_arc) = self.scenes.read().get_scene(scene_id) else {
+      return false;
+    };
+    let guard = scene_arc.read();
+    let id: EntityId = slotmap::KeyData::from_ffi(entity).into();
+    if guard.scene.has_component::<crate::scene::SphereGizmoComponent>(id)
+      != crate::scene::HasComponentResultEnum::EntityHasComponent
+    {
+      return false;
+    }
+    if guard
+      .scene
+      .with_component_mut(id, |p: &mut crate::scene::SphereGizmoPartsComponent| p.parts = parts)
+      .is_none()
+    {
+      let _ = guard
+        .scene
+        .add_component(id, crate::scene::SphereGizmoPartsComponent { parts, velocity_dir: [0.0; 3] });
     }
     true
   }

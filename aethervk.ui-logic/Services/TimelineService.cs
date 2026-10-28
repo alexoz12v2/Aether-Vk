@@ -39,6 +39,7 @@ public sealed class TimelineService : IDisposable
   private readonly BehaviorSubject<bool> _isSimulationRunningSubject = new(false);
   private readonly Subject<System.Reactive.Unit> _snapshotRestoreSubject = new();
   private readonly Subject<System.Reactive.Unit> _seekedSubject = new();
+  private readonly Subject<DateTimeOffset> _modelRangeRequestSubject = new();
   private readonly IDisposable _listenerToken;
 
 
@@ -176,6 +177,15 @@ public sealed class TimelineService : IDisposable
   public IObservable<System.Reactive.Unit> Seeked =>
     _seekedSubject.ObserveOn(_schedulerProvider.MainThread);
 
+  /// <summary>
+  /// "Model range" requests (a FITS row's observation epoch): the Timeline tab proposes its N
+  /// rotations ending at the epoch (feedback #20).
+  /// </summary>
+  public IObservable<DateTimeOffset> ModelRangeRequests =>
+    _modelRangeRequestSubject.ObserveOn(_schedulerProvider.MainThread);
+
+  public void RequestModelRange(DateTimeOffset endUtc) => _modelRangeRequestSubject.OnNext(endUtc);
+
   public bool SnapshotRestore()
   {
       bool ok = _runtimeService.RestoreSnapshotSync();
@@ -209,5 +219,6 @@ public sealed class TimelineService : IDisposable
     _isSimulationRunningSubject.Dispose();
     _snapshotRestoreSubject.Dispose();
     _seekedSubject.Dispose();
+    _modelRangeRequestSubject.Dispose();
   }
 }

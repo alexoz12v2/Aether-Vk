@@ -197,14 +197,31 @@ public class DesktopBillboardTests
     Near(new PointD(530, 420), DesktopBillboardGeometry.Center(free));
   }
 
+  /// A new billboard shows its image 1:1 (one image px per desktop px), even larger than the
+  /// display: the physical sizes must add up.
   [Fact]
-  public void InitialSize_IsNativeShrunkToHalfTheDisplay()
+  public void InitialSize_IsNative()
   {
     var screen = new ScreenInfo(new RectI(0, 0, 1920, 1080), 1);
     Assert.Equal((300.0, 200.0), DesktopBillboardGeometry.InitialSize(300, 200, screen));
-    var (w, h) = DesktopBillboardGeometry.InitialSize(4000, 2000, screen);
-    Near(960, w);
-    Near(480, h);
+    Assert.Equal((1300.0, 1200.0), DesktopBillboardGeometry.InitialSize(1300, 1200, screen));
+    Assert.Equal((4000.0, 2000.0), DesktopBillboardGeometry.InitialSize(4000, 2000, screen));
+    var b = Bb() with { WidthPx = 1300, HeightPx = 1200, ImageWidthPx = 1300, ImageHeightPx = 1200 };
+    Assert.Equal(1.0, DesktopBillboardGeometry.DesktopPxPerImagePx(b));
+  }
+
+  /// The row spells out the image → sky → viewport conversion: the 2021-12-27 JPEG case
+  /// (1200 px tall, 120 000 km at D = 69.77e6 km) on a viewport of 0.2838″/px.
+  [Fact]
+  public void ConversionText_ShowsImageAngleViewportScaleAndPxRatio()
+  {
+    var b = Bb() with { WidthPx = 650, HeightPx = 600, ImageWidthPx = 1300, ImageHeightPx = 1200, ImageHeightKm = 120000 };
+    Assert.Null(DesktopBillboardGeometry.ConversionText(b, 0.2838, null)); // km needs the distance
+    string t = DesktopBillboardGeometry.ConversionText(b, 0.2838, 69.77e6)!;
+    Assert.Equal("image 0.2956″/px × 1200 px = 354.8″ (120000 km) → viewport 0.2838″/px → 1250 px · 1 image px = 0.5 desktop px", t);
+    // without a viewport scale only the image side and the ratio
+    Assert.Equal("image 0.3″/px × 1200 px = 360″ · 1 image px = 0.5 desktop px",
+      DesktopBillboardGeometry.ConversionText(b with { ImageHeightKm = null, ImageArcsecPerPx = 0.3 }, null, null));
   }
 
   [Theory]
@@ -330,14 +347,14 @@ public class DesktopBillboardTests
     new(7, AssetKind.Texture, "tail", key, w, h, [], null, null) { IsDisplayable = true };
 
   [Fact]
-  public void Create_PlacesTheBillboardAtTheDisplayCentre_FittingHalfOfIt()
+  public void Create_PlacesTheBillboardAtTheDisplayCentre_AtNativeSize()
   {
     using var svc = new DesktopBillboardService();
     var screen = new ScreenInfo(new RectI(1920, 0, 2560, 1440), 1);
     var b = svc.Create(Tex(), screen);
     Near(new PointD(3200, 720), DesktopBillboardGeometry.Center(b));
-    Near(1280, b.WidthPx);
-    Near(640, b.HeightPx);
+    Near(4000, b.WidthPx); // the 4000 × 2000 texture, 1:1, even larger than the display
+    Near(2000, b.HeightPx);
     Assert.Equal("/data/tail.png", b.TextureKey);
     Assert.Single(svc.Current);
     Assert.Throws<ArgumentException>(() => svc.Create(Tex() with { Kind = AssetKind.Mesh }, screen));

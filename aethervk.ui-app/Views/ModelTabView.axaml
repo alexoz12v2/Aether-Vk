@@ -304,6 +304,18 @@
                       IsChecked="{Binding IsGizmoVisible}"
                       Content="Show sphere gizmo"
                       ToolTip.Tip="The wireframe sphere and axes around the nucleus. Saved with the file." />
+            <WrapPanel Margin="28,0,12,4" IsEnabled="{Binding IsGizmoVisible}">
+              <CheckBox Margin="0,0,10,0" AutomationProperties.AutomationId="GizmoGridCheckBox" IsChecked="{Binding ShowGizmoGrid}" Content="Grid"
+                        ToolTip.Tip="The latitude / longitude wireframe" />
+              <CheckBox Margin="0,0,10,0" AutomationProperties.AutomationId="GizmoBodyAxesCheckBox" IsChecked="{Binding ShowGizmoBodyAxes}" Content="Body X/Y"
+                        ToolTip.Tip="The body-fixed X (red) and Y (green) axes, rotating with the nucleus" />
+              <CheckBox Margin="0,0,10,0" AutomationProperties.AutomationId="GizmoSpinAxisCheckBox" IsChecked="{Binding ShowGizmoSpinAxis}" Content="Spin axis"
+                        ToolTip.Tip="The rotation axis (body Z, blue)" />
+              <CheckBox Margin="0,0,10,0" AutomationProperties.AutomationId="GizmoSunCheckBox" IsChecked="{Binding ShowGizmoSun}" Content="Sun"
+                        ToolTip.Tip="The arrow towards the Sun" />
+              <CheckBox AutomationProperties.AutomationId="GizmoVelocityCheckBox" IsChecked="{Binding ShowGizmoVelocity}" Content="Velocity"
+                        ToolTip.Tip="The comet's heliocentric velocity direction (magenta)" />
+            </WrapPanel>
 
             <!-- Warning: no radius known yet -->
             <TextBlock Margin="12,0,12,6"
@@ -434,6 +446,7 @@
                   <!-- Latitude -->
                   <TextBlock Grid.Row="0" Grid.Column="0" Text="Latitude" />
                   <controls:UnboundedSlider Grid.Row="0" Grid.Column="2" AutomationProperties.AutomationId="JetLatitudeSlider"
+                    ToolTip.Tip="Latitude of the jet source on the nucleus, in degrees in the body-fixed frame: +90 is the north spin pole, 0 the equator, -90 the south pole."
                                             Value="{Binding LatitudeDeg}">
                     <controls:UnboundedSlider.InnerRightContent>
                       <TextBlock Classes="unit-of-measurement" Text="°" />
@@ -443,6 +456,7 @@
                   <!-- Longitude -->
                   <TextBlock Grid.Row="2" Grid.Column="0" Text="Longitude" />
                   <controls:UnboundedSlider Grid.Row="2" Grid.Column="2" AutomationProperties.AutomationId="JetLongitudeSlider"
+                    ToolTip.Tip="Longitude of the jet source on the nucleus, in degrees from the prime meridian (-180 to 180). The nucleus spin carries the jet around as it rotates."
                                             Value="{Binding LongitudeDeg}">
                     <controls:UnboundedSlider.InnerRightContent>
                       <TextBlock Classes="unit-of-measurement" Text="°" />
@@ -497,6 +511,7 @@
                   <!-- Stream Color -->
                   <TextBlock Grid.Row="10" Grid.Column="0" Text="Stream Color" />
                   <ColorPicker Grid.Row="10" Grid.Column="2"
+                    ToolTip.Tip="Colour used to draw this jet in the viewport (its dust and direction line). Display only: it does not change the physics."
                                Color="{Binding StreamColor, Converter={x:Static converters:Vector4ToColorConverter.Instance}}"
                                HorizontalAlignment="Left" />
 
@@ -504,32 +519,178 @@
                   <TextBlock Grid.Row="12" Grid.Column="0" Text="β (beta)" />
                   <TextBox Grid.Row="12" Grid.Column="2"
                            Classes="computed"
+                           ToolTip.Tip="Computed, read-only. Beta is the ratio of solar radiation-pressure force to solar gravity on the reference grain, roughly 0.57 x Q_pr / (density in g/cm3 x grain radius in um). Small, light grains have larger beta and curve away from the Sun faster."
                            Text="{Binding Beta, StringFormat='{}{0:F4}'}" />
 
                   <!-- Computed: Dust production rate -->
                   <TextBlock Grid.Row="14" Grid.Column="0" Text="Q_dust @ 1 AU" />
                   <Panel Grid.Row="14" Grid.Column="2" Classes="unit-overlay">
                     <TextBox Classes="computed"
-                             Text="{Binding DustProductionRateAt1AuKgs, StringFormat='{}{0:F4}'}" />
+                             Text="{Binding DustProductionRateAt1AuKgs, StringFormat='{}{0:F4}'}"
+                             ToolTip.Tip="Computed, read-only. Dust mass production rate at 1 AU from the Sun in kg/s, derived from Afρ₀, grain density, size, albedo and ejection speed." />
                     <TextBlock Classes="unit-of-measurement" Text="kg/s" />
                   </Panel>
 
                 </Grid>
               </Border><!-- /content Border -->
+
+              <!-- ──── This jet's grain: every jet has its own (new jets start from the defaults below) ── -->
+              <Expander AutomationProperties.AutomationId="JetGrainExpander" Margin="12,8,12,0">
+                <Expander.Header>
+                  <StackPanel Orientation="Horizontal" Spacing="4">
+                    <TextBlock Text="Grain" />
+                    <controls:PropertyHelpButton AutomationProperties.AutomationId="JetGrainHelp"
+                                                 HelpHeader="Grain (this jet)"
+                                                 HelpContent="This jet's own dust grains: every jet has its own, and a new jet starts from the defaults further down.&#x0A;&#x0A;Grain radii follow n(s) ∝ s^−q from s₀/F to s₀·F, s₀ = diameter/2 (q = 3.5, F = 10, 100 µm → radii 5–500 µm).&#x0A;&#x0A;Diameter, density and Q_pr set β ∝ Q_pr/(ρ·s), how hard sunlight pushes the grains away from the Sun. The albedo sets how bright they are and, with Afρ, how much mass the jet emits.&#x0A;&#x0A;Limitation: q only changes the individual bright specks; the continuous dust rendering is built for q = 3.5 whatever q is." />
+                  </StackPanel>
+                </Expander.Header>
+                <StackPanel Spacing="8">
+                  <Border DataContext="{Binding SelectedJet}">
+                    <Grid ColumnDefinitions="*,12,1.6*"
+                          RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto"
+                          x:DataType="vm:JetViewModel">
+
+                      <TextBlock Grid.Row="0" Grid.Column="0" Text="Diameter" />
+                      <Panel Grid.Row="0" Grid.Column="2" Classes="unit-overlay">
+                        <TextBox AutomationProperties.AutomationId="JetDiametreUm"
+                          ToolTip.Tip="Reference grain diameter of this jet, in µm. With density and Q_pr it sets β, the radiation-pressure push: smaller or lighter grains curve away from the Sun faster. The size law spans radii from s₀/F to s₀·F about half of it.">
+                          <i:Interaction.Behaviors>
+                            <b:NumericTextBoxBehavior Value="{Binding DiametreUm}" Minimum="0.0001" Maximum="10000" />
+                          </i:Interaction.Behaviors>
+                        </TextBox>
+                        <TextBlock Classes="unit-of-measurement" Text="μm" />
+                      </Panel>
+
+                      <TextBlock Grid.Row="2" Grid.Column="0" Text="Density" />
+                      <Panel Grid.Row="2" Grid.Column="2" Classes="unit-overlay">
+                        <TextBox AutomationProperties.AutomationId="JetDensity"
+                          ToolTip.Tip="Bulk density of this jet's grains, in g/cm³ (cometary dust about 0.5 to 1). It enters β and the mass the observed brightness needs.">
+                          <i:Interaction.Behaviors>
+                            <b:NumericTextBoxBehavior Value="{Binding DensityGCm3}" Minimum="0.00001" Maximum="7.0" />
+                          </i:Interaction.Behaviors>
+                        </TextBox>
+                        <TextBlock Classes="unit-of-measurement" Text="g/cm³" />
+                      </Panel>
+
+                      <TextBlock Grid.Row="4" Grid.Column="0" Text="Q_pr" />
+                      <TextBox Grid.Row="4" Grid.Column="2" AutomationProperties.AutomationId="JetQpr"
+                        ToolTip.Tip="Radiation-pressure efficiency Q_pr of this jet's grains (0.5 to 2; 1 is a grey body). It scales β only, not the brightness.">
+                        <i:Interaction.Behaviors>
+                          <b:NumericTextBoxBehavior Value="{Binding ScatteringEfficiency}" Minimum="0.5" Maximum="2" />
+                        </i:Interaction.Behaviors>
+                      </TextBox>
+
+                      <TextBlock Grid.Row="6" Grid.Column="0" Text="Albedo" />
+                      <TextBox Grid.Row="6" Grid.Column="2" AutomationProperties.AutomationId="JetAlbedo"
+                        ToolTip.Tip="Geometric albedo of this jet's dust (0.01 to 0.5; cometary dust 0.03 to 0.06). It scales the brightness and the Afρ → kg/s conversion.">
+                        <i:Interaction.Behaviors>
+                          <b:NumericTextBoxBehavior Value="{Binding GeometricAlbedo}" Minimum="0.01" Maximum="0.5" />
+                        </i:Interaction.Behaviors>
+                      </TextBox>
+
+                      <TextBlock Grid.Row="8" Grid.Column="0" Text="Size law q" />
+                      <TextBox Grid.Row="8" Grid.Column="2" AutomationProperties.AutomationId="JetSizeQ"
+                        ToolTip.Tip="Exponent q of this jet's grain size law n(s) ∝ s⁻ᵠ (2 to 5; 3.5 is the usual value). Larger q means more small grains. It only changes the individual bright specks; the continuous dust assumes 3.5.">
+                        <i:Interaction.Behaviors>
+                          <b:NumericTextBoxBehavior Value="{Binding SizeQ}" Minimum="2" Maximum="5" />
+                        </i:Interaction.Behaviors>
+                      </TextBox>
+
+                      <TextBlock Grid.Row="10" Grid.Column="0" Text="Size range F" />
+                      <TextBox Grid.Row="10" Grid.Column="2" AutomationProperties.AutomationId="JetSizeRange"
+                        ToolTip.Tip="Range factor F of this jet's grains (1 to 1000): radii span from s₀/F to s₀·F, where s₀ is half the diameter. Larger F means a wider spread of grain sizes.">
+                        <i:Interaction.Behaviors>
+                          <b:NumericTextBoxBehavior Value="{Binding SizeRange}" Minimum="1" Maximum="1000" />
+                        </i:Interaction.Behaviors>
+                      </TextBox>
+                    </Grid>
+                  </Border>
+
+                  <controls:CurvePlot AutomationProperties.AutomationId="JetSizeDistributionPlot"
+                                    Model="{Binding JetSizeDistributionPlot}"
+                                    Height="140" HorizontalAlignment="Stretch"
+                                    PlotBackground="{DynamicResource Bg.Surface}"
+                                    PrimaryBrush="{DynamicResource Accent.Primary}"
+                                    SecondaryBrush="{DynamicResource Sem.Warning}"
+                                    MarkerBrush="{DynamicResource Sem.Warning}"
+                                    AxisBrush="{DynamicResource Text.Disabled}"
+                                    TextBrush="{DynamicResource Text.Secondary}" />
+                </StackPanel>
+              </Expander>
+
+              <!-- ──── This jet's activity: its own Afρ₀, the law's shape is shared ── -->
+              <Expander AutomationProperties.AutomationId="JetActivityExpander" Margin="12,8,12,0">
+                <Expander.Header>
+                  <StackPanel Orientation="Horizontal" Spacing="4">
+                    <TextBlock Text="Activity" />
+                    <controls:PropertyHelpButton AutomationProperties.AutomationId="JetActivityHelp"
+                                                 HelpHeader="Activity (this jet)"
+                                                 HelpContent="This jet's Afρ at 1 AU: how much dust it produces. The jets add up: the comet's total is the Σ read-out under the list.&#x0A;&#x0A;Afρ(r) = min(max, Afρ₀ · r⁻ᵏ), zero beyond the cutoff; the exponent k, the cutoff and the max are shared by every jet (Advanced: activity, further down).&#x0A;&#x0A;The engine turns this jet's Afρ into its production rate Q_d with its own grain (density, size, albedo) and speed." />
+                  </StackPanel>
+                </Expander.Header>
+                <StackPanel Spacing="8">
+                  <Grid ColumnDefinitions="*,12,1.6*" DataContext="{Binding SelectedJet}" x:DataType="vm:JetViewModel">
+                    <TextBlock Grid.Column="0" Text="Afρ₀ (at 1 AU)" />
+                    <Panel Grid.Column="2" Classes="unit-overlay">
+                      <TextBox AutomationProperties.AutomationId="JetAfrho0"
+                        ToolTip.Tip="Afρ of this jet at 1 AU from the Sun, in cm: its dust activity (albedo x filling factor x aperture radius, from the brightness of the coma). Active comets total about 10² to 10⁵ cm.">
+                        <i:Interaction.Behaviors>
+                          <b:NumericTextBoxBehavior Value="{Binding Afrho0Cm}" Minimum="1" Maximum="2000000" />
+                        </i:Interaction.Behaviors>
+                      </TextBox>
+                      <TextBlock Classes="unit-of-measurement" Text="cm" />
+                    </Panel>
+                  </Grid>
+
+                  <controls:CurvePlot AutomationProperties.AutomationId="JetAfrhoCurvePlot"
+                                    Model="{Binding JetAfrhoPlot}"
+                                    Height="140" HorizontalAlignment="Stretch"
+                                    PlotBackground="{DynamicResource Bg.Surface}"
+                                    PrimaryBrush="{DynamicResource Accent.Primary}"
+                                    SecondaryBrush="{DynamicResource Accent.Secondary}"
+                                    MarkerBrush="{DynamicResource Sem.Warning}"
+                                    AxisBrush="{DynamicResource Text.Disabled}"
+                                    TextBrush="{DynamicResource Text.Secondary}" />
+                  <TextBlock AutomationProperties.AutomationId="AfrhoNowText"
+                             Text="{Binding AfrhoNowText}"
+                             FontSize="11" TextWrapping="Wrap"
+                             Foreground="{DynamicResource Text.Secondary}" />
+                </StackPanel>
+              </Expander>
+
+              <Button AutomationProperties.AutomationId="CopyGrainToAllJetsButton"
+                      Margin="12,8,12,12"
+                      HorizontalAlignment="Right"
+                      Padding="10,2"
+                      Content="Copy to all jets"
+                      Command="{Binding CopyGrainToAllJetsCommand}"
+                      ToolTip.Tip="Gives every other jet this jet's grain and activity: diameter, density, Q_pr, albedo, q, F and Afρ₀. Their sites, speeds and colours stay as they are." />
             </StackPanel><!-- /detail StackPanel -->
           </Border><!-- /detail outer Border -->
 
+            <!-- ──── The whole comet's activity: Σ over the jets ─────────── -->
+            <TextBlock AutomationProperties.AutomationId="TotalActivityText"
+                       Margin="12,8,12,8"
+                       Text="{Binding TotalActivityText}"
+                       FontSize="11" TextWrapping="Wrap"
+                       Foreground="{DynamicResource Text.Secondary}"
+                       ToolTip.Tip="The comet's total activity: the jets' Afρ add up, and so do their dust production rates Q_d (each from its own grain and speed). Shown at 1 AU from the Sun and, with a committed comet, at its current distance." />
 
-            <!-- ──── Shared model properties (common to all jets) ─────────── -->
+            <!-- ──── Grain and activity defaults for new jets (each jet then has its own) ── -->
             <!-- Thin divider + section label separates this from the jet panel -->
             <Border BorderBrush="{DynamicResource Bg.Outline}"
                     BorderThickness="0,1,0,0"
                     Margin="0,0,0,0"
                     Padding="12,8,12,0">
-              <TextBlock Text="Grain &amp; Activity Parameters"
-                         FontSize="11"
-                         FontWeight="SemiBold"
-                         Foreground="{DynamicResource Text.Secondary}" />
+              <StackPanel Orientation="Horizontal" Spacing="4">
+                <TextBlock Text="Defaults for new jets"
+                           FontSize="11"
+                           FontWeight="SemiBold"
+                           Foreground="{DynamicResource Text.Secondary}" />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="JetDefaultsHelp"
+                                             HelpHeader="Defaults for new jets"
+                                             HelpContent="Every jet has its own grain (diameter, density, Q_pr, albedo, q, F) and its own Afρ₀: edit them in the selected jet's Grain and Activity panels.&#x0A;&#x0A;The values here are what a newly added jet starts from; changing them does not change existing jets. Only the shape of the Afρ law (exponent, cutoff, max, under Advanced: activity) is shared by every jet." />
+              </StackPanel>
             </Border>
 
             <Grid ColumnDefinitions="*,12,1.6*"
@@ -540,7 +701,7 @@
                 <TextBlock Text="{Binding StrDustDensity}" />
                 <controls:PropertyHelpButton AutomationProperties.AutomationId="DustDensityHelp"
                                              HelpHeader="{Binding StrDustDensity}"
-                                             HelpContent="Grain bulk density, g/cm³; enters β and the mass per brightness." />
+                                             HelpContent="Grain bulk density of new jets, g/cm³; enters β and the mass per brightness." />
               </StackPanel>
               <Panel Grid.Row="0" Grid.Column="2" Classes="unit-overlay">
                 <TextBox AutomationProperties.AutomationId="DustDensityBox">
@@ -555,7 +716,7 @@
                 <TextBlock Text="{Binding StrDustDiameter}" />
                 <controls:PropertyHelpButton AutomationProperties.AutomationId="DustDiameterHelp"
                                              HelpHeader="{Binding StrDustDiameter}"
-                                             HelpContent="Grain diameter; with density it sets β, the radiation-pressure push: smaller or lighter grains curve away from the Sun faster." />
+                                             HelpContent="Grain diameter of new jets; with density it sets β, the radiation-pressure push: smaller or lighter grains curve away from the Sun faster." />
               </StackPanel>
               <Panel Grid.Row="2" Grid.Column="2" Classes="unit-overlay">
                 <TextBox AutomationProperties.AutomationId="DustDiameterBox">
@@ -567,7 +728,8 @@
               </Panel>
 
               <TextBlock Grid.Row="4" Grid.Column="0" Text="{Binding StrScatteringEfficiency}" />
-              <TextBox Grid.Row="4" Grid.Column="2">
+              <TextBox Grid.Row="4" Grid.Column="2"
+                ToolTip.Tip="Radiation-pressure efficiency Q_pr of new jets' grains (0.5 to 2; 1 is a grey body). It scales beta only, not the brightness.">
                 <i:Interaction.Behaviors>
                   <b:NumericTextBoxBehavior Value="{Binding CurrentSession.ScatteringEfficiency}" Minimum="0.5" Maximum="2" />
                 </i:Interaction.Behaviors>
@@ -577,7 +739,7 @@
                 <TextBlock Text="{Binding StrGeometricAlbedo}" />
                 <controls:PropertyHelpButton AutomationProperties.AutomationId="DustAlbedoHelp"
                                              HelpHeader="{Binding StrGeometricAlbedo}"
-                                             HelpContent="Geometric albedo of the dust; cometary dust 0.03–0.06; scales brightness and the Afρ → kg/s conversion." />
+                                             HelpContent="Geometric albedo of new jets' dust; cometary dust 0.03–0.06; scales brightness and the Afρ → kg/s conversion." />
               </StackPanel>
               <TextBox Grid.Row="6" Grid.Column="2" AutomationProperties.AutomationId="DustAlbedoBox">
                 <i:Interaction.Behaviors>
@@ -594,7 +756,7 @@
                   <TextBlock Text="Advanced: activity (Afρ)" />
                   <controls:PropertyHelpButton AutomationProperties.AutomationId="ActivityAdvancedHelp"
                                                HelpHeader="Activity (Afρ)"
-                                               HelpContent="Afρ is not a grain distribution: it is how much dust the comet produces at each distance from the Sun.&#x0A;&#x0A;Afρ(r) = min(max, Afρ₀ · r⁻ᵏ), zero beyond the cutoff.&#x0A;• Afρ₀: activity at 1 AU (cm).&#x0A;• Exponent k: how fast activity falls with solar distance (k = 2: twice as far → 4× less dust).&#x0A;• Cutoff: distance where activity stops.&#x0A;• Max: cap close to the Sun.&#x0A;&#x0A;The engine turns Afρ into a production rate Q = 2ρ·s·v·Afρ / (3·p·f_v·(1+(σ/v)²)) kg/s (ρ density, s grain radius, v speed, p albedo, f_v speed factor of the size spread).&#x0A;&#x0A;Afρ is a brightness measurement, so it fixes how bright the coma is. Density and diameter do not set the amount of dust: they set how much mass that brightness needs, and how hard radiation pressure pushes the grains (β ∝ 1/(ρ·s)), i.e. how much the coma curves away from the Sun." />
+                                               HelpContent="Afρ is not a grain distribution: it is how much dust the comet produces at each distance from the Sun.&#x0A;&#x0A;Afρ(r) = min(max, Afρ₀ · r⁻ᵏ), zero beyond the cutoff.&#x0A;• Afρ₀: activity at 1 AU (cm), per jet; the value here is the default for new jets.&#x0A;• Exponent k: how fast activity falls with solar distance (k = 2: twice as far → 4× less dust).&#x0A;• Cutoff: distance where activity stops.&#x0A;• Max: cap close to the Sun.&#x0A;k, cutoff and max are shared by every jet.&#x0A;&#x0A;The engine turns Afρ into a production rate Q = 2ρ·s·v·Afρ / (3·p·f_v·(1+(σ/v)²)) kg/s (ρ density, s grain radius, v speed, p albedo, f_v speed factor of the size spread).&#x0A;&#x0A;Afρ is a brightness measurement, so it fixes how bright the coma is. Density and diameter do not set the amount of dust: they set how much mass that brightness needs, and how hard radiation pressure pushes the grains (β ∝ 1/(ρ·s)), i.e. how much the coma curves away from the Sun." />
                 </StackPanel>
               </Expander.Header>
               <StackPanel Spacing="8">
@@ -602,7 +764,8 @@
 
                   <TextBlock Grid.Row="0" Grid.Column="0" Text="Afρ₀ (at 1 AU)" />
                   <Panel Grid.Row="0" Grid.Column="2" Classes="unit-overlay">
-                    <TextBox AutomationProperties.AutomationId="Afrho0Box">
+                    <TextBox AutomationProperties.AutomationId="Afrho0Box"
+                      ToolTip.Tip="Default Afρ at 1 AU for new jets, in cm: the standard dust-activity proxy (albedo x filling factor x aperture radius, from the brightness of the coma). Active comets range from about 10² to 10⁵ cm. Each jet then has its own (its Activity panel).">
                       <i:Interaction.Behaviors>
                         <b:NumericTextBoxBehavior Value="{Binding CurrentSession.Afrho0Cm}" Minimum="1" Maximum="2000000" />
                       </i:Interaction.Behaviors>
@@ -611,7 +774,8 @@
                   </Panel>
 
                   <TextBlock Grid.Row="2" Grid.Column="0" Text="Afρ exponent k" />
-                  <TextBox Grid.Row="2" Grid.Column="2" AutomationProperties.AutomationId="AfrhoPowerBox">
+                  <TextBox Grid.Row="2" Grid.Column="2" AutomationProperties.AutomationId="AfrhoPowerBox"
+                    ToolTip.Tip="Exponent k of the activity law Afρ(r) = Afρ₀ · r⁻ᵏ, with r the distance from the Sun in AU. 2 is the classic value; larger k means activity drops faster as the comet recedes. Shared by every jet.">
                     <i:Interaction.Behaviors>
                       <b:NumericTextBoxBehavior Value="{Binding CurrentSession.AfrhoPower}" Minimum="1" Maximum="4" />
                     </i:Interaction.Behaviors>
@@ -619,7 +783,8 @@
 
                   <TextBlock Grid.Row="4" Grid.Column="0" Text="Afρ cutoff" />
                   <Panel Grid.Row="4" Grid.Column="2" Classes="unit-overlay">
-                    <TextBox AutomationProperties.AutomationId="AfrhoCutoffBox">
+                    <TextBox AutomationProperties.AutomationId="AfrhoCutoffBox"
+                      ToolTip.Tip="Distance from the Sun, in AU (at least 3), beyond which the comet emits no dust. Shared by every jet.">
                       <i:Interaction.Behaviors>
                         <b:NumericTextBoxBehavior Value="{Binding CurrentSession.AfrhoCutoffAu}" Minimum="3" Maximum="100" />
                       </i:Interaction.Behaviors>
@@ -629,7 +794,8 @@
 
                   <TextBlock Grid.Row="6" Grid.Column="0" Text="Afρ max" />
                   <Panel Grid.Row="6" Grid.Column="2" Classes="unit-overlay">
-                    <TextBox AutomationProperties.AutomationId="AfrhoMaxBox">
+                    <TextBox AutomationProperties.AutomationId="AfrhoMaxBox"
+                      ToolTip.Tip="Upper limit on each jet's Afρ in cm, so that activity does not grow without bound close to the Sun. Shared by every jet.">
                       <i:Interaction.Behaviors>
                         <b:NumericTextBoxBehavior Value="{Binding CurrentSession.AfrhoMaxValueCm}" Minimum="1" Maximum="10000000" />
                       </i:Interaction.Behaviors>
@@ -647,10 +813,6 @@
                                     MarkerBrush="{DynamicResource Sem.Warning}"
                                     AxisBrush="{DynamicResource Text.Disabled}"
                                     TextBrush="{DynamicResource Text.Secondary}" />
-                <TextBlock AutomationProperties.AutomationId="AfrhoNowText"
-                           Text="{Binding AfrhoNowText}"
-                           FontSize="11" TextWrapping="Wrap"
-                           Foreground="{DynamicResource Text.Secondary}" />
               </StackPanel>
             </Expander>
 
@@ -661,20 +823,22 @@
                   <TextBlock Text="Advanced: grain size distribution" />
                   <controls:PropertyHelpButton AutomationProperties.AutomationId="SizeDistributionAdvancedHelp"
                                                HelpHeader="Grain size distribution"
-                                               HelpContent="Grain radii follow n(s) ∝ s^−q from s₀/F to s₀·F, s₀ = diameter/2 (q = 3.5, F = 10, 100 µm → radii 5–500 µm).&#x0A;&#x0A;By number, small grains dominate; by cross-section (what sets brightness) the law is s^(2−q), so brightness favours small grains only slowly.&#x0A;&#x0A;The continuous dust rendering is built for q = 3.5; changing q only affects the individual bright specks." />
+                                               HelpContent="The size law new jets start from (each jet has its own, in its Grain panel).&#x0A;&#x0A;Grain radii follow n(s) ∝ s^−q from s₀/F to s₀·F, s₀ = diameter/2 (q = 3.5, F = 10, 100 µm → radii 5–500 µm).&#x0A;&#x0A;By number, small grains dominate; by cross-section (what sets brightness) the law is s^(2−q), so brightness favours small grains only slowly.&#x0A;&#x0A;The continuous dust rendering is built for q = 3.5; changing q only affects the individual bright specks." />
                 </StackPanel>
               </Expander.Header>
               <StackPanel Spacing="8">
                 <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto,8,Auto">
                   <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding StrSizeQ}" />
-                  <TextBox Grid.Row="0" Grid.Column="2" AutomationProperties.AutomationId="SizeQBox">
+                  <TextBox Grid.Row="0" Grid.Column="2" AutomationProperties.AutomationId="SizeQBox"
+                    ToolTip.Tip="Default exponent q of the grain size law n(s) ∝ s⁻ᵠ for new jets (2 to 5; 3.5 is the usual value). Larger q means more small grains. It only changes the individual bright specks; the continuous dust assumes 3.5.">
                     <i:Interaction.Behaviors>
                       <b:NumericTextBoxBehavior Value="{Binding CurrentSession.SizeQ}" Minimum="2" Maximum="5" />
                     </i:Interaction.Behaviors>
                   </TextBox>
 
                   <TextBlock Grid.Row="2" Grid.Column="0" Text="{Binding StrSizeRange}" />
-                  <TextBox Grid.Row="2" Grid.Column="2" AutomationProperties.AutomationId="SizeRangeBox">
+                  <TextBox Grid.Row="2" Grid.Column="2" AutomationProperties.AutomationId="SizeRangeBox"
+                    ToolTip.Tip="Default range factor F for new jets (1 to 1000): grain radii span from s₀/F to s₀·F, where s₀ is half the reference diameter. Larger F means a wider spread of grain sizes.">
                     <i:Interaction.Behaviors>
                       <b:NumericTextBoxBehavior Value="{Binding CurrentSession.SizeRange}" Minimum="1" Maximum="1000" />
                     </i:Interaction.Behaviors>

@@ -129,6 +129,24 @@ public class DustCurvesTests
     Assert.All(one.Series, s => Assert.All(s.Points, p => Assert.True(p.Y > 0 && !double.IsInfinity(p.Y))));
   }
 
+  /// <summary>
+  /// Σ Afρ and Σ Q_d add the jets (each its own Afρ₀ and rate, the law shared); at r_h each jet's
+  /// rate scales with its own Afρ; a jet without a native rate drops Σ Q_d (it would be partial).
+  /// </summary>
+  [Fact]
+  public void TotalActivityText_AddsTheJets()
+  {
+    Assert.Contains("no jets", DustCurves.TotalActivityText([], 2, 15, 1e5, 1.0));
+    var t = DustCurves.TotalActivityText([(100, 1.0), (300, 2.0)], 2, 15, 1e5, 2.0);
+    Assert.StartsWith("Σ 2 jets at 1 AU: Σ Afρ 400 cm → Σ Q_d ≈ 3 kg/s", t);
+    // at 2 AU, k = 2: every Afρ and rate is a quarter
+    Assert.EndsWith("now (r_h 2.00 AU): Σ Afρ 100 cm → Σ Q_d ≈ 0.75 kg/s", t);
+    // the cap applies per jet: 2 × min(1e5, 8e4 · 0.5⁻²) = 2e5
+    Assert.Contains("Σ Afρ 2e5 cm", DustCurves.TotalActivityText([(8e4, 1.0), (8e4, 1.0)], 2, 15, 1e5, 0.5));
+    var partial = DustCurves.TotalActivityText([(100, 1.0), (100, double.NaN)], 2, 15, 1e5, double.NaN);
+    Assert.Equal("Σ 2 jets at 1 AU: Σ Afρ 200 cm", partial);
+  }
+
   [Fact]
   public void AfrhoNowText_ScalesTheJetsRate_OrAsksForACommit()
   {

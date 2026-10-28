@@ -533,19 +533,62 @@ pub fn apply(scene: &Scene, s: &mut EarthObserverState) -> Option<(V3, Q)> {
     _ => clear_light_time_view(scene, s.camera),
   }
   if let Some(t) = target {
-    let to = sub(t, pos);
-    let fwd = rotate(rot, [0.0, -1.0, 0.0]);
-    let c = cross(fwd, to);
-    s.last_error = dot(c, c).sqrt().atan2(dot(fwd, to));
-    // geocentric: no horizon, the target is always "up" (π/2)
-    s.last_elevation = if s.topocentric {
-      let zenith = normalize(rotate(earth_rot, s.zenith_bf));
-      (dot(normalize(to), zenith)).clamp(-1.0, 1.0).asin()
-    } else {
-      core::f64::consts::FRAC_PI_2
-    };
+    (s.last_error, s.last_elevation) = aim_error(s, pos, rot, earth_rot, t);
   }
   Some((pos, rot))
+}
+
+/// `(view-axis error to target, target elevation)` (rad) of a camera at `pos` turned by `rot`:
+/// `atan2(|fwd × to|, fwd · to)` (accurate near 0, unlike `acos`), and the elevation above the
+/// site's horizon (geocentric: no horizon, the target is always "up", π/2).
+fn aim_error(s: &EarthObserverState, pos: V3, rot: Q, earth_rot: Q, target: V3) -> (f64, f64) {
+  let to = sub(target, pos);
+  let fwd = rotate(rot, [0.0, -1.0, 0.0]);
+  let c = cross(fwd, to);
+  let error = dot(c, c).sqrt().atan2(dot(fwd, to));
+  let elevation = if s.topocentric {
+    let zenith = normalize(rotate(earth_rot, s.zenith_bf));
+    (dot(normalize(to), zenith)).clamp(-1.0, 1.0).asin()
+  } else {
+    core::f64::consts::FRAC_PI_2
+  };
+  (error, elevation)
+}
+
+/// The aim of the observer camera **as it is now** in `scene`: `(view-axis error, target
+/// elevation)` (rad) against the target [`apply`] aims at (the astrometric comet: its committed
+/// position plus the last pose's light-time offset; the Sun at the origin). Unlike
+/// [`EarthObserverState::last_error`], which [`apply`] measured on its own pose, this sees any later
+/// write to the camera (a stale UI animation, a restored snapshot) instead of reporting a pose the
+/// screen no longer shows. `None` when an entity is missing, or in `Free` (no target).
+pub fn current_aim(scene: &Scene, s: &EarthObserverState) -> Option<(f64, f64)> {
+  let target = if s.mode.targets_comet() {
+    let c = v3(scene.global_transform_f64(s.comet?)?.position);
+    add(c, s.light_time.map_or([0.0; 3], |l| l.offset_au))
+  } else if s.mode.is_tracking() {
+    [0.0, 0.0, 0.0]
+  } else {
+    return None;
+  };
+  let cam = scene.global_transform_f64(s.camera)?;
+  let earth = scene.global_transform_f64(s.earth)?;
+  let (pos, rot) = (v3(cam.position), qnormalize(q(cam.rotation)));
+  Some(aim_error(s, pos, rot, qnormalize(q(earth.rotation)), target))
+}
+
+/// Heliocentric velocity (km/s, world = SUN_ECLIPJ2000 axes) of the SPK body `naif` at `epoch`, the
+/// light-time input ([`EarthObserverState::comet_vel_km_s`]) of a pose outside a commit (the commit
+/// takes it from the SPK state it just stepped). `None` when the almanac does not cover it.
+pub fn comet_velocity_at(
+  almanac: &crate::simulation::almanac::AlmanacPackedData,
+  naif: i32,
+  epoch: hifitime::Epoch,
+) -> Option<V3> {
+  let frame = crate::simulation::almanac::SUN_ECLIPJ2000;
+  almanac
+    .get_cartesian_state(naif, frame.orientation_id, frame.ephemeris_id, epoch, false)
+    .ok()
+    .map(|s| [s.velocity_km_s[0], s.velocity_km_s[1], s.velocity_km_s[2]])
 }
 
 #[cfg(test)]
