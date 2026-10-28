@@ -2487,7 +2487,14 @@ bool dust_pq_on_o(uvec2 pyr, uint base, uint cap, uint slot) { return (dust_pq_u
 //
 // The leaf's screen packet through one per-lane pointer to its slot's word 0, the fields at
 // constant offsets (one address, not one per field)
+// (the workgroup blob: volatile, which glslang also decorates Coherent; the slot's address is
+// uniform, its loads scalar loads on AMD RDNA, which amdvlk served stale without it; see
+// DustLeafListC in dust_draw_leaf.comp)
+#ifdef DUST_LEAF_WG
+layout(buffer_reference, std430, buffer_reference_align = 4) volatile buffer DustLRow { uint v[]; };
+#else
 layout(buffer_reference, std430, buffer_reference_align = 4) buffer DustLRow { uint v[]; };
+#endif
 uvec2 dust_l_slot;
 uvec2 dust_l_addr(DustUintBuffer pyr, uint word) { uvec2 a = uvec2(pyr); uint o = word * 4u; uint lo = a.x + o; return uvec2(lo, a.y + (lo < o ? 1u : 0u)); }
 uvec2 dust_l_addr_o(uvec2 pyr, uint word) { uvec2 a = uvec2(pyr); uint o = word * 4u; uint lo = a.x + o; return uvec2(lo, a.y + (lo < o ? 1u : 0u)); }
@@ -2520,13 +2527,24 @@ DustScreenPacket dust_l_get() {
 // buffer-reference access inside dust_capsule_tau's precise cone otherwise spreads NoContraction
 // to every buffer-reference store of the shader (glslang's precise propagation)
 layout(buffer_reference, std430, buffer_reference_align = 4) volatile buffer DustLRowV { uint v[]; };
+// The workgroup blob's walk words (33-46) are shared words, not the slot's: lane 0's stores were
+// read back by every lane through uniform (scalar, on AMD) loads that did not see them
+#ifdef DUST_LEAF_WG
+shared uint dust_l_ws[14];
+uint dust_lv(uint k) { return (k >= 33u && k <= 46u) ? dust_l_ws[k - 33u] : DustLRowV(dust_l_slot).v[k]; }
+#else
 uint dust_lv(uint k) { return DustLRowV(dust_l_slot).v[k]; }
+#endif
 void dust_lv_set(uint k, uint v) { DustLRowV(dust_l_slot).v[k] = v; }
 // (every call site has the push-constant buffer's address as `pyr`, a uvec2)
 // (perf9_O fix 3) through a function: a store to DustUintBuffer(pyr) in the caller has no symbol
 // root, so glslang's precise propagation gave every such store of the shader one object and
 // spread NoContraction over the whole lane walk (the tree's set is dust_capsule_tau's cone only)
+#ifdef DUST_LEAF_WG
+void dust_lv_store(uvec2 pyr_, uint k_, uint v_) { dust_l_ws[k_ - 33u] = v_; }
+#else
 void dust_lv_store(uvec2 pyr_, uint k_, uint v_) { DustUintBuffer(pyr_).v[((dust_l_slot.x - pyr_.x) >> 2u) + k_] = v_; }
+#endif
 #define dust_lv_set(k_, v_) dust_lv_store(uvec2(pyr), (k_), (v_))
 #define DUST_O_COL(n_) DustUintBuffer(pyr).v[DUST_LS(33u) + (n_) * DUST_SQUEUE_CAPACITY]
 #define LQV(k) uintBitsToFloat(dust_lv(k))
