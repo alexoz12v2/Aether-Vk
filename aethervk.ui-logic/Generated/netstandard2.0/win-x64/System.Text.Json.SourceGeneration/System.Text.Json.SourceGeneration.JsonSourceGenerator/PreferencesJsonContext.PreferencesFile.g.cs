@@ -46,7 +46,7 @@ namespace AetherVk.Logic.Services
 
         private static global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[] PreferencesFilePropInit(global::System.Text.Json.JsonSerializerOptions options)
         {
-            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[8];
+            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[9];
 
             var info0 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<int>
             {
@@ -212,6 +212,26 @@ namespace AetherVk.Logic.Services
             
             properties[7] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<int?>(options, info7);
 
+            var info8 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<int?>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.Services.PreferencesFile),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.Services.PreferencesFile)obj).ParticleQuality,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.Services.PreferencesFile)obj).ParticleQuality = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "ParticleQuality",
+                JsonPropertyName = "particle_quality",
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.Services.PreferencesFile).GetProperty("ParticleQuality", InstanceMemberBindingFlags, null, typeof(int?), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[8] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<int?>(options, info8);
+
             return properties;
         }
 
@@ -241,6 +261,8 @@ namespace AetherVk.Logic.Services
             global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.Services.PreferencesFile)value).DustHazeDetail, NullableInt32);
             writer.WritePropertyName(PropName_dust_reuse_px);
             global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.Services.PreferencesFile)value).DustReuseTolerance, NullableInt32);
+            writer.WritePropertyName(PropName_particle_quality);
+            global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.Services.PreferencesFile)value).ParticleQuality, NullableInt32);
 
             writer.WriteEndObject();
         }

@@ -54,6 +54,11 @@ use core::sync::atomic::{AtomicU64, Ordering};
 #[cfg(test)]
 mod tests;
 
+pub mod fits_metadata;
+pub mod fits_stretch;
+#[cfg(test)]
+pub(crate) mod fits_tests;
+
 /// J2000 equator → ecliptic J2000 rotation angle about +X (ANISE / SPICE `ECLIPJ2000`, IAU 1976
 /// 84381.448″): the engine's one obliquity, `simulation_api::astrometry::OBLIQUITY_J2000_RAD`.
 pub const OBLIQUITY_J2000_RAD: f64 = crate::simulation_api::astrometry::OBLIQUITY_J2000_RAD;

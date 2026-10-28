@@ -2011,9 +2011,10 @@ fn camera_aim_error(
 }
 
 /// The app's real scene (almanac Earth with its BPC rotation, the scene camera parented to the
-/// Earth like the C# does): the native Earth observer aims at the Sun when a Sun submode is set
-/// (lock-in and tracking) and, tracking, keeps aiming at it in every commit while the simulation
-/// plays at 1 h/s (the Earth turns ~15° per second).
+/// Earth like the C# does): the native Earth observer aims at the Sun when set (Sun tracking,
+/// topocentric and geocentric, and a free look aimed at it) and, tracking from the surface, keeps
+/// aiming at it in every commit while the simulation plays at 1 h/s (the Earth turns ~15° per
+/// second).
 #[test]
 fn test_earth_observer_aims_at_the_sun_on_the_real_scene() {
   use crate::simulation_api::earth_observer::EarthObserverMode;
@@ -2061,8 +2062,12 @@ fn test_earth_observer_aims_at_the_sun_on_the_real_scene() {
     camera_aim_error(&g, cam, sun)
   };
 
-  // lock-in aims when set (the C# computes the body-fixed look the same way)
-  for mode in [EarthObserverMode::SunTracking, EarthObserverMode::SunLockIn] {
+  // every submode aims when set (the free look is the world look at the Sun from the site)
+  for (mode, topocentric) in [
+    (EarthObserverMode::SunTracking, true),
+    (EarthObserverMode::Free, true),
+    (EarthObserverMode::SunTracking, false),
+  ] {
     let look = {
       let scenes = ctx.scenes.read();
       let g = scenes.get_scene(scene_id).unwrap();
@@ -2076,17 +2081,9 @@ fn test_earth_observer_aims_at_the_sun_on_the_real_scene() {
         surf,
       );
       let cam_pos = [ep[0] + sw[0], ep[1] + sw[1], ep[2] + sw[2]];
-      let aimed = crate::simulation_api::earth_observer::look_at(
+      crate::simulation_api::earth_observer::look_at(
         [-cam_pos[0], -cam_pos[1], -cam_pos[2]],
         lat_deg,
-      );
-      crate::simulation_api::earth_observer::qnormalize(
-        crate::simulation_api::earth_observer::qmul(
-          crate::simulation_api::earth_observer::qinverse(
-            crate::simulation_api::earth_observer::qnormalize(er),
-          ),
-          aimed,
-        ),
       )
     };
     assert!(
@@ -2096,6 +2093,7 @@ fn test_earth_observer_aims_at_the_sun_on_the_real_scene() {
         Some(mode),
         earth.as_ffi(),
         0,
+        topocentric,
         lat_deg,
         lon_deg,
         0.0,
@@ -2104,7 +2102,7 @@ fn test_earth_observer_aims_at_the_sun_on_the_real_scene() {
       "{mode:?}: native observer refused"
     );
     let e = read_error();
-    assert!(e < 1e-6, "{mode:?} when set: Sun {e} rad off the view axis");
+    assert!(e < 1e-6, "{mode:?} (topocentric {topocentric}) when set: Sun {e} rad off the view axis");
   }
 
   // tracking while playing: every commit re-aims
@@ -2114,6 +2112,7 @@ fn test_earth_observer_aims_at_the_sun_on_the_real_scene() {
     Some(EarthObserverMode::SunTracking),
     earth.as_ffi(),
     0,
+    true,
     lat_deg,
     lon_deg,
     0.0,

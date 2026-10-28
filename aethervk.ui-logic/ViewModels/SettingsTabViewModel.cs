@@ -20,7 +20,6 @@ public partial class SettingsTabViewModel
   private readonly CompositeDisposable _disposables = [];
   private readonly INativeRuntimeService _runtimeService;
   private readonly ISchedulerProvider _schedulerProvider;
-  private readonly IFileDialogService? _fileDialogService;
 
   [ObservableProperty]
   private string _cameraModeName = "Up Zenith";
@@ -55,12 +54,12 @@ public partial class SettingsTabViewModel
     IScreenInfoProvider screenInfoProvider,
     Input.InputRegistry inputRegistry,
     PreferencesService preferences,
-    IFileDialogService? fileDialogService = null
+    IFileDialogService? fileDialogService = null,
+    FitsImageService? fitsImageService = null
   )
     : base("Settings", sessionService)
   {
     _translationService = translationService;
-    _fileDialogService = fileDialogService;
     _runtimeService = runtimeService;
     _schedulerProvider = schedulerProvider;
     CometAppearance = new CometAppearanceViewModel(
@@ -75,7 +74,9 @@ public partial class SettingsTabViewModel
       billboardService,
       assetLibrary,
       screenInfoProvider,
-      schedulerProvider);
+      schedulerProvider,
+      fitsImageService,
+      timelineService.SeekAsync);
 
     Icon = "⚙";
 
@@ -92,10 +93,10 @@ public partial class SettingsTabViewModel
           {
             int nextIndex = ActiveViewports.Count;
             var vm = new ViewportSettingsViewModel(
-              cameraId, nextIndex, _runtimeService, _schedulerProvider, cameraService,
-              _fileDialogService, _translationService);
+              cameraId, nextIndex, _runtimeService, _schedulerProvider, cameraService);
             ActiveViewports.Add(vm);
             HasActiveViewport = true;
+            Billboards.AttachViewport(new CameraBillboardProbe(cameraService));
 
             // Simple fallback to keep the global mode display somewhat functional
             if (ActiveViewports.Count == 1)

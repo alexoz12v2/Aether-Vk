@@ -83,6 +83,8 @@ public partial interface ICometTabViewModel
   double PoleRaRateDegCen { get; set; }
   double PoleDecRateDegCen { get; set; }
   double RotRateDegDay { get; set; }
+  /// <summary>Sidereal rotation period in hours (the rate seen another way).</summary>
+  double RotationPeriodHours { get; set; }
   int BodyFixedOrientationIndex { get; set; }
 
   // ── Commands ──────────────────────────────────────────────────────────────

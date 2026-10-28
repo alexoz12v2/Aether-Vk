@@ -64,14 +64,49 @@ public partial class ModelTabViewModel
   [ObservableProperty]
   private bool _enableLegacyExpanders;
 
+  /// <summary>The comet's sphere gizmo (wireframe + axes), saved in the model session.</summary>
   [ObservableProperty]
-  private int _isGizmoVisibleIndex = 0; // 0 = Yes, 1 = No
+  private bool _isGizmoVisible = true;
 
-  partial void OnIsGizmoVisibleIndexChanged(int value)
+  partial void OnIsGizmoVisibleChanged(bool value)
   {
     if (CurrentSession is { } session)
-      session.SphereGizmoVisible = value == 0;
-    _runtimeService?.SetSphereGizmoVisibility(value == 0);
+      session.SphereGizmoVisible = value;
+    _runtimeService?.SetSphereGizmoVisibility(value);
+  }
+
+  /// <summary>
+  /// The selected jet's latitude/longitude arcs and degree labels in the viewport (the other jets
+  /// show their direction line only), saved in the model session.
+  /// </summary>
+  [ObservableProperty]
+  private bool _showJetAngles;
+
+  partial void OnShowJetAnglesChanged(bool value)
+  {
+    if (CurrentSession is { } session)
+      session.ShowJetAngles = value;
+    ApplyJetAngles();
+  }
+
+  // selecting a jet only moves the angle display: the camera stays where it is
+  partial void OnSelectedJetChanged(JetViewModel? value) => ApplyJetAngles();
+
+  private void ApplyJetAngles()
+  {
+    if (Jets is not { } jets || _runtimeService is null)
+      return;
+    foreach (var jet in jets)
+      if (jet.NativePsId != 0)
+        _runtimeService.SetJetAngleVisibility(jet.NativePsId, ShowJetAngles && ReferenceEquals(jet, SelectedJet));
+  }
+
+  // a commit rebuilds the comet with its gizmo shown (and a toggle made before any commit had no
+  // comet to reach): apply the stored choice once the comet exists
+  partial void OnIsCometCommittedChanged(bool value)
+  {
+    if (value)
+      _runtimeService?.SetSphereGizmoVisibility(IsGizmoVisible);
   }
 
   [ObservableProperty]
@@ -282,25 +317,14 @@ public partial class ModelTabViewModel
       _runtimeService.AddParticleSystem(model, psJet, out ulong psId);
       jet.NativePsId = psId;
     }
+    // a new native jet starts without angles: the selected one gets them back
+    if (ShowJetAngles && ReferenceEquals(jet, SelectedJet) && jet.NativePsId != 0)
+      _runtimeService.SetJetAngleVisibility(jet.NativePsId, true);
   }
 
   public void SetCursorPosition(int x, int y)
   {
       _platformWindowService.SetCursorPosition(x, y);
-  }
-
-  partial void OnSelectedJetChanged(JetViewModel? value) => FaceJet(value);
-
-  /// <summary>
-  /// Editing a jet: every viewport orbits the nucleus facing its site, so the spawn point and
-  /// whether it is lit are in view. The previous mode is not restored (key 1 returns to the observer).
-  /// </summary>
-  private void FaceJet(JetViewModel? jet)
-  {
-    if (jet is null || !IsCometCommitted || _cameras is null)
-      return;
-    foreach (var camera in _cameras.All)
-      camera.FaceNucleusSite(jet.LatitudeRad, jet.LongitudeRad);
   }
 
   /// <summary>
@@ -438,7 +462,8 @@ public partial class ModelTabViewModel
     PushDustViewFlags();
     DustFlowSpeed = session.DustFlowSpeed;
     _runtimeService?.SetDustFlowSpeed((float)DustFlowSpeed);
-    IsGizmoVisibleIndex = session.SphereGizmoVisible ? 0 : 1;
+    IsGizmoVisible = session.SphereGizmoVisible;
+    ShowJetAngles = session.ShowJetAngles;
 
     _modelChangeSub.Disposable = Observable
       .FromEventPattern<PropertyChangedEventHandler, PropertyChangedEventArgs>(
@@ -588,16 +613,6 @@ public partial class ModelTabViewModel
 
   private void SubscribeJetChanges(JetViewModel jet, ModelSession session)
   {
-    Observable
-      .FromEventPattern<PropertyChangedEventHandler, PropertyChangedEventArgs>(
-        h => jet.PropertyChanged += h,
-        h => jet.PropertyChanged -= h)
-      .Where(e => e.EventArgs.PropertyName is nameof(JetViewModel.LatitudeDeg) or nameof(JetViewModel.LongitudeDeg))
-      .Throttle(TimeSpan.FromMilliseconds(150), _schedulerProvider.MainThread)
-      .Where(_ => ReferenceEquals(SelectedJet, jet))
-      .Subscribe(_ => FaceJet(jet))
-      .AddDisposableTo(_disposables);
-
     Observable
       .FromEventPattern<PropertyChangedEventHandler, PropertyChangedEventArgs>(
         h => jet.PropertyChanged += h,

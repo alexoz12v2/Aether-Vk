@@ -42,7 +42,9 @@ public sealed class AssetLibraryService : IDisposable
 {
   /// <summary>File extensions accepted by the native importer.</summary>
   public static readonly string[] MeshExtensions = ["obj", "ply", "gltf", "glb"];
-  public static readonly string[] TextureExtensions = ["png", "jpg", "jpeg", "ktx2"];
+  /// <summary>FITS (<c>fit</c>, <c>fits</c>, <c>fts</c>) imports as an RGBA8 texture, stretched
+  /// natively (see <c>docs/fits_ffi_contract.md</c>).</summary>
+  public static readonly string[] TextureExtensions = ["png", "jpg", "jpeg", "ktx2", "fit", "fits", "fts"];
   public static readonly string[] AllExtensions = [.. MeshExtensions, .. TextureExtensions];
 
   private readonly INativeRuntimeService _runtimeService;
@@ -112,6 +114,25 @@ public sealed class AssetLibraryService : IDisposable
   public void NotifyAppearanceChanged(CometAppearanceDto applied) => _appearanceChanged.OnNext(applied);
 
   private readonly System.Reactive.Subjects.Subject<CometAppearanceDto> _appearanceChanged = new();
+
+  /// <summary>
+  /// The texels of a texture changed in place (a FITS re-stretch): same id and size, new pixels.
+  /// Whoever copied them (the billboard windows) copies them again. Observed on the main thread.
+  /// </summary>
+  public IObservable<ulong> TexelsChanged => _texelsChanged.ObserveOn(_schedulerProvider.MainThread);
+
+  private readonly Subject<ulong> _texelsChanged = new();
+
+  /// <summary>
+  /// Reports that texture <paramref name="assetId"/> was re-rendered natively: its thumbnail is
+  /// fetched again (the textures list re-emits) and <see cref="TexelsChanged"/> fires.
+  /// </summary>
+  public void NotifyTexelsChanged(ulong assetId)
+  {
+    _thumbnails.TryRemove(assetId, out _);
+    Refresh();
+    if (!_disposed) _texelsChanged.OnNext(assetId);
+  }
 
   public ImmutableArray<ImportedAsset> CurrentMeshes => _meshes.Value;
   public ImmutableArray<ImportedAsset> CurrentTextures => _textures.Value;

@@ -130,7 +130,25 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
   private double _poleDecRateDegCen;
 
   [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(RotationPeriodHours))]
   private double _rotRateDegDay;
+
+  /// <summary>
+  /// Sidereal rotation period in hours, the same quantity as <see cref="RotRateDegDay"/> (period =
+  /// 360° / rate × 24 h); setting it keeps the rate's sign (prograde / retrograde). 0 = no rotation.
+  /// </summary>
+  public double RotationPeriodHours
+  {
+    get => RotRateDegDay == 0 ? 0 : Math.Round(360.0 * 24.0 / Math.Abs(RotRateDegDay), 6);
+    set
+    {
+      if (double.IsNaN(value) || double.IsInfinity(value) || value <= 0)
+        return;
+      if (Math.Abs(value - RotationPeriodHours) < 1e-9)
+        return;
+      RotRateDegDay = (RotRateDegDay < 0 ? -1 : 1) * 360.0 * 24.0 / value;
+    }
+  }
 
   [ObservableProperty]
   private int _bodyFixedOrientationIndex = 0; // 0 = Yes, 1 = No
@@ -539,10 +557,12 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
       if (IsAlmanacCommitted)
         _cometConfig.DecommitComet();
 
-      // Auto-commit timeline before loading SPK
-      if (_currentProposedTimeRange is not null)
+      // Auto-commit timeline before loading SPK. A refused range would leave the engine on the
+      // previous one (Run to End then landed on a stale end): never commit on top of it.
+      if (_currentProposedTimeRange is null || !_timeline.RequestEpochRange(_currentProposedTimeRange))
       {
-        _timeline.RequestEpochRange(_currentProposedTimeRange);
+        DownloadStatus = "Timeline could not be applied: commit cancelled.";
+        return;
       }
 
       // Commit the new SPK — sbData carries the SBDB Keplerian elements for orbit track generation

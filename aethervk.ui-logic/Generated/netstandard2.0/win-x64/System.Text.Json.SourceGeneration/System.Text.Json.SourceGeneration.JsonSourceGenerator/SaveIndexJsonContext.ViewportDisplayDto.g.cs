@@ -46,7 +46,7 @@ namespace AetherVk.Logic.SaveFile
 
         private static global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[] ViewportDisplayDtoPropInit(global::System.Text.Json.JsonSerializerOptions options)
         {
-            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[3];
+            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[4];
 
             var info0 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<string>
             {
@@ -112,6 +112,26 @@ namespace AetherVk.Logic.SaveFile
             
             properties[2] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<bool>(options, info2);
 
+            var info3 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<bool>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.ViewportDisplayDto),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.ViewportDisplayDto)obj).ShowBehindCamera,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.ViewportDisplayDto)obj).ShowBehindCamera = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "ShowBehindCamera",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.ViewportDisplayDto).GetProperty("ShowBehindCamera", InstanceMemberBindingFlags, null, typeof(bool), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[3] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<bool>(options, info3);
+
             return properties;
         }
 
@@ -130,6 +150,7 @@ namespace AetherVk.Logic.SaveFile
             writer.WriteString(PropName_ortho_unit, ((global::AetherVk.Logic.SaveFile.ViewportDisplayDto)value).OrthoUnit);
             writer.WriteString(PropName_fov_unit, ((global::AetherVk.Logic.SaveFile.ViewportDisplayDto)value).FovUnit);
             writer.WriteBoolean(PropName_ortho_proportions_locked, ((global::AetherVk.Logic.SaveFile.ViewportDisplayDto)value).OrthoProportionsLocked);
+            writer.WriteBoolean(PropName_show_behind_camera, ((global::AetherVk.Logic.SaveFile.ViewportDisplayDto)value).ShowBehindCamera);
 
             writer.WriteEndObject();
         }

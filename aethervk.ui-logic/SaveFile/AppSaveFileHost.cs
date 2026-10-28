@@ -323,7 +323,9 @@ public sealed class AppSaveFileHost : ISaveFileHost
   {
     var mode = SaveIndexMapping.ParseSnake(spk.ReferenceOrbitMode, ReferenceOrbitMode.Sbdb);
     var sb = SaveIndexMapping.FromDto(spk.Sbdb ?? new SbdbDto { SpkId = spk.NaifId });
-    _timeline.RequestEpochRange(range);
+    // the saved range must reach the engine first (Run to End seeks its end); ResetAsync decommitted
+    if (!_timeline.RequestEpochRange(range))
+      return false;
     if (!await _cometConfig.CommitCometAsync(spkPath, spk.NaifId, range, sb, mode))
       return false;
 

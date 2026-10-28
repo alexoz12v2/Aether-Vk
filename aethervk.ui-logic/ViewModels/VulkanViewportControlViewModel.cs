@@ -210,11 +210,16 @@ public partial class VulkanViewportControlViewModel(
   /// </summary>
   public void FocusViewport() => _handler?.FocusViewportWindow();
 
-  public void NotifyResized(double width, double height)
-  {
-    _viewport3DViewModel.Width = (uint)Math.Max(1, width);
-    _viewport3DViewModel.Height = (uint)Math.Max(1, height);
-  }
+  /// <summary>The control's size in Avalonia DIPs at <paramref name="renderScaling"/>: the camera
+  /// works in the swapchain's physical pixels.</summary>
+  public void NotifyResized(double width, double height, double renderScaling = 1.0) =>
+    _viewport3DViewModel.SetPixelSize(
+      Viewport3DViewModel.DipToPixels(width, renderScaling),
+      Viewport3DViewModel.DipToPixels(height, renderScaling));
+
+  /// <summary>The control's top-left corner on the desktop, physical px (billboard coordinates).</summary>
+  public void NotifyScreenOrigin(double x, double y) =>
+    _viewport3DViewModel.CameraService.ViewportScreenOriginPx = (x, y);
 
   public void Dispose()
   {

@@ -41,14 +41,21 @@ public sealed class DesktopBillboardService : IDisposable
       screen.Bounds.X + screen.Bounds.Width / 2.0,
       screen.Bounds.Y + screen.Bounds.Height / 2.0,
       w,
-      h);
+      h)
+    {
+      ImageWidthPx = (int)Math.Min(int.MaxValue, texture.A),
+      ImageHeightPx = (int)Math.Min(int.MaxValue, texture.B),
+    };
     lock (_gate)
       _billboards.OnNext(Current.Add(b));
     return b;
   }
 
-  /// <summary>Replaces the billboard with the same id (geometry, alpha, texture, gizmo …).</summary>
-  public bool Update(DesktopBillboard updated)
+  /// <summary>Replaces the billboard with the same id (geometry, alpha, texture, gizmo …). A size
+  /// change of a billboard bound to its physical size (a row edit, a scale drag) unbinds it.</summary>
+  public bool Update(DesktopBillboard updated) => Replace(updated, keepBinding: false);
+
+  private bool Replace(DesktopBillboard updated, bool keepBinding)
   {
     lock (_gate)
     {
@@ -58,6 +65,9 @@ public sealed class DesktopBillboardService : IDisposable
         if (list[i].Id != updated.Id)
           continue;
         var clean = Sanitize(updated);
+        if (!keepBinding && list[i].PhysicalSizeBound && clean.PhysicalSizeBound
+            && (clean.WidthPx != list[i].WidthPx || clean.HeightPx != list[i].HeightPx))
+          clean = clean with { PhysicalSizeBound = false };
         if (list[i] != clean)
           _billboards.OnNext(list.SetItem(i, clean));
         return true;
@@ -72,6 +82,36 @@ public sealed class DesktopBillboardService : IDisposable
     {
       var b = Find(id);
       return b is not null && Update(edit(b));
+    }
+  }
+
+  /// <summary>
+  /// "Apply physical size": sizes the billboard to cover the sky its image covers on a viewport of
+  /// <paramref name="viewportArcsecPerPx"/> (see <see cref="DesktopBillboardGeometry.PhysicalSize"/>)
+  /// and binds it, so <see cref="RescaleBound"/> keeps it matched. False without a physical size.
+  /// </summary>
+  public bool ApplyPhysicalSize(Guid id, double viewportArcsecPerPx)
+  {
+    lock (_gate)
+    {
+      if (Find(id) is not { } b || DesktopBillboardGeometry.PhysicalSize(b, viewportArcsecPerPx) is not { } size)
+        return false;
+      return Replace(b with { WidthPx = size.WidthPx, HeightPx = size.HeightPx, PhysicalSizeBound = true }, keepBinding: true);
+    }
+  }
+
+  /// <summary>Re-sizes every bound billboard for a new viewport scale (zoom, resize).</summary>
+  public void RescaleBound(double viewportArcsecPerPx)
+  {
+    lock (_gate)
+    {
+      var list = Current;
+      var next = list.Select(b =>
+        b.PhysicalSizeBound && DesktopBillboardGeometry.PhysicalSize(b, viewportArcsecPerPx) is { } size
+          ? Sanitize(b with { WidthPx = size.WidthPx, HeightPx = size.HeightPx })
+          : b).ToImmutableArray();
+      if (!next.SequenceEqual(list))
+        _billboards.OnNext(next);
     }
   }
 
@@ -116,6 +156,9 @@ public sealed class DesktopBillboardService : IDisposable
       WidthPx = Math.Max(DesktopBillboardGeometry.MinSidePx, b.WidthPx),
       HeightPx = Math.Max(DesktopBillboardGeometry.MinSidePx, b.HeightPx),
       RotationDeg = DesktopBillboardGeometry.NormalizeDeg(b.RotationDeg),
+      ImageArcsecPerPx = b.ImageArcsecPerPx is { } a && a > 0 && !double.IsInfinity(a) ? a : null,
+      ImageWidthPx = Math.Max(0, b.ImageWidthPx),
+      ImageHeightPx = Math.Max(0, b.ImageHeightPx),
     };
 
   public void Dispose() => _billboards.Dispose();

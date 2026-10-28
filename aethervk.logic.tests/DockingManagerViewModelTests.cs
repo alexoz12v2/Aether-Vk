@@ -296,5 +296,71 @@ public class DockingManagerViewModelTests : IDisposable
     var foundNode = vm.FindNodeContainingTab(vm.RootNode, tabToFind);
     Assert.Null(foundNode);
   }
+
+  // ── single, pinned viewport (a second viewport crashed the app; re-docking re-created it) ──
+
+  private sealed class PinnedSingleTab() : TabItemViewModel("Pinned")
+  {
+    public override bool IsPinned => true;
+    public override bool IsSingleInstance => true;
+  }
+
+  private (DockingManagerViewModel Vm, TabGroupNodeViewModel Left, TabGroupNodeViewModel Right, PinnedSingleTab Pinned)
+    SplitLayoutWithPinnedTab()
+  {
+    var pinned = new PinnedSingleTab();
+    _mockFactory.Setup(f => f.CreateScopedTab(typeof(PinnedSingleTab))).Returns(() => (new PinnedSingleTab(), null));
+    _mockFactory.Setup(f => f.AvailableTabs).Returns(
+      [new TabDescriptor("Pinned", typeof(PinnedSingleTab), false), new TabDescriptor("UI Test Panel", typeof(UITestPanelViewModel), false)]);
+    var left = new TabGroupNodeViewModel(pinned, _mockFactory.Object, _mockLayoutMessenger.Object);
+    var right = new TabGroupNodeViewModel(new DebugUiViewModel(), _mockFactory.Object, _mockLayoutMessenger.Object);
+    var split = new SplitNodeViewModel(left, right, SplitOrientation.Horizontal);
+    left.Parent = split;
+    right.Parent = split;
+    return (new DockingManagerViewModel(_mockFactory.Object, _mockLayoutMessenger.Object, split), left, right, pinned);
+  }
+
+  [Fact]
+  public void SingleInstanceTab_IsRefusedAnywhereInTheLayout_AndHiddenFromTheMenu()
+  {
+    var (_, _, right, _) = SplitLayoutWithPinnedTab();
+
+    right.AddNewTabCommand.Execute(typeof(PinnedSingleTab));
+    right.ChangeSelectedTabCommand.Execute(typeof(PinnedSingleTab));
+
+    Assert.DoesNotContain(right.Tabs, t => t is PinnedSingleTab);
+    Assert.False(right.CanCreateTab(typeof(PinnedSingleTab)));
+    Assert.DoesNotContain(right.AvailableTabs, d => d.TabType == typeof(PinnedSingleTab));
+    Assert.Contains(right.AvailableTabs, d => d.TabType == typeof(UITestPanelViewModel));
+    _mockFactory.Verify(f => f.CreateScopedTab(typeof(PinnedSingleTab)), Times.Never);
+  }
+
+  [Fact]
+  public void PinnedTab_CannotBeClosedReplacedOrDragged()
+  {
+    var (vm, left, right, pinned) = SplitLayoutWithPinnedTab();
+
+    left.CloseTabCommand.Execute(pinned);
+    left.CloseAllTabsCommand.Execute(null);
+    left.ChangeSelectedTabCommand.Execute(typeof(UITestPanelViewModel));
+    vm.Receive(new TabDroppedMessage(pinned, right, DockZone.Center));
+    vm.Receive(new TabDroppedMessage(pinned, right, DockZone.Left));
+
+    Assert.Same(pinned, left.SelectedTab);
+    Assert.Contains(pinned, left.Tabs);
+    Assert.DoesNotContain(pinned, right.Tabs);
+    Assert.Same(left, vm.FindNodeContainingTab(vm.RootNode, pinned));
+  }
+
+  [Fact]
+  public void CloseAllTabs_KeepsThePinnedTab_ClosesTheOthers()
+  {
+    var (_, left, _, pinned) = SplitLayoutWithPinnedTab();
+    left.AddNewTabCommand.Execute(typeof(UITestPanelViewModel));
+
+    left.CloseAllTabsCommand.Execute(null);
+
+    Assert.Equal([pinned], left.Tabs);
+  }
 }
 #endif

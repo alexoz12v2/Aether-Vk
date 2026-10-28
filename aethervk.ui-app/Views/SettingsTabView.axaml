@@ -62,8 +62,9 @@
   <ScrollViewer Classes="left-scrollbar" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
     <StackPanel Orientation="Vertical" Spacing="16" Margin="16,16,16,16">
 
-      <!-- General Settings for Research -->
-      <Border Classes="accordion">
+      <!-- General Settings for Research: not wired yet (the dates live in the timeline), hidden
+           until it drives the session (third feedback round) -->
+      <Border Classes="accordion" IsVisible="False">
         <Expander Header="{Binding StrGeneral}">
           <!-- Form-Like: label auto-sizes, input stretches -->
           <Grid ColumnDefinitions="Auto,16,*"
@@ -101,8 +102,9 @@
         </Expander>
       </Border>
 
-      <!-- Orbital Elements (Bunch of computed properties over the selected record in the CSV Tab) -->
-      <Border Classes="accordion">
+      <!-- Orbital Elements (Bunch of computed properties over the selected record in the CSV Tab):
+           not bound yet, so it never filled; hidden until it is -->
+      <Border Classes="accordion" IsVisible="False">
         <Expander Header="{Binding StrOrbitalElements}">
           <!--
           Column layout:
@@ -355,7 +357,7 @@
                         <TextBlock Text="{Binding DisplayLabel}" Opacity="0.7" />
                       </StackPanel>
                     </Expander.Header>
-                    <Grid ColumnDefinitions="Auto,16,*" RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto"
+                    <Grid ColumnDefinitions="Auto,16,*" RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto"
                           Margin="4,8,4,4">
                       <TextBlock Grid.Row="0" Grid.ColumnSpan="3" TextWrapping="Wrap"
                                  Foreground="{DynamicResource Sem.Warning}"
@@ -393,7 +395,115 @@
                       <CheckBox Grid.Row="10" Grid.Column="2" AutomationProperties.AutomationId="BillboardVisible" IsChecked="{Binding IsVisible}"
                                 Content="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrBillboardVisible}" />
 
-                      <Button Grid.Row="12" Grid.Column="2" HorizontalAlignment="Right"
+                      <!-- Physical size (Earth observer): the image's plate scale sizes it on the sky -->
+                      <TextBlock Grid.Row="12" Grid.Column="0" Text="Physical size" />
+                      <StackPanel Grid.Row="12" Grid.Column="2" Spacing="4">
+                        <TextBox AutomationProperties.AutomationId="BillboardArcsecPerPx" Text="{Binding ImageArcsecPerPxText}"
+                                 Watermark="plate scale, arcsec / image px (e.g. 0.3037)"
+                                 ToolTip.Tip="The image's plate scale in arcseconds per image pixel (dot decimals). Empty: no physical size." />
+                        <TextBlock Text="{Binding PhysicalSizeLabel}" TextWrapping="Wrap" Opacity="0.8" />
+                        <TextBlock Text="Bound: follows the viewport's scale (a manual resize unbinds)" TextWrapping="Wrap"
+                                   Opacity="0.7" IsVisible="{Binding IsPhysicalSizeBound}" />
+                        <WrapPanel Orientation="Horizontal">
+                          <Button AutomationProperties.AutomationId="BillboardApplyPhysicalSize" Content="Apply physical size" Margin="0,0,6,4"
+                                  Command="{Binding ApplyPhysicalSizeCommand}"
+                                  ToolTip.Tip="Size the billboard to the sky its image covers at the Earth observer's current scale, and keep it so on zoom and resize." />
+                          <Button AutomationProperties.AutomationId="BillboardCenterOnComet" Content="Center on comet" Margin="0,0,6,4"
+                                  Command="{Binding CenterOnCometCommand}"
+                                  ToolTip.Tip="Move the billboard's centre onto the comet as the viewport draws it (enabled while the comet is on screen)." />
+                          <Button AutomationProperties.AutomationId="BillboardMatchCamera" Content="Match camera to image" Margin="0,0,6,4"
+                                  Command="{Binding MatchCameraToImageCommand}"
+                                  ToolTip.Tip="Set the Earth observer's scale to the image's plate scale, show the image 1:1 and centre it on the comet." />
+                        </WrapPanel>
+                      </StackPanel>
+
+                      <!-- FITS texture: header facts and cards, stretch, and the buttons that set the
+                           simulation up like the observation (FitsImageViewModel) -->
+                      <ContentControl Grid.Row="14" Grid.ColumnSpan="3" Content="{Binding Fits}" IsVisible="{Binding IsFits}">
+                        <ContentControl.ContentTemplate>
+                          <DataTemplate x:DataType="vm:FitsImageViewModel">
+                            <Expander Header="FITS image" HorizontalAlignment="Stretch"
+                                      AutomationProperties.AutomationId="BillboardFitsSection">
+                              <StackPanel Spacing="10" Margin="4,8,4,4">
+                                <TextBlock Text="Key facts" FontWeight="SemiBold" />
+                                <ItemsControl x:Name="FitsFacts" ItemsSource="{Binding Facts}">
+                                  <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:FitsFactItem">
+                                      <Grid ColumnDefinitions="110,8,*" Margin="0,0,0,2">
+                                        <TextBlock Grid.Column="0" Text="{Binding Label}" TextWrapping="Wrap"
+                                                   Foreground="{DynamicResource Text.Secondary}" />
+                                        <SelectableTextBlock Grid.Column="2" Text="{Binding Value}" TextWrapping="Wrap" />
+                                      </Grid>
+                                    </DataTemplate>
+                                  </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <CheckBox Content="Flip longitude sign" IsChecked="{Binding FlipSiteLon}"
+                                          IsVisible="{Binding HasSiteLon}"
+                                          ToolTip.Tip="Use the opposite sign of the site longitude: some headers say 'west' for an east-positive value (the Liverpool Telescope's LONGITUD). The header's LST settles it when present." />
+
+                                <TextBlock Text="Header" FontWeight="SemiBold" />
+                                <DataGrid x:Name="FitsHeaderGrid" ItemsSource="{Binding Cards}"
+                                          AutoGenerateColumns="False" IsReadOnly="True" Height="240"
+                                          AutomationProperties.AutomationId="BillboardFitsHeader">
+                                  <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Key" Binding="{Binding Key}" />
+                                    <DataGridTextColumn Header="Value" Binding="{Binding Value}" Width="*" />
+                                    <DataGridTextColumn Header="Comment" Binding="{Binding Comment}" Width="2*" />
+                                  </DataGrid.Columns>
+                                </DataGrid>
+
+                                <TextBlock Text="Stretch" FontWeight="SemiBold" />
+                                <Grid ColumnDefinitions="*,6,*">
+                                  <ComboBox Grid.Column="0" HorizontalAlignment="Stretch"
+                                            ItemsSource="{Binding StretchModes}" SelectedItem="{Binding StretchMode}"
+                                            ToolTip.Tip="ZScale: IRAF zscale (the import's default). Percentile: black / white at two percentiles. Manual: black / white in data units." />
+                                  <ComboBox Grid.Column="2" HorizontalAlignment="Stretch"
+                                            ItemsSource="{Binding Transfers}" SelectedItem="{Binding Transfer}"
+                                            ToolTip.Tip="Transfer curve between black and white: linear, log or asinh (brings out faint dust)." />
+                                </Grid>
+                                <Grid ColumnDefinitions="Auto,6,*,12,Auto,6,*" IsVisible="{Binding HasStretchParams}">
+                                  <TextBlock Grid.Column="0" Text="{Binding Param0Label}" VerticalAlignment="Center" />
+                                  <TextBox Grid.Column="2" Text="{Binding Param0Text}" />
+                                  <TextBlock Grid.Column="4" Text="{Binding Param1Label}" VerticalAlignment="Center" />
+                                  <TextBox Grid.Column="6" Text="{Binding Param1Text}" />
+                                </Grid>
+                                <Grid ColumnDefinitions="*,8,Auto">
+                                  <TextBlock Grid.Column="0" Text="{Binding StretchResultText}" TextWrapping="Wrap"
+                                             Opacity="0.8" VerticalAlignment="Center" />
+                                  <Button Grid.Column="2" Content="Apply stretch" Classes="accent"
+                                          AutomationProperties.AutomationId="BillboardFitsApplyStretch"
+                                          Command="{Binding ApplyStretchCommand}" />
+                                </Grid>
+                                <ProgressBar IsIndeterminate="True" Height="4" IsVisible="{Binding IsApplyingStretch}" />
+
+                                <TextBlock Text="Compare with the simulation" FontWeight="SemiBold" />
+                                <WrapPanel Orientation="Horizontal">
+                                  <Button Content="Seek to observation" Margin="0,0,6,4"
+                                          Command="{Binding SeekToObservationCommand}"
+                                          ToolTip.Tip="Seek the timeline to the middle of the exposure (TDB)." />
+                                  <Button Content="Use observatory site" Margin="0,0,6,4"
+                                          Command="{Binding UseObservatorySiteCommand}"
+                                          ToolTip.Tip="Put the Earth observer on the header's site (topocentric, latitude, longitude, elevation)." />
+                                  <Button Content="Orient to image" Margin="0,0,6,4"
+                                          Command="{Binding OrientToImageCommand}" ToolTip.ShowOnDisabled="True"
+                                          ToolTip.Tip="Earth observer only: look at the image centre (WCS), turn the billboard like the sky in the view and move it to the viewport centre." />
+                                  <Button Content="Match camera to image" Margin="0,0,6,4"
+                                          Command="{Binding MatchCameraToImageCommand}" ToolTip.ShowOnDisabled="True"
+                                          ToolTip.Tip="Earth observer only: set the viewport's scale to the image's plate scale and show the image 1:1 on the comet." />
+                                  <Button Content="Set up comparison" Margin="0,0,6,4" Classes="accent"
+                                          AutomationProperties.AutomationId="BillboardFitsSetUpComparison"
+                                          Command="{Binding SetUpComparisonCommand}"
+                                          ToolTip.Tip="Enter the Earth observer, then seek, use the site, orient, match the scale, centre the billboard and lock the viewport for comparison." />
+                                </WrapPanel>
+                                <TextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap" Opacity="0.8"
+                                           IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                              </StackPanel>
+                            </Expander>
+                          </DataTemplate>
+                        </ContentControl.ContentTemplate>
+                      </ContentControl>
+
+                      <Button Grid.Row="16" Grid.Column="2" HorizontalAlignment="Right"
                               Content="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrBillboardDelete}"
                               Command="{Binding DeleteCommand}" />
                     </Grid>
@@ -409,6 +519,19 @@
       <Border Classes="accordion">
         <Expander Header="{Binding StrParticleRendering}" x:Name="ParticleRenderingSection">
           <StackPanel Spacing="10" Margin="12,8,12,12">
+            <Grid ColumnDefinitions="Auto,16,*,12,Auto">
+              <TextBlock Grid.Column="0" Text="Quality" VerticalAlignment="Center" />
+              <Slider Grid.Column="2" x:Name="ParticleQualitySlider"
+                      AutomationProperties.AutomationId="ParticleQualitySlider"
+                      Minimum="1" Maximum="5" TickFrequency="1" IsSnapToTickEnabled="True"
+                      TickPlacement="BottomRight"
+                      Value="{Binding ParticleRendering.QualitySliderValue}" />
+              <TextBlock Grid.Column="4" x:Name="ParticleQualityLabel" MinWidth="56"
+                         VerticalAlignment="Center"
+                         Text="{Binding ParticleRendering.QualityLabel}" />
+            </Grid>
+            <TextBlock Text="Lowest is the fastest; each step draws the dust finer. Editing a value below turns the quality to Custom. Saved for the next start."
+                       TextWrapping="Wrap" Foreground="{DynamicResource Text.Secondary}" />
             <Grid ColumnDefinitions="Auto,16,*">
               <TextBlock Grid.Column="0" Text="{Binding StrVolumeDetail}" />
               <ComboBox Grid.Column="2" HorizontalAlignment="Stretch"
@@ -509,8 +632,12 @@
                              Foreground="{DynamicResource Accent.Primary}"
                              FontWeight="SemiBold" />
 
+                  <CheckBox AutomationProperties.AutomationId="ComparisonLockCheckBox" Content="Lock viewport for comparison"
+                            IsChecked="{Binding IsComparisonLocked}"
+                            ToolTip.Tip="Refuse mouse orbit, pan and zoom and grey the projection, so the view stays matched to a telescope image." />
+
                   <!-- Projection type -->
-                  <Grid ColumnDefinitions="Auto,16,*">
+                  <Grid ColumnDefinitions="Auto,16,*" IsEnabled="{Binding !IsComparisonLocked}">
                     <TextBlock Grid.Column="0" Text="Type" />
                     <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="16">
                       <RadioButton AutomationProperties.AutomationId="ProjectionPerspective" Content="Perspective"
@@ -523,7 +650,7 @@
                   <!-- Perspective parameters -->
                   <Grid ColumnDefinitions="Auto,16,*"
                         RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto"
-                        IsVisible="{Binding IsPerspective}">
+                        IsVisible="{Binding IsPerspective}" IsEnabled="{Binding !IsComparisonLocked}">
                     <TextBlock Grid.Row="0" Grid.Column="0" Text="FOV" VerticalAlignment="Center" />
                     <controls:UnboundedSlider Grid.Row="0" Grid.Column="2" AutomationProperties.AutomationId="FovSlider"
                                               Value="{Binding PerspFovDisplay}"
@@ -574,7 +701,7 @@
                   <!-- Orthographic parameters -->
                   <Grid ColumnDefinitions="Auto,16,*"
                         RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto"
-                        IsVisible="{Binding IsOrthographic}">
+                        IsVisible="{Binding IsOrthographic}" IsEnabled="{Binding !IsComparisonLocked}">
                     <TextBlock Grid.Row="0" Grid.Column="0" Text="Half-Width" VerticalAlignment="Center" />
                     <controls:UnboundedSlider Grid.Row="0" Grid.Column="2" AutomationProperties.AutomationId="OrthoHalfWidthSlider"
                                               Value="{Binding OrthoHalfWidthDisplay}"
@@ -631,6 +758,8 @@
 
                     <StackPanel Grid.Row="10" Grid.Column="0" Grid.ColumnSpan="3" Orientation="Vertical" Spacing="8">
                       <CheckBox AutomationProperties.AutomationId="OrthoProportionsLock" Content="Keep Proportions Locked" IsChecked="{Binding IsOrthoProportionsLocked}" />
+                      <CheckBox AutomationProperties.AutomationId="ShowBehindCameraCheckBox" Content="Show objects behind camera" IsChecked="{Binding ShowBehindCamera}"
+                                ToolTip.Tip="Orthographic only: also draw the geometry behind the camera plane (within the far distance), as a telescope image does. Dust behind the camera is not drawn. A perspective view cannot show it." />
                       <Button AutomationProperties.AutomationId="RestoreOrthoProportionsButton" Content="Restore Proportions" Command="{Binding RestoreOrthoProportionsCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
                     </StackPanel>
                   </Grid>
@@ -666,8 +795,13 @@
                                FontWeight="SemiBold"
                                Foreground="{DynamicResource Accent.Primary}" />
 
+                    <CheckBox AutomationProperties.AutomationId="ObserverTopocentricCheckBox"
+                              Content="Observer on the Earth's surface (topocentric)"
+                              IsChecked="{Binding IsEarthObserverTopocentric}"
+                              ToolTip.Tip="Off: the camera is at the Earth's centre and only follows its motion around the Sun. On: it stands at the latitude / longitude below, turning with the Earth (diurnal parallax, a horizon). The view never rotates with the Earth. Saved with the file." />
+
                     <!-- Latitude -->
-                    <Grid ColumnDefinitions="Auto,16,*">
+                    <Grid ColumnDefinitions="Auto,16,*" IsVisible="{Binding IsEarthObserverTopocentric}">
                       <TextBlock Grid.Column="0" Text="Latitude (°N)" />
                       <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="ObserverLatSlider"
                                                 Value="{Binding EarthObserverLatDeg}"
@@ -677,7 +811,7 @@
                     </Grid>
 
                     <!-- Longitude -->
-                    <Grid ColumnDefinitions="Auto,16,*">
+                    <Grid ColumnDefinitions="Auto,16,*" IsVisible="{Binding IsEarthObserverTopocentric}">
                       <TextBlock Grid.Column="0" Text="Longitude (°E)" />
                       <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="ObserverLonSlider"
                                                 Value="{Binding EarthObserverLonDeg}"
@@ -688,37 +822,33 @@
 
                     <!-- Look Direction -->
                     <TextBlock Text="Look Direction" FontWeight="SemiBold" />
-                    <Grid RowDefinitions="Auto, Auto, Auto, Auto, Auto, 8, Auto">
+                    <Grid RowDefinitions="Auto, Auto, Auto, 8, Auto">
                       <RadioButton Grid.Row="0" AutomationProperties.AutomationId="OrientFree" Content="Free look"
-                                   ToolTip.Tip="Drag to look around; the direction stays fixed in space"
+                                   ToolTip.Tip="Drag to look around; the direction stays fixed among the stars"
                                    IsChecked="{Binding EarthObserverOrientationMode,
                                    Converter={StaticResource EnumToBool},
                                    ConverterParameter=Free}" />
-                      <RadioButton Grid.Row="1" AutomationProperties.AutomationId="OrientCometLockIn" Content="Comet lock-in (telescope)"
-                                   ToolTip.Tip="Aims at the comet, then turns with the Earth like a telescope on the ground"
-                                   IsChecked="{Binding EarthObserverOrientationMode,
-                                   Converter={StaticResource EnumToBool},
-                                   ConverterParameter=CometLockIn}" />
-                      <RadioButton Grid.Row="2" AutomationProperties.AutomationId="OrientCometTracking" Content="Comet tracking"
-                                   ToolTip.Tip="Follows the comet; faces the horizon where it will rise while it is below it"
+                      <RadioButton Grid.Row="1" AutomationProperties.AutomationId="OrientCometTracking" Content="Comet tracking"
+                                   ToolTip.Tip="Keeps the comet exactly at the centre of the view (from the surface: faces the horizon where it will rise while it is below it)"
                                    IsChecked="{Binding EarthObserverOrientationMode,
                                    Converter={StaticResource EnumToBool},
                                    ConverterParameter=CometTracking}" />
-                      <RadioButton Grid.Row="3" AutomationProperties.AutomationId="OrientSunLockIn" Content="Sun lock-in (telescope)"
-                                   ToolTip.Tip="Aims at the Sun, then turns with the Earth like a telescope on the ground"
-                                   IsChecked="{Binding EarthObserverOrientationMode,
-                                   Converter={StaticResource EnumToBool},
-                                   ConverterParameter=SunLockIn}" />
-                      <RadioButton Grid.Row="4" AutomationProperties.AutomationId="OrientSunTracking" Content="Sun tracking"
-                                   ToolTip.Tip="Follows the Sun; faces the horizon where it will rise while it is below it"
+                      <RadioButton Grid.Row="2" AutomationProperties.AutomationId="OrientSunTracking" Content="Sun tracking"
+                                   ToolTip.Tip="Keeps the Sun at the centre of the view (from the surface: faces the horizon where it will rise while it is below it)"
                                    IsChecked="{Binding EarthObserverOrientationMode,
                                    Converter={StaticResource EnumToBool},
                                    ConverterParameter=SunTracking}" />
-                      <Button Grid.Row="6" AutomationProperties.AutomationId="RestorePresetButton" Content="Restore preset projection"
+                      <Button Grid.Row="4" AutomationProperties.AutomationId="RestorePresetButton" Content="Restore preset projection"
                               Command="{Binding RestoreEarthPresetProjectionCommand}"
-                              ToolTip.Tip="Re-applies the lock-in / tracking projection where the target spans 10% of the view"
+                              ToolTip.Tip="Re-applies the tracking projection where the target spans 10% of the view"
                               HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
                     </Grid>
+
+                    <!-- Telescope scale of the view (physical pixels) -->
+                    <TextBlock AutomationProperties.AutomationId="EarthObserverScaleText"
+                               Text="{Binding EarthObserverScaleText}" TextWrapping="Wrap" Opacity="0.85"
+                               IsVisible="{Binding EarthObserverScaleText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                               ToolTip.Tip="Angle one screen pixel covers, the field of view, and at the comet's distance the kilometres per pixel and the half-width / half-height of the view" />
 
                     <!-- Tracking target below the horizon: explain the hold, suggest a site -->
                     <Border IsVisible="{Binding IsObserverTargetBelowHorizon}"
@@ -733,59 +863,6 @@
                                 HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
                       </StackPanel>
                     </Border>
-
-                    <!-- ── Telescope image overlay (HUD, WP5) ───────────────── -->
-                    <StackPanel Spacing="8"
-                                IsVisible="{Binding SkyImage, Converter={x:Static ObjectConverters.IsNotNull}}">
-                      <Separator />
-                      <TextBlock Text="{Binding SkyImage.StrHeader}" FontWeight="SemiBold" />
-                      <Grid ColumnDefinitions="*,6,Auto">
-                        <Button Grid.Column="0" Content="{Binding SkyImage.StrLoadButton}"
-                                Command="{Binding SkyImage.LoadImageCommand}"
-                                ToolTip.Tip="{Binding SkyImage.StrLoadTip}"
-                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
-                        <Button Grid.Column="2" Content="{Binding SkyImage.StrRemoveButton}"
-                                Command="{Binding SkyImage.RemoveImageCommand}" />
-                      </Grid>
-                      <TextBlock Text="{Binding SkyImage.ImageName}" TextWrapping="Wrap"
-                                 IsVisible="{Binding SkyImage.HasImage}" />
-                      <TextBlock Text="{Binding SkyImage.StatusMessage}" TextWrapping="Wrap" Opacity="0.8"
-                                 IsVisible="{Binding SkyImage.StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-
-                      <StackPanel Spacing="8" IsVisible="{Binding SkyImage.HasImage}">
-                        <CheckBox Content="{Binding SkyImage.StrVisible}"
-                                  IsChecked="{Binding SkyImage.IsOverlayVisible}" />
-                        <Grid ColumnDefinitions="Auto,16,*">
-                          <TextBlock Grid.Column="0" Text="{Binding SkyImage.StrOpacity}" VerticalAlignment="Center" />
-                          <Slider Grid.Column="2" Minimum="0" Maximum="1" SmallChange="0.05" LargeChange="0.1"
-                                  Value="{Binding SkyImage.Opacity}" />
-                        </Grid>
-                        <Grid ColumnDefinitions="Auto,16,*">
-                          <TextBlock Grid.Column="0" Text="{Binding SkyImage.StrStretch}" VerticalAlignment="Center" />
-                          <Slider Grid.Column="2" Minimum="0" Maximum="100" SmallChange="1" LargeChange="10"
-                                  Value="{Binding SkyImage.Stretch}" />
-                        </Grid>
-                        <Button Content="{Binding SkyImage.StrSeekButton}"
-                                Command="{Binding SkyImage.SeekToDateObsCommand}"
-                                ToolTip.Tip="{Binding SkyImage.SeekToolTip}" ToolTip.ShowOnDisabled="True"
-                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
-                        <Button Content="{Binding SkyImage.StrSiteButton}"
-                                Command="{Binding SkyImage.UseSiteFromHeaderCommand}"
-                                ToolTip.Tip="{Binding SkyImage.SiteToolTip}" ToolTip.ShowOnDisabled="True"
-                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
-                        <Button Content="{Binding SkyImage.StrLockButton}"
-                                Command="{Binding SkyImage.LockToImageCommand}"
-                                ToolTip.Tip="{Binding SkyImage.LockToolTip}" ToolTip.ShowOnDisabled="True"
-                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
-                        <!-- breadcrumb: the header facts the offers need and the image lacks -->
-                        <Border IsVisible="{Binding SkyImage.HasMissingHeader}"
-                                Background="{DynamicResource Accent.Subtle}"
-                                BorderBrush="{DynamicResource Accent.Primary}"
-                                BorderThickness="1" CornerRadius="4" Padding="8">
-                          <TextBlock Text="{Binding SkyImage.MissingHeaderMessage}" TextWrapping="Wrap" />
-                        </Border>
-                      </StackPanel>
-                    </StackPanel>
                   </StackPanel>
 
                 </StackPanel>

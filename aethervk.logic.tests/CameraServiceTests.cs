@@ -176,19 +176,19 @@ public class CameraServiceTests
   }
 
   /// Once parented in Earth observer mode the core owns the pose: a submode change hands it the
-  /// mode, Earth, comet, surface point and look; the per-tick Earth callback no longer writes the
-  /// camera (a write a callback later re-applied a stale aim, comet_tracking.rdc); leaving the mode
-  /// takes it back.
+  /// mode, Earth, comet, the topocentric flag and the inertial look; the per-tick Earth callback no
+  /// longer writes the camera (a write a callback later re-applied a stale aim, comet_tracking.rdc);
+  /// leaving the mode takes it back.
   [Fact]
   public void EarthObserver_IsPosedNativelyOnceParented()
   {
     var (service, runtime, _) = BuildService();
     var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
     runtime.Setup(r => r.CometEntityId).Returns(77UL);
-    var calls = new System.Collections.Generic.List<(int Mode, ulong Earth, ulong Comet)>();
+    var calls = new System.Collections.Generic.List<(int Mode, ulong Earth, ulong Comet, bool Topo, Quaterniond Look)>();
     runtime.Setup(r => r.SetEarthObserver(It.IsAny<ulong>(), It.IsAny<int>(), It.IsAny<ulong>(), It.IsAny<ulong>(),
-        It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<Quaterniond>()))
-      .Callback<ulong, int, ulong, ulong, double, double, double, Quaterniond>((_, m, e, c, _, _, _, _) => calls.Add((m, e, c)))
+        It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<Quaterniond>()))
+      .Callback<ulong, int, ulong, ulong, bool, double, double, double, Quaterniond>((_, m, e, c, t, _, _, _, l) => calls.Add((m, e, c, t, l)))
       .Returns(true);
     var cometConfig = (CometConfigService)typeof(CameraService).GetField("_cometConfigService", flags)!.GetValue(service)!;
     ((System.Reactive.Subjects.BehaviorSubject<bool>)typeof(CometConfigService)
@@ -201,7 +201,8 @@ public class CameraServiceTests
     typeof(CameraService).GetField("_bodyCameraParented", flags)!.SetValue(service, true);
     service.SetEarthObserverOrientationMode(EarthObserverOrientationMode.CometTracking);
 
-    Assert.Contains(((int)EarthObserverOrientationMode.CometTracking, 42UL, 77UL), calls);
+    Assert.Contains(calls, c => c.Mode == (int)EarthObserverOrientationMode.CometTracking && c.Earth == 42UL
+      && c.Comet == 77UL && !c.Topo); // geocentric by default
 
     // per-tick Earth callback: no camera write from the UI any more
     runtime.Invocations.Clear();
@@ -220,9 +221,15 @@ public class CameraServiceTests
       It.IsAny<Quaterniond>(), It.IsAny<ulong>()), Times.Never);
     runtime.Verify(r => r.AddCameraAnimation(It.IsAny<ulong>(), It.IsAny<AnimationTarget>()), Times.Never);
 
-    // lock-in hands over the body-fixed look; leaving the mode clears it
-    service.SetEarthObserverOrientationMode(EarthObserverOrientationMode.CometLockIn);
-    Assert.Equal((int)EarthObserverOrientationMode.CometLockIn, calls[^1].Mode);
+    // the topocentric checkbox re-pushes at once; Free hands over the inertial look (the comet
+    // still rides along for light time and its screen position); leaving the mode clears it
+    service.SetEarthObserverTopocentric(true);
+    Assert.True(calls[^1].Topo);
+    Assert.Equal((int)EarthObserverOrientationMode.CometTracking, calls[^1].Mode);
+    service.SetEarthObserverOrientationMode(EarthObserverOrientationMode.Free);
+    Assert.Equal(((int)EarthObserverOrientationMode.Free, 77UL), (calls[^1].Mode, calls[^1].Comet));
+    Assert.Equal(service.GetPersistedState().ObserverInertialLook,
+      new[] { calls[^1].Look.X, calls[^1].Look.Y, calls[^1].Look.Z, calls[^1].Look.W });
     service.SetCameraMode(CameraMode.UpZenith);
     Assert.Equal(-1, calls[^1].Mode);
   }
@@ -778,28 +785,65 @@ public class CameraServiceTests
     return ((AnimationTarget)call.Arguments[1]).Rot;
   }
 
-  /// Sun lock-in aims at the Sun (camera forward = engine −Y towards the origin).
+  /// Sun tracking aims at the Sun (camera forward = engine −Y towards the origin) from the Earth's
+  /// centre: the camera animation targets no surface offset.
   [Fact]
-  public void SunLockIn_AimsAtTheSun()
+  public void SunTracking_AimsAtTheSun_FromTheEarthsCentre()
   {
     var (service, runtime, _) = BuildService();
     service.SetCameraMode(CameraMode.EarthPosition);
     runtime.Invocations.Clear();
 
-    service.SetEarthObserverOrientationMode(EarthObserverOrientationMode.SunLockIn);
+    service.SetEarthObserverOrientationMode(EarthObserverOrientationMode.SunTracking);
 
-    var fwd = Vector3d.Transform(-Vector3d.UnitY, LastAnimatedRotation(runtime));
-    // Earth at the origin in the test, observer at (R, 0, 0): the Sun is along −X
+    var call = runtime.Invocations.Last(inv => inv.Method.Name == nameof(INativeRuntimeService.AddCameraAnimation));
+    var target = (AnimationTarget)call.Arguments[1];
+    Assert.Equal((0.0, 0.0, 0.0), (target.PosX, target.PosY, target.PosZ));
+    var fwd = Vector3d.Transform(-Vector3d.UnitY, target.Rot);
+    // Earth at its default (1, 0, 0): the Sun is along −X
     Assert.True(fwd.X < -0.999, $"forward {fwd} should point at the Sun");
+    // geocentric: up towards the ecliptic north whatever the site latitude
+    service.SetEarthObserverLatLon(-45f, 0f);
+    var up = Vector3d.Transform(Vector3d.UnitZ, LastAnimatedRotation(runtime));
+    Assert.True(up.Z > 0.0, $"up {up}");
+  }
+
+  /// "Orient to image" (a world direction such as a FITS CRVAL) is a free look fixed among the
+  /// stars, not a retired lock-in.
+  [Fact]
+  public void LockToDirection_IsAFreeLookAlongIt()
+  {
+    var (service, runtime, _) = BuildService();
+    Assert.False(service.LockEarthObserverToDirection(new Vector3d(0, 1, 0))); // not an observer yet
+    service.SetCameraMode(CameraMode.EarthPosition);
+    Assert.True(service.LockEarthObserverToDirection(new Vector3d(0.2, 1, 0.1)));
+    var st = service.GetPersistedState();
+    Assert.Equal(EarthObserverOrientationMode.Free, st.ObserverOrientation);
+    var look = new Quaterniond(st.ObserverInertialLook[0], st.ObserverInertialLook[1], st.ObserverInertialLook[2], st.ObserverInertialLook[3]);
+    var fwd = Vector3d.Transform(-Vector3d.UnitY, look);
+    var want = Vector3d.Normalize(new Vector3d(0.2, 1, 0.1));
+    Assert.True(Vector3d.Cross(fwd, want).Length() < 1e-12 && Vector3d.Dot(fwd, want) > 0, $"{fwd}");
+  }
+
+  /// Only the integer values the core reads are left (1 / 3 were the lock-in modes).
+  [Fact]
+  public void OrientationModes_AreFreeAndTheTwoTrackings()
+  {
+    Assert.Equal(new[] { 0, 2, 4 },
+      ((EarthObserverOrientationMode[])Enum.GetValues(typeof(EarthObserverOrientationMode))).Select(m => (int)m).ToArray());
   }
 
   /// Comet tracking aims in double precision from the f64 comet position: the forward hits the
-  /// comet ~0.5 AU away to ~1e-12 rad. In float (positions and quaternion) it was ~1e-7 rad, i.e.
-  /// tens of km, and the nucleus fell outside a ±9 km field (earth_observer_comet.rdc).
-  [Fact]
-  public void CometTracking_AimsAtTheCometInDoublePrecision()
+  /// comet ~0.5 AU away to ~1e-12 rad, from the Earth's centre or (topocentric) the site. In float
+  /// (positions and quaternion) it was ~1e-7 rad, i.e. tens of km, and the nucleus fell outside a
+  /// ±9 km field (earth_observer_comet.rdc).
+  [Theory]
+  [InlineData(false)]
+  [InlineData(true)]
+  public void CometTracking_AimsAtTheCometInDoublePrecision(bool topocentric)
   {
     var (service, runtime, _) = BuildService();
+    service.SetEarthObserverTopocentric(topocentric);
     var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
     var cometConfig = (CometConfigService)typeof(CameraService).GetField("_cometConfigService", flags)!.GetValue(service)!;
     ((System.Reactive.Subjects.BehaviorSubject<bool>)typeof(CometConfigService)
@@ -830,8 +874,9 @@ public class CameraServiceTests
       System.Runtime.InteropServices.Marshal.FreeHGlobal(ptr);
     }
 
-    // observer at (0°N, 0°E) with an identity Earth rotation: earth + (R, 0, 0)
-    var camPos = earth + new Vector3d(4.26e-5, 0, 0);
+    // geocentric: the Earth's centre; topocentric at (0°N, 0°E) with an identity Earth rotation:
+    // earth + (R, 0, 0)
+    var camPos = earth + (topocentric ? new Vector3d(4.26e-5, 0, 0) : Vector3d.Zero);
     var want = Vector3d.Normalize(comet - camPos);
     var fwd = Vector3d.Transform(-Vector3d.UnitY, LastAnimatedRotation(runtime));
     double err = Vector3d.Cross(fwd, want).Length();
@@ -852,7 +897,7 @@ public class CameraServiceTests
       .GetField("_isCommittedSubject", flags)!.GetValue(cometConfig)!).OnNext(true);
     var tracker = typeof(CameraService).GetField("_cometTracker", flags)!.GetValue(service)!;
     tracker.GetType().GetField("_lastKnownCometPositionF64", flags)!
-      .SetValue(tracker, ((double X, double Y, double Z)?)(1.0, 0.0, 0.0)); // 1 AU from the Earth at the origin
+      .SetValue(tracker, ((double X, double Y, double Z)?)(2.0, 0.0, 0.0)); // 1 AU from the Earth at its default (1, 0, 0)
     service.SetCameraMode(CameraMode.EarthPosition);
     CameraProjectionState? preset = null;
     using var _p = service.EarthObserverPresetProjection.Subscribe(p => preset = p);
@@ -979,6 +1024,9 @@ public class CameraServiceTests
       .SetValue(tracker, ((double X, double Y, double Z)?)(-1.0, 0.0, 0.2));
     service.SetCameraMode(CameraMode.EarthPosition);
     service.SetEarthObserverOrientationMode(EarthObserverOrientationMode.CometTracking);
+    // the Earth's centre has no horizon: nothing to explain until the observer stands on the site
+    Assert.Null(service.GetEarthObserverTargetVisibility());
+    service.SetEarthObserverTopocentric(true);
 
     var schedulers = new AetherVk.Logic.Tests.Mocks.TestSchedulerProvider();
     var vm = new AetherVk.Logic.ViewModels.ViewportSettingsViewModel(100UL, 0, runtime.Object, schedulers, service);
@@ -1002,14 +1050,18 @@ public class CameraServiceTests
     Assert.True(service.GetEarthObserverTargetVisibility()!.ElevationDeg > 89.0);
   }
 
-  /// Outside tracking there is nothing to explain.
+  /// Outside topocentric tracking there is nothing to explain.
   [Fact]
-  public void TargetVisibility_IsNullOutsideTracking()
+  public void TargetVisibility_IsNullOutsideTopocentricTracking()
   {
     var (service, _, _) = BuildService();
     Assert.Null(service.GetEarthObserverTargetVisibility()); // not an Earth observer
     service.SetCameraMode(CameraMode.EarthPosition);
-    service.SetEarthObserverOrientationMode(EarthObserverOrientationMode.SunLockIn);
+    service.SetEarthObserverOrientationMode(EarthObserverOrientationMode.SunTracking);
+    Assert.Null(service.GetEarthObserverTargetVisibility()); // geocentric
+    service.SetEarthObserverTopocentric(true);
+    Assert.NotNull(service.GetEarthObserverTargetVisibility());
+    service.SetEarthObserverOrientationMode(EarthObserverOrientationMode.Free);
     Assert.Null(service.GetEarthObserverTargetVisibility());
   }
 
@@ -1289,6 +1341,36 @@ public class CameraServiceTests
     Assert.Equal(new List<(ulong, uint)> { (100UL, 0u), (100UL, p), (100UL, 0u), (100UL, p), (100UL, 0u) }, sent);
   }
 
+  /// Behind-camera geometry is on by default; turning it off sets the hide bit on the camera
+  /// flags (with the shading bit untouched), sends it at once, and the savefile keeps it.
+  [Fact]
+  public void ShowBehindCamera_DefaultsOn_SendsTheHideBit_AndPersists()
+  {
+    Assert.Equal(CameraService.HideBehindCamera, CameraService.ShadingFor(CameraMode.UpZenith, false, false));
+    Assert.Equal(CameraService.ShadingPhysical | CameraService.HideBehindCamera,
+      CameraService.ShadingFor(CameraMode.CometOrbiting, true, false));
+
+    var (service, runtime, _) = BuildService();
+    Assert.True(service.ShowBehindCamera);
+    Assert.True(service.GetPersistedState().Display!.ShowBehindCamera);
+    var sent = new List<uint>();
+    runtime
+      .Setup(r => r.SetCameraShading(100UL, It.IsAny<uint>()))
+      .Callback<ulong, uint>((_, f) => sent.Add(f))
+      .Returns(true);
+
+    service.ShowBehindCamera = false;
+    service.ShowBehindCamera = false; // unchanged: nothing sent
+    Assert.Equal([CameraService.HideBehindCamera], sent);
+    Assert.False(service.GetPersistedState().Display!.ShowBehindCamera);
+
+    var (reopened, _, _) = BuildService();
+    reopened.RestorePersistedState(service.GetPersistedState());
+    Assert.False(reopened.ShowBehindCamera);
+    service.ShowBehindCamera = true;
+    Assert.Equal([CameraService.HideBehindCamera, 0u], sent);
+  }
+
   /// The savefile's view of a viewport camera: mode, observer site and orientation.
   [Fact]
   public void PersistedState_ReportsModeAndObserverSettings()
@@ -1303,6 +1385,9 @@ public class CameraServiceTests
     Assert.Equal(120.0, st.ObserverElevationM);
     Assert.Equal(EarthObserverOrientationMode.Free, st.ObserverOrientation);
     Assert.Equal(4, st.ObserverInertialLook.Length);
+    Assert.False(st.ObserverTopocentric); // geocentric by default
+    service.SetEarthObserverTopocentric(true);
+    Assert.True(service.GetPersistedState().ObserverTopocentric);
   }
 
   /// A restore lands UpZenith on the saved pose (not the Sun default) and re-applies the observer
@@ -1318,7 +1403,7 @@ public class CameraServiceTests
       new System.Numerics.Vector3(1e-5f, 2e-5f, 0),
       -33.5f, 151.25f, 42.0,
       EarthObserverOrientationMode.Free,
-      [0, 0, 0, 1], [0, 0, 0, 1]);
+      [0, 0, 0, 1], [0, 0, 0, 1], ObserverTopocentric: true);
     runtime.Invocations.Clear();
     (float LatDeg, float LonDeg) site = default;
     using var _site = service.EarthObserverSiteChanged.Subscribe(s => site = s);
@@ -1332,6 +1417,7 @@ public class CameraServiceTests
     Assert.Equal(-33.5f, st.ObserverLatDeg);
     Assert.Equal(151.25f, st.ObserverLonDeg);
     Assert.Equal(42.0, st.ObserverElevationM);
+    Assert.True(st.ObserverTopocentric);
     Assert.Equal(new System.Numerics.Vector3(1e-5f, 2e-5f, 0), st.OrbitOffsetAu);
     // a later plain switch back into UpZenith uses the default again (the restore is consumed)
     service.SetCameraMode(CameraMode.EarthPosition);
@@ -1377,5 +1463,187 @@ public class CameraServiceTests
 
     runtime.Verify(r => r.AddCameraAnimation(100UL, It.Is<AnimationTarget>(t =>
       t.PivotEntityId == null && Math.Abs(t.PosZ - 0.05) < 1e-6)), Times.Once);
+  }
+
+  // ── Telescope scale (physical pixels) ─────────────────────────────────────
+
+  /// Perspective: arcsec/px = vertical fov / height px, the field from the fov and aspect, and at
+  /// the comet's distance km/px and half-extents that match the frustum there.
+  [Fact]
+  public void EarthObserverScale_Perspective_MatchesTheFrustum()
+  {
+    const double AuToKm = 149_597_870.7;
+    double fov = 0.5 * Math.PI / 180.0; // 30 arcmin
+    var proj = new CameraProjectionState(true, (float)fov, 1.5f, 1e-9f, 10f, 0, 0, 0, 0, 1f);
+    var s = CameraService.ComputeEarthObserverScale(proj, 1500, 1000, 0.4)!;
+    Assert.Equal(1.8, s.ArcsecPerPx, 4); // 1800″ / 1000 px
+    Assert.Equal(30.0, s.FieldHeightArcmin, 3);
+    Assert.Equal(2.0 * Math.Atan(Math.Tan((float)fov / 2.0) * 1.5) * 180.0 * 60.0 / Math.PI, s.FieldWidthArcmin, 6);
+    double halfHKm = 0.4 * AuToKm * Math.Tan((float)fov / 2.0);
+    Assert.Equal(halfHKm, s.HalfHeightKm!.Value, 3);
+    Assert.Equal(halfHKm * 1.5, s.HalfWidthKm!.Value, 3);
+    // without a comet: the angles only
+    var noComet = CameraService.ComputeEarthObserverScale(proj, 1500, 1000, null)!;
+    Assert.Null(noComet.KmPerPx);
+    Assert.Equal(s.ArcsecPerPx, noComet.ArcsecPerPx);
+  }
+
+  /// Orthographic: the half-extents in km round-trip (km/px × px / 2 = half-height), the angle
+  /// comes from the comet's distance, and there is no angle without it.
+  [Fact]
+  public void EarthObserverScale_Orthographic_RoundTripsTheHalfExtents()
+  {
+    const double AuToKm = 149_597_870.7;
+    float halfH = (float)(20_000.0 / AuToKm), halfW = halfH * 16f / 9f;
+    var proj = new CameraProjectionState(false, 0, 16f / 9f, 1e-9f, 10f, -halfW, halfW, -halfH, halfH, 1f);
+    var s = CameraService.ComputeEarthObserverScale(proj, 1920, 1080, 0.5)!;
+    Assert.Equal(halfH * AuToKm, s.HalfHeightKm!.Value, 1);
+    Assert.Equal(halfW * AuToKm, s.HalfWidthKm!.Value, 1);
+    double wantArcsecPx = 2.0 * Math.Atan(halfH / 0.5) / 1080.0 * 180.0 * 3600.0 / Math.PI;
+    Assert.Equal(wantArcsecPx, s.ArcsecPerPx, 9);
+    Assert.Null(CameraService.ComputeEarthObserverScale(proj, 1920, 1080, null));
+  }
+
+  /// The service reads the physical pixel size and only reports in the Earth observer.
+  [Fact]
+  public void EarthObserverScale_IsReportedInTheEarthObserverOnly()
+  {
+    var (service, _, _) = BuildService();
+    Assert.Null(service.GetEarthObserverScale()); // UpZenith
+    service.SetCameraMode(CameraMode.EarthPosition);
+    service.OnViewportResized(2400, 1200);
+    var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+    var projection = (System.Reactive.Subjects.BehaviorSubject<CameraProjectionState?>)typeof(CameraService)
+      .GetField("_projectionSubject", flags)!.GetValue(service)!;
+    projection.OnNext(new CameraProjectionState(true, (float)(Math.PI / 180.0), 2f, 1e-9f, 10f, 0, 0, 0, 0, 1f));
+    var s = service.GetEarthObserverScale();
+    Assert.NotNull(s);
+    Assert.Equal((2400.0, 1200.0), (s!.WidthPx, s.HeightPx));
+    Assert.Equal(3.0, s.ArcsecPerPx, 3); // 3600″ over 1200 px
+    Assert.StartsWith("Scale 3″/px · field",
+      AetherVk.Logic.ViewModels.ViewportSettingsViewModel.FormatObserverScale(s));
+  }
+
+  // ── telescope image matching ────────────────────────────────────────────────
+
+  /// "Match camera to image": perspective takes fov = height px × scale; the comet position is
+  /// asked from the core with the physical viewport size, only in the Earth observer.
+  [Fact]
+  public void MatchArcsecPerPx_SetsTheFov_AndCometPositionIsObserverOnly()
+  {
+    var (service, runtime, _) = BuildService();
+    runtime.Setup(r => r.GetCometScreenPosition(100UL, 1600u, 1000u)).Returns(new CometScreenPosition(800, 500, true));
+    service.OnViewportResized(1600, 1000);
+    Assert.False(service.SetEarthObserverArcsecPerPx(1.0)); // UpZenith
+    Assert.Null(service.GetCometScreenPosition());
+    service.SetCameraMode(CameraMode.EarthPosition);
+    var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+    ((System.Reactive.Subjects.BehaviorSubject<CameraProjectionState?>)typeof(CameraService)
+      .GetField("_projectionSubject", flags)!.GetValue(service)!)
+      .OnNext(new CameraProjectionState(true, 0.1f, 1.6f, 1e-9f, 10f, 0, 0, 0, 0, 1f));
+    float fov = 0;
+    runtime.Setup(r => r.CameraSetPerspective(100UL, It.IsAny<float>(), It.IsAny<float>(), 1e-9f, 10f))
+      .Callback<ulong, float, float, float, float>((_, f, _, _, _) => fov = f).Returns(true);
+    Assert.True(service.SetEarthObserverArcsecPerPx(0.3));
+    Assert.Equal(0.3 * 1000 / (180.0 * 3600.0 / Math.PI), fov, 9);
+    Assert.False(service.SetEarthObserverArcsecPerPx(0));
+    Assert.False(service.SetEarthObserverArcsecPerPx(double.NaN));
+    Assert.Equal(new CometScreenPosition(800, 500, true), service.GetCometScreenPosition());
+  }
+
+  /// The comparison lock refuses mouse orbit, pan and zoom in every mode, and lifts cleanly.
+  [Fact]
+  public void ComparisonLock_RefusesOrbitPanAndZoom()
+  {
+    var (service, _, _) = BuildService();
+    var seen = new List<bool>();
+    using var sub = service.ComparisonLockChanged.Subscribe(seen.Add);
+    service.SetCameraMode(CameraMode.EarthPosition);
+    Assert.True(service.IsOrbitAllowed() && service.IsZoomAllowed());
+    service.IsComparisonLocked = true;
+    Assert.False(service.IsOrbitAllowed());
+    Assert.False(service.IsZoomAllowed());
+    Assert.False(service.RequestZoom(10f, default));
+    service.SetCameraMode(CameraMode.UpZenith);
+    Assert.False(service.IsPanAllowed());
+    service.IsComparisonLocked = false;
+    Assert.True(service.IsPanAllowed() && service.IsZoomAllowed());
+    Assert.Equal([false, true, false], seen);
+  }
+
+  // ── Earth observer kept across exit / re-enter ───────────────────────────────
+
+  /// Leaving the Earth observer and coming back lands on the look and projection it was left
+  /// with (not the Sun at 30°), with the tracking submode and topocentric choice intact; the
+  /// remembered projection is saved while in another mode; Reset camera forgets it.
+  [Fact]
+  public async Task EarthObserver_ReEnter_KeepsLookProjectionAndSubmode()
+  {
+    var (service, runtime, scheduler) = BuildService();
+    var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+    var projection = (System.Reactive.Subjects.BehaviorSubject<CameraProjectionState?>)typeof(CameraService)
+      .GetField("_projectionSubject", flags)!.GetValue(service)!;
+    var animations = new List<AnimationTarget>();
+    runtime.Setup(r => r.AddCameraAnimation(100UL, It.IsAny<AnimationTarget>()))
+      .Callback<ulong, AnimationTarget>((_, a) => animations.Add(a)).Returns(true);
+
+    service.SetCameraMode(CameraMode.EarthPosition);
+    service.SetEarthObserverTopocentric(true);
+    // a free look somewhere off the Sun, and a zoomed telescope projection
+    var look = Quaterniond.Normalize(new Quaterniond(0.1, 0.2, 0.3, 0.9));
+    typeof(CameraService).GetField("_inertialLookDir", flags)!.SetValue(service, look);
+    typeof(CameraService).GetField("_earthRotation", flags)!.SetValue(service, look);
+    typeof(CameraService).GetField("_lastConfirmedTransform", flags)!
+      .SetValue(service, new CameraTransformState(0, 0, 0, look.X, look.Y, look.Z, look.W));
+    var zoomed = new CameraProjectionState(true, 0.002f, 4f / 3f, 1e-9f, 10f, 0, 0, 0, 0, 1f);
+    projection.OnNext(zoomed);
+
+    service.SetCameraMode(CameraMode.UpZenith);
+    var saved = service.GetPersistedState();
+    Assert.Equal(zoomed, saved.ObserverProjection);
+    Assert.True(saved.ObserverTopocentric);
+
+    var fovs = new List<float>();
+    runtime.Setup(r => r.CameraSetPerspective(100UL, It.IsAny<float>(), It.IsAny<float>(), It.IsAny<float>(), It.IsAny<float>()))
+      .Callback<ulong, float, float, float, float>((_, f, _, _, _) => fovs.Add(f)).Returns(true);
+    animations.Clear();
+    service.SetCameraMode(CameraMode.EarthPosition);
+    var a = Assert.Single(animations);
+    Assert.True(Quaterniond.AngleBetween(a.Rot, look) < 1e-6, $"re-entered at {a.Rot}, left at {look}");
+    Assert.True(service.IsEarthObserverTopocentric);
+    await Task.Delay(TimeSpan.FromSeconds(2.5 + 0.7));
+    scheduler.AdvanceBy(1);
+    Assert.Equal(0.002f, fovs.Last()); // not the 30° default
+    Assert.Null(service.GetPersistedState().ObserverProjection); // in the observer: Projection holds it
+
+    // Reset camera: the defaults again (look at the Sun, 30°)
+    animations.Clear();
+    fovs.Clear();
+    service.ResetToModeDefault();
+    var reset = Assert.Single(animations);
+    Assert.True(Quaterniond.AngleBetween(reset.Rot, look) > 1e-3);
+    await Task.Delay(TimeSpan.FromSeconds(2.5 + 0.7));
+    scheduler.AdvanceBy(1);
+    Assert.Equal(30f * (float)Math.PI / 180f, fovs.Last(), 5);
+  }
+
+  /// A save made outside the Earth observer brings its submode and remembered projection back;
+  /// a save without one forgets what this session remembered.
+  [Fact]
+  public void EarthObserver_SetupSavedFromAnotherMode_IsRestored()
+  {
+    var (service, _, _) = BuildService();
+    var proj = new CameraProjectionState(false, 0, 4f / 3f, -1f, 1f, -4e-5f, 4e-5f, -3e-5f, 3e-5f, 1f);
+    var state = service.GetPersistedState() with
+    {
+      Mode = CameraMode.UpZenith,
+      ObserverOrientation = EarthObserverOrientationMode.SunTracking,
+      ObserverProjection = proj,
+    };
+    service.RestorePersistedState(state);
+    Assert.Equal(EarthObserverOrientationMode.SunTracking, service.GetPersistedState().ObserverOrientation);
+    Assert.Equal(proj, service.GetPersistedState().ObserverProjection);
+    service.RestorePersistedState(state with { ObserverProjection = null });
+    Assert.Null(service.GetPersistedState().ObserverProjection);
   }
 }

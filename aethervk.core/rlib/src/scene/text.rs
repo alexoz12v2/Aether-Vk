@@ -117,7 +117,8 @@ impl FontAtlas {
     }
 
     let mut placed = Vec::new();
-    let chars = (32..=126).map(|c| c as u8 as char).chain(core::iter::once('█'));
+    // printable ASCII, the degree sign (jet angle labels) and the block
+    let chars = (32..=126).map(|c| c as u8 as char).chain(['°', '█']);
 
     for c in chars {
       let glyph = font.glyph_id(c).with_scale(scale);

@@ -39,4 +39,26 @@ public sealed record DesktopBillboard(
 {
   /// <summary>Gizmo currently shown (UI state, not persisted).</summary>
   public BillboardGizmoMode GizmoMode { get; init; } = BillboardGizmoMode.None;
+
+  /// <summary>Physical size: the image's plate scale, arcsec per image pixel (null: not set).</summary>
+  public double? ImageArcsecPerPx { get; init; }
+
+  /// <summary>The texture's native width, px (0: unknown until the texture is seen).</summary>
+  public int ImageWidthPx { get; init; }
+
+  /// <summary>The texture's native height, px (0: unknown).</summary>
+  public int ImageHeightPx { get; init; }
+
+  /// <summary>
+  /// The size follows the Earth observer's viewport scale ("Apply physical size"): the billboard
+  /// covers the sky the image covers, and re-scales on zoom and resize. A manual size edit unbinds.
+  /// </summary>
+  public bool PhysicalSizeBound { get; init; }
+
+  /// <summary>
+  /// FITS texture: the stretch the user applied (null: the import's zscale / linear). The engine
+  /// does not persist it, so it is re-applied after a savefile load or a re-import. It belongs to
+  /// the texture: applying it on one billboard sets it on every billboard of that texture.
+  /// </summary>
+  public FitsStretch? FitsStretch { get; init; }
 }

@@ -75,6 +75,39 @@ public class DesignDesktopBillboardsViewModel : DesktopBillboardsViewModel
   }
 }
 
+/// <summary>A FITS metadata JSON like the Liverpool Telescope 67P frame (previewer, view tests).</summary>
+public static class DesignFits
+{
+  public const string SampleJson = """
+    {
+      "assetId": 5, "textureWidth": 1200, "textureHeight": 1200, "rowOrder": "topDown", "flipped": true,
+      "stretch": { "mode": 0, "transfer": 0, "black": -1004.76, "white": 1020.78 },
+      "naxis1": 1200, "naxis2": 1200, "bitpix": 32,
+      "cards": [
+        { "key": "SIMPLE", "value": "T", "comment": "A valid FITS file" },
+        { "key": "BITPIX", "value": "32", "comment": "" },
+        { "key": "OBJECT", "value": "67P", "comment": "Actual name of the current observation source" },
+        { "key": "DATE-OBS", "value": "2021-12-27T00:14:37.345", "comment": "[utc] Start of the exposure" },
+        { "key": "EXPTIME", "value": "20.0", "comment": "[s] Exposure length" },
+        { "key": "LONGITUD", "value": "-17.8792", "comment": "[degrees West] Telescope longitude" }
+      ],
+      "facts": {
+        "object": "67P", "telescope": "Liverpool Telescope", "instrument": "IO:O", "filter": "SDSS-G",
+        "exposureS": 20.0, "dateObs": "2021-12-27T00:14:37.345", "dateSource": "DATE-OBS", "dateIsMid": false,
+        "dateMidUtc": "2021-12-27T00:14:47.345Z", "dateMidTdbCenturies": 0, "dateMidTdbNanoseconds": 693749756529000000,
+        "dateMidTdbUs": 693749756529000, "timesysAssumed": true,
+        "pixelScaleArcsec": 0.30368, "pixelScaleXArcsec": 0.30368, "pixelScaleYArcsec": 0.30368, "pixelScaleSource": "CD",
+        "fovWidthArcmin": 6.07, "fovHeightArcmin": 6.07,
+        "crvalRaDeg": 135.5634, "crvalDecDeg": 28.1569, "centerRaDeg": 135.6, "centerDecDeg": 28.1,
+        "pointingRaDeg": 135.56, "pointingDecDeg": 28.16, "radesys": "FK5", "equinox": 2000.0, "wcsError": null,
+        "rotationDeg": 0.136, "mirrored": false,
+        "siteLatDeg": 28.7624, "siteLonDeg": -17.8792, "siteElevM": 2363.0, "siteSource": "LATITUDE/LONGITUD",
+        "siteLonWestConvention": false, "siteLonRawDeg": -17.8792, "siteLonFromLst": true
+      }
+    }
+    """;
+}
+
 public class DesignViewportSettingsViewModel : ViewportSettingsViewModel
 {
   public DesignViewportSettingsViewModel(string name, bool isPerspective)

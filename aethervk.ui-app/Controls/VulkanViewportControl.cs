@@ -1,6 +1,8 @@
 using System;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Platform;
+using Avalonia.VisualTree;
 
 namespace AetherVk.Controls;
 
@@ -56,9 +58,63 @@ public class VulkanViewportControl : NativeControlHost
   protected override void OnSizeChanged(Avalonia.Controls.SizeChangedEventArgs e)
   {
     base.OnSizeChanged(e);
-    if (DataContext is Logic.ViewModels.VulkanViewportControlViewModel vm)
+    PushSize();
+  }
+
+  private TopLevel? _topLevel;
+
+  protected override void OnAttachedToVisualTree(Avalonia.VisualTreeAttachmentEventArgs e)
+  {
+    base.OnAttachedToVisualTree(e);
+    _topLevel = TopLevel.GetTopLevel(this);
+    if (_topLevel is not null)
+      _topLevel.ScalingChanged += OnScalingChanged;
+    if (_topLevel is Window w)
+      w.PositionChanged += OnWindowMoved;
+    LayoutUpdated += OnLayoutUpdated;
+    PushSize();
+  }
+
+  protected override void OnDetachedFromVisualTree(Avalonia.VisualTreeAttachmentEventArgs e)
+  {
+    if (_topLevel is not null)
+      _topLevel.ScalingChanged -= OnScalingChanged;
+    if (_topLevel is Window w)
+      w.PositionChanged -= OnWindowMoved;
+    LayoutUpdated -= OnLayoutUpdated;
+    _topLevel = null;
+    _origin = null;
+    base.OnDetachedFromVisualTree(e);
+  }
+
+  // a move to a monitor with another scaling changes the pixels, not the DIP size
+  private void OnScalingChanged(object? sender, EventArgs e) => PushSize();
+
+  // the size in physical pixels (DIPs × render scaling), as the native child window and the swapchain
+  private void PushSize()
+  {
+    if (DataContext is Logic.ViewModels.VulkanViewportControlViewModel vm && Bounds.Width > 0 && Bounds.Height > 0)
     {
-      vm.NotifyResized(e.NewSize.Width, e.NewSize.Height);
+      vm.NotifyResized(Bounds.Width, Bounds.Height, _topLevel?.RenderScaling ?? TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0);
+      PushOrigin();
     }
   }
+
+  private Avalonia.PixelPoint? _origin;
+
+  // the desktop position (physical px) the billboards use: window moves and layout changes move it
+  private void PushOrigin()
+  {
+    if (DataContext is not Logic.ViewModels.VulkanViewportControlViewModel vm || this.GetVisualRoot() is null)
+      return;
+    var origin = this.PointToScreen(new Avalonia.Point(0, 0));
+    if (_origin == origin)
+      return;
+    _origin = origin;
+    vm.NotifyScreenOrigin(origin.X, origin.Y);
+  }
+
+  private void OnWindowMoved(object? sender, Avalonia.Controls.PixelPointEventArgs e) => PushOrigin();
+
+  private void OnLayoutUpdated(object? sender, EventArgs e) => PushOrigin();
 }

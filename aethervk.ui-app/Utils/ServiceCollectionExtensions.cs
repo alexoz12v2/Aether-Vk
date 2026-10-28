@@ -71,6 +71,8 @@ public static class ServiceCollectionExtensions
     // Asset library mirror (Imports tab, Settings > Comet Appearance)
     collection.AddSingleton<AssetLibraryService>();
     collection.AddSingleton<DesktopBillboardService>();
+    // FITS metadata / re-stretch; resolved with the billboard windows so saved stretches re-apply
+    collection.AddSingleton<FitsImageService>();
     collection.AddSingleton<Logic.ViewModels.IScreenInfoProvider, UI.AvaloniaScreenInfoProvider>();
     collection.AddSingleton<UI.DesktopBillboardWindowManager>();
     collection.AddSingleton<INativeInputHandlerFactory, NativeInputHandlerFactory>();

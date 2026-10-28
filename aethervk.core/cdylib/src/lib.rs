@@ -14,6 +14,7 @@ extern crate core;
 
 pub mod ffi;
 pub mod ffi_assets;
+pub mod ffi_fits;
 pub mod oshal;
 
 // ----------- Allocator Setup --------------------------------------

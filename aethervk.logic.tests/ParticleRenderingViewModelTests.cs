@@ -47,19 +47,6 @@ public sealed class ParticleRenderingViewModelTests : IDisposable
       Assert.Equal(d, ParticleRenderingViewModel.ClampVolumeDetail(d));
   }
 
-  /// <summary>No stored value: 16 (today's image), and building the section sends nothing (the
-  /// app pushes the stored value at startup).</summary>
-  [Fact]
-  public void VolumeDetail_DefaultsTo16_AndConstructionSendsNothing()
-  {
-    var (vm, runtime, prefs) = Build();
-    Assert.Equal(ParticleRenderingViewModel.VolumeDetailDefault, vm.VolumeDetail);
-    Assert.Equal(16, vm.VolumeDetail);
-    Assert.Equal(0, vm.VolumeDetailIndex);
-    Assert.Equal(16, prefs.DustVolumeDetail);
-    runtime.Verify(r => r.SetDustVolumeDetail(It.IsAny<int>()), Times.Never);
-  }
-
   [Fact]
   public void VolumeDetail_IsSentClampedAndStored()
   {
@@ -105,18 +92,18 @@ public sealed class ParticleRenderingViewModelTests : IDisposable
     runtime2.Verify(r => r.SetDustVolumeDetail(It.IsAny<int>()), Times.Never);
   }
 
-  /// <summary>A file without the key (written before the setting) means 16; a hand-edited value
+  /// <summary>At the custom level, a file without the key means 16; a hand-edited value
   /// off the steps clamps.</summary>
   [Fact]
-  public void VolumeDetail_MissingKeyMeans16_AndAnOffStepValueClamps()
+  public void VolumeDetail_MissingKeyMeans16InCustom_AndAnOffStepValueClamps()
   {
     Directory.CreateDirectory(_dir);
-    File.WriteAllText(PrefsPath, "{\"format_version\": 1, \"theme\": \"dark\"}");
+    File.WriteAllText(PrefsPath, "{\"format_version\": 1, \"particle_quality\": 0, \"theme\": \"dark\"}");
     var p = LoadPrefs();
     Assert.Equal("loaded", p.LoadOutcome);
     Assert.Equal(16, p.DustVolumeDetail);
 
-    File.WriteAllText(PrefsPath, "{\"format_version\": 1, \"dust_volume_detail\": 5}");
+    File.WriteAllText(PrefsPath, "{\"format_version\": 1, \"particle_quality\": 0, \"dust_volume_detail\": 5}");
     var p2 = LoadPrefs();
     Assert.Equal(4, p2.DustVolumeDetail);
     Assert.Equal(4, new ParticleRenderingViewModel(null, p2).VolumeDetail);
@@ -132,18 +119,6 @@ public sealed class ParticleRenderingViewModelTests : IDisposable
     Assert.Equal(16, ParticleRenderingViewModel.ClampHazeDetail(1000));
     foreach (int d in ParticleRenderingViewModel.HazeDetailSteps)
       Assert.Equal(d, ParticleRenderingViewModel.ClampHazeDetail(d));
-  }
-
-  /// <summary>No stored value: 16 (today's image), and building the section sends nothing.</summary>
-  [Fact]
-  public void HazeDetail_DefaultsTo16_AndConstructionSendsNothing()
-  {
-    var (vm, runtime, prefs) = Build();
-    Assert.Equal(ParticleRenderingViewModel.HazeDetailDefault, vm.HazeDetail);
-    Assert.Equal(16, vm.HazeDetail);
-    Assert.Equal(0, vm.HazeDetailIndex);
-    Assert.Equal(16, prefs.DustHazeDetail);
-    runtime.Verify(r => r.SetDustHazeDetail(It.IsAny<int>()), Times.Never);
   }
 
   [Fact]
@@ -209,18 +184,6 @@ public sealed class ParticleRenderingViewModelTests : IDisposable
       Assert.Equal(d, ParticleRenderingViewModel.ClampPropagateDetail(d));
   }
 
-  /// <summary>No stored value: 17 (today's image), and building the section sends nothing.</summary>
-  [Fact]
-  public void PropagateDetail_DefaultsTo17_AndConstructionSendsNothing()
-  {
-    var (vm, runtime, prefs) = Build();
-    Assert.Equal(ParticleRenderingViewModel.PropagateDetailDefault, vm.PropagateDetail);
-    Assert.Equal(17, vm.PropagateDetail);
-    Assert.Equal(0, vm.PropagateDetailIndex);
-    Assert.Equal(17, prefs.DustPropagateDetail);
-    runtime.Verify(r => r.SetDustPropagateDetail(It.IsAny<int>()), Times.Never);
-  }
-
   [Fact]
   public void PropagateDetail_IsSentClampedAndStored()
   {
@@ -266,18 +229,18 @@ public sealed class ParticleRenderingViewModelTests : IDisposable
     runtime2.Verify(r => r.SetDustPropagateDetail(It.IsAny<int>()), Times.Never);
   }
 
-  /// <summary>A file without the key (written before the setting) means 17; a hand-edited value
+  /// <summary>At the custom level, a file without the key means 17; a hand-edited value
   /// off the steps clamps.</summary>
   [Fact]
-  public void PropagateDetail_MissingKeyMeans17_AndAnOffStepValueClamps()
+  public void PropagateDetail_MissingKeyMeans17InCustom_AndAnOffStepValueClamps()
   {
     Directory.CreateDirectory(_dir);
-    File.WriteAllText(PrefsPath, "{\"format_version\": 1, \"theme\": \"dark\"}");
+    File.WriteAllText(PrefsPath, "{\"format_version\": 1, \"particle_quality\": 0, \"theme\": \"dark\"}");
     var p = LoadPrefs();
     Assert.Equal("loaded", p.LoadOutcome);
     Assert.Equal(17, p.DustPropagateDetail);
 
-    File.WriteAllText(PrefsPath, "{\"format_version\": 1, \"dust_propagate_detail\": 12}");
+    File.WriteAllText(PrefsPath, "{\"format_version\": 1, \"particle_quality\": 0, \"dust_propagate_detail\": 12}");
     var p2 = LoadPrefs();
     Assert.Equal(9, p2.DustPropagateDetail);
     Assert.Equal(9, new ParticleRenderingViewModel(null, p2).PropagateDetail);
@@ -295,20 +258,6 @@ public sealed class ParticleRenderingViewModelTests : IDisposable
     Assert.Equal(16, ParticleRenderingViewModel.ClampReuseTolerance(1000));
     foreach (int px in ParticleRenderingViewModel.ReuseToleranceSteps)
       Assert.Equal(px, ParticleRenderingViewModel.ClampReuseTolerance(px));
-  }
-
-  /// <summary>No stored value: the default 16 px (temporal reuse on, round 9), and building the
-  /// section sends nothing (the app pushes the stored value at startup).</summary>
-  [Fact]
-  public void ReuseTolerance_DefaultsTo16_AndConstructionSendsNothing()
-  {
-    var (vm, runtime, prefs) = Build();
-    Assert.Equal(ParticleRenderingViewModel.ReuseToleranceDefault, vm.ReuseTolerance);
-    Assert.Equal(16, vm.ReuseTolerance);
-    Assert.Equal(5, vm.ReuseToleranceIndex);
-    Assert.Equal(16, prefs.DustReuseTolerance);
-    Assert.Equal(new[] { "Off", "1 px", "2 px", "4 px", "8 px", "16 px" }, vm.ReuseToleranceOptions);
-    runtime.Verify(r => r.SetDustReuseTolerance(It.IsAny<int>()), Times.Never);
   }
 
   [Fact]
@@ -371,24 +320,24 @@ public sealed class ParticleRenderingViewModelTests : IDisposable
     runtime2.Verify(r => r.SetDustReuseTolerance(It.IsAny<int>()), Times.Never);
   }
 
-  /// <summary>A file without the key (written before the setting) means the default 16 px; a
+  /// <summary>At the custom level, a file without the key means the default 16 px; a
   /// hand-edited value off the steps clamps, a negative one is off.</summary>
   [Fact]
-  public void ReuseTolerance_MissingKeyMeansTheDefault_AndAnOffStepValueClamps()
+  public void ReuseTolerance_MissingKeyMeansTheDefaultInCustom_AndAnOffStepValueClamps()
   {
     Directory.CreateDirectory(_dir);
-    File.WriteAllText(PrefsPath, "{\"format_version\": 1, \"theme\": \"dark\"}");
+    File.WriteAllText(PrefsPath, "{\"format_version\": 1, \"particle_quality\": 0, \"theme\": \"dark\"}");
     var p = LoadPrefs();
     Assert.Equal("loaded", p.LoadOutcome);
     Assert.Equal(ParticleRenderingViewModel.ReuseToleranceDefault, p.DustReuseTolerance);
     Assert.Equal(16, p.DustReuseTolerance);
 
-    File.WriteAllText(PrefsPath, "{\"format_version\": 1, \"dust_reuse_px\": 5}");
+    File.WriteAllText(PrefsPath, "{\"format_version\": 1, \"particle_quality\": 0, \"dust_reuse_px\": 5}");
     var p2 = LoadPrefs();
     Assert.Equal(4, p2.DustReuseTolerance);
     Assert.Equal(4, new ParticleRenderingViewModel(null, p2).ReuseTolerance);
 
-    File.WriteAllText(PrefsPath, "{\"format_version\": 1, \"dust_reuse_px\": -3}");
+    File.WriteAllText(PrefsPath, "{\"format_version\": 1, \"particle_quality\": 0, \"dust_reuse_px\": -3}");
     Assert.Equal(0, LoadPrefs().DustReuseTolerance);
   }
 
@@ -403,5 +352,133 @@ public sealed class ParticleRenderingViewModelTests : IDisposable
     Assert.Equal("4 px", vm.ReuseToleranceOptions[3]);
     Assert.Equal(3, vm.ReuseToleranceIndex);
     runtime.Verify(r => r.SetDustReuseTolerance(It.IsAny<int>()), Times.Once);
+  }
+
+  /// <summary>No stored file: the lowest preset (a slow machine starts usable), and building the
+  /// section sends nothing (the app pushes the stored values at startup).</summary>
+  [Fact]
+  public void NoFile_StartsAtTheLowestPreset_AndConstructionSendsNothing()
+  {
+    var (vm, runtime, prefs) = Build();
+    Assert.Equal(1, vm.Quality);
+    Assert.Equal(1.0, vm.QualitySliderValue);
+    Assert.Equal("Lowest", vm.QualityLabel);
+    Assert.Equal((1, 5, 1, 16), (vm.VolumeDetail, vm.PropagateDetail, vm.HazeDetail, vm.ReuseTolerance));
+    Assert.Equal((1, 5, 1, 16), (prefs.DustVolumeDetail, prefs.DustPropagateDetail, prefs.DustHazeDetail, prefs.DustReuseTolerance));
+    Assert.Equal(4, vm.VolumeDetailIndex);
+    Assert.Equal(2, vm.PropagateDetailIndex);
+    Assert.Equal(4, vm.HazeDetailIndex);
+    Assert.Equal(5, vm.ReuseToleranceIndex);
+    Assert.Equal(new[] { "Off", "1 px", "2 px", "4 px", "8 px", "16 px" }, vm.ReuseToleranceOptions);
+    runtime.Verify(r => r.SetDustVolumeDetail(It.IsAny<int>()), Times.Never);
+    runtime.Verify(r => r.SetDustPropagateDetail(It.IsAny<int>()), Times.Never);
+    runtime.Verify(r => r.SetDustHazeDetail(It.IsAny<int>()), Times.Never);
+    runtime.Verify(r => r.SetDustReuseTolerance(It.IsAny<int>()), Times.Never);
+  }
+
+  /// <summary>Without preferences (designer) the section still shows the lowest preset.</summary>
+  [Fact]
+  public void NoPreferences_ShowsTheLowestPreset()
+  {
+    var vm = new ParticleRenderingViewModel(null, null);
+    Assert.Equal(1, vm.Quality);
+    Assert.Equal((1, 5, 1, 16), (vm.VolumeDetail, vm.PropagateDetail, vm.HazeDetail, vm.ReuseTolerance));
+  }
+
+  /// <summary>Each slider level sends its four values (those that change) and stores the level.</summary>
+  [Theory]
+  [InlineData(2)]
+  [InlineData(3)]
+  [InlineData(4)]
+  [InlineData(5)]
+  public void SliderLevel_SendsThePresetValues_AndStoresTheLevel(int level)
+  {
+    var (vm, runtime, prefs) = Build();
+    var preset = ParticleRenderingViewModel.Presets[level - 1];
+    var lowest = ParticleRenderingViewModel.Presets[0];
+    vm.QualitySliderValue = level;
+    Assert.Equal(level, vm.Quality);
+    Assert.Equal(preset.Name, vm.QualityLabel);
+    Assert.Equal(level, prefs.ParticleQuality);
+    Assert.Equal((preset.VolumeDetail, preset.PropagateDetail, preset.HazeDetail, preset.ReuseTolerance),
+      (vm.VolumeDetail, vm.PropagateDetail, vm.HazeDetail, vm.ReuseTolerance));
+    runtime.Verify(r => r.SetDustVolumeDetail(preset.VolumeDetail), preset.VolumeDetail == lowest.VolumeDetail ? Times.Never() : Times.Once());
+    runtime.Verify(r => r.SetDustPropagateDetail(preset.PropagateDetail), preset.PropagateDetail == lowest.PropagateDetail ? Times.Never() : Times.Once());
+    runtime.Verify(r => r.SetDustHazeDetail(preset.HazeDetail), preset.HazeDetail == lowest.HazeDetail ? Times.Never() : Times.Once());
+    runtime.Verify(r => r.SetDustReuseTolerance(preset.ReuseTolerance), preset.ReuseTolerance == lowest.ReuseTolerance ? Times.Never() : Times.Once());
+  }
+
+  /// <summary>The slider snaps; an out-of-range value never picks a level.</summary>
+  [Fact]
+  public void SliderValue_RoundsToALevel_AndIgnoresOutOfRange()
+  {
+    var (vm, _, _) = Build();
+    vm.QualitySliderValue = 2.6;
+    Assert.Equal(3, vm.Quality);
+    vm.QualitySliderValue = 9;
+    Assert.Equal(3, vm.Quality);
+    vm.QualitySliderValue = 0;
+    Assert.Equal(3, vm.Quality);
+  }
+
+  /// <summary>Editing a dropdown by hand makes the level custom (the slider stays on the last
+  /// level); edits that land on a preset's values select that preset.</summary>
+  [Fact]
+  public void HandEdit_IsCustom_UntilTheValuesMatchAPreset()
+  {
+    var (vm, _, prefs) = Build();
+    vm.QualitySliderValue = 3;
+    vm.HazeDetail = 16;
+    Assert.Equal(ParticleRenderingViewModel.QualityCustom, vm.Quality);
+    Assert.Equal("Custom", vm.QualityLabel);
+    Assert.Equal(3.0, vm.QualitySliderValue);
+    Assert.Equal(0, prefs.ParticleQuality);
+    Assert.Equal(16, prefs.DustHazeDetail);
+
+    var high = ParticleRenderingViewModel.Presets[3];
+    vm.VolumeDetail = high.VolumeDetail;
+    vm.PropagateDetail = high.PropagateDetail;
+    vm.HazeDetail = high.HazeDetail;
+    vm.ReuseTolerance = high.ReuseTolerance;
+    Assert.Equal(4, vm.Quality);
+    Assert.Equal(4, prefs.ParticleQuality);
+  }
+
+  /// <summary>The level and the custom values both survive a restart.</summary>
+  [Fact]
+  public void Quality_SurvivesARestart_PresetAndCustom()
+  {
+    var (vm, _, _) = Build();
+    vm.QualitySliderValue = 4;
+    var high = ParticleRenderingViewModel.Presets[3];
+    var vm2 = new ParticleRenderingViewModel(new Mock<INativeRuntimeService>().Object, LoadPrefs());
+    Assert.Equal(4, vm2.Quality);
+    Assert.Equal(high.VolumeDetail, vm2.VolumeDetail);
+
+    vm2.ReuseTolerance = 1;
+    var prefs3 = LoadPrefs();
+    Assert.Equal(0, prefs3.ParticleQuality);
+    var vm3 = new ParticleRenderingViewModel(null, prefs3);
+    Assert.Equal(ParticleRenderingViewModel.QualityCustom, vm3.Quality);
+    Assert.Equal(1, vm3.ReuseTolerance);
+    Assert.Equal(high.HazeDetail, vm3.HazeDetail);
+  }
+
+  /// <summary>A file without the key (written before the slider) means level 1, and so does a bad
+  /// level; a preset level wins over stale stored values.</summary>
+  [Fact]
+  public void Quality_MissingOrBadKeyMeansLowest_AndAPresetOverridesStoredValues()
+  {
+    Directory.CreateDirectory(_dir);
+    File.WriteAllText(PrefsPath, "{\"format_version\": 1, \"dust_volume_detail\": 16}");
+    var p = LoadPrefs();
+    Assert.Equal("loaded", p.LoadOutcome);
+    Assert.Equal(1, p.ParticleQuality);
+    Assert.Equal(1, p.DustVolumeDetail);
+
+    File.WriteAllText(PrefsPath, "{\"format_version\": 1, \"particle_quality\": 42}");
+    Assert.Equal(1, LoadPrefs().ParticleQuality);
+    File.WriteAllText(PrefsPath, "{\"format_version\": 1, \"particle_quality\": -2}");
+    Assert.Equal(1, LoadPrefs().ParticleQuality);
   }
 }

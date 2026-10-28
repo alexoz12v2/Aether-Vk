@@ -41,6 +41,11 @@ use aethervk_oshal_rlib::{
 };
 
 use crate::{
+  scene::sky_image::{
+    self,
+    fits_metadata::FitsMetadata,
+    fits_stretch::{self, FitsStretch},
+  },
   simulation::{
     comet::{
       self, Comet, CometLoadError, EncodedImageKind, GltfTextureSlot, TexelFormat, Texture, Vertex,
@@ -115,8 +120,12 @@ impl From<GltfTextureSlot> for TextureChannel {
 pub enum AssetError {
   /// The source could not be parsed / decoded.
   Load(CometLoadError),
-  /// The file extension is not one of obj, ply, gltf, glb, png, jpg, jpeg, ktx2.
+  /// The file extension is not one of obj, ply, gltf, glb, png, jpg, jpeg, ktx2, fit, fits, fts.
   UnsupportedExtension(String),
+  /// A FITS file could not be decoded (message of `sky_image::parse_fits`).
+  Fits(String),
+  /// Not a FITS texture, or invalid stretch parameters.
+  NotFits,
   /// Texture larger than the device's `maxImageDimension2D`.
   TextureTooLarge { width: u32, height: u32, max: u32 },
   /// Texture payload size does not match its declared format / extent.
@@ -151,6 +160,8 @@ impl AssetError {
       AssetError::CacheIo => "could not write or map the asset cache file".to_string(),
       AssetError::EmptyMesh => "mesh has no triangles".to_string(),
       AssetError::UnknownAsset => "unknown asset".to_string(),
+      AssetError::Fits(e) => format!("could not decode FITS: {e}"),
+      AssetError::NotFits => "not a FITS texture, or invalid stretch".to_string(),
     }
   }
 }
@@ -170,6 +181,8 @@ impl From<AssetError> for EngineError {
       AssetError::CacheIo => EngineError::InvalidOperation("AssetError::CacheIo"),
       AssetError::EmptyMesh => EngineError::InvalidOperation("AssetError::EmptyMesh"),
       AssetError::UnknownAsset => EngineError::InvalidOperation("AssetError::UnknownAsset"),
+      AssetError::Fits(_) => EngineError::InvalidOperation("AssetError::Fits"),
+      AssetError::NotFits => EngineError::InvalidOperation("AssetError::NotFits"),
     }
   }
 }
@@ -227,6 +240,52 @@ impl TextureAsset {
 
   pub fn format(&self) -> TexelFormat {
     self.texture.format
+  }
+}
+
+/// FITS side data of a texture asset imported from a `.fit` / `.fits` / `.fts` file.
+///
+/// The texture is RGBA8 (grey: `R = G = B`, alpha 255, blank pixels black) rendered from the f32
+/// raster with [`Self::stretch`]. **Orientation**: FITS row 0 is the bottom of the image, so the
+/// rows are flipped: texture row 0 is the *last* FITS row (`NAXIS2`), the image shows as a
+/// viewer does (north up, east left for a standard WCS); a header with the non-standard
+/// `ROWORDER = 'TOP-DOWN'` is not flipped ([`Self::flipped`]). The raster lives in its own mapped cache
+/// file (`<hash>.avkf`, f32 native endian, already in texture row order), so a re-stretch
+/// ([`AssetLibrary::set_fits_stretch`]) never re-reads the source.
+pub struct FitsAsset {
+  pub metadata: FitsMetadata,
+  pub stretch: FitsStretch,
+  /// black / white points of the current texels (data units)
+  pub black: f64,
+  pub white: f64,
+  raster_cache_path: String,
+  /// `f32[nx · ny]`, texture row order, NaN = blank
+  raster: bytes::Bytes,
+  /// content hash of the raster (FITS dedup)
+  raster_hash: u64,
+  /// rows were reversed at import (`false` only for `ROWORDER = 'TOP-DOWN'`)
+  pub flipped: bool,
+  /// re-stretch counter (names the texel cache files)
+  generation: u32,
+}
+
+impl FitsAsset {
+  pub fn width(&self) -> u32 {
+    self.metadata.naxis1
+  }
+
+  pub fn height(&self) -> u32 {
+    self.metadata.naxis2
+  }
+
+  /// The f32 raster (texture row order: row 0 = last FITS row).
+  pub fn raster(&self) -> alloc::borrow::Cow<'_, [f32]> {
+    match bytemuck::try_cast_slice::<u8, f32>(&self.raster) {
+      Ok(v) => alloc::borrow::Cow::Borrowed(v),
+      Err(_) => alloc::borrow::Cow::Owned(
+        self.raster.chunks_exact(4).map(|c| f32::from_ne_bytes([c[0], c[1], c[2], c[3]])).collect(),
+      ),
+    }
   }
 }
 
@@ -334,6 +393,8 @@ pub struct AssetLibrary {
   next_id: AssetId,
   meshes: BTreeMap<AssetId, MeshAsset>,
   textures: BTreeMap<AssetId, TextureAsset>,
+  /// FITS side data of the textures imported from FITS files.
+  fits: BTreeMap<AssetId, FitsAsset>,
   by_key: BTreeMap<String, AssetId>,
   by_hash: BTreeMap<u64, Vec<AssetId>>,
   /// Cache files written by this library (deleted on [`Self::clear`]).
@@ -357,6 +418,7 @@ impl AssetLibrary {
       next_id: 1,
       meshes: BTreeMap::new(),
       textures: BTreeMap::new(),
+      fits: BTreeMap::new(),
       by_key: BTreeMap::new(),
       by_hash: BTreeMap::new(),
       cache_files: Vec::new(),
@@ -594,7 +656,8 @@ impl AssetLibrary {
     })
   }
 
-  /// Imports a mesh (obj, ply, gltf, glb) or a texture (png, jpg, jpeg, ktx2).
+  /// Imports a mesh (obj, ply, gltf, glb) or a texture (png, jpg, jpeg, ktx2, fit, fits, fts;
+  /// a FITS image becomes an RGBA8 texture, see [`FitsAsset`]).
   ///
   /// Meshes are split from their textures: bundled images become separate texture assets,
   /// recorded in [`MeshAsset::bundled_textures`]. Re-importing a known key is a no-op that
@@ -619,7 +682,7 @@ impl AssetLibrary {
 
     match ext.as_str() {
       "obj" | "ply" | "gltf" | "glb" => self.import_mesh_file(path, &key, &ext),
-      "png" | "jpg" | "jpeg" | "ktx2" => {
+      "png" | "jpg" | "jpeg" | "ktx2" | "fit" | "fits" | "fts" => {
         let mut outcome = ImportOutcome::default();
         let (id, added) = self.import_texture_file(path, None)?;
         outcome.textures.push(id);
@@ -637,6 +700,11 @@ impl AssetLibrary {
   pub fn clear(&mut self) {
     self.meshes.clear();
     self.textures.clear();
+    for (_, f) in core::mem::take(&mut self.fits) {
+      let path = f.raster_cache_path.clone();
+      drop(f);
+      let _ = fs::remove_file(path.as_str());
+    }
     self.by_key.clear();
     self.by_hash.clear();
     for f in self.cache_files.drain(..) {
@@ -660,6 +728,11 @@ impl AssetLibrary {
     let (kind, hash, cache_path) = if let Some(m) = self.meshes.remove(&id) {
       (AssetKind::Mesh, m.content_hash, m.cache_path)
     } else if let Some(t) = self.textures.remove(&id) {
+      if let Some(f) = self.fits.remove(&id) {
+        let path = f.raster_cache_path.clone();
+        drop(f);
+        self.pending_deletes.push(path);
+      }
       for m in self.meshes.values_mut() {
         for slot in m.bundled_textures.iter_mut() {
           if *slot == Some(id) {
@@ -878,6 +951,9 @@ impl AssetLibrary {
     if let Some(&id) = self.by_key.get(&key) {
       return Ok((id, false));
     }
+    if matches!(extension_of(path).as_str(), "fit" | "fits" | "fts") {
+      return self.import_fits_file(path, key, hint);
+    }
     let kind = EncodedImageKind::from_path(path)
       .ok_or_else(|| AssetError::UnsupportedExtension(extension_of(path)))?;
     let encoded =
@@ -885,6 +961,147 @@ impl AssetLibrary {
     let tex = comet::decode_encoded_image(&encoded, kind)?;
     drop(encoded);
     self.insert_texture(tex, key, file_stem(path), path.to_string(), hint)
+  }
+
+  /// FITS side data of texture `id` (`None` when it did not come from a FITS file).
+  pub fn fits(&self, id: AssetId) -> Option<&FitsAsset> {
+    self.fits.get(&id)
+  }
+
+  /// Re-renders the RGBA8 texels of FITS texture `id` from its cached raster with `stretch`
+  /// (no re-read of the source). The new texels go to a new cache file which replaces the
+  /// texture's mapping: a later [`Self::copy_texture_rgba8`] / [`TextureAsset::texture`] returns
+  /// the new image (clones of the old `Texture` keep the old texels until dropped). The content
+  /// hash (identity used by savefiles and dedup) is the import-time one and does not change.
+  /// Returns the black / white points used.
+  pub fn set_fits_stretch(
+    &mut self,
+    id: AssetId,
+    stretch: FitsStretch,
+  ) -> Result<(f64, f64), AssetError> {
+    let f = self.fits.get(&id).ok_or(AssetError::NotFits)?;
+    let t = self.textures.get(&id).ok_or(AssetError::UnknownAsset)?;
+    let (nx, ny) = (t.texture.width, t.texture.height);
+    let raster = f.raster();
+    let (black, white) = fits_stretch::black_white(&raster, nx, ny, stretch.mode);
+    let rgba = fits_stretch::render_rgba8(&raster, black, white, stretch.transfer);
+    drop(raster);
+    let generation = f.generation.wrapping_add(1);
+    let hash = t.content_hash;
+    let dir = self.cache_dir.as_ref().ok_or(AssetError::NoCacheDir)?;
+    let new_path = format!("{dir}/{hash:016x}_s{generation}.avkt");
+    let format = TexelFormat::R8G8B8A8_UNORM;
+    let header = CacheHeader {
+      kind: AssetKind::Texture,
+      format: format.to_vk_format().as_raw() as u32,
+      a: nx as u64,
+      b: ny as u64,
+      payload_len: rgba.len() as u64,
+      content_hash: hash,
+    };
+    let data = write_and_map(&new_path, &header, &[&rgba])?;
+    drop(rgba);
+    let texture = Texture { data, format, width: nx, height: ny, has_mipmaps: false };
+    let thumbnail = thumbnail::texture_thumbnail(&texture, THUMBNAIL_SIZE);
+    let t = self.textures.get_mut(&id).ok_or(AssetError::UnknownAsset)?;
+    let old_path = core::mem::replace(&mut t.cache_path, new_path.clone());
+    t.texture = texture;
+    t.thumbnail = thumbnail;
+    self.cache_files.retain(|p| *p != old_path);
+    self.cache_files.push(new_path);
+    self.pending_deletes.push(old_path);
+    self.pending_deletes.retain(|p| fs::remove_file(p.as_str()).is_err());
+    let f = self.fits.get_mut(&id).ok_or(AssetError::NotFits)?;
+    f.stretch = stretch;
+    f.black = black;
+    f.white = white;
+    f.generation = generation;
+    Ok((black, white))
+  }
+
+  /// Decodes a FITS primary image ([`sky_image::parse_fits`]: every BITPIX, BZERO / BSCALE,
+  /// BLANK → NaN), flips its rows, stretches it (zscale, linear) to RGBA8 and inserts it like
+  /// any texture; the raster and the header are kept ([`FitsAsset`]). The same raster under
+  /// another path is the same asset.
+  fn import_fits_file(
+    &mut self,
+    path: &str,
+    key: String,
+    hint: Option<TextureChannel>,
+  ) -> Result<(AssetId, bool), AssetError> {
+    let encoded =
+      MappedFile::new(path).map_err(|_| AssetError::Load(CometLoadError::TextureNotFound))?;
+    let (nx, ny, mut data, _) = sky_image::parse_fits(&encoded).map_err(AssetError::Fits)?;
+    let mut metadata = FitsMetadata::from_fits_bytes(&encoded);
+    drop(encoded);
+    metadata.naxis1 = nx;
+    metadata.naxis2 = ny;
+    // FITS stores bottom-up; a non-standard `ROWORDER = 'TOP-DOWN'` (some capture software) is
+    // already in display order
+    let flipped = !metadata
+      .cards
+      .iter()
+      .find(|c| c.key == "ROWORDER")
+      .is_some_and(|c| c.value.trim().eq_ignore_ascii_case("TOP-DOWN"));
+    if flipped {
+      fits_stretch::flip_rows(&mut data, nx, ny);
+    }
+    let raster_bytes: &[u8] = bytemuck::cast_slice(&data);
+    let raster_hash = content_hash(&[raster_bytes], [nx as u64, ny as u64, 0x4649_5453]);
+    // content dedup on the raster (the texels depend on the stretch)
+    if let Some((&existing, _)) = self.fits.iter().find(|(_, f)| {
+      f.raster_hash == raster_hash && f.raster.len() == raster_bytes.len() && f.raster[..] == *raster_bytes
+    }) {
+      self.by_key.insert(key, existing);
+      return Ok((existing, false));
+    }
+    let stretch = FitsStretch::default();
+    let (black, white) = fits_stretch::black_white(&data, nx, ny, stretch.mode);
+    let rgba = fits_stretch::render_rgba8(&data, black, white, stretch.transfer);
+    let tex = Texture {
+      data: bytes::Bytes::from(rgba),
+      format: TexelFormat::R8G8B8A8_UNORM,
+      width: nx,
+      height: ny,
+      has_mipmaps: false,
+    };
+    let (id, added) = self.insert_texture(tex, key, file_stem(path), path.to_string(), hint)?;
+    if !added || self.fits.contains_key(&id) {
+      return Ok((id, added));
+    }
+    let hash = self.textures.get(&id).map(|t| t.content_hash).unwrap_or(raster_hash);
+    let raster_cache_path = self.cache_path(hash, "avkf")?;
+    let header = CacheHeader {
+      kind: AssetKind::Texture,
+      format: 0,
+      a: nx as u64,
+      b: ny as u64,
+      payload_len: raster_bytes.len() as u64,
+      content_hash: raster_hash,
+    };
+    let raster = match write_and_map(&raster_cache_path, &header, &[raster_bytes]) {
+      Ok(r) => r,
+      Err(e) => {
+        let _ = self.remove(id);
+        return Err(e);
+      }
+    };
+    drop(data);
+    self.fits.insert(
+      id,
+      FitsAsset {
+        metadata,
+        stretch,
+        black,
+        white,
+        raster_cache_path,
+        raster,
+        raster_hash,
+        flipped,
+        generation: 0,
+      },
+    );
+    Ok((id, true))
   }
 
   /// Validates, thumbnails, caches + maps a decoded texture. Consumes (and frees) `tex`.
@@ -1394,3 +1611,5 @@ pub(crate) fn ply_texture_file(ply_path: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod fits_tests;

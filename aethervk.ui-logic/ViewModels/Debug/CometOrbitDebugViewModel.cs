@@ -1,4 +1,5 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 
 namespace AetherVk.Logic.ViewModels.Debug;
 
@@ -8,7 +9,21 @@ namespace AetherVk.Logic.ViewModels.Debug;
 /// </summary>
 public sealed partial class CometOrbitDebugViewModel : ObservableObject
 {
-    [ObservableProperty] private bool   _isVisible;
+    /// <summary>In CometOrbiting mode (set by the overlay).</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsShown))]
+    private bool _isVisible;
+
+    /// <summary>Closed by the user: stays closed for the session.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsShown))]
+    private bool _isDismissed;
+
+    /// <summary>What the panel binds: in CometOrbiting and not closed.</summary>
+    public bool IsShown => IsVisible && !IsDismissed;
+
+    [RelayCommand]
+    private void Dismiss() => IsDismissed = true;
 
     // ── Distance telemetry ────────────────────────────────────────────────────
 

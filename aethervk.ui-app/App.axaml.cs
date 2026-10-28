@@ -198,6 +198,7 @@ public partial class App : Application
             };
 
             desktop.MainWindow = mainWindow;
+            mainWindow.Closing += (_, e) => { if (!e.Cancel) DetachViewport(); };
 
             mainWindow.Show();
             splashWindow.Close();
@@ -241,6 +242,10 @@ public partial class App : Application
           });
         });
 
+        // detach the viewport while its window still exists: presenting to a destroyed window
+        // deadlocked the render thread at shutdown ("presentation engines are still attached")
+        desktop.ShutdownRequested += (_, _) => DetachViewport();
+
         desktop.Exit += (sender, args) => {
           // EDIT: I think it's not necessary to call dispose here, cause DI Container should handle
           // that. This block will remain if there are special actions to be performed on closing
@@ -258,6 +263,17 @@ public partial class App : Application
     }
 
     base.OnFrameworkInitializationCompleted();
+  }
+
+  /// <summary>
+  /// Removes the viewport's presentation engine while its window still exists: presenting to a
+  /// destroyed window deadlocked the render thread at shutdown. Idempotent.
+  /// </summary>
+  private void DetachViewport()
+  {
+    var runtime = Host?.Services.GetService<INativeRuntimeService>();
+    if (runtime?.PresentationEngineId is ulong pe)
+      runtime.RemoveViewport(pe);
   }
 }
 
@@ -295,11 +311,15 @@ public class MockNativeRuntimeService : INativeRuntimeService
   public bool CleanupParticleSystem(ulong psId) => true;
 
   public bool SetJetPreviewVisibility(ulong psId, bool visibility) => true;
+  public bool SetJetAngleVisibility(ulong psId, bool visibility) => true;
 
   public bool SetCometIndicatorVisible(bool visible) => true;
   public bool SetCameraRenderMask(ulong cameraEntityId, uint mask) => true;
   public bool SetCameraShading(ulong cameraEntityId, uint flags) => true;
+  public CometScreenPosition? GetCometScreenPosition(ulong cameraEntityId, uint widthPx, uint heightPx) => null;
   public Logic.Models.AssetThumbnail? CopyAssetTexels(ulong assetId) => null;
+  public string? GetFitsMetadataJson(ulong assetId) => null;
+  public Logic.Models.FitsStretchResult? SetFitsStretch(ulong assetId, uint mode, uint transfer, double p0, double p1) => null;
   public bool DumpSceneToFile(string file) => true;
   public bool RestoreSceneFromFile(string file) => true;
   public string? GetCompatibilityJson() => "{}";
@@ -308,7 +328,7 @@ public class MockNativeRuntimeService : INativeRuntimeService
   public uint SceneDumpVersion => 0;
   public double DustComaRadiusKm() => 0.0;
   public EarthObserverStatus? EarthObserverStatus() => null;
-  public bool SetEarthObserver(ulong cameraId, int mode, ulong earthId, ulong cometId, double latDeg, double lonDeg, double elevM, AetherVk.Logic.Utils.Quaterniond look) => true;
+  public bool SetEarthObserver(ulong cameraId, int mode, ulong earthId, ulong cometId, bool topocentric, double latDeg, double lonDeg, double elevM, AetherVk.Logic.Utils.Quaterniond look) => true;
 
   public bool SetReferenceErrorVisible(bool visible) => true;
   public bool SetDustSoftening(float softening) => true;
