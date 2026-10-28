@@ -5,6 +5,7 @@ using System.ComponentModel;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using AetherVk.Logic.Attributes;
+using AetherVk.Logic.Models;
 using AetherVk.Logic.Services;
 using AetherVk.Logic.Utils;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -75,6 +76,36 @@ public partial class ModelTabViewModel
     _runtimeService?.SetSphereGizmoVisibility(value);
   }
 
+  private uint _gizmoParts = SphereGizmoPart.Default;
+
+  /// <summary>Which sphere gizmo parts are drawn (<see cref="SphereGizmoPart"/> bits), saved in the model session.</summary>
+  public uint GizmoParts
+  {
+    get => _gizmoParts;
+    set
+    {
+      value &= SphereGizmoPart.All;
+      if (!SetProperty(ref _gizmoParts, value))
+        return;
+      OnPropertyChanged(nameof(ShowGizmoGrid));
+      OnPropertyChanged(nameof(ShowGizmoBodyAxes));
+      OnPropertyChanged(nameof(ShowGizmoSpinAxis));
+      OnPropertyChanged(nameof(ShowGizmoSun));
+      OnPropertyChanged(nameof(ShowGizmoVelocity));
+      if (CurrentSession is { } session)
+        session.SphereGizmoParts = value;
+      _runtimeService?.SetSphereGizmoParts(value);
+    }
+  }
+
+  private void SetGizmoPart(uint part, bool on) => GizmoParts = on ? GizmoParts | part : GizmoParts & ~part;
+
+  public bool ShowGizmoGrid { get => (GizmoParts & SphereGizmoPart.Grid) != 0; set => SetGizmoPart(SphereGizmoPart.Grid, value); }
+  public bool ShowGizmoBodyAxes { get => (GizmoParts & SphereGizmoPart.BodyAxes) != 0; set => SetGizmoPart(SphereGizmoPart.BodyAxes, value); }
+  public bool ShowGizmoSpinAxis { get => (GizmoParts & SphereGizmoPart.SpinAxis) != 0; set => SetGizmoPart(SphereGizmoPart.SpinAxis, value); }
+  public bool ShowGizmoSun { get => (GizmoParts & SphereGizmoPart.Sun) != 0; set => SetGizmoPart(SphereGizmoPart.Sun, value); }
+  public bool ShowGizmoVelocity { get => (GizmoParts & SphereGizmoPart.Velocity) != 0; set => SetGizmoPart(SphereGizmoPart.Velocity, value); }
+
   /// <summary>
   /// The selected jet's latitude/longitude arcs and degree labels in the viewport (the other jets
   /// show their direction line only), saved in the model session.
@@ -107,7 +138,10 @@ public partial class ModelTabViewModel
   {
     RefreshDustCurves();
     if (value)
+    {
       _runtimeService?.SetSphereGizmoVisibility(IsGizmoVisible);
+      _runtimeService?.SetSphereGizmoParts(GizmoParts);
+    }
   }
 
   [ObservableProperty]
@@ -313,24 +347,7 @@ public partial class ModelTabViewModel
 
   private void AddJetNatively(JetViewModel jet, ModelSession session, bool isFirst)
   {
-    var model = BuildModel(session);
-    var psJet = BuildJet(jet);
-
-    if (isFirst)
-    {
-      var computed = _runtimeService.AddFirstParticleSystem(model, psJet, out ulong psId);
-      jet.NativePsId = psId;
-      if (computed is not null)
-      {
-        jet.Beta = computed.Beta;
-        jet.DustProductionRateAt1AuKgs = computed.DustProductionRateAt1AuKgs;
-      }
-    }
-    else
-    {
-      _runtimeService.AddParticleSystem(model, psJet, out ulong psId);
-      jet.NativePsId = psId;
-    }
+    JetNativeSync.AddNative(_runtimeService, BuildModel(session, jet), BuildJet(jet), jet, isFirst);
     // a new native jet starts without angles: the selected one gets them back
     if (ShowJetAngles && ReferenceEquals(jet, SelectedJet) && jet.NativePsId != 0)
       _runtimeService.SetJetAngleVisibility(jet.NativePsId, true);
@@ -342,8 +359,8 @@ public partial class ModelTabViewModel
   }
 
   /// <summary>
-  /// Adds a new jet with physically-reasonable random defaults and registers it
-  /// with the native particle system runtime.
+  /// Adds a new jet with a random site and ejection, the grain and activity defaults of the model
+  /// session, and registers it with the native particle system runtime.
   /// </summary>
   [RelayCommand(CanExecute = nameof(CanAddJet))]
   private void AddJet()
@@ -351,7 +368,7 @@ public partial class ModelTabViewModel
     var session = CurrentSession;
     if (session is null) return;
 
-    var jet = new JetViewModel();
+    var jet = new JetViewModel(session.DefaultGrain);
     jet.DisplayIndex = session.Jets.Count + 1;
     bool isFirst = session.Jets.Count == 0;
 
@@ -366,6 +383,22 @@ public partial class ModelTabViewModel
     // Subscribe to this jet's property changes to push updates to native
     _subscribedJets.Add(jet);
     SubscribeJetChanges(jet, session);
+    RefreshTotalActivityText();
+  }
+
+  /// <summary>
+  /// Gives every other jet the selected jet's grain and activity parameters (diameter, density,
+  /// Q_pr, albedo, q, F, Afρ₀); sites, speeds and colours stay as they are.
+  /// </summary>
+  [RelayCommand]
+  private void CopyGrainToAllJets()
+  {
+    if (SelectedJet is not { } source || CurrentSession is not { } session)
+      return;
+    var grain = source.Grain;
+    foreach (var jet in session.Jets)
+      if (!ReferenceEquals(jet, source))
+        jet.Grain = grain;
   }
 
   /// <summary>
@@ -389,6 +422,7 @@ public partial class ModelTabViewModel
 
     if (SelectedJet == jet)
       SelectedJet = null;
+    RefreshTotalActivityText();
   }
 
   // ── Localization helper ──────────────────────────────────────────────────────────
@@ -405,17 +439,10 @@ public partial class ModelTabViewModel
 
   // ── Helpers ─────────────────────────────────────────────────────────────────────
 
-  private static ParticleSystemModel BuildModel(ModelSession s) => JetNativeSync.BuildModel(s);
+  private static ParticleSystemModel BuildModel(ModelSession s, JetViewModel j) => JetNativeSync.BuildModel(s, j);
 
   private ParticleSystemJet BuildJet(JetViewModel j) => JetNativeSync.BuildJet(j, EffectiveNucleusRadiusKm);
 
-  /// <summary>
-  /// Subscribes to <paramref name="session"/>'s <see cref="System.ComponentModel.INotifyPropertyChanged"/>
-  /// so that any edit to the shared grain/dust model properties is forwarded to all live jets
-  /// via <see cref="INativeRuntimeService.ModifyParticleSystem"/> (debounced 250 ms).
-  /// The subscription is stored in <see cref="_modelChangeSub"/> which disposes the previous
-  /// subscription automatically when this is called again on a session switch.
-  /// </summary>
   // jets whose property changes are forwarded natively (each subscribed once)
   private readonly System.Collections.Generic.HashSet<JetViewModel> _subscribedJets = new();
   private ModelSession? _restoredHooked;
@@ -438,17 +465,29 @@ public partial class ModelTabViewModel
 
   // ── Dust curves (Afρ(r_h) and the grain size law) ────────────────────────────
 
-  /// <summary>Afρ(r_h) of the shared model (engine law), with a marker at the comet's r_h.</summary>
+  /// <summary>Afρ(r_h) of the defaults for new jets (engine law), with a marker at the comet's r_h.</summary>
   [ObservableProperty]
   private CurvePlotModel? _afrhoPlot;
 
-  /// <summary>Grain size PDFs by number and by cross-section.</summary>
+  /// <summary>Grain size PDFs by number and by cross-section, of the defaults for new jets.</summary>
   [ObservableProperty]
   private CurvePlotModel? _sizeDistributionPlot;
+
+  /// <summary>Afρ(r_h) of the selected jet (its Afρ₀, the model-wide law); null without a selection.</summary>
+  [ObservableProperty]
+  private CurvePlotModel? _jetAfrhoPlot;
+
+  /// <summary>Grain size PDFs of the selected jet; null without a selection.</summary>
+  [ObservableProperty]
+  private CurvePlotModel? _jetSizeDistributionPlot;
 
   /// <summary>"Afρ now: X cm → Q_d ≈ Y kg/s" for the comet's current r_h and the selected jet.</summary>
   [ObservableProperty]
   private string _afrhoNowText = "";
+
+  /// <summary>"Σ Afρ → Σ Q_d" over every jet, at 1 AU and at the comet's current r_h.</summary>
+  [ObservableProperty]
+  private string _totalActivityText = "";
 
   /// <summary>The comet's heliocentric distance (AU); NaN when unknown.</summary>
   [ObservableProperty]
@@ -456,11 +495,28 @@ public partial class ModelTabViewModel
 
   partial void OnHeliocentricDistanceAuChanged(double value) => RefreshDustCurves();
 
+  // the session's defaults and the model-wide Afρ law
   private static readonly System.Collections.Generic.HashSet<string?> CurveInputs = new()
   {
     nameof(ModelSession.Afrho0Cm), nameof(ModelSession.AfrhoPower), nameof(ModelSession.AfrhoCutoffAu),
     nameof(ModelSession.AfrhoMaxValueCm), nameof(ModelSession.DiametreUm), nameof(ModelSession.SizeRange),
     nameof(ModelSession.SizeQ),
+  };
+
+  // a jet's own curve inputs
+  private static readonly System.Collections.Generic.HashSet<string?> JetCurveInputs = new()
+  {
+    nameof(JetViewModel.Afrho0Cm), nameof(JetViewModel.DiametreUm), nameof(JetViewModel.SizeRange),
+    nameof(JetViewModel.SizeQ),
+  };
+
+  /// <summary>
+  /// The model-wide parameters every jet's native record carries (the Afρ law's shape): an edit is
+  /// pushed to all jets. The session's other dust values are defaults for new jets only.
+  /// </summary>
+  internal static readonly System.Collections.Generic.HashSet<string?> ModelWideJetProperties = new()
+  {
+    nameof(ModelSession.AfrhoPower), nameof(ModelSession.AfrhoCutoffAu), nameof(ModelSession.AfrhoMaxValueCm),
   };
 
   private ModelSession? _curvesHooked;
@@ -471,10 +527,16 @@ public partial class ModelTabViewModel
     if (ReferenceEquals(_curvesHooked, session))
       return;
     if (_curvesHooked is not null)
+    {
       _curvesHooked.PropertyChanged -= OnCurveInputChanged;
+      _curvesHooked.Jets.CollectionChanged -= OnJetsCollectionChanged;
+    }
     _curvesHooked = session;
     if (session is not null)
+    {
       session.PropertyChanged += OnCurveInputChanged;
+      session.Jets.CollectionChanged += OnJetsCollectionChanged;
+    }
   }
 
   private void OnCurveInputChanged(object? sender, PropertyChangedEventArgs e)
@@ -483,24 +545,46 @@ public partial class ModelTabViewModel
       RefreshDustCurves();
   }
 
+  // a savefile open / New clears and refills the list
+  private void OnJetsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e) =>
+    RefreshTotalActivityText();
+
   partial void OnSelectedJetChanged(JetViewModel? oldValue, JetViewModel? newValue)
   {
     if (_rateHooked is not null)
-      _rateHooked.PropertyChanged -= OnJetRateChanged;
+      _rateHooked.PropertyChanged -= OnSelectedJetPropertyChanged;
     _rateHooked = newValue;
     if (newValue is not null)
-      newValue.PropertyChanged += OnJetRateChanged;
+      newValue.PropertyChanged += OnSelectedJetPropertyChanged;
+    RefreshJetCurves();
     RefreshAfrhoNowText();
   }
 
   // the rate is written from the native-push thread: refresh on the UI thread
-  private void OnJetRateChanged(object? sender, PropertyChangedEventArgs e)
+  private void OnSelectedJetPropertyChanged(object? sender, PropertyChangedEventArgs e)
   {
     if (e.PropertyName == nameof(JetViewModel.DustProductionRateAt1AuKgs))
-    {
-      if (_dispatcher is null) RefreshAfrhoNowText();
-      else _dispatcher.Dispatch(RefreshAfrhoNowText);
-    }
+      OnUiThread(RefreshAfrhoNowText);
+    else if (e.PropertyName is null || JetCurveInputs.Contains(e.PropertyName))
+      OnUiThread(() =>
+      {
+        RefreshJetCurves();
+        RefreshAfrhoNowText();
+      });
+  }
+
+  // any jet's Afρ₀ or rate: the Σ read-out (rates arrive from the native-push thread)
+  private void OnAnyJetActivityChanged(string? propertyName)
+  {
+    if (propertyName is null || propertyName == nameof(JetViewModel.Afrho0Cm)
+        || propertyName == nameof(JetViewModel.DustProductionRateAt1AuKgs))
+      OnUiThread(RefreshTotalActivityText);
+  }
+
+  private void OnUiThread(Action action)
+  {
+    if (_dispatcher is null) action();
+    else _dispatcher.Dispatch(action);
   }
 
   private double CurrentRhAu => IsCometCommitted ? HeliocentricDistanceAu : double.NaN;
@@ -511,25 +595,50 @@ public partial class ModelTabViewModel
       return;
     AfrhoPlot = DustCurves.AfrhoPlot(s.Afrho0Cm, s.AfrhoPower, s.AfrhoCutoffAu, s.AfrhoMaxValueCm, CurrentRhAu);
     SizeDistributionPlot = DustCurves.SizeDistributionPlot(s.DiametreUm, s.SizeRange, s.SizeQ);
+    RefreshJetCurves();
     RefreshAfrhoNowText();
+    RefreshTotalActivityText();
+  }
+
+  private void RefreshJetCurves()
+  {
+    if (CurrentSession is not { } s || SelectedJet is not { } j)
+    {
+      JetAfrhoPlot = null;
+      JetSizeDistributionPlot = null;
+      return;
+    }
+    JetAfrhoPlot = DustCurves.AfrhoPlot(j.Afrho0Cm, s.AfrhoPower, s.AfrhoCutoffAu, s.AfrhoMaxValueCm, CurrentRhAu);
+    JetSizeDistributionPlot = DustCurves.SizeDistributionPlot(j.DiametreUm, j.SizeRange, j.SizeQ);
   }
 
   private void RefreshAfrhoNowText()
   {
     if (CurrentSession is not { } s)
       return;
-    // the selected jet's rate (each jet has its own: it depends on its speed), else the first jet
+    // the selected jet's Afρ₀ and rate (each jet has its own), else the first jet, else the defaults
     var jet = SelectedJet ?? (s.Jets.Count > 0 ? s.Jets[0] : null);
     double rate = jet is { NativePsId: not 0 } ? jet.DustProductionRateAt1AuKgs : double.NaN;
-    AfrhoNowText = DustCurves.AfrhoNowText(CurrentRhAu, s.Afrho0Cm, s.AfrhoPower, s.AfrhoCutoffAu,
-      s.AfrhoMaxValueCm, rate, jet?.DisplayIndex ?? 0);
+    AfrhoNowText = DustCurves.AfrhoNowText(CurrentRhAu, jet?.Afrho0Cm ?? s.Afrho0Cm, s.AfrhoPower,
+      s.AfrhoCutoffAu, s.AfrhoMaxValueCm, rate, jet?.DisplayIndex ?? 0);
+  }
+
+  private void RefreshTotalActivityText()
+  {
+    if (CurrentSession is not { } s)
+      return;
+    var jets = new System.Collections.Generic.List<(double Afrho0Cm, double RateAt1AuKgs)>(s.Jets.Count);
+    foreach (var j in s.Jets)
+      jets.Add((j.Afrho0Cm, j.NativePsId != 0 ? j.DustProductionRateAt1AuKgs : double.NaN));
+    TotalActivityText = DustCurves.TotalActivityText(jets, s.AfrhoPower, s.AfrhoCutoffAu, s.AfrhoMaxValueCm,
+      CurrentRhAu);
   }
 
   public override void Dispose()
   {
     HookCurveSession(null);
     if (_rateHooked is not null)
-      _rateHooked.PropertyChanged -= OnJetRateChanged;
+      _rateHooked.PropertyChanged -= OnSelectedJetPropertyChanged;
     _rateHooked = null;
     if (_restoredHooked is not null)
       _restoredHooked.Restored -= OnSessionRestored;
@@ -572,31 +681,33 @@ public partial class ModelTabViewModel
     DustFlowSpeed = session.DustFlowSpeed;
     _runtimeService?.SetDustFlowSpeed((float)DustFlowSpeed);
     IsGizmoVisible = session.SphereGizmoVisible;
+    GizmoParts = session.SphereGizmoParts;
     ShowJetAngles = session.ShowJetAngles;
 
+    // only the model-wide Afρ law reaches the jets: the other values are defaults for new jets
     _modelChangeSub.Disposable = Observable
       .FromEventPattern<PropertyChangedEventHandler, PropertyChangedEventArgs>(
         h => session.PropertyChanged += h,
         h => session.PropertyChanged -= h)
+      .Where(e => e.EventArgs.PropertyName is null || ModelWideJetProperties.Contains(e.EventArgs.PropertyName))
       .Throttle(TimeSpan.FromMilliseconds(250),
         _schedulerProvider?.Background ?? System.Reactive.Concurrency.DefaultScheduler.Instance)
       .Subscribe(_ => PushModelToAllJets(session));
   }
 
   /// <summary>
-  /// Pushes the current <see cref="ModelSession"/> common properties to every live jet
-  /// by calling <see cref="INativeRuntimeService.ModifyParticleSystem"/> for each one.
-  /// Called whenever a shared model property (grain size, density, Afρ, …) changes.
+  /// Pushes the model-wide Afρ law (<see cref="ModelWideJetProperties"/>) to every live jet, each
+  /// with its own grain and Afρ₀, by calling <see cref="INativeRuntimeService.ModifyParticleSystem"/>
+  /// for each one.
   /// </summary>
   private void PushModelToAllJets(ModelSession session)
   {
-    var model = BuildModel(session);
     foreach (var jet in session.Jets)
     {
       if (jet.NativePsId == 0) continue;
       var psJet = BuildJet(jet);
       bool ok = _runtimeService.ModifyParticleSystem(
-        jet.NativePsId, model, psJet,
+        jet.NativePsId, BuildModel(session, jet), psJet,
         out ParticleSystemComputedProperties computed);
       if (ok)
       {
@@ -755,7 +866,7 @@ public partial class ModelTabViewModel
       .Subscribe(_ =>
       {
         if (jet.NativePsId == 0) return;
-        var model = BuildModel(session);
+        var model = BuildModel(session, jet);
         var psJet = BuildJet(jet);
         bool ok = _runtimeService.ModifyParticleSystem(
           jet.NativePsId, model, psJet,
@@ -781,6 +892,14 @@ public partial class ModelTabViewModel
           _runtimeService.SetJetPreviewVisibility(jet.NativePsId, jet.IsPreviewVisible);
         }
       })
+      .AddDisposableTo(_disposables);
+
+    // the Σ Afρ → Σ Q_d read-out follows every jet's Afρ₀ and rate
+    Observable
+      .FromEventPattern<PropertyChangedEventHandler, PropertyChangedEventArgs>(
+        h => jet.PropertyChanged += h,
+        h => jet.PropertyChanged -= h)
+      .Subscribe(e => OnAnyJetActivityChanged(e.EventArgs.PropertyName))
       .AddDisposableTo(_disposables);
   }
 }

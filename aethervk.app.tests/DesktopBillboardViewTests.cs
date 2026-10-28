@@ -52,14 +52,21 @@ public class DesktopBillboardViewTests
 
     // edit through the controls of the row
     var numbers = list.GetVisualDescendants().OfType<NumericUpDown>().ToList();
-    Assert.Equal(4, numbers.Count); // x, y, w, h
+    Assert.Equal(6, numbers.Count); // x, y, w, h, nucleus x, nucleus y
+    Assert.Equal(["BillboardNucleusX", "BillboardNucleusY"], numbers.Skip(4).Select(AutomationProperties.GetAutomationId));
+    Assert.Null(numbers[4].Value); // unset: the image centre
     numbers[0].Value = 333;
+    numbers[4].Value = 12.5m;
+    numbers[5].Value = 7.25m;
     var slider = list.GetVisualDescendants().OfType<Slider>().Single();
     slider.Value = 0.3;
     Dispatcher.UIThread.RunJobs();
     var b = vm.Billboards.Service.Current.Single();
     Assert.Equal(333, b.CenterX, 6);
     Assert.Equal(0.3, b.Alpha, 6);
+    Assert.Equal(new Logic.Utils.PointD(12.5, 7.25), b.ImageNucleusPx);
+    Assert.Contains(list.GetVisualDescendants().OfType<TextBlock>(),
+      t => AutomationProperties.GetAutomationId(t) == "BillboardGeometry" && t.Text!.Contains("nucleus 12.500, 7.250 px"));
 
     var delete = list.GetVisualDescendants().OfType<Button>().Single(x => Equals(x.Content, vm.StrBillboardDelete));
     delete.Command!.Execute(null);
@@ -105,6 +112,12 @@ public class DesktopBillboardViewTests
     var buttons = fitsSection.GetVisualDescendants().OfType<Button>().ToList();
     Assert.Contains(buttons, b => Equals(b.Content, "Apply stretch"));
     Assert.Contains(buttons, b => Equals(b.Content, "Set up comparison"));
+    Assert.Contains(buttons, b => AutomationProperties.GetAutomationId(b) == "BillboardSetUpComparison");
+    // the facts the end-to-end test reads carry their AutomationIds
+    var ids = fitsSection.GetVisualDescendants().OfType<SelectableTextBlock>()
+      .Select(AutomationProperties.GetAutomationId).Where(id => id is not null).ToList();
+    Assert.Contains("FitsFact_Scale", ids);
+    Assert.Contains("FitsFact_DateMid", ids);
     // the plate scale came from the header
     Assert.Equal(0.30368, vm.Billboards.Service.Current.Single().ImageArcsecPerPx);
     window.Close();

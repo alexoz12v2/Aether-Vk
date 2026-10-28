@@ -819,6 +819,36 @@ pub const CAMERA_HIDE_BEHIND: u32 = 1 << 1;
 pub struct CameraShadingComponent(pub u32);
 impl Component for CameraShadingComponent {}
 
+/// Linear factor a camera multiplies the sunlight on meshes by (both shadings; ambient fill
+/// unchanged). A camera without it uses 1.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct CameraExposureComponent(pub f32);
+impl Component for CameraExposureComponent {}
+
+/// [`SphereGizmoPartsComponent`] bit: the wireframe sphere.
+pub const SPHERE_GIZMO_PART_GRID: u32 = 1 << 0;
+/// [`SphereGizmoPartsComponent`] bit: the body X (red) and Y (green) axes.
+pub const SPHERE_GIZMO_PART_BODY_AXES: u32 = 1 << 1;
+/// [`SphereGizmoPartsComponent`] bit: the body Z axis (blue), the spin axis.
+pub const SPHERE_GIZMO_PART_SPIN_AXIS: u32 = 1 << 2;
+/// [`SphereGizmoPartsComponent`] bit: the Sun direction (yellow).
+pub const SPHERE_GIZMO_PART_SUN: u32 = 1 << 3;
+/// [`SphereGizmoPartsComponent`] bit: the heliocentric velocity direction (magenta).
+pub const SPHERE_GIZMO_PART_VELOCITY: u32 = 1 << 4;
+/// What a sphere gizmo without [`SphereGizmoPartsComponent`] draws (no velocity: unknown).
+pub const SPHERE_GIZMO_PARTS_DEFAULT: u32 =
+  SPHERE_GIZMO_PART_GRID | SPHERE_GIZMO_PART_BODY_AXES | SPHERE_GIZMO_PART_SPIN_AXIS | SPHERE_GIZMO_PART_SUN;
+
+/// Which parts of the [`SphereGizmoComponent`] on the same entity are drawn
+/// (`SPHERE_GIZMO_PART_*` bits), and the comet's heliocentric velocity direction (unit, world
+/// axes; zero while unknown, then the velocity arrow is not drawn), refreshed every logic commit.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct SphereGizmoPartsComponent {
+  pub parts: u32,
+  pub velocity_dir: [f32; 3],
+}
+impl Component for SphereGizmoPartsComponent {}
+
 /// A component that stores debug render states for BVH nodes
 #[derive(Clone, Debug)]
 pub struct BvhDebugComponent {
@@ -1720,6 +1750,8 @@ impl Scene {
     self.register_component::<RenderLayerComponent>(&[]);
     self.register_component::<CameraRenderMaskComponent>(&[]);
     self.register_component::<CameraShadingComponent>(&[]);
+    self.register_component::<CameraExposureComponent>(&[]);
+    self.register_component::<SphereGizmoPartsComponent>(&[]);
 
     // TODO remove
     self.register_component::<BvhDebugComponent>(&transform_type_id);
@@ -5039,12 +5071,13 @@ pub use computed_properties::*;
 
 /// Module containing the DTO used for particle system related FFI functions
 pub mod particles_dto {
-  /// Particle system emission and draw commands. Some properties are grouped by a comment and are
-  /// displayed "commonly", and not for each particle system. they are the "Jet Common Properties"
+  /// Particle system emission and draw commands of one jet. Every field is the jet's own (its grain
+  /// and activity too: add / modify never touch sibling jets); the UI keeps the Afρ law's shape
+  /// (power, cutoff, max) model-wide and copies it into every jet's record.
   #[repr(C)]
   #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
   pub struct ParticleSystemDTO {
-    // -- start of jet common properties --
+    // -- grain and activity properties (per jet: each jet owns its own copy) --
     pub diametre_um: f32,
     pub density_gcm3: f32,
     pub scattering_efficiency: f32,
@@ -5059,7 +5092,7 @@ pub mod particles_dto {
     pub afrho_cutoff_au: f32,
     pub afrho_max_value_cm: f32,
 
-    // -- start jet specific properties --
+    // -- jet site and ejection properties --
     pub latitude_rad: f32,
     pub longitude_rad: f32,
     pub aperture_rad: f32,
@@ -5075,7 +5108,7 @@ pub mod particles_dto {
     /// `particles::EMISSION_START_PREEXISTING` = a pre-existing tail
     pub emission_start_us: i64,
   }
-  // 10 common f32 (40 B) + jet 5 f32 + colour 4 f32 + radius + seed (44 B) + `_pad` + i64
+  // 10 grain/activity f32 (40 B) + jet 5 f32 + colour 4 f32 + radius + seed (44 B) + `_pad` + i64
   const _: () = assert!(core::mem::size_of::<ParticleSystemDTO>() == 96);
   const _: () = assert!(core::mem::offset_of!(ParticleSystemDTO, emission_start_us) == 88);
   const _: () = assert!(core::mem::offset_of!(ParticleSystemDTO, afrho_0_cm) == 24);

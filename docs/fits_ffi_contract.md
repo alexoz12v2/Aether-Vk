@@ -59,6 +59,19 @@ bool avkSimulationContext_setFitsStretch(
     double p1,
     double* out_black,
     double* out_white);
+
+// The physical f32 raster (BZERO + BSCALE · raw, blank = NaN) in texture row order (row 0 = the
+// top of the displayed image, like copyAssetTexels), for measurements on the data rather than on
+// the stretched texels (the C# nucleus detector). out = NULL only sizes (*out_width ·
+// *out_height floats); out_len counts floats. Returns the copyAssetTexels status codes:
+// 0 ok, 1 invalid argument, 2 unknown asset (also: not FITS), 4 buffer too small, 5 busy.
+int32_t avkSimulationContext_copyFitsRaster(
+    SimulationContext* ctx,
+    uint64_t asset_id,
+    float* out,
+    uint64_t out_len,
+    uint32_t* out_width,
+    uint32_t* out_height);
 ```
 
 C# (same style as `avkSimulationContext_getCompatibilityJson` in

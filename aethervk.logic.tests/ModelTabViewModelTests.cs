@@ -19,7 +19,7 @@ internal delegate void ModifyParticleSystemCallback(
 
 /// <summary>
 /// Unit tests for <see cref="ModelTabViewModel"/> covering jet management and
-/// common-parameter propagation. Native FFI paths are bypassed via a mocked
+/// per-jet grain and activity parameters. Native FFI paths are bypassed via a mocked
 /// <see cref="INativeRuntimeService"/>.
 /// </summary>
 public class ModelTabViewModelTests
@@ -134,6 +134,30 @@ public class ModelTabViewModelTests
     s.Vm.IsGizmoVisible = true;
     Assert.True(s.Session.SphereGizmoVisible);
     s.Runtime.Verify(r => r.SetSphereGizmoVisibility(true), Times.Once);
+  }
+
+  [Fact]
+  public void SphereGizmoParts_Toggles_ReachNativeAndSession_AndAreReappliedOnCommit()
+  {
+    var s = new TestSetup(cometCommitted: false);
+    Assert.Equal(AetherVk.Logic.Models.SphereGizmoPart.Default, s.Vm.GizmoParts);
+    Assert.False(s.Vm.ShowGizmoVelocity);
+
+    s.Vm.ShowGizmoGrid = false;
+    s.Vm.ShowGizmoVelocity = true;
+    uint expected = AetherVk.Logic.Models.SphereGizmoPart.All & ~AetherVk.Logic.Models.SphereGizmoPart.Grid;
+    Assert.Equal(expected, s.Session.SphereGizmoParts);
+    s.Runtime.Verify(r => r.SetSphereGizmoParts(expected), Times.Once);
+
+    s.Runtime.Invocations.Clear();
+    s.Vm.IsCometCommitted = true;
+    s.Runtime.Verify(r => r.SetSphereGizmoParts(expected), Times.Once);
+
+    // the save file keeps it
+    var dto = AetherVk.Logic.SaveFile.SaveIndexMapping.ToDto(s.Session);
+    var restored = new ModelSession();
+    AetherVk.Logic.SaveFile.SaveIndexMapping.Apply(dto, restored);
+    Assert.Equal(expected, restored.SphereGizmoParts);
   }
 
   /// <summary>Jets with native ids 11 and 22, the first one selected.</summary>
@@ -522,7 +546,7 @@ public class ModelTabViewModelTests
 
   /// <summary>
   /// ModelSession common properties must raise PropertyChanged when set,
-  /// so the ViewModel can detect model-level edits and propagate them to siblings.
+  /// so the ViewModel can re-plot the defaults and push the model-wide Afρ law to every jet.
   /// </summary>
   [Fact]
   public void ModelSession_CommonProperties_RaisePropertyChanged()
@@ -572,10 +596,11 @@ public class ModelTabViewModelTests
   // ── PushModelToAllJets reactive pipeline ──────────────────────────────────
 
   /// <summary>
-  /// When a ModelSession common property changes, PushModelToAllJets must call
-  /// ModifyParticleSystem for every jet with a non-zero NativePsId.
-  /// Verifies the full reactive pipeline: PropertyChanged → Throttle → PushModelToAllJets → FFI.
-  /// ImmediateScheduler (used in TestSetup) collapses the Throttle delay to zero.
+  /// When a model-wide property (the Afρ law's shape) changes, PushModelToAllJets must call
+  /// ModifyParticleSystem for every jet with a non-zero NativePsId, each with its own grain.
+  /// A grain default (diameter …) changes no existing jet. Verifies the full reactive pipeline:
+  /// PropertyChanged → Throttle → PushModelToAllJets → FFI. ImmediateScheduler (used in TestSetup)
+  /// collapses the Throttle delay to zero.
   /// </summary>
   [Fact]
   public void ModelSessionPropertyChange_AfterThrottle_CallsModifyParticleSystem()
@@ -608,13 +633,147 @@ public class ModelTabViewModelTests
     // No modify calls before session property changes
     Assert.Empty(modifyCalls);
 
-    // Mutate a common property — with ImmediateScheduler the Throttle fires synchronously
+    // a default for new jets: the existing jet keeps its grain, nothing is pushed
     s.Session.DiametreUm = 50.0f;
+    Assert.Empty(modifyCalls);
+    Assert.Equal(100f, s.Vm.Jets!.Single().DiametreUm);
+
+    // Mutate a model-wide property — with ImmediateScheduler the Throttle fires synchronously
+    s.Session.AfrhoPower = 3.0f;
 
     // Pipeline must have fired: PropertyChanged → Throttle → PushModelToAllJets → ModifyParticleSystem
     Assert.Single(modifyCalls);
     Assert.Equal(jetId, modifyCalls[0].id);
-    Assert.Equal(50.0f, modifyCalls[0].model.DiametreUm);
+    Assert.Equal(3.0f, modifyCalls[0].model.AfrhoPower);
+    Assert.Equal(100f, modifyCalls[0].model.DiametreUm);
+  }
+
+  // ── Per-jet grain and activity ─────────────────────────────────────────────
+
+  /// <summary>Adds two native jets (ids 21, 22) and records every ModifyParticleSystem call.</summary>
+  private static List<(ulong id, ParticleSystemModel model)> AddTwoJetsRecordingModifies(TestSetup s)
+  {
+    ulong firstId = 21, secondId = 22;
+    s.Runtime
+      .Setup(r => r.AddFirstParticleSystem(It.IsAny<ParticleSystemModel>(), It.IsAny<ParticleSystemJet>(), out firstId))
+      .Returns(new ParticleSystemComputedProperties(0.5f, 1.0f));
+    s.Runtime
+      .Setup(r => r.AddParticleSystem(It.IsAny<ParticleSystemModel>(), It.IsAny<ParticleSystemJet>(), out secondId))
+      .Returns(true);
+    var modifyCalls = new List<(ulong id, ParticleSystemModel model)>();
+    s.Runtime
+      .Setup(r => r.ModifyParticleSystem(
+        It.IsAny<ulong>(), It.IsAny<ParticleSystemModel>(), It.IsAny<ParticleSystemJet>(),
+        out It.Ref<ParticleSystemComputedProperties>.IsAny))
+      .Callback(new ModifyParticleSystemCallback((ulong id, ParticleSystemModel model,
+          ParticleSystemJet jet, out ParticleSystemComputedProperties comp) =>
+        {
+          modifyCalls.Add((id, model));
+          // β ∝ 1/diameter, like the engine (enough to tell the jets apart)
+          comp = new ParticleSystemComputedProperties(10f / model.DiametreUm, model.Afrho0Cm * 0.01f);
+        }))
+      .Returns(true);
+    s.Vm.AddJetCommand.Execute(null);
+    s.Vm.AddJetCommand.Execute(null);
+    return modifyCalls;
+  }
+
+  /// <summary>
+  /// Editing one jet's grain diameter modifies that jet only: one native modify of its system with
+  /// the new diameter, the sibling's grain (view model and native) untouched.
+  /// </summary>
+  [Fact]
+  public void EditingOneJetDiameter_ModifiesOnlyThatJet()
+  {
+    var s = new TestSetup();
+    var modifyCalls = AddTwoJetsRecordingModifies(s);
+    var (first, second) = (s.Vm.Jets![0], s.Vm.Jets[1]);
+    Assert.Equal((21ul, 22ul), (first.NativePsId, second.NativePsId));
+    // the later jet read its own β and rate back (AddParticleSystem returns none)
+    Assert.Equal(10f / 100f, second.Beta, 6);
+    modifyCalls.Clear();
+
+    first.DiametreUm = 20f;
+
+    var call = Assert.Single(modifyCalls);
+    Assert.Equal(21ul, call.id);
+    Assert.Equal(20f, call.model.DiametreUm);
+    Assert.Equal(0.5f, first.Beta, 6);
+    Assert.Equal(100f, second.DiametreUm);
+    Assert.Equal(10f / 100f, second.Beta, 6);
+  }
+
+  /// <summary>
+  /// A new jet starts from the model session's grain and activity defaults (view model and native
+  /// record), and a later change of the defaults leaves it as it is.
+  /// </summary>
+  [Fact]
+  public void NewJet_TakesTheModelDefaults()
+  {
+    var s = new TestSetup();
+    s.Session.DiametreUm = 42f;
+    s.Session.DensityGCm3 = 1.3f;
+    s.Session.ScatteringEfficiency = 1.4f;
+    s.Session.GeometricAlbedo = 0.06f;
+    s.Session.SizeQ = 3.0f;
+    s.Session.SizeRange = 30f;
+    s.Session.Afrho0Cm = 700f;
+    s.Session.AfrhoPower = 2.5f;
+    ParticleSystemModel? captured = null;
+    ulong outId = 5;
+    s.Runtime
+      .Setup(r => r.AddFirstParticleSystem(It.IsAny<ParticleSystemModel>(), It.IsAny<ParticleSystemJet>(), out outId))
+      .Callback((ParticleSystemModel model, ParticleSystemJet jet, out ulong id) =>
+      {
+        captured = model;
+        id = 5;
+      })
+      .Returns(new ParticleSystemComputedProperties(0.5f, 1.0f));
+
+    s.Vm.AddJetCommand.Execute(null);
+
+    var jet = s.Vm.Jets!.Single();
+    var expected = new AetherVk.Logic.Models.JetGrain(42f, 1.3f, 1.4f, 0.06f, 3.0f, 30f, 700f);
+    Assert.Equal(expected, jet.Grain);
+    Assert.Equal(expected, s.Session.DefaultGrain);
+    Assert.Equal(new ParticleSystemModel(42f, 1.3f, 1.4f, 0.06f, 3.0f, 30f, 700f, 2.5f, 15f, 100_000f), captured);
+
+    s.Session.DiametreUm = 7f;
+    s.Session.Afrho0Cm = 9f;
+    Assert.Equal(expected, jet.Grain);
+  }
+
+  /// <summary>"Copy to all jets" gives the siblings the selected jet's grain and Afρ₀, nothing else.</summary>
+  [Fact]
+  public void CopyGrainToAllJets_CopiesTheGrainOnly()
+  {
+    var s = new TestSetup();
+    var modifyCalls = AddTwoJetsRecordingModifies(s);
+    var (first, second) = (s.Vm.Jets![0], s.Vm.Jets[1]);
+    var site = (second.LatitudeDeg, second.LongitudeDeg, second.StartVelocityMeanMs, second.StreamColor);
+    first.Grain = new AetherVk.Logic.Models.JetGrain(250f, 0.8f, 1.2f, 0.05f, 3.2f, 20f, 900f);
+    s.Vm.SelectedJet = first;
+    modifyCalls.Clear();
+
+    s.Vm.CopyGrainToAllJetsCommand.Execute(null);
+
+    Assert.Equal(first.Grain, second.Grain);
+    Assert.Equal(site, (second.LatitudeDeg, second.LongitudeDeg, second.StartVelocityMeanMs, second.StreamColor));
+    Assert.Contains(modifyCalls, c => c.id == 22ul && c.model.DiametreUm == 250f && c.model.Afrho0Cm == 900f);
+    Assert.DoesNotContain(modifyCalls, c => c.id == 21ul);
+  }
+
+  /// <summary>The Σ read-out adds the jets' Afρ₀ and their native rates.</summary>
+  [Fact]
+  public void TotalActivityText_SumsTheJets()
+  {
+    var s = new TestSetup();
+    AddTwoJetsRecordingModifies(s);
+    s.Vm.Jets![0].DustProductionRateAt1AuKgs = 1.5f;
+    s.Vm.Jets[1].Afrho0Cm = 300f;
+    s.Vm.Jets[1].DustProductionRateAt1AuKgs = 2.5f;
+    Assert.Contains("Σ 2 jets at 1 AU: Σ Afρ 400 cm", s.Vm.TotalActivityText);
+    Assert.Contains("Σ Q_d ≈ 4 kg/s", s.Vm.TotalActivityText);
   }
 
   // ── RemoveJet edge cases ───────────────────────────────────────────────────

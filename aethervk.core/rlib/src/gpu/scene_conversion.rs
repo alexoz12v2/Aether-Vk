@@ -124,6 +124,9 @@ impl SceneConversionExt2 for Scene {
     let camera_flags = self
       .with_component(camera_entity, |s: &crate::scene::CameraShadingComponent| s.0)
       .unwrap_or(0);
+    let camera_exposure = self
+      .with_component(camera_entity, |e: &crate::scene::CameraExposureComponent| e.0)
+      .unwrap_or(1.0);
     let hide_behind = camera_flags & crate::scene::CAMERA_HIDE_BEHIND != 0;
     let is_ortho = matches!(
       camera_data.projection_params,
@@ -327,6 +330,7 @@ impl SceneConversionExt2 for Scene {
       dust_view: Default::default(),
       layer_ref_dist: core::array::from_fn(|i| layer_ref_dists.get(&(i as u32)).copied().unwrap_or(0.0)),
       mesh_shading: camera_flags,
+      mesh_exposure: camera_exposure,
     };
 
     // ------ 3. Zero-Copy GPU Upload Abstraction Macro -------------------------------------
@@ -439,7 +443,7 @@ impl SceneConversionExt2 for Scene {
           sg.subdivisions,
           gpu::SPHERE_GIZMO_STYLE_SPHERE,
           0.0f32,
-          [1.0f32; 4],
+          sphere_gizmo_parts_color(self, id, layer_frame_entities.get(&layer_idx).copied()),
         )
       })
     });
@@ -2148,6 +2152,30 @@ pub(crate) fn jet_angle_arcs(site: [f64; 3], gizmo_radius_km: f64) -> Option<Jet
     lon_rad: lon,
     arcs: [lon_arc, lat_arc],
   })
+}
+
+/// The sphere-gizmo style's `color` slot (`sphere_gizmo.vert`): rgb the comet's velocity direction
+/// in the axes of the depth-layer frame `frame` (the gizmo's model matrix is relative to it; world
+/// axes without one), a the `SPHERE_GIZMO_PART_*` mask. Without a [`SphereGizmoPartsComponent`]:
+/// the default parts and no velocity.
+pub(crate) fn sphere_gizmo_parts_color(
+  scene: &Scene,
+  gizmo: EntityId,
+  frame: Option<EntityId>,
+) -> [f32; 4] {
+  use crate::simulation_api::earth_observer::{qinverse, qnormalize, rotate};
+  let Some(p) = scene.with_component(gizmo, |p: &crate::scene::SphereGizmoPartsComponent| *p) else {
+    return [0.0, 0.0, 0.0, crate::scene::SPHERE_GIZMO_PARTS_DEFAULT as f32];
+  };
+  let v = p.velocity_dir.map(f64::from);
+  let v = match frame.and_then(|f| scene.global_transform_f64(f)) {
+    Some(f) => rotate(
+      qinverse(qnormalize([f.rotation[0], f.rotation[1], f.rotation[2], f.rotation[3]])),
+      v,
+    ),
+    None => v,
+  };
+  [v[0] as f32, v[1] as f32, v[2] as f32, p.parts as f32]
 }
 
 pub(crate) fn jet_site_lit(scene: &Scene, jet: EntityId) -> Option<bool> {

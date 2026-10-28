@@ -14,7 +14,8 @@ struct SphereGizmoData {
                         // 2 = solid jet line (local +Z, 0 → radius, in `color`)
     float dashCount;    // style 1: dashes (dash + gap) along the whole axis
     vec4 centerClip;    // P*V*center composed in f64 on the CPU; all zero = compute it here
-    vec4 color;         // style 2: the line's colour
+    vec4 color;         // style 2: the line's colour; style 0: xyz the comet's velocity direction
+                        // (layer-frame axes, zero = unknown), w the parts mask (PART_* bits)
 };
 
 // Bindless BDA block
@@ -36,6 +37,22 @@ layout(location = 1) out float outAlpha;
 layout(location = 2) out vec2 outDash;
 
 const float PI = 3.14159265359;
+
+// style 0 parts (scene::SPHERE_GIZMO_PART_*)
+const uint PART_GRID      = 1u;
+const uint PART_BODY_AXES = 2u;
+const uint PART_SPIN_AXIS = 4u;
+const uint PART_SUN       = 8u;
+const uint PART_VELOCITY  = 16u;
+const vec3 VELOCITY_COLOR = vec3(1.0, 0.35, 1.0);
+
+// Whether axis `axisIdx` (0 X, 1 Y, 2 Z = spin, 3 Sun, 4 velocity) is drawn.
+bool axisShown(int axisIdx, uint parts, vec3 velocity) {
+    if (axisIdx <= 1) return (parts & PART_BODY_AXES) != 0u;
+    if (axisIdx == 2) return (parts & PART_SPIN_AXIS) != 0u;
+    if (axisIdx == 3) return (parts & PART_SUN) != 0u;
+    return (parts & PART_VELOCITY) != 0u && dot(velocity, velocity) > 0.25;
+}
 
 void main() {
     mat4 model = push.gizmoPtr.gizmos[gl_InstanceIndex].model;
@@ -120,14 +137,18 @@ void main() {
     // Vertices per line = 2
     int totalSphereVertices = lonSegments * (2 * latSegments - 1) * 2;
 
-    // 4 axes: X(red), Y(green), Z(blue), Sun(yellow). 2 vertices each.
-    int axesOffset = totalSphereVertices;
-    int totalAxesVertices = 8; // 4 axes * 2 vertices
+    vec4 partsSlot = push.gizmoPtr.gizmos[gl_InstanceIndex].color;
+    uint parts = uint(partsSlot.w + 0.5);
+    vec3 velocityDir = partsSlot.xyz;
 
-    // Arrowheads: 4 lines = 8 vertices per arrowhead. 4 arrowheads = 32 vertices.
+    // 5 axes: X(red), Y(green), Z(blue), Sun(yellow), velocity(magenta). 2 vertices each.
+    int axesOffset = totalSphereVertices;
+    int totalAxesVertices = 10; // 5 axes * 2 vertices
+
+    // Arrowheads: 4 lines = 8 vertices per arrowhead. 5 arrowheads = 40 vertices.
     int arrowheadLines = 4;
     int arrowheadVerticesPerAxis = arrowheadLines * 2;
-    int totalArrowheadVertices = arrowheadVerticesPerAxis * 4; // 4 axes
+    int totalArrowheadVertices = arrowheadVerticesPerAxis * 5; // 5 axes
 
     int totalExpectedVertices = axesOffset + totalAxesVertices + totalArrowheadVertices;
 
@@ -138,6 +159,7 @@ void main() {
 
     if (gl_VertexIndex < totalSphereVertices) {
         // ── UV Sphere wireframe ──────────────────────────────────────────────
+        valid = (parts & PART_GRID) != 0u;
         int lineIdx = gl_VertexIndex / 2;
         int isEndVertex = gl_VertexIndex % 2;
 
@@ -172,11 +194,12 @@ void main() {
             localPos = vec3(cos(phi) * sin(theta) * r, sin(phi) * sin(theta) * r, cos(theta) * r);
         }
     } else if (gl_VertexIndex < axesOffset + totalAxesVertices) {
-        // ── 4 axes (X=red, Y=green, Z=blue, Sun=yellow) ─────────────────────
+        // ── 5 axes (X=red, Y=green, Z=blue, Sun=yellow, velocity=magenta) ───
         isAxis = true;
         int axisIdx = (gl_VertexIndex - axesOffset) / 2;
         int pt = (gl_VertexIndex - axesOffset) % 2;
         float r = push.gizmoPtr.gizmos[gl_InstanceIndex].radius * 1.5; // Axes extend beyond the sphere
+        valid = axisShown(axisIdx, parts, velocityDir);
 
         if (axisIdx == 0) { // X Axis (Right) -> Red
             localPos = vec3(pt == 0 ? 0.0 : r, 0.0, 0.0);
@@ -187,7 +210,7 @@ void main() {
         } else if (axisIdx == 2) { // Z Axis (Up) -> Blue
             localPos = vec3(0.0, 0.0, pt == 0 ? 0.0 : r);
             color = vec3(0.0, 0.0, 1.0);
-        } else { // Axis 3: Sun direction -> Yellow (1.4x length)
+        } else if (axisIdx == 3) { // Axis 3: Sun direction -> Yellow (1.4x length)
             float sunR = r * 1.4;
             // Transform global sun direction into the model's local space.
             // scene_conversion.rs enforces scale=1 for sphere gizmos, so mat3(model)
@@ -196,6 +219,10 @@ void main() {
             vec3 localSunDir = normalize(transpose(mat3(model)) * worldSunDir);
             localPos = pt == 0 ? vec3(0.0) : localSunDir * sunR;
             color = vec3(1.0, 1.0, 0.0);
+        } else { // Axis 4: heliocentric velocity -> Magenta (1.4x length, like the Sun)
+            vec3 localVelDir = normalize(transpose(mat3(model)) * velocityDir);
+            localPos = pt == 0 ? vec3(0.0) : localVelDir * (r * 1.4);
+            color = VELOCITY_COLOR;
         }
     } else if (gl_VertexIndex < totalExpectedVertices) {
         // ── Arrowheads (4 axes) ──────────────────────────────────────────────
@@ -204,6 +231,7 @@ void main() {
         int axisIdx = vIdx / arrowheadVerticesPerAxis;
         int lineIdx = (vIdx % arrowheadVerticesPerAxis) / 2;
         int pt = vIdx % 2;
+        valid = axisShown(axisIdx, parts, velocityDir);
 
         float r = push.gizmoPtr.gizmos[gl_InstanceIndex].radius * 1.5;
         float headLength = push.gizmoPtr.gizmos[gl_InstanceIndex].radius * 0.2;
@@ -226,10 +254,10 @@ void main() {
             tip = vec3(0.0, 0.0, r);
             baseOffset = vec3(cos(angle)*headWidth, sin(angle)*headWidth, -headLength);
             color = vec3(0.0, 0.0, 1.0);
-        } else { // Axis 3: Sun arrowhead -> Yellow
+        } else { // Axis 3: Sun arrowhead -> Yellow; axis 4: velocity arrowhead -> Magenta
             float sunR = r * 1.4;
-            vec3 worldSunDir = normalize(push.sunPos - model[3].xyz);
-            vec3 localSunDir = normalize(transpose(mat3(model)) * worldSunDir);
+            vec3 worldDir = axisIdx == 3 ? normalize(push.sunPos - model[3].xyz) : velocityDir;
+            vec3 localSunDir = normalize(transpose(mat3(model)) * worldDir);
             tip = localSunDir * sunR;
 
             // Gram-Schmidt: build orthonormal basis perpendicular to localSunDir
@@ -239,7 +267,7 @@ void main() {
 
             vec3 radial = right * cos(angle) * headWidth + trueUp * sin(angle) * headWidth;
             baseOffset  = -localSunDir * headLength + radial;
-            color = vec3(1.0, 1.0, 0.0);
+            color = axisIdx == 3 ? vec3(1.0, 1.0, 0.0) : VELOCITY_COLOR;
         }
 
         localPos = (pt == 0) ? tip : tip + baseOffset;

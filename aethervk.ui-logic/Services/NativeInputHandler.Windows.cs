@@ -142,12 +142,12 @@ public unsafe class WindowsNativeInputHandler(IntPtr handle, string handleDescri
       // --- KEYBOARD --
       case PInvoke.WM_KEYDOWN:
       case PInvoke.WM_SYSKEYDOWN:
-        instance.PublishKeyEvent((uint)wParam.Value, isDown: true, GetModifiers());
+        instance.PublishKeyEvent(GetKeyCode(wParam, lParam), isDown: true, GetModifiers());
         break;
 
       case PInvoke.WM_KEYUP:
       case PInvoke.WM_SYSKEYUP:
-        instance.PublishKeyEvent((uint)wParam.Value, isDown: false, GetModifiers());
+        instance.PublishKeyEvent(GetKeyCode(wParam, lParam), isDown: false, GetModifiers());
         break;
 
       // --- MOUSE MOVEMENT --
@@ -213,6 +213,13 @@ public unsafe class WindowsNativeInputHandler(IntPtr handle, string handleDescri
 
   [MethodImpl(MethodImplOptions.AggressiveInlining)]
   private static double GetY(LPARAM lParam) => (short)((lParam.Value >> 16) & 0xFFFF);
+
+  // Key messages: wParam is the virtual key, lParam bit 24 the extended-key flag (KF_EXTENDED in
+  // the high word), which tells a NumLock-off keypad key from the navigation key it doubles as.
+  // https://learn.microsoft.com/en-us/windows/win32/inputdev/about-keyboard-input#keystroke-message-flags
+  [MethodImpl(MethodImplOptions.AggressiveInlining)]
+  private static uint GetKeyCode(WPARAM wParam, LPARAM lParam) =>
+    AetherVk.Logic.Input.NativeInputConverter.NormalizeWin32NumPad((uint)wParam.Value, isExtended: (lParam.Value & 0x01000000) != 0);
 
   /// <summary>
   /// Reads the state of modifier keys at the time hte message was added to the message queue.

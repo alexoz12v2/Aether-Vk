@@ -132,18 +132,48 @@ public class CometReferenceOrbitTests
     Assert.Equal(-360, vm.RotRateDegDay, 9);
   }
 
-  /// The orbit debug panel shows in CometOrbiting until the user closes it.
+  /// Collapsing the orbit debug panel keeps it shown (only the body folds away).
   [Fact]
-  public void OrbitDebugPanel_CanBeClosed()
+  public void OrbitDebugPanel_CollapsedIsStillShown()
   {
     var vm = new AetherVk.Logic.ViewModels.Debug.CometOrbitDebugViewModel();
     Assert.False(vm.IsShown);
     vm.IsVisible = true;
     Assert.True(vm.IsShown);
-    vm.DismissCommand.Execute(null);
-    Assert.False(vm.IsShown);
+    Assert.True(vm.IsExpanded);
+    vm.ToggleExpandedCommand.Execute(null);
+    Assert.False(vm.IsExpanded);
+    Assert.True(vm.IsShown);
     vm.IsVisible = false;
-    vm.IsVisible = true;
-    Assert.False(vm.IsShown); // stays closed
+    Assert.False(vm.IsShown);
+  }
+
+  [Fact]
+  public void Toggle_FlipsIsExpanded_AndWritesPreference()
+  {
+    var dir = Path.Combine(Path.GetTempPath(), "avk-hud-" + Guid.NewGuid().ToString("N"));
+    try
+    {
+      var path = Path.Combine(dir, "preferences.json");
+      var prefs = new AetherVk.Logic.Services.PreferencesService(path, new AetherVk.Logic.Input.InputRegistry());
+      Assert.True(prefs.HudOrbitExpanded);
+      var vm = new AetherVk.Logic.ViewModels.Debug.CometOrbitDebugViewModel(prefs);
+      Assert.True(vm.IsExpanded);
+      vm.ToggleExpandedCommand.Execute(null);
+      Assert.False(vm.IsExpanded);
+      Assert.False(prefs.HudOrbitExpanded);
+      Assert.True(prefs.HudCameraExpanded);
+
+      var reloaded = new AetherVk.Logic.Services.PreferencesService(path, new AetherVk.Logic.Input.InputRegistry());
+      reloaded.Load();
+      Assert.False(reloaded.HudOrbitExpanded);
+      Assert.False(new AetherVk.Logic.ViewModels.Debug.CometOrbitDebugViewModel(reloaded).IsExpanded);
+      reloaded.SetHudCameraExpanded(false);
+      Assert.False(reloaded.HudCameraExpanded);
+    }
+    finally
+    {
+      if (Directory.Exists(dir)) Directory.Delete(dir, true);
+    }
   }
 }

@@ -6,6 +6,27 @@ namespace AetherVk.Logic.ViewModels.Debug
     /// <inheritdoc/>
     partial class CameraMatrixDebugViewModel
     {
+        /// <inheritdoc cref="_isExpanded"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public bool IsExpanded
+        {
+            get => _isExpanded;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_isExpanded, value))
+                {
+                    OnIsExpandedChanging(value);
+                    OnIsExpandedChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsExpanded);
+                    _isExpanded = value;
+                    OnIsExpandedChanged(value);
+                    OnIsExpandedChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsExpanded);
+                }
+            }
+        }
+
         /// <inheritdoc cref="_dustHistory"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
@@ -195,6 +216,28 @@ namespace AetherVk.Logic.ViewModels.Debug
             }
         }
 
+        /// <summary>Executes the logic for when <see cref="IsExpanded"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="IsExpanded"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsExpandedChanging(bool value);
+        /// <summary>Executes the logic for when <see cref="IsExpanded"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="IsExpanded"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsExpandedChanging(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="IsExpanded"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="IsExpanded"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsExpandedChanged(bool value);
+        /// <summary>Executes the logic for when <see cref="IsExpanded"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="IsExpanded"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsExpandedChanged(bool oldValue, bool newValue);
         /// <summary>Executes the logic for when <see cref="DustHistory"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="DustHistory"/> is changed.</remarks>
