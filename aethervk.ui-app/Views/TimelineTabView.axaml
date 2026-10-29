@@ -49,7 +49,7 @@
             <TextBox AutomationProperties.AutomationId="EndEpochBox"
               ToolTip.Tip="End of the simulated period (ISO 8601). It must be at least 1 day after the start. Typing here only proposes a range; commit it in the Comet tab." Text="{Binding EndEpoch}" Width="180" Watermark="e.g. 2000-02-01T12:00:00Z" />
 
-            <Button Content="Restore" Command="{Binding RestoreCommand}" IsEnabled="{Binding CanRestore}" ToolTip.Tip="Puts the committed range back in the boxes" ToolTip.ShowDelay="1000" />
+            <Button AutomationProperties.AutomationId="RestoreButton" Content="Restore" Command="{Binding RestoreCommand}" IsEnabled="{Binding CanRestore}" ToolTip.Tip="Puts the committed range (the one the simulation runs) back in the Start/End boxes and drops the edit." ToolTip.ShowDelay="1000" />
 
             <!-- Indicator: proposed range differs from committed -->
             <TextBlock Text="●" Foreground="{DynamicResource Sem.Warning}" IsVisible="{Binding IsProposedDifferentFromCommitted}" ToolTip.Tip="Proposed range differs from committed" VerticalAlignment="Center" />
@@ -78,12 +78,12 @@
           <StackPanel Orientation="Horizontal" Spacing="24" Margin="0,8,0,0">
             <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding HasProposedState}">
               <TextBlock Text="Proposed Range:" FontWeight="SemiBold" FontSize="12" Foreground="{DynamicResource Text.Secondary}" />
-              <TextBlock AutomationProperties.AutomationId="ProposedRangeText" Text="{Binding DisplayProposedRange}" FontSize="12" FontFamily="Cascadia Mono, Consolas, monospace" />
+              <TextBlock AutomationProperties.AutomationId="ProposedRangeText" Text="{Binding DisplayProposedRange}" ToolTip.Tip="The range in the boxes: what the next Download &amp; Commit (Comet tab) or Recommit will use. It does not change the running simulation." FontSize="12" FontFamily="Cascadia Mono, Consolas, monospace" />
             </StackPanel>
             
             <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding HasCommittedState}">
               <TextBlock Text="Committed Range:" FontWeight="SemiBold" FontSize="12" Foreground="{DynamicResource Text.Secondary}" />
-              <TextBlock AutomationProperties.AutomationId="CommittedRangeText" Text="{Binding DisplayCommittedRange}" FontSize="12" FontFamily="Cascadia Mono, Consolas, monospace" />
+              <TextBlock AutomationProperties.AutomationId="CommittedRangeText" Text="{Binding DisplayCommittedRange}" ToolTip.Tip="The range the simulation runs: the comet's ephemeris covers it and Play, Reset, Run to End and Go stay inside it." FontSize="12" FontFamily="Cascadia Mono, Consolas, monospace" />
             </StackPanel>
           </StackPanel>
 
@@ -112,18 +112,18 @@
                         Width="150" PlaceholderText="{Binding StrSelectSpeed}" />
             </StackPanel>
 
-            <Button Command="{Binding ResetCommand}" Classes="playback" IsVisible="{Binding !IsPlaying}" ToolTip.Tip="Reset (&lt;&lt;)" ToolTip.ShowDelay="1000">
+            <Button AutomationProperties.AutomationId="ResetButton" Command="{Binding ResetCommand}" Classes="playback" IsVisible="{Binding !IsPlaying}" ToolTip.Tip="Reset: back to the start epoch of the committed range; the dust is rebuilt there." ToolTip.ShowDelay="1000">
               <Path Data="M 16,6 L 8,12 L 16,18 Z M 24,6 L 16,12 L 24,18 Z" Fill="{DynamicResource Text.Primary}" Stretch="Uniform" Width="16" Height="12" />
             </Button>
 
-            <Button AutomationProperties.AutomationId="PlayPauseButton" Command="{Binding PlayPauseCommand}" Classes="playback" ToolTip.Tip="Play/Pause" ToolTip.ShowDelay="1000">
+            <Button AutomationProperties.AutomationId="PlayPauseButton" Command="{Binding PlayPauseCommand}" Classes="playback" ToolTip.Tip="Play / Pause: simulated time runs at the chosen speed and the dust is computed frame by frame, so the tail evolves while you watch. Pause keeps the current epoch." ToolTip.ShowDelay="1000">
               <Panel Width="14" Height="14">
                 <Path Data="M 6,4 L 18,11 L 6,18 Z" Fill="{DynamicResource Text.Primary}" Stretch="Uniform" IsVisible="{Binding !IsPlaying}" />
                 <Path Data="M 6,4 L 9,4 L 9,18 L 6,18 Z M 15,4 L 18,4 L 18,18 L 15,18 Z" Fill="{DynamicResource Text.Primary}" Stretch="Uniform" IsVisible="{Binding IsPlaying}" />
               </Panel>
             </Button>
 
-            <Button AutomationProperties.AutomationId="RunToEndButton" Command="{Binding RunToEndCommand}" Classes="playback" ToolTip.Tip="Run to End" ToolTip.ShowDelay="1000">
+            <Button AutomationProperties.AutomationId="RunToEndButton" Command="{Binding RunToEndCommand}" Classes="playback" ToolTip.Tip="Run to End: jumps to the end epoch without animating. The dust there is rebuilt at once, so it can look complete sooner than while playing." ToolTip.ShowDelay="1000">
               <Path Data="M 8,6 L 8,18 L 11,18 L 11,6 Z M 13,6 L 21,12 L 13,18 Z" Fill="{DynamicResource Text.Primary}" Stretch="Uniform" Width="16" Height="12" />
             </Button>
           </StackPanel>
@@ -145,7 +145,7 @@
               </TextBox.KeyBindings>
             </TextBox>
             <Button x:Name="SeekToEpochButton" AutomationProperties.AutomationId="SeekToEpochButton"
-                    Content="Go" Command="{Binding SeekToEpochCommand}" ToolTip.Tip="Jump to this epoch" ToolTip.ShowDelay="1000" />
+                    Content="Go" Command="{Binding SeekToEpochCommand}" ToolTip.Tip="Go: jumps to the epoch in the box (inside the committed range); the dust is rebuilt there. Same as pressing Enter in the box." ToolTip.ShowDelay="1000" />
           </StackPanel>
           <TextBlock AutomationProperties.AutomationId="CurrentEpochErrorText" Text="{Binding CurrentEpochError}"
                      IsVisible="{Binding HasCurrentEpochError}" Foreground="{DynamicResource Sem.Error}"
