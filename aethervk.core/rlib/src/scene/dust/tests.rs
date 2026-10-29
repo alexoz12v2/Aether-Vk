@@ -14780,3 +14780,354 @@ fn tracer_points_span_the_size_polyline() {
   let reach = pts.iter().map(|p| p[0]).fold(0.0f32, f32::max);
   assert!(reach >= 9.9 * m.mean()[0], "the dots reach the tail's tip ({reach} m vs the mean {} m)", m.mean()[0]);
 }
+
+/// The coma's 1/ρ normalisation (`rho_normalised_levels`, `DUST_VIEW_RHO_NORM`): a synthetic
+/// τ = 1/ρ field (the steady coma's column) normalises to a flat field (its p99 within 2× of
+/// its median, against ≫ 2× for the plain levels), and without a nucleus the function is the
+/// plain `white_point_from_level` bit for bit.
+#[test]
+fn rho_normalised_levels_flatten_a_coma_column() {
+  let (w, h, texel_px) = (120u32, 68u32, 16u32);
+  let nucleus = [w as f32 * texel_px as f32 * 0.5, h as f32 * texel_px as f32 * 0.5];
+  let mut level = alloc::vec![0u32; (w * h * PYRAMID_TEXEL_WORDS) as usize];
+  for y in 0..h {
+    for x in 0..w {
+      let cx = x as f32 * texel_px as f32 + texel_px as f32 * 0.5 - nucleus[0];
+      let cy = y as f32 * texel_px as f32 + texel_px as f32 * 0.5 - nucleus[1];
+      let rho = (cx * cx + cy * cy).sqrt().max(DUST_RHO_MIN_PX);
+      level[((y * w + x) * PYRAMID_TEXEL_WORDS) as usize] = (1e7 / rho).round() as u32;
+    }
+  }
+  let unit = 3e-9;
+  let plain = white_point_from_level(&level, texel_px, unit).expect("lit");
+  assert!(plain.0 / plain.1 > 4.0, "the plain column is far from flat: {plain:?}");
+  let (p99, p50) = rho_normalised_levels(&level, w, texel_px, unit, Some(nucleus)).expect("lit");
+  assert!(p99 / p50 < 2.0 && p99 >= p50, "normalised p99 {p99:e} p50 {p50:e}");
+  // the far texels' 1/ρ · ρ / ρ_ref ≈ 1e7 / 16 counts: the normalised white in those units
+  let expect = 1e7 / DUST_RHO_REF_PX * unit / (texel_px * texel_px) as f32;
+  assert!((p50 / expect - 1.0).abs() < 0.05, "p50 {p50:e} vs {expect:e}");
+  // no nucleus: the plain levels, bit for bit
+  let none = rho_normalised_levels(&level, w, texel_px, unit, None).expect("lit");
+  assert_eq!((none.0.to_bits(), none.1.to_bits()), (plain.0.to_bits(), plain.1.to_bits()));
+  let nan = rho_normalised_levels(&level, w, texel_px, unit, Some([f32::NAN, 1.0])).expect("lit");
+  assert_eq!((nan.0.to_bits(), nan.1.to_bits()), (plain.0.to_bits(), plain.1.to_bits()));
+  assert_eq!(rho_normalised_levels(&alloc::vec![0u32; 50], 10, texel_px, unit, Some(nucleus)), None);
+}
+
+/// The display mirror with the view options (`display_stretch_view`): off and EV 0 it is
+/// `display_stretch(τ / white, b, s)` bit for bit; EV +1 is the stretch at half the white; the
+/// normalisation multiplies τ by `max(ρ, ρ_min) / ρ_ref` (1 at ρ_ref, saturated inside ρ_min,
+/// 1 without a nucleus); a non-finite EV is 0.
+#[test]
+fn display_stretch_view_mirrors_the_composite_options() {
+  let white = 2.5e-3;
+  let (b, s) = (DUST_BLACK_POINT, 1e-2);
+  for tau in [0.0, 1e-7, 3e-5, 1e-3, 2.5e-3, 1e-2] {
+    for rho in [None, Some(0.0), Some(DUST_RHO_REF_PX), Some(300.0)] {
+      let plain = display_stretch(tau / white, b, s);
+      assert_eq!(display_stretch_view(tau, white, b, s, false, rho, 0.0).to_bits(), plain.to_bits());
+      assert_eq!(display_stretch_view(tau, white, b, s, false, rho, f32::NAN).to_bits(), plain.to_bits());
+      assert_eq!(
+        display_stretch_view(tau, white, b, s, true, rho, 0.0).to_bits(),
+        display_stretch(tau * rho_norm_factor(rho, DUST_RHO_MIN_PX, DUST_RHO_REF_PX) / white, b, s).to_bits()
+      );
+    }
+    assert_eq!(
+      display_stretch_view(tau, white, b, s, false, None, 1.0).to_bits(),
+      display_stretch(tau / (white * 0.5), b, s).to_bits()
+    );
+    assert_eq!(
+      display_stretch_view(tau, white, b, s, false, None, -2.0).to_bits(),
+      display_stretch(tau / (white * 4.0), b, s).to_bits()
+    );
+  }
+  assert_eq!(rho_norm_factor(Some(DUST_RHO_REF_PX), DUST_RHO_MIN_PX, DUST_RHO_REF_PX), 1.0);
+  assert_eq!(rho_norm_factor(Some(0.0), DUST_RHO_MIN_PX, DUST_RHO_REF_PX), DUST_RHO_MIN_PX / DUST_RHO_REF_PX);
+  assert_eq!(rho_norm_factor(Some(f32::NAN), DUST_RHO_MIN_PX, DUST_RHO_REF_PX), 1.0);
+  assert_eq!(rho_norm_factor(None, DUST_RHO_MIN_PX, DUST_RHO_REF_PX), 1.0);
+  assert_eq!(exposure_ev_white_scale(0.0).to_bits(), 1.0f32.to_bits());
+  assert_eq!(exposure_ev_white_scale(f32::INFINITY).to_bits(), 1.0f32.to_bits());
+  assert_eq!(exposure_ev_white_scale(1.0), 0.5);
+  assert_eq!(clamp_dust_exposure_ev(9.0), DUST_EXPOSURE_EV_MAX);
+  assert_eq!(clamp_dust_exposure_ev(-9.0), DUST_EXPOSURE_EV_MIN);
+  assert_eq!(clamp_dust_exposure_ev(f32::NAN), 0.0);
+  assert_eq!(
+    DUST_VIEW_USER_MASK & !DUST_VIEW_DRAW_MASK,
+    DUST_VIEW_RHO_NORM | DUST_VIEW_TRAJECTORIES
+  );
+}
+
+// ─── trajectories view aid (`DUST_VIEW_TRAJECTORIES`) ─────────────────────────
+
+/// A ticked system (every tier caught up, published, complete) on the test orbit with a lit
+/// polar jet: the lines' input.
+fn trajectory_test_system() -> (DustSystemState, f64) {
+  use trajectories::*;
+  let (r0, v0) = comet_state();
+  let axis = unit(scale(r0, -1.0));
+  let jet_at = move |t: f64| {
+    let (r, v) = kepler::propagate_f64(r0, v0, SUN_MU_M3_S2, t);
+    Some(JetState {
+      t_s: t,
+      r_m: r,
+      v_ms: v,
+      rot: [0.0, 0.0, 0.0, 1.0],
+      site_normal: axis,
+      spin: Some([axis[0], axis[1], axis[2], 0.0]),
+      site_offset_m: [0.0; 3],
+    })
+  };
+  let cfg = test_cfg(1e-3, 2.0 * 86400.0);
+  let mut sys = DustSystemState::new(RING_CAPACITY_LOW);
+  let t_now = 3.0 * 86400.0;
+  let mut seq = 0u64;
+  for _ in 0..64 {
+    sys.tick(t_now, &jet_at, &|_| cfg);
+    seq += 1;
+    sys.mark_submitted(seq);
+    if !sys.building() {
+      break;
+    }
+  }
+  assert!(!sys.building(), "the test system never caught up");
+  assert!(live_cluster_count(&sys) > 0);
+  (sys, t_now)
+}
+
+/// Test (1): the last vertex is the cluster's propagated position now (as the renderer
+/// evaluates it, `evaluate_cluster_in`), and every earlier vertex, once the comet-frame shift is
+/// undone (`comet_state_at`), is the propagated position at that sample's age: the lines draw
+/// the dust's own physics. Test (2): the first vertex lies on the nucleus at its current
+/// position (within the nucleus radius plus `v0 · a0`, `a0 = 0`). Test (3): a line's extent is
+/// bounded by the grain's comet-relative motion (ejection speed plus radiation pressure over
+/// its age): the dust tail's size, not the comet's orbital arc.
+#[test]
+fn trajectory_vertices_match_the_propagated_cluster_at_every_age() {
+  use trajectories::*;
+  let (sys, t_now) = trajectory_test_system();
+  let paths = build_trajectories(&sys, t_now);
+  assert!(!paths.is_empty(), "no path from a live system");
+  let states = sys.draw_states();
+  assert!(!states.is_empty());
+  let nucleus_now = states[0].anchor_m;
+  const NUCLEUS_RADIUS_M: f64 = 2_000.0;
+  let mut checked = 0usize;
+  let mut max_extent_km: f64 = 0.0;
+  for path in &paths {
+    assert!(path.samples.len() >= DUST_TRAJECTORY_SAMPLES);
+    assert_eq!(path.samples[0].age_s, 0.0, "the first sample is the emission");
+    let state = states.iter().find(|s| s.tier == path.tier).expect("the tier's draw state");
+    let t0 = path.cluster.t0().to_f64();
+    let age = t_now - t0;
+    let host = sys.tiers.iter().find(|t| t.tier == path.tier).unwrap();
+    let batch = host
+      .ring
+      .batches
+      .iter()
+      .map(|b| b.desc)
+      .find(|d| {
+        let t_start = d.comet_r_t_hi[3] as f64 + d.comet_r_t_lo[3] as f64;
+        t0 >= t_start - 1.0 && t0 <= t_start + d.comet_v_dur_hi[3] as f64 + 1.0
+      })
+      .expect("the cluster's batch");
+    let rc_now = comet_state_at(&batch, Df::from_f64(t_now)).0.to_f64();
+
+    // (2) the first vertex: on the nucleus (site offset 0 here) at the current nucleus position
+    let first = path.samples[0].r_m;
+    let d_nucleus = norm(sub(first, nucleus_now));
+    let v0 = norm(sub(path.cluster.v0().to_f64(), comet_state_at(&batch, path.cluster.t0()).1.to_f64()));
+    assert!(
+      d_nucleus <= NUCLEUS_RADIUS_M + v0 * path.samples[0].age_s + 1_000.0,
+      "tier {} first vertex {d_nucleus:.1} m from the current nucleus (v0 {v0:.2} m/s)",
+      path.tier
+    );
+
+    // (1) the last vertex: the grain now, exactly as drawn
+    let last = path.samples.last().unwrap();
+    assert!((last.age_s - age).abs() <= 1e-6 * age.max(1.0));
+    let frame_now = state.frame.at_time(t_now);
+    let rc = evaluate_cluster_in(&path.cluster, 0, RENDER_SLOT_BITS, &frame_now);
+    assert!(rc.pos_size != [0.0; 4] || rc.age_id_dbeta_flux[3] != 0.0, "the cluster is drawn now");
+    for a in 0..3 {
+      let mine = (last.r_m[a] - state.anchor_m[a]) as f32;
+      let d = (mine - rc.pos_size[a]).abs();
+      let n = (0..3).map(|i| rc.pos_size[i] * rc.pos_size[i]).sum::<f32>().sqrt().max(1.0);
+      assert!(d <= 1e-6 * n, "tier {} last vertex axis {a}: {mine} vs {}", path.tier, rc.pos_size[a]);
+    }
+
+    // (1) every sample: the shift undone, the heliocentric position at that age
+    for (k, smp) in path.samples.iter().enumerate() {
+      let frame_tier = states
+        .iter()
+        .find(|s| smp.age_s >= s.frame.ttl[1] as f64 - 1.0 && smp.age_s <= s.frame.ttl[0] as f64 + 1.0)
+        .unwrap_or(state);
+      let frame = frame_tier.frame.at_time(t0 + smp.age_s);
+      let rc = evaluate_cluster_in(&path.cluster, 0, RENDER_SLOT_BITS, &frame);
+      if rc.pos_size == [0.0; 4] && rc.age_id_dbeta_flux[3] == 0.0 && k != 0 {
+        continue; // outside every tier's band at this frame
+      }
+      let rc_then = comet_state_at(&batch, Df::from_f64(t0 + smp.age_s)).0.to_f64();
+      let helio = [
+        smp.r_m[0] - rc_now[0] + rc_then[0],
+        smp.r_m[1] - rc_now[1] + rc_then[1],
+        smp.r_m[2] - rc_now[2] + rc_then[2],
+      ];
+      let mine = [
+        (helio[0] - frame_tier.anchor_m[0]) as f32,
+        (helio[1] - frame_tier.anchor_m[1]) as f32,
+        (helio[2] - frame_tier.anchor_m[2]) as f32,
+      ];
+      let n = (mine[0] * mine[0] + mine[1] * mine[1] + mine[2] * mine[2]).sqrt().max(1.0);
+      for a in 0..3 {
+        let d = (mine[a] - rc.pos_size[a]).abs();
+        // the shift is undone in f64 from df64 values: a few m of rounding on 1e11 m
+        assert!(
+          d <= 1e-6 * n + 10.0,
+          "tier {} sample {k} age {} axis {a}: line {} vs cluster {}",
+          path.tier,
+          smp.age_s,
+          mine[a],
+          rc.pos_size[a]
+        );
+      }
+      checked += 1;
+    }
+
+    // (3) extent: ejection + radiation pressure over the age, not the orbital arc
+    let extent_m = path
+      .samples
+      .iter()
+      .map(|s| norm(sub(s.r_m, first)))
+      .fold(0.0, f64::max);
+    max_extent_km = max_extent_km.max(extent_m * 1e-3);
+    let r_sun = norm(nucleus_now);
+    let beta_max = path.cluster.beta() as f64 * SIZE_RANGE_FACTOR as f64;
+    let g = SUN_MU_M3_S2 / (r_sun * r_sun);
+    let bound = 2.0 * ((v0 + 10.0) * age + 0.5 * beta_max * g * age * age) + 10_000.0;
+    assert!(
+      extent_m <= bound,
+      "tier {} age {age:.0} s: extent {:.1} km exceeds the tail bound {:.1} km",
+      path.tier,
+      extent_m * 1e-3,
+      bound * 1e-3
+    );
+  }
+  assert!(checked >= paths.len() * (DUST_TRAJECTORY_SAMPLES / 2), "too few samples compared: {checked}");
+  // the sample ages: 0, a geometric grid from the first step, the exact age last
+  let ages = trajectories::sample_ages(30.0 * 86400.0, DUST_TRAJECTORY_SAMPLES);
+  assert_eq!(ages.len(), DUST_TRAJECTORY_SAMPLES);
+  assert_eq!(ages[0], 0.0);
+  assert_eq!(ages[1], (30.0 * 86400.0 * DUST_TRAJECTORY_FIRST_AGE_FRACTION).max(DUST_TRAJECTORY_FIRST_AGE_S));
+  assert_eq!(*ages.last().unwrap(), 30.0 * 86400.0);
+  assert!(ages.windows(2).all(|w| w[1] > w[0]), "{ages:?}");
+  let r = ages[2] / ages[1];
+  assert!(ages.windows(2).skip(2).all(|w| ((w[1] / w[0]) / r - 1.0).abs() < 1e-6), "{ages:?}");
+  assert_eq!(trajectories::sample_ages(3600.0, DUST_TRAJECTORY_SAMPLES)[1], DUST_TRAJECTORY_FIRST_AGE_S);
+  assert_eq!(trajectories::sample_ages(100.0, 4), alloc::vec![0.0, 100.0 / 3.0, 200.0 / 3.0, 100.0]);
+  for path in &paths {
+    assert!(path.samples.windows(2).all(|w| w[1].age_s > w[0].age_s));
+  }
+  // the oldest grains here are ≤ 64 TTL = 128 d old: a tail of at most a few 1e7 km
+  assert!(max_extent_km <= 3.0e7, "largest line extent {max_extent_km:.0} km");
+}
+
+/// Test (2): about 200 lines whatever the population (small and large), deterministic per
+/// cluster (the same subset tick after tick), capped at `DUST_TRAJECTORY_MAX`.
+#[test]
+fn trajectory_line_count_is_near_the_target_for_any_population() {
+  use trajectories::*;
+  let synthetic = |total: u32, per_batch: u32| -> alloc::vec::Vec<DustBatch> {
+    let mut out = alloc::vec::Vec::new();
+    let mut left = total;
+    let mut k = 0u32;
+    while left > 0 {
+      let count = left.min(per_batch);
+      let mut b = <DustBatch as bytemuck::Zeroable>::zeroed();
+      b.seed = pcg(0x1234_5678 ^ k);
+      b.count = count;
+      out.push(b);
+      left -= count;
+      k += 1;
+    }
+    out
+  };
+  for (total, per_batch) in [(1_000u32, 64u32), (20_000, 512), (500_000, 4096), (1 << 20, 16_384)] {
+    let batches = synthetic(total, per_batch);
+    let sel = select_trajectories(batches.iter().map(|b| (0, b)), total as u64);
+    let n = sel.len();
+    assert!(
+      (150..=250).contains(&n),
+      "{total} clusters: {n} lines selected (target {DUST_TRAJECTORY_TARGET})"
+    );
+    // deterministic: the same clusters again
+    let again = select_trajectories(batches.iter().map(|b| (0, b)), total as u64);
+    assert_eq!(sel, again);
+    // a cluster's choice depends on the cluster only (seed, index), not on its neighbours
+    for (_, b, j) in sel.iter().take(8) {
+      assert!(is_trajectory_tracer(b, *j, trajectory_threshold(total as u64)));
+    }
+  }
+  // below the target every cluster is a line
+  let few = synthetic(120, 64);
+  assert_eq!(select_trajectories(few.iter().map(|b| (0, b)), 120).len(), 120);
+  assert_eq!(trajectory_threshold(0), u32::MAX);
+  assert_eq!(trajectory_threshold(DUST_TRAJECTORY_TARGET as u64), u32::MAX);
+  assert!(trajectory_threshold(2 * DUST_TRAJECTORY_TARGET as u64) <= u32::MAX / 2 + 1);
+
+  // a real system: the live count is what the rings hold, the lines in range (or all of them)
+  let (sys, t_now) = trajectory_test_system();
+  let live = live_cluster_count(&sys);
+  let paths = build_trajectories(&sys, t_now);
+  let n = paths.len();
+  if live >= 250 {
+    // some selected clusters fall outside their tier's age band (the tiers overlap in emission
+    // time); the selection itself is in range
+    let sel = select_trajectories(
+      sys.tiers.iter().flat_map(|t| t.ring.batches.iter().map(move |b| (t.tier, &b.desc))),
+      live,
+    );
+    assert!((150..=250).contains(&sel.len()), "{live} live: {} selected", sel.len());
+    assert!(n >= 100 && n <= 250, "{live} live: {n} paths");
+  } else {
+    assert!(n <= live as usize);
+  }
+  let again = build_trajectories(&sys, t_now);
+  assert_eq!(paths, again, "the lines must not change between two builds at the same time");
+  // the component: 4 control points per segment, one segment per sample pair
+  let comp = trajectory_component(&sys, t_now, [0.2, 0.4, 1.0, 1.0]).expect("lines");
+  let segments: usize = paths.iter().map(|p| p.samples.len() - 1).sum();
+  assert_eq!(comp.control_points_f64.len(), 4 * segments);
+  assert_eq!(comp.control_points.len(), 4 * segments);
+  assert_eq!(comp.color, [0.2, 0.4, 1.0, 1.0]);
+  // the drawn colour: the stream colour lightened, opaque
+  let c = trajectory_line_color([1.0, 0.6, 0.2, 0.5]);
+  assert_eq!(c, [1.0, 0.8, 0.6, 1.0]);
+  assert_eq!(describe_control_points(&comp.control_points_f64).0, paths.len());
+  assert!(describe_control_points(&comp.control_points_f64).1 > 0.0);
+  let cp = &comp.control_points_f64;
+  let first = paths[0].samples[0].r_m;
+  for a in 0..3 {
+    assert!((cp[0][a] * AU_M - first[a]).abs() <= 1e-9 * AU_M);
+  }
+  // the renderer's cull: the host ring of a paused tick sees the same lines
+  assert!(trajectory_component(&DustSystemState::new(RING_CAPACITY_LOW), t_now, [1.0; 4]).is_none());
+}
+
+/// Test (3): bit 2 is a user flag that never reaches the splat (`DUST_VIEW_DRAW_MASK` strips it,
+/// like the 1/ρ normalisation) and never overlaps the push constants' detail bits.
+#[test]
+fn trajectories_flag_is_a_user_flag_stripped_from_the_draw_flags() {
+  assert_eq!(DUST_VIEW_TRAJECTORIES, 1 << 2);
+  assert_eq!(DUST_VIEW_USER_MASK & DUST_VIEW_TRAJECTORIES, DUST_VIEW_TRAJECTORIES);
+  assert_eq!(DUST_VIEW_TRAJECTORIES & DUST_VIEW_DRAW_MASK, 0);
+  assert_eq!(
+    (DUST_VIEW_USER_MASK | DUST_VIEW_DEBUG_STREAM | DUST_VIEW_DEBUG_SAMPLE) & DUST_VIEW_DRAW_MASK,
+    DUST_VIEW_TRACERS | DUST_VIEW_FLOW | DUST_VIEW_DEBUG_STREAM | DUST_VIEW_DEBUG_SAMPLE
+  );
+  assert_eq!(DUST_VIEW_TRAJECTORIES & (7 << DUST_FLAGS_VOLUME_DETAIL_SHIFT), 0);
+  assert_eq!(DUST_VIEW_TRAJECTORIES & (7 << DUST_FLAGS_HAZE_DETAIL_SHIFT), 0);
+  // every user flag combination: the draw flags never carry bit 2
+  for f in 0..16u32 {
+    assert_eq!((f & DUST_VIEW_USER_MASK) & DUST_VIEW_DRAW_MASK & DUST_VIEW_TRAJECTORIES, 0);
+  }
+}
