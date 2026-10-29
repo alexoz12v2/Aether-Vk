@@ -520,7 +520,9 @@ mod scene_dump_tests {
   /// distance (v7 and earlier reset them to 16:9, ±1 and 10).
   /// The savefile hashes the compatibility JSON, so the jets part must not depend on entity ids
   /// or on the order the jets were created in: the same jets in any order give identical JSON,
-  /// one changed parameter (or TTL) gives a different one.
+  /// one changed parameter, TTL or ignition gives a different one. The ignition is part of it
+  /// since the dust lead time (a state saved with the jets lit at the committed start holds no
+  /// dust there, and must not be restored into a scene lit 30 d before it).
   #[test]
   fn test_jets_compatibility_json_is_order_and_id_free() {
     use crate::scene::particles::v2::ParticleSystemEmitParams;
@@ -530,17 +532,21 @@ mod scene_dump_tests {
       seed,
       ..bytemuck::Zeroable::zeroed()
     };
-    let a = (jet(0.1, 7), 1_000_000);
-    let b = (jet(-0.4, 9), 2_000_000);
-    let c = (jet(0.1, 7), 3_000_000);
+    let start = 692_539_200_000_000_i64;
+    let a = (jet(0.1, 7), 1_000_000, start);
+    let b = (jet(-0.4, 9), 2_000_000, start);
+    let c = (jet(0.1, 7), 3_000_000, start);
     let one = jets_compatibility_json([a, b, c]);
     for order in [[b, c, a], [c, a, b], [c, b, a]] {
       assert_eq!(jets_compatibility_json(order), one);
     }
     assert!(!one.contains("\"id\""), "{one}");
     assert_eq!(one.matches("ttl_us").count(), 3);
-    assert_ne!(jets_compatibility_json([a, b, (jet(0.1, 8), 3_000_000)]), one);
-    assert_ne!(jets_compatibility_json([a, b, (jet(0.1, 7), 3_000_001)]), one);
+    assert_eq!(one.matches(&alloc::format!("\"ignition_us\":{start}")).count(), 3, "{one}");
+    assert_ne!(jets_compatibility_json([a, b, (jet(0.1, 8), 3_000_000, start)]), one);
+    assert_ne!(jets_compatibility_json([a, b, (jet(0.1, 7), 3_000_001, start)]), one);
+    let lead = 30 * 86_400_000_000_i64;
+    assert_ne!(jets_compatibility_json([a, b, (jet(0.1, 7), 3_000_000, start - lead)]), one);
     assert_eq!(jets_compatibility_json([]), "");
   }
 

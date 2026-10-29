@@ -168,6 +168,8 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
     CameraMatrixDebug = new CameraMatrixDebugViewModel(runtimeService, schedulerProvider, preferences,
       () => (_cameraService.GetCometScreenPosition(), _cameraService.ViewportWidthPx, _cameraService.ViewportHeightPx));
     CometOrbitDebug   = new CometOrbitDebugViewModel(preferences);
+    _disposables.Add(CameraMatrixDebug);
+    _disposables.Add(CometOrbitDebug);
 
     _cameraService
       .EarthObserverUpChanged.Subscribe(up => _dispatcher.Dispatch(() => ObserverUp = up))

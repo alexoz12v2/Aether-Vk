@@ -25,7 +25,7 @@ public static class JetNativeSync
     AfrhoCutoffAu: s.AfrhoCutoffAu,
     AfrhoMaxValueCm: s.AfrhoMaxValueCm);
 
-  public static ParticleSystemJet BuildJet(JetViewModel j, float nucleusRadiusKm) => new(
+  public static ParticleSystemJet BuildJet(JetViewModel j, float nucleusRadiusKm, long emissionStartUs = long.MaxValue) => new(
     LatitudeRad: j.LatitudeRad,
     LongitudeRad: j.LongitudeRad,
     ApertureRad: j.ApertureRad,
@@ -33,7 +33,8 @@ public static class JetNativeSync
     StartVelocityStd: j.StartVelocityStdMs,
     StreamColor: j.StreamColor,
     NucleusRadiusKm: nucleusRadiusKm,
-    Seed: j.Seed);
+    Seed: j.Seed,
+    EmissionStartUs: emissionStartUs);
 
   /// <summary>The radius jets are emitted from: the Model tab's manual one, else the comet's.</summary>
   public static float EffectiveNucleusRadiusKm(ModelSession model, CometSession? comet) =>
@@ -47,8 +48,10 @@ public static class JetNativeSync
   /// Adds every jet of <paramref name="session"/> without a native system (the comet must be
   /// committed). The first system of the scene goes through <c>AddFirstParticleSystem</c>.
   /// Returns how many jets the core refused; each keeps <see cref="JetViewModel.NativeError"/>.
+  /// <paramref name="emissionStartUs"/>: the ignition (<see cref="TimelineService.IgnitionUs()"/>).
   /// </summary>
-  public static int EnsureNative(INativeRuntimeService runtime, ModelSession session, float nucleusRadiusKm)
+  public static int EnsureNative(INativeRuntimeService runtime, ModelSession session, float nucleusRadiusKm,
+    long emissionStartUs = long.MaxValue)
   {
     bool any = false;
     foreach (var jet in session.Jets)
@@ -57,7 +60,7 @@ public static class JetNativeSync
     foreach (var jet in session.Jets)
     {
       if (jet.NativePsId != 0) continue;
-      AddNative(runtime, BuildModel(session, jet), BuildJet(jet, nucleusRadiusKm), jet, isFirst: !any);
+      AddNative(runtime, BuildModel(session, jet), BuildJet(jet, nucleusRadiusKm, emissionStartUs), jet, isFirst: !any);
       any |= jet.NativePsId != 0;
       if (jet.NativePsId == 0) refused++;
     }

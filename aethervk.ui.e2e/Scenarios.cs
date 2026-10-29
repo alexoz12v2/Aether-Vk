@@ -130,7 +130,7 @@ public static class Scenarios
     // 47.8 ± 1.2 h, spin axis RA 332°, Dec +47° (W0 unknown: 0)
     Rotation.FromPeriodHours(47.8, poleRaDeg: 332, poleDecDeg: 47)); // bar 25856 km
 
-  // "four active emission regions", three listed. Site ASSUMED (image by Virginio Oldani).
+  // "four active emission regions", three listed. Site ASSUMED (the reviewer's image).
   public static readonly Scenario Churyumov20220111 = new(
     "67p-2022-01-11", "67P", "67P",
     new DateTime(2022, 1, 11, 20, 0, 0, DateTimeKind.Utc), Sozzago,

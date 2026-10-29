@@ -25,6 +25,10 @@ public sealed class TimelineSession : ITabSession
   /// null before one was chosen.</summary>
   public int? Speed { get; set; }
 
+  /// <summary>Days the jets ignite before the committed start (<c>TimelineService.DustLeadDays</c>);
+  /// null: the default (one TTL).</summary>
+  public double? DustLeadDays { get; set; }
+
   /// <summary>True while Run to End seeks to the committed end (the viewport overlay shows a
   /// spinner).</summary>
   public bool IsRunningToEnd { get; set; }

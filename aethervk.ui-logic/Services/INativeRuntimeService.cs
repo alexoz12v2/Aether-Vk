@@ -3218,7 +3218,9 @@ public record ParticleSystemJet(
   float StartVelocityStd,
   Vector4 StreamColor,
   float NucleusRadiusKm,
-  uint Seed
+  uint Seed,
+  // ignition, TDB µs since J2000 (ParticleSystemDTO.EmissionStartUs); MaxValue = the scene's clock
+  long EmissionStartUs = long.MaxValue
 );
 
 public record ParticleSystemComputedProperties(float Beta, float DustProductionRateAt1AuKgs);
@@ -3365,7 +3367,7 @@ internal readonly struct ParticleSystemDTO(ParticleSystemModel model, ParticleSy
   /// epoch when the jet is added (the tail is built from then on), <c>long.MinValue</c> = a
   /// pre-existing tail (history filled back before the scene start).
   /// </summary>
-  public readonly long EmissionStartUs = long.MaxValue;
+  public readonly long EmissionStartUs = jet.EmissionStartUs;
 }
 
 /// <summary>
