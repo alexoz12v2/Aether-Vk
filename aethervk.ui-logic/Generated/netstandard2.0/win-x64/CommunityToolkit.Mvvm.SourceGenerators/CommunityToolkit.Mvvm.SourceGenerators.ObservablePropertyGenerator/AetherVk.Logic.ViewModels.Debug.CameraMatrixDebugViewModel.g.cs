@@ -27,6 +27,27 @@ namespace AetherVk.Logic.ViewModels.Debug
             }
         }
 
+        /// <inheritdoc cref="_isShown"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public bool IsShown
+        {
+            get => _isShown;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_isShown, value))
+                {
+                    OnIsShownChanging(value);
+                    OnIsShownChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsShown);
+                    _isShown = value;
+                    OnIsShownChanged(value);
+                    OnIsShownChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsShown);
+                }
+            }
+        }
+
         /// <inheritdoc cref="_dustHistory"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
@@ -238,6 +259,28 @@ namespace AetherVk.Logic.ViewModels.Debug
         /// <remarks>This method is invoked right after the value of <see cref="IsExpanded"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnIsExpandedChanged(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="IsShown"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="IsShown"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsShownChanging(bool value);
+        /// <summary>Executes the logic for when <see cref="IsShown"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="IsShown"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsShownChanging(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="IsShown"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="IsShown"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsShownChanged(bool value);
+        /// <summary>Executes the logic for when <see cref="IsShown"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="IsShown"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsShownChanged(bool oldValue, bool newValue);
         /// <summary>Executes the logic for when <see cref="DustHistory"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="DustHistory"/> is changed.</remarks>

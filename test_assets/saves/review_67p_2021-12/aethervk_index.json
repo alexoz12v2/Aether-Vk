@@ -318,7 +318,7 @@
   ],
   "assets": [
     {
-      "key": "c:/users/virgi/downloads/67p/gerasimenko/assets/textures/f36cb09f67126fa5_fits_lt_67p_header_4x3.fits",
+      "key": "c:/saves/gerasimenko/assets/textures/f36cb09f67126fa5_fits_lt_67p_header_4x3.fits",
       "kind": "texture",
       "label": "f36cb09f67126fa5_fits_lt_67p_header_4x3",
       "original_source": "y:/aethervk_handoff/untracked_src/test_assets/fits_lt_67p_header_4x3.fits",
@@ -329,7 +329,7 @@
       "bundled_textures": null
     },
     {
-      "key": "c:/users/virgi/downloads/67p/gerasimenko/assets/textures/06c59da80f2a7c7a_67p_20211225_26_27_28_liverpool2m0_g_r_i_z_1x-02.fit",
+      "key": "c:/saves/gerasimenko/assets/textures/06c59da80f2a7c7a_67p_20211225_26_27_28_liverpool2m0_g_r_i_z_1x-02.fit",
       "kind": "texture",
       "label": "06c59da80f2a7c7a_67p_20211225_26_27_28_Liverpool2m0_g_r_i_z_1x-02",
       "original_source": "y:/downloads/67p 20211225\u002B26\u002B27\u002B28 liverpool2m0 g\u002Br\u002Bi\u002Bz 1x-02.fit",
@@ -361,7 +361,7 @@
   "billboards": [
     {
       "id": "d4b3aa8c-ba53-45ce-bb36-2ae6d454d65f",
-      "texture_key": "c:/users/virgi/downloads/67p/gerasimenko/assets/textures/06c59da80f2a7c7a_67p_20211225_26_27_28_liverpool2m0_g_r_i_z_1x-02.fit",
+      "texture_key": "c:/saves/gerasimenko/assets/textures/06c59da80f2a7c7a_67p_20211225_26_27_28_liverpool2m0_g_r_i_z_1x-02.fit",
       "center_x": 1094.22351634844,
       "center_y": 444.183033211636,
       "width_px": 699.040408389268,

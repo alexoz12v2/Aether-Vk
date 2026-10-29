@@ -6,6 +6,27 @@ namespace AetherVk.Logic.ViewModels
     /// <inheritdoc/>
     partial class JetViewModel
     {
+        /// <inheritdoc cref="_nativeError"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public string? NativeError
+        {
+            get => _nativeError;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<string?>.Default.Equals(_nativeError, value))
+                {
+                    OnNativeErrorChanging(value);
+                    OnNativeErrorChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.NativeError);
+                    _nativeError = value;
+                    OnNativeErrorChanged(value);
+                    OnNativeErrorChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.NativeError);
+                }
+            }
+        }
+
         /// <inheritdoc cref="_latitudeDeg"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
@@ -279,23 +300,23 @@ namespace AetherVk.Logic.ViewModels
             }
         }
 
-        /// <inheritdoc cref="_afrho0Cm"/>
+        /// <inheritdoc cref="_dustRate1AuKgs"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-        public float Afrho0Cm
+        public float DustRate1AuKgs
         {
-            get => _afrho0Cm;
+            get => _dustRate1AuKgs;
             set
             {
-                if (!global::System.Collections.Generic.EqualityComparer<float>.Default.Equals(_afrho0Cm, value))
+                if (!global::System.Collections.Generic.EqualityComparer<float>.Default.Equals(_dustRate1AuKgs, value))
                 {
-                    OnAfrho0CmChanging(value);
-                    OnAfrho0CmChanging(default, value);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.Afrho0Cm);
-                    _afrho0Cm = value;
-                    OnAfrho0CmChanged(value);
-                    OnAfrho0CmChanged(default, value);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.Afrho0Cm);
+                    OnDustRate1AuKgsChanging(value);
+                    OnDustRate1AuKgsChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.DustRate1AuKgs);
+                    _dustRate1AuKgs = value;
+                    OnDustRate1AuKgsChanged(value);
+                    OnDustRate1AuKgsChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.DustRate1AuKgs);
                 }
             }
         }
@@ -342,6 +363,28 @@ namespace AetherVk.Logic.ViewModels
             }
         }
 
+        /// <summary>Executes the logic for when <see cref="NativeError"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="NativeError"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnNativeErrorChanging(string? value);
+        /// <summary>Executes the logic for when <see cref="NativeError"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="NativeError"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnNativeErrorChanging(string? oldValue, string? newValue);
+        /// <summary>Executes the logic for when <see cref="NativeError"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="NativeError"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnNativeErrorChanged(string? value);
+        /// <summary>Executes the logic for when <see cref="NativeError"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="NativeError"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnNativeErrorChanged(string? oldValue, string? newValue);
         /// <summary>Executes the logic for when <see cref="LatitudeDeg"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="LatitudeDeg"/> is changed.</remarks>
@@ -628,28 +671,28 @@ namespace AetherVk.Logic.ViewModels
         /// <remarks>This method is invoked right after the value of <see cref="SizeRange"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnSizeRangeChanged(float oldValue, float newValue);
-        /// <summary>Executes the logic for when <see cref="Afrho0Cm"/> is changing.</summary>
+        /// <summary>Executes the logic for when <see cref="DustRate1AuKgs"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="Afrho0Cm"/> is changed.</remarks>
+        /// <remarks>This method is invoked right before the value of <see cref="DustRate1AuKgs"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnAfrho0CmChanging(float value);
-        /// <summary>Executes the logic for when <see cref="Afrho0Cm"/> is changing.</summary>
+        partial void OnDustRate1AuKgsChanging(float value);
+        /// <summary>Executes the logic for when <see cref="DustRate1AuKgs"/> is changing.</summary>
         /// <param name="oldValue">The previous property value that is being replaced.</param>
         /// <param name="newValue">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="Afrho0Cm"/> is changed.</remarks>
+        /// <remarks>This method is invoked right before the value of <see cref="DustRate1AuKgs"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnAfrho0CmChanging(float oldValue, float newValue);
-        /// <summary>Executes the logic for when <see cref="Afrho0Cm"/> just changed.</summary>
+        partial void OnDustRate1AuKgsChanging(float oldValue, float newValue);
+        /// <summary>Executes the logic for when <see cref="DustRate1AuKgs"/> just changed.</summary>
         /// <param name="value">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="Afrho0Cm"/> is changed.</remarks>
+        /// <remarks>This method is invoked right after the value of <see cref="DustRate1AuKgs"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnAfrho0CmChanged(float value);
-        /// <summary>Executes the logic for when <see cref="Afrho0Cm"/> just changed.</summary>
+        partial void OnDustRate1AuKgsChanged(float value);
+        /// <summary>Executes the logic for when <see cref="DustRate1AuKgs"/> just changed.</summary>
         /// <param name="oldValue">The previous property value that was replaced.</param>
         /// <param name="newValue">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="Afrho0Cm"/> is changed.</remarks>
+        /// <remarks>This method is invoked right after the value of <see cref="DustRate1AuKgs"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnAfrho0CmChanged(float oldValue, float newValue);
+        partial void OnDustRate1AuKgsChanged(float oldValue, float newValue);
         /// <summary>Executes the logic for when <see cref="Beta"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="Beta"/> is changed.</remarks>
