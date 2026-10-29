@@ -386,8 +386,21 @@ pub struct CompositePushConstants {
   pub layer_ref_hi: u32,
   /// AU per unit of each depth layer's global depth (`layer_index` → scale): dust occlusion
   pub layer_unit_au: [f32; 8],
+  /// the nucleus' framebuffer pixel (x right, y down) the 1/ρ normalisation measures from
+  /// (`dust::DUST_VIEW_RHO_NORM`); anything when `dust_rho_norm` is 0
+  pub dust_nucleus_px: [f32; 2],
+  /// the normalisation's saturation distance and unit distance (px, `dust::DUST_RHO_MIN_PX`,
+  /// `dust::DUST_RHO_REF_PX`)
+  pub dust_rho_min: f32,
+  pub dust_rho_ref: f32,
+  /// the exposure correction's factor on the white point (`dust::exposure_ev_white_scale`,
+  /// exactly 1 at EV 0)
+  pub dust_white_scale: f32,
+  /// 1 = multiply the dust optical depth by `max(ρ, ρ_min) / ρ_ref` before the stretch
+  pub dust_rho_norm: u32,
+  pub _pad: [u32; 2],
 }
-const _: () = assert!(core::mem::size_of::<CompositePushConstants>() == 96);
+const _: () = assert!(core::mem::size_of::<CompositePushConstants>() == 128);
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -1659,7 +1672,12 @@ mod tests {
     assert_eq!(offset_of!(ObjectData, center_dist), 80);
     assert_eq!(offset_of!(ObjectData, inv_center_len), 96);
     // composite.frag push block: 96 bytes, dust fields where the dust track has them
-    assert_eq!(size_of::<CompositePushConstants>(), 96);
+    assert_eq!(size_of::<CompositePushConstants>(), 128);
+    assert_eq!(offset_of!(CompositePushConstants, dust_nucleus_px), 96);
+    assert_eq!(offset_of!(CompositePushConstants, dust_rho_min), 104);
+    assert_eq!(offset_of!(CompositePushConstants, dust_rho_ref), 108);
+    assert_eq!(offset_of!(CompositePushConstants, dust_white_scale), 112);
+    assert_eq!(offset_of!(CompositePushConstants, dust_rho_norm), 116);
     assert_eq!(offset_of!(CompositePushConstants, layer_ref_lo), 36);
     assert_eq!(offset_of!(CompositePushConstants, dust_pyramid), 40);
     assert_eq!(offset_of!(CompositePushConstants, layer_ref_hi), 60);

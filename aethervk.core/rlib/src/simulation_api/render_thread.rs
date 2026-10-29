@@ -389,6 +389,7 @@ fn process_command(
               let mut dust_feedback_gen = 0u32;
               let mut dust_sim_speed = 0.0f64;
               let mut dust_view_flags = 0u32;
+              let mut dust_exposure_ev = 0.0f32;
               let mut dust_flow = crate::scene::dust::DustFlowClock::default();
               let (
                 scene_arc,
@@ -419,6 +420,9 @@ fn process_command(
                 );
                 dust_view_flags =
                   scene_context_read.dust_view_flags.load(core::sync::atomic::Ordering::Relaxed);
+                dust_exposure_ev = f32::from_bits(
+                  scene_context_read.dust_exposure_ev.load(core::sync::atomic::Ordering::Relaxed),
+                );
                 dust_volume_detail =
                   scene_context_read.dust_volume_detail.load(core::sync::atomic::Ordering::Relaxed);
                 dust_propagate_detail =
@@ -477,6 +481,7 @@ fn process_command(
               render_scene.dust_feedback_gen = dust_feedback_gen;
               render_scene.dust_sim_speed = dust_sim_speed;
               render_scene.dust_view_flags = dust_view_flags;
+              render_scene.dust_exposure_ev = dust_exposure_ev;
               render_scene.dust_flow = dust_flow;
 
               // Dust v3: evaluate clusters before the render pass; the draw must wait for the

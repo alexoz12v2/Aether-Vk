@@ -260,6 +260,35 @@
                       IsChecked="{Binding DustFlow}"
                       ToolTip.Tip="Brightness marks riding the dust along synchrones (the dust of one emission instant), a motion cue near the nucleus: peak 4x, trough 0.15x, mean 1.&#x0A;Off by default: seen from 0.03 AU and beyond the marks are the synchrone fan itself, hard rays through the nucleus that the physical optical depth does not show.&#x0A;Visual only." />
             <CheckBox Margin="12,10,12,0"
+                      AutomationProperties.AutomationId="DustRhoNormToggle"
+                      Content="{Binding StrDustRhoNorm}"
+                      IsChecked="{Binding DustRhoNorm}"
+                      ToolTip.Tip="Divides the dust brightness by the distance from the nucleus (ρ) so the bright inner coma and the faint outer jets share one exposure. Display only: the simulated dust is unchanged." />
+            <CheckBox Margin="12,10,12,0"
+                      AutomationProperties.AutomationId="DustTrajectoriesToggle"
+                      Content="{Binding StrDustTrajectories}"
+                      IsChecked="{Binding DustTrajectories}"
+                      ToolTip.Tip="Draws about 200 grains' paths since they left the nucleus as lines, one colour per jet." />
+
+            <!-- ──── Dust exposure compensation over the automatic exposure ──── -->
+            <Grid ColumnDefinitions="*,12,1.6*,8,Auto"
+                  Margin="12,10,12,4">
+              <TextBlock Grid.Column="0"
+                         Text="{Binding StrDustExposure}"
+                         VerticalAlignment="Center" />
+              <Slider Grid.Column="2"
+                      AutomationProperties.AutomationId="DustExposureSlider"
+                      Minimum="-6" Maximum="6"
+                      SmallChange="0.25" LargeChange="1" TickFrequency="0.25" IsSnapToTickEnabled="True"
+                      Value="{Binding DustExposureEv}"
+                      VerticalAlignment="Center"
+                      ToolTip.Tip="Brightens (+) or darkens (−) the dust over the automatic exposure, in photographic stops." />
+              <TextBlock Grid.Column="4"
+                         Text="{Binding DustExposureEvText}"
+                         MinWidth="64"
+                         VerticalAlignment="Center" />
+            </Grid>
+            <CheckBox Margin="12,10,12,0"
                       AutomationProperties.AutomationId="DustTracersToggle"
                       Content="{Binding StrDustTracers}"
                       IsChecked="{Binding DustTracers}"

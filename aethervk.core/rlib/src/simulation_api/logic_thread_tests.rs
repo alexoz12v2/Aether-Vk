@@ -3225,3 +3225,114 @@ fn comet_67p_reopen_offset_is_the_light_time_aim() {
     "the light-time aim predicts {ui_px:?} px, the screenshot shows {MEASURED_PX:?} px"
   );
 }
+
+/// Test (4) of the trajectories view aid (`DUST_VIEW_TRAJECTORIES`): the logic thread's update
+/// adds a jet's line entity (child of root, marker + `TrajectoryComponent`) while the flag is
+/// set, rebuilds it at a new sim time only, removes it when the flag is cleared (or the jet is
+/// gone), and a scene dump never carries it.
+#[test]
+fn test_dust_trajectory_lines_follow_the_view_flag_and_never_enter_a_dump() {
+  use crate::scene::trajectory::DustTrajectoryLinesComponent;
+  use crate::simulation_api::scene_dump::serialize_scene;
+  let ctx = startup_with_planets();
+  let start = Epoch::from_gregorian_utc(2025, 10, 1, 0, 0, 0, 0);
+  let scene_id = ctx
+    .create_empty_scene2(true, start, start + Duration::from_days(30.0))
+    .unwrap()
+    .scene_id;
+  let scenes = ctx.scenes.read();
+  let scene_arc = scenes.get_scene(scene_id).unwrap();
+  let g = scene_arc.read();
+  let root = g.root_entity;
+  let comet = g.comet.map(|c| c.body);
+  // a stand-in jet entity (the line builder keys the lines by the jet entity)
+  let jet = g.scene.spawn_entity("review_67p_jet_stub");
+  g.scene.set_parent(jet, Some(root));
+  let color = [0.1, 0.7, 0.3, 1.0];
+  let line = |t: f64| {
+    TrajectoryComponent::from_f64(
+      alloc::vec![[1.0, 0.0, 0.0], [1.0, 0.1, 0.0], [1.1, 0.2, 0.0], [1.2, t, 0.0]],
+      color,
+      1.5,
+      0,
+      4,
+    )
+  };
+  let entity_of = |system: crate::scene::EntityId| {
+    let mut found = None;
+    g.scene.query1(|e, m: &DustTrajectoryLinesComponent| {
+      if m.system == system {
+        found = Some((e, m.t_s));
+      }
+    });
+    found
+  };
+  let dumped_lines = || {
+    serialize_scene(&g.scene)
+      .iter()
+      .filter(|e| e.name.starts_with("dust_trajectories_"))
+      .count()
+  };
+  let dumped_total = dumped_lines_total(&g.scene);
+  assert_eq!(dumped_lines(), 0);
+
+  // flag set: the lines appear
+  g.dust_view_flags.store(
+    crate::scene::dust::DUST_VIEW_TRAJECTORIES,
+    core::sync::atomic::Ordering::Relaxed,
+  );
+  utils::sync_dust_trajectory_lines(&g.scene, root, comet, alloc::vec![(jet, 10.0, Some(line(0.3)))]);
+  let (e, t) = entity_of(jet).expect("the jet's line entity");
+  assert_eq!(t, 10.0);
+  assert_eq!(g.scene.get_parent(e), Some(root));
+  assert_eq!(
+    g.scene.get_entity_by_name(&alloc::format!("dust_trajectories_{}", jet.as_ffi())),
+    Some(e)
+  );
+  let comp = g
+    .scene
+    .with_component(e, |c: &TrajectoryComponent| c.clone())
+    .expect("lines");
+  assert_eq!(comp.color, color);
+  assert_eq!(comp.control_points_f64.len(), 4);
+  assert!(g.scene.with_component(e, |_: &crate::scene::TransformComponent| ()).is_some());
+  // never in a dump (neither the entity nor its trajectory)
+  assert_eq!(dumped_lines(), 0);
+  assert_eq!(dumped_lines_total(&g.scene), dumped_total, "a dump must not grow with the lines");
+  assert!(serialize_scene(&g.scene).iter().all(|se| se.ffi_id != e.as_ffi()));
+
+  // the same sim time keeps the entity (None = nothing new), a new one rebuilds it in place
+  utils::sync_dust_trajectory_lines(&g.scene, root, comet, alloc::vec![(jet, 10.0, None)]);
+  assert_eq!(entity_of(jet), Some((e, 10.0)));
+  utils::sync_dust_trajectory_lines(&g.scene, root, comet, alloc::vec![(jet, 11.0, Some(line(0.5)))]);
+  assert_eq!(entity_of(jet), Some((e, 11.0)));
+  let comp = g.scene.with_component(e, |c: &TrajectoryComponent| c.clone()).unwrap();
+  assert_eq!(comp.control_points_f64[3][1], 0.5);
+  let mut n = 0;
+  g.scene.query1(|_, _: &DustTrajectoryLinesComponent| n += 1);
+  assert_eq!(n, 1, "one entity per jet");
+
+  // the flag cleared: the logic thread's update removes the entity (no particle system needed)
+  g.dust_view_flags.store(0, core::sync::atomic::Ordering::Relaxed);
+  utils::update_dust_trajectories(&g, 12.0);
+  assert_eq!(entity_of(jet), None);
+  assert_eq!(
+    g.scene.get_entity_by_name(&alloc::format!("dust_trajectories_{}", jet.as_ffi())),
+    None
+  );
+  // the flag set without any jet: nothing appears, and a stale entity of a gone jet is removed
+  utils::sync_dust_trajectory_lines(&g.scene, root, comet, alloc::vec![(jet, 13.0, Some(line(0.1)))]);
+  assert!(entity_of(jet).is_some());
+  g.dust_view_flags.store(
+    crate::scene::dust::DUST_VIEW_TRAJECTORIES,
+    core::sync::atomic::Ordering::Relaxed,
+  );
+  utils::update_dust_trajectories(&g, 14.0);
+  assert_eq!(entity_of(jet), None, "a jet without a particle system has no lines");
+  assert_eq!(dumped_lines(), 0);
+}
+
+/// Entities of a dump (the trajectories view aid test's size check).
+fn dumped_lines_total(scene: &crate::scene::Scene) -> usize {
+  crate::simulation_api::scene_dump::serialize_scene(scene).len()
+}

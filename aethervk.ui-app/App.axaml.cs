@@ -340,6 +340,7 @@ public class MockNativeRuntimeService : INativeRuntimeService
   public bool SetDustReuseTolerance(int px) => true;
   public bool ResetDustViewFeedback() => true;
   public bool SetDustViewFlags(uint flags) => true;
+  public bool SetDustExposureEv(float ev) => true;
   public bool SetDustFlowSpeed(float speed) => true;
 
   public void RemoveViewport(ulong presentationEngineId) { }

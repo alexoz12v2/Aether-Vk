@@ -1399,6 +1399,9 @@ pub struct SceneContext {
   /// dust view aids (`dust::DUST_VIEW_TRACERS` | `dust::DUST_VIEW_FLOW`), see
   /// `SimulationContext::set_dust_view_flags`
   pub dust_view_flags: Arc<core::sync::atomic::AtomicU32>,
+  /// the user's dust exposure correction (EV, f32 bits; 0 = none), see
+  /// `SimulationContext::set_dust_exposure_ev`
+  pub dust_exposure_ev: Arc<core::sync::atomic::AtomicU32>,
   /// dust flow clock (time-lapse phase, eased sim rate), advanced by the render thread, held while
   /// paused (`dust::DustFlowClock`)
   pub dust_flow_clock: Arc<spin::Mutex<crate::scene::dust::DustFlowClock>>,
@@ -1521,6 +1524,7 @@ impl SceneContext {
       dust_view_flags: Arc::new(core::sync::atomic::AtomicU32::new(
         crate::scene::dust::dust_view_flags_default(),
       )),
+      dust_exposure_ev: Arc::new(core::sync::atomic::AtomicU32::new(0.0f32.to_bits())),
       dust_flow_clock: Arc::new(spin::Mutex::new(Default::default())),
       earth_observer: None,
     }

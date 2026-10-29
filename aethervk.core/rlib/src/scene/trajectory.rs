@@ -19,6 +19,21 @@ pub struct TrajectoryComponent {
 
 impl Component for TrajectoryComponent {}
 
+/// Marks the entity carrying a jet's dust trajectory lines (`dust::DUST_VIEW_TRAJECTORIES`,
+/// `logic_thread::utils::update_dust_trajectories`): a child of root named
+/// `dust_trajectories_<jet>` with a `TransformComponent` and the `TrajectoryComponent` built by
+/// `dust::trajectories::trajectory_component`. Display only: rebuilt per logic tick while the
+/// flag is set, removed when it is cleared, never serialized (`scene_dump` skips it).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DustTrajectoryLinesComponent {
+  /// the jet entity (the `ParticleSystemComponent` holder) the lines belong to
+  pub system: crate::scene::EntityId,
+  /// scaled sim time (s) the lines were built at: the same time rebuilds nothing
+  pub t_s: f64,
+}
+
+impl Component for DustTrajectoryLinesComponent {}
+
 impl TrajectoryComponent {
   /// TODO: Document this item
   pub fn new(

@@ -58,6 +58,10 @@ public partial class DesignModelTabViewModel
   public double DustSoftening { get; set; } = AetherVk.Logic.Services.ModelTabDefaults.DustSoftening;
   public bool DustTracers { get; set; } = false;
   public bool DustFlow { get; set; } = false;
+  public bool DustTrajectories { get; set; } = false;
+  public bool DustRhoNorm { get; set; } = false;
+  public double DustExposureEv { get; set; } = 0.0;
+  public string DustExposureEvText => "0.00 EV";
   public double DustFlowSpeed { get; set; } = 1.0;
   public bool IsCometCommitted { get; } = false;
   public bool EnableLegacyExpanders { get; set; } = false;

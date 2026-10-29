@@ -85,6 +85,17 @@ pub fn serialize_scene(scene: &Scene) -> alloc::vec::Vec<SerializedEntity> {
     {
       continue;
     }
+    // Same for the dust trajectory lines (`DUST_VIEW_TRAJECTORIES`): a display aid rebuilt by the
+    // logic thread every tick while the flag is set.
+    if scene
+      .with_component(
+        entity,
+        |_: &crate::scene::trajectory::DustTrajectoryLinesComponent| (),
+      )
+      .is_some()
+    {
+      continue;
+    }
     let mut components = alloc::vec::Vec::new();
 
     scene.with_component(entity, |t: &HighResTransformComponent| {

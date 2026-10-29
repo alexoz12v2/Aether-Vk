@@ -165,6 +165,9 @@ public static class SaveIndexMapping
     DustTracers = m.DustTracers,
     DustFlow = m.DustFlow,
     DustFlowSpeed = m.DustFlowSpeed,
+    DustTrajectories = m.DustTrajectories,
+    DustRhoNorm = m.DustRhoNorm,
+    DustExposureEv = m.DustExposureEv,
     SphereGizmoVisible = m.SphereGizmoVisible,
     SphereGizmoParts = m.SphereGizmoParts,
     ShowJetAngles = m.ShowJetAngles,
@@ -226,6 +229,9 @@ public static class SaveIndexMapping
     m.DustTracers = d.DustTracers;
     m.DustFlow = d.DustFlow;
     m.DustFlowSpeed = d.DustFlowSpeed;
+    m.DustTrajectories = d.DustTrajectories;
+    m.DustRhoNorm = d.DustRhoNorm;
+    m.DustExposureEv = d.DustExposureEv;
     m.SphereGizmoVisible = d.SphereGizmoVisible;
     m.SphereGizmoParts = d.SphereGizmoParts;
     m.ShowJetAngles = d.ShowJetAngles;

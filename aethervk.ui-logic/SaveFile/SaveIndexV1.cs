@@ -163,6 +163,9 @@ public sealed class ModelDto
   public bool DustTracers { get; set; }
   public bool DustFlow { get; set; }
   public double DustFlowSpeed { get; set; } = 1;
+  public bool DustTrajectories { get; set; }
+  public bool DustRhoNorm { get; set; }
+  public double DustExposureEv { get; set; }
   public bool SphereGizmoVisible { get; set; } = true;
   public uint SphereGizmoParts { get; set; } = Models.SphereGizmoPart.Default;
   public bool ShowJetAngles { get; set; }

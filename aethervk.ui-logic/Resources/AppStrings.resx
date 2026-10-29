@@ -237,6 +237,15 @@
   <data name="Tabs_Model_DustFlowSpeed" xml:space="preserve">
     <value>Flow time-lapse</value>
   </data>
+  <data name="Tabs_Model_DustTrajectories" xml:space="preserve">
+    <value>Trajectory lines</value>
+  </data>
+  <data name="Tabs_Model_DustRhoNorm" xml:space="preserve">
+    <value>Coma 1/ρ normalisation</value>
+  </data>
+  <data name="Tabs_Model_DustExposure" xml:space="preserve">
+    <value>Dust exposure</value>
+  </data>
   <data name="Tabs_Model_ShowReferenceError" xml:space="preserve">
     <value>show reference-position error</value>
   </data>

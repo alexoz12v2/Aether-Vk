@@ -759,15 +759,29 @@ impl SimulationContext {
   }
 
   /// Sets the dust view aids: [`crate::scene::dust::DUST_VIEW_TRACERS`] (bright dots on a sparse
-  /// set of real particles) and [`crate::scene::dust::DUST_VIEW_FLOW`] (synchrone pulses travelling
-  /// outward). Other bits are ignored. Returns the flags applied, or `None` without the scene.
-  /// Visual only: picked up by the next rendered frame.
+  /// set of real particles), [`crate::scene::dust::DUST_VIEW_FLOW`] (synchrone pulses travelling
+  /// outward), [`crate::scene::dust::DUST_VIEW_TRAJECTORIES`] (the paths of ~200 real clusters
+  /// from emission to now, lines coloured per jet, built by the logic thread) and
+  /// [`crate::scene::dust::DUST_VIEW_RHO_NORM`] (the coma's 1/ρ normalisation of the display).
+  /// Other bits are ignored. Returns the flags applied, or `None` without the scene. Visual
+  /// only: picked up by the next rendered frame (the trajectories by the next logic tick).
   pub fn set_dust_view_flags(&self, scene_id: u64, flags: u32) -> Option<u32> {
-    use crate::scene::dust::{DUST_VIEW_FLOW, DUST_VIEW_TRACERS};
     let scene_arc = self.scenes.read().get_scene(scene_id)?;
-    let f = flags & (DUST_VIEW_TRACERS | DUST_VIEW_FLOW);
+    let f = flags & crate::scene::dust::DUST_VIEW_USER_MASK;
     scene_arc.read().dust_view_flags.store(f, core::sync::atomic::Ordering::Relaxed);
     Some(f)
+  }
+
+  /// Sets the dust exposure correction (EV: the display's white point is divided by `2^ev`, so
+  /// +1 shows the dust twice as bright), clamped to [`crate::scene::dust::DUST_EXPOSURE_EV_MIN`,
+  /// `DUST_EXPOSURE_EV_MAX`] (0 if not finite). Returns the value applied, or `None` without the
+  /// scene. Visual only: picked up by the next rendered frame; the HUD's surface brightness stays
+  /// the measured one.
+  pub fn set_dust_exposure_ev(&self, scene_id: u64, ev: f32) -> Option<f32> {
+    let scene_arc = self.scenes.read().get_scene(scene_id)?;
+    let v = crate::scene::dust::clamp_dust_exposure_ev(ev);
+    scene_arc.read().dust_exposure_ev.store(v.to_bits(), core::sync::atomic::Ordering::Relaxed);
+    Some(v)
   }
 
   /// Sets the time-lapse factor `K` of the dust flow marks ([`crate::scene::dust::DustFlowClock`]):
@@ -1170,8 +1184,9 @@ impl SimulationContext {
       })
       .ok()?;
     let fixed = crate::scene::dust::dust_exposure_fixed();
+    // the plain measured white: the view options (1/ρ normalisation, EV) do not move the readout
     Some(crate::scene::dust::DustExposure::of(
-      fixed.unwrap_or(params.white),
+      fixed.unwrap_or(params.white_measured),
       params.p50,
       params.softening,
       fixed.is_some(),

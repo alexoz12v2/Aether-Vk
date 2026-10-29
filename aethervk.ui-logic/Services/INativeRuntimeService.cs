@@ -312,8 +312,13 @@ public interface INativeRuntimeService : IDisposable
   bool ResetDustViewFeedback();
 
   /// <summary>Dust view aids: bit 0 tracers (bright dots on real particles), bit 1 flow animation
-  /// (pulses travelling outward). Visual only.</summary>
+  /// (pulses travelling outward), bit 2 trajectory lines, bit 3 coma 1/ρ normalisation. Visual
+  /// only.</summary>
   bool SetDustViewFlags(uint flags);
+
+  /// <summary>Dust exposure compensation in photographic stops over the automatic exposure
+  /// (clamped natively to ±6 EV). Visual only.</summary>
+  bool SetDustExposureEv(float ev);
 
   /// <summary>Time-lapse factor of the dust flow marks: 1 = the marks move with the dust, K = that
   /// many times faster in its direction (clamped to [1, 10 000] natively). Visual only.</summary>
@@ -1402,6 +1407,10 @@ internal unsafe static class PInvokeAetherVkCore
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   [return: MarshalAs(UnmanagedType.U1)]
   public static extern bool avkSimulationContext_setDustViewFlags(nint ctx, ulong sceneId, uint flags);
+
+  /// <summary>0 ok, -1 null context, -2 no scene; <paramref name="ev"/> is clamped to ±6 EV.</summary>
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern int avkSimulationContext_setDustExposureEv(nint ctx, ulong sceneId, float ev);
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   [return: MarshalAs(UnmanagedType.U1)]
@@ -2541,6 +2550,9 @@ public sealed class NativeRuntimeService : INativeRuntimeService
 
   public bool SetDustViewFlags(uint flags) =>
     _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_setDustViewFlags(_ctx, _sceneId, flags);
+
+  public bool SetDustExposureEv(float ev) =>
+    _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_setDustExposureEv(_ctx, _sceneId, ev) == 0;
 
   public bool SetDustFlowSpeed(float speed) =>
     _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_setDustFlowSpeed(_ctx, _sceneId, speed);

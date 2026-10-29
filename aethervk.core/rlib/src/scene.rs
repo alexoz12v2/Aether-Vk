@@ -1784,6 +1784,7 @@ impl Scene {
     self.register_component::<trajectory::TrajectoryComponent>(&[]);
     self.register_component::<trajectory::EffectiveTrajectoryComponent>(&[]);
     self.register_component::<trajectory::ScreenMeasurementComponent>(&[]);
+    self.register_component::<trajectory::DustTrajectoryLinesComponent>(&[]);
 
     // script components module
     self.register_component::<script_components::UpdateComponent>(&[]);

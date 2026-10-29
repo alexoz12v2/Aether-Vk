@@ -688,7 +688,11 @@ public partial class ModelTabViewModel
     DustSoftening = session.DustSoftening;
     DustTracers = session.DustTracers;
     DustFlow = session.DustFlow;
+    DustTrajectories = session.DustTrajectories;
+    DustRhoNorm = session.DustRhoNorm;
     PushDustViewFlags();
+    DustExposureEv = session.DustExposureEv;
+    _runtimeService?.SetDustExposureEv((float)DustExposureEv);
     DustFlowSpeed = session.DustFlowSpeed;
     _runtimeService?.SetDustFlowSpeed((float)DustFlowSpeed);
     IsGizmoVisible = session.SphereGizmoVisible;
@@ -790,6 +794,70 @@ public partial class ModelTabViewModel
   }
 
   /// <summary>
+  /// Trajectory lines: about 200 grains' paths since they left the nucleus, drawn as lines, one
+  /// colour per jet (native view flag bit 2). Stored in the model session; visual only.
+  /// </summary>
+  [ObservableProperty]
+  private bool _dustTrajectories = false;
+
+  partial void OnDustTrajectoriesChanged(bool value)
+  {
+    if (CurrentSession is { } session)
+      session.DustTrajectories = value;
+    PushDustViewFlags();
+  }
+
+  /// <summary>
+  /// Coma 1/ρ normalisation: the dust brightness is divided by the distance from the nucleus so
+  /// the inner coma and the outer jets share one exposure (native view flag bit 3). Stored in the
+  /// model session; display only, the simulated dust is unchanged.
+  /// </summary>
+  [ObservableProperty]
+  private bool _dustRhoNorm = false;
+
+  partial void OnDustRhoNormChanged(bool value)
+  {
+    if (CurrentSession is { } session)
+      session.DustRhoNorm = value;
+    PushDustViewFlags();
+  }
+
+  /// <summary>
+  /// Dust exposure compensation in photographic stops over the automatic exposure, in
+  /// [<see cref="DustExposureEvMin"/>, <see cref="DustExposureEvMax"/>]. Stored in the model
+  /// session; visual only.
+  /// </summary>
+  [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(DustExposureEvText))]
+  private double _dustExposureEv = 0.0;
+
+  public const double DustExposureEvMin = -6.0;
+  public const double DustExposureEvMax = 6.0;
+
+  /// <summary>The exposure as shown next to its slider, e.g. "+1.25 EV".</summary>
+  public string DustExposureEvText => FormatDustExposureEv(DustExposureEv);
+
+  internal static string FormatDustExposureEv(double ev) =>
+    (ev > 0 ? "+" : ev < 0 ? "-" : "") + Math.Abs(ev).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture) + " EV";
+
+  partial void OnDustExposureEvChanged(double value)
+  {
+    var clamped = ClampDustExposureEv(value);
+    if (clamped != value)
+    {
+      DustExposureEv = clamped;
+      return;
+    }
+    if (CurrentSession is { } session)
+      session.DustExposureEv = value;
+    _runtimeService?.SetDustExposureEv((float)value);
+  }
+
+  /// <summary>Native range of the dust exposure compensation (±6 EV); NaN is 0.</summary>
+  internal static double ClampDustExposureEv(double ev) =>
+    double.IsNaN(ev) ? 0.0 : Math.Min(Math.Max(ev, DustExposureEvMin), DustExposureEvMax);
+
+  /// <summary>
   /// Time-lapse factor K of the dust flow marks (brightness marks riding the dust): 1 = the marks
   /// move with the dust, K = that many times faster in its direction, so the swarm keeps its true
   /// velocity field at a readable pace from afar. Stored in the model session; visual only.
@@ -819,13 +887,14 @@ public partial class ModelTabViewModel
     double.IsNaN(k) ? DustFlowSpeedDefault : Math.Min(Math.Max(k, DustFlowSpeedMin), DustFlowSpeedMax);
 
   /// <summary>
-  /// Native dust view flags (<c>dust::DUST_VIEW_*</c>): bit 0 tracers, bit 1 flow. The flow is
-  /// always on: it runs while the sim runs and freezes in place on pause (no toggle).
+  /// Native dust view flags (<c>dust::DUST_VIEW_*</c>): bit 0 tracers, bit 1 flow pulses, bit 2
+  /// trajectory lines, bit 3 coma 1/ρ normalisation (display only).
   /// </summary>
-  internal static uint DustViewFlags(bool tracers, bool flow) => (tracers ? 1u : 0u) | (flow ? 2u : 0u);
+  internal static uint DustViewFlags(bool tracers, bool flow, bool trajectories, bool rhoNorm) =>
+    (tracers ? 1u : 0u) | (flow ? 2u : 0u) | (trajectories ? 4u : 0u) | (rhoNorm ? 8u : 0u);
 
   private void PushDustViewFlags() =>
-    _runtimeService?.SetDustViewFlags(DustViewFlags(DustTracers, DustFlow));
+    _runtimeService?.SetDustViewFlags(DustViewFlags(DustTracers, DustFlow, DustTrajectories, DustRhoNorm));
 
   partial void OnShowReferencePositionErrorChanged(bool value)
   {
