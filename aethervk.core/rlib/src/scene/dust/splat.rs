@@ -9179,6 +9179,47 @@ pub fn white_point_from_level(level: &[u32], texel_px: u32, unit: f32) -> Option
   ))
 }
 
+/// `(p99, p50)` of one white-point level as [`white_point_from_level`] gives them, under the
+/// coma's 1/ρ normalisation ([`super::DUST_VIEW_RHO_NORM`]): each non-empty texel's optical depth
+/// is multiplied by [`super::rho_norm_factor`] of its centre's distance (px) from the nucleus
+/// `nucleus_px` (framebuffer px, y down; a texel of `texel_px` px at column `i % level_w`, row
+/// `i / level_w`), so the white is the crest of the normalised field the composite shows. Without
+/// a nucleus (`None`) it is [`white_point_from_level`] bit for bit (the plain levels).
+pub fn rho_normalised_levels(
+  level: &[u32],
+  level_w: u32,
+  texel_px: u32,
+  unit: f32,
+  nucleus_px: Option<[f32; 2]>,
+) -> Option<(f32, f32)> {
+  let Some(n) = nucleus_px.filter(|n| n[0].is_finite() && n[1].is_finite()) else {
+    return white_point_from_level(level, texel_px, unit);
+  };
+  let w = level_w.max(1) as usize;
+  let half = texel_px as f32 * 0.5;
+  let mut v: alloc::vec::Vec<f32> = level
+    .chunks_exact(PYRAMID_TEXEL_WORDS as usize)
+    .enumerate()
+    .filter(|(_, t)| t[0] > 0)
+    .map(|(i, t)| {
+      let cx = (i % w) as f32 * texel_px as f32 + half - n[0];
+      let cy = (i / w) as f32 * texel_px as f32 + half - n[1];
+      let rho = <f32 as FloatLike>::sqrt(cx * cx + cy * cy);
+      t[0] as f32 * super::rho_norm_factor(Some(rho), super::DUST_RHO_MIN_PX, super::DUST_RHO_REF_PX)
+    })
+    .collect();
+  if v.is_empty() {
+    return None;
+  }
+  v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(core::cmp::Ordering::Equal));
+  let at = |q: f32| v[(((v.len() - 1) as f32 * q).round() as usize).min(v.len() - 1)];
+  let area = (texel_px * texel_px) as f32;
+  Some((
+    at(super::WHITE_TILE_PERCENTILE) * unit / area,
+    at(0.5) * unit / area,
+  ))
+}
+
 /// lit texels below which [`level_is_flat`] never calls a level flat (a small object's few texels
 /// may all be its brightest)
 pub const DUST_FLAT_MIN_TEXELS: usize = 64;

@@ -273,7 +273,7 @@ public class ModelTabViewModelTests
 
     s.Vm.DustTracers = false;
     s.Runtime.Verify(r => r.SetDustViewFlags(0u), Times.Once);
-    Assert.Equal(0u, ModelTabViewModel.DustViewFlags(false, false));
+    Assert.Equal(0u, ModelTabViewModel.DustViewFlags(false, false, false, false));
     s.Runtime.Verify(r => r.RestoreSnapshotSync(), Times.Never);
   }
 
@@ -294,7 +294,84 @@ public class ModelTabViewModelTests
     s.Vm.DustFlow = false;
     s.Runtime.Verify(r => r.SetDustViewFlags(1u), Times.Once);
     Assert.False(s.Session.DustFlow);
-    Assert.Equal(3u, ModelTabViewModel.DustViewFlags(true, true));
+    Assert.Equal(3u, ModelTabViewModel.DustViewFlags(true, true, false, false));
+    s.Runtime.Verify(r => r.RestoreSnapshotSync(), Times.Never);
+  }
+
+  /// <summary>Every combination of the four dust view toggles maps to its native bits.</summary>
+  [Fact]
+  public void DustViewFlags_EveryCombination_MapsToItsBits()
+  {
+    for (uint bits = 0; bits < 16; bits++)
+      Assert.Equal(bits, ModelTabViewModel.DustViewFlags(
+        (bits & 1) != 0, (bits & 2) != 0, (bits & 4) != 0, (bits & 8) != 0));
+  }
+
+  /// <summary>
+  /// Trajectory lines and the coma 1/ρ normalisation are off by default; each toggle sends its bit
+  /// (4 and 8) together with the others, clearing it drops only that bit, and the session keeps it.
+  /// </summary>
+  [Fact]
+  public void DustTrajectoriesAndRhoNorm_ToggleSendFlagsAndPersist_WithoutRestore()
+  {
+    var s = new TestSetup();
+    s.Runtime.Invocations.Clear();
+    Assert.False(s.Vm.DustTrajectories);
+    Assert.False(s.Vm.DustRhoNorm);
+    Assert.False(s.Session.DustTrajectories);
+    Assert.False(s.Session.DustRhoNorm);
+
+    s.Vm.DustTrajectories = true;
+    s.Runtime.Verify(r => r.SetDustViewFlags(4u), Times.Once);
+    Assert.True(s.Session.DustTrajectories);
+
+    s.Vm.DustRhoNorm = true;
+    s.Runtime.Verify(r => r.SetDustViewFlags(12u), Times.Once);
+    Assert.True(s.Session.DustRhoNorm);
+
+    s.Vm.DustTracers = true;
+    s.Runtime.Verify(r => r.SetDustViewFlags(13u), Times.Once);
+
+    s.Vm.DustTrajectories = false;
+    s.Runtime.Verify(r => r.SetDustViewFlags(9u), Times.Once);
+    Assert.False(s.Session.DustTrajectories);
+
+    s.Vm.DustRhoNorm = false;
+    s.Runtime.Verify(r => r.SetDustViewFlags(1u), Times.Once);
+    Assert.False(s.Session.DustRhoNorm);
+    s.Runtime.Verify(r => r.RestoreSnapshotSync(), Times.Never);
+  }
+
+  /// <summary>
+  /// Dust exposure: 0 EV by default, goes to the runtime clamped by the UI to ±6 EV, is stored in
+  /// the model session, is shown as "+1.25 EV", and is visual only.
+  /// </summary>
+  [Fact]
+  public void DustExposureEv_SendsClampedValueAndPersists_WithoutRestore()
+  {
+    var s = new TestSetup();
+    s.Runtime.Invocations.Clear();
+    Assert.Equal(0.0, s.Vm.DustExposureEv);
+    Assert.Equal(0.0, s.Session.DustExposureEv);
+
+    s.Vm.DustExposureEv = 1.25;
+    s.Runtime.Verify(r => r.SetDustExposureEv(1.25f), Times.Once);
+    Assert.Equal(1.25, s.Session.DustExposureEv);
+    Assert.Equal("+1.25 EV", s.Vm.DustExposureEvText);
+
+    s.Vm.DustExposureEv = 50.0;
+    Assert.Equal(6.0, s.Vm.DustExposureEv);
+    Assert.Equal(6.0, s.Session.DustExposureEv);
+    s.Runtime.Verify(r => r.SetDustExposureEv(6f), Times.Once);
+    s.Runtime.Verify(r => r.SetDustExposureEv(50f), Times.Never);
+
+    s.Vm.DustExposureEv = -50.0;
+    Assert.Equal(-6.0, s.Vm.DustExposureEv);
+    s.Runtime.Verify(r => r.SetDustExposureEv(-6f), Times.Once);
+    Assert.Equal("-6.00 EV", s.Vm.DustExposureEvText);
+
+    Assert.Equal(0.0, ModelTabViewModel.ClampDustExposureEv(double.NaN));
+    Assert.Equal("0.00 EV", ModelTabViewModel.FormatDustExposureEv(0.0));
     s.Runtime.Verify(r => r.RestoreSnapshotSync(), Times.Never);
   }
 

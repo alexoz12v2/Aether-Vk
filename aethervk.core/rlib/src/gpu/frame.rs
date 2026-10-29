@@ -881,6 +881,11 @@ pub struct DustDrawCall {
   /// nucleus (the jet entity's parent) heliocentric position from the scene graph (dust trace
   /// only: never used to draw)
   pub nucleus_m: Option<[f64; 3]>,
+  /// the nucleus as the telescope sees it, relative to the eye in layer units (light-time
+  /// displaced like the comet's micro layer, `earth_observer::LightTimeViewComponent::offset_au`):
+  /// the display's 1/ρ normalisation measures from its projection ([`dust_nucleus_px`]); never
+  /// used to draw
+  pub nucleus_rte: Option<[f64; 3]>,
   /// the volume detail this call draws with (`dust::DUST_VOLUME_DETAIL_*`, 16 = every piece):
   /// the scene's setting for now ([`RenderScene::set_dust_volume_detail`]), a system's own later;
   /// [`dust_splat_pc`] puts it in the flags' bits 8–10
@@ -958,6 +963,38 @@ impl DustDrawCall {
       (-self.rte_position[2] / u) as f32,
     ]
   }
+}
+
+/// The nucleus' framebuffer pixel (x right, y down, physical px) of the first dust call drawn:
+/// its [`DustDrawCall::nucleus_rte`] through the same `Proj · ViewRot` the splat projects with
+/// ([`DustDrawCall::mvp_params`]), on the call's layer camera. `None` without dust, a nucleus,
+/// or a finite projection (behind a perspective eye: `w ≤ 0`); off-screen positions are kept
+/// (the normalisation's ρ grows from them).
+pub fn dust_nucleus_px(render_scene: &RenderScene) -> Option<[f32; 2]> {
+  use aethervk_oshal_rlib::math::vector::{Vector4, vec4f64::Vec4f64};
+  let extent = render_scene.window_extent;
+  if extent[0] == 0 || extent[1] == 0 {
+    return None;
+  }
+  let (layer, call) = render_scene
+    .depth_layers
+    .iter()
+    .flat_map(|l| l.dust_calls.iter().map(move |c| (l, c)))
+    .next()?;
+  let n = call.nucleus_rte?;
+  let camera = render_scene.camera_data.rebuild_for_layer(layer.near, layer.far, layer.frame_scale);
+  let mut view_rot_only = camera.view_f64;
+  view_rot_only.cols[3] = Vec4f64::from_components(0.0, 0.0, 0.0, 1.0);
+  let clip = (camera.proj_f64 * view_rot_only).mul_vector(Vec4f64::from_components(n[0], n[1], n[2], 1.0));
+  if !(clip.w() > 0.0) {
+    return None;
+  }
+  let (x, y) = (clip.x() / clip.w(), clip.y() / clip.w());
+  let px = [
+    ((x + 1.0) * 0.5 * extent[0] as f64) as f32,
+    ((y + 1.0) * 0.5 * extent[1] as f64) as f32,
+  ];
+  (px[0].is_finite() && px[1].is_finite()).then_some(px)
 }
 
 /// `(|x scale|, |y scale|)` of an engine projection matrix (clip units per view unit at depth 1,
@@ -1044,7 +1081,17 @@ pub fn prepare_dust(
     .map(|c| c.state.frame.t_now_s())
     .unwrap_or(0.0);
   let flow = crate::scene::dust::DustFlowUniform::new(&render_scene.dust_flow, t_sim);
-  let flags = render_scene.dust_view_flags;
+  // the display-only aids (`DUST_VIEW_RHO_NORM`) never reach the splat, the reuse hash or the
+  // cadence: the pyramid is the same with them on or off
+  let flags = render_scene.dust_view_flags & crate::scene::dust::DUST_VIEW_DRAW_MASK;
+  // the nucleus' pixel of this frame: the composite's 1/ρ normalisation and the white point
+  // measured from this frame's readback (`DustViewHost::absorb_at`)
+  render_scene.dust_nucleus_px = dust_nucleus_px(render_scene);
+  device.dust_set_nucleus_px(
+    pe,
+    render_scene.dust_nucleus_px,
+    render_scene.dust_view_flags & crate::scene::dust::DUST_VIEW_RHO_NORM != 0,
+  );
   // dust trace (`gpu::dust_trace`): every `trace_every` frames, what was drawn
   static FRAME: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
   let frame_no = FRAME.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
@@ -1492,6 +1539,8 @@ fn dust_splat_pc(
   let (mvp, _params) = call.mvp_params(camera, extent);
   let s = &call.state;
   let eye = call.eye_local_m();
+  // the display-only aids never reach a dust pipeline
+  let flags = flags & crate::scene::dust::DUST_VIEW_DRAW_MASK;
   let debug_env = |name: &str| aethervk_oshal_rlib::os::env::var(name).and_then(|v| v.trim().parse::<u32>().ok());
   let flags = match (debug_env("AETHERVK_DUST_DEBUG_STREAM"), debug_env("AETHERVK_DUST_DEBUG_SAMPLE_MOD")) {
     (Some(v), _) => flags | crate::scene::dust::DUST_VIEW_DEBUG_STREAM | ((v & 0xFF) << 20),
@@ -1685,7 +1734,8 @@ fn dust_draw_inputs(
   }
   let mut h = Fnv(0xcbf2_9ce4_8422_2325);
   h.u64(render_scene.window_extent[0] as u64 | (render_scene.window_extent[1] as u64) << 32);
-  h.u64(flags as u64 | (specks_needed as u64) << 32);
+  // the display-only aids (`DUST_VIEW_RHO_NORM`) do not change the drawing: a toggle reuses
+  h.u64((flags & crate::scene::dust::DUST_VIEW_DRAW_MASK) as u64 | (specks_needed as u64) << 32);
   h.f32s(&[flow.t_hi, flow.t_lo, flow.speed]);
   h.u64(render_scene.dust_reuse_px as u64);
   h.u64(render_scene.dust_propagate_detail as u64);
@@ -1855,6 +1905,11 @@ pub struct RenderScene {
   pub dust_propagate_detail: u32,
   /// dust view aids (`dust::DUST_VIEW_*`, `SceneContext::dust_view_flags`)
   pub dust_view_flags: u32,
+  /// the user's exposure correction (EV, `SceneContext::dust_exposure_ev`; 0 = none)
+  pub dust_exposure_ev: f32,
+  /// the nucleus' framebuffer pixel of this frame ([`dust_nucleus_px`], filled by
+  /// [`prepare_dust`]; `None` = unknown: no 1/ρ normalisation)
+  pub dust_nucleus_px: Option<[f32; 2]>,
   /// dust flow clock of this frame (`SceneContext::dust_flow_clock`)
   pub dust_flow: crate::scene::dust::DustFlowClock,
   /// the view's dust pyramid of this frame (filled by [`prepare_dust`]; pyramid 0 = no dust)
@@ -1894,6 +1949,8 @@ impl RenderScene {
       dust_sim_speed: 0.0,
       dust_propagate_detail: crate::scene::dust::DUST_PROPAGATE_DETAIL_DEFAULT,
       dust_view_flags: 0,
+      dust_exposure_ev: 0.0,
+      dust_nucleus_px: None,
       dust_flow: Default::default(),
       dust_view: Default::default(),
       layer_ref_dist: [0.0; 8],
@@ -2535,6 +2592,15 @@ pub fn render_frame(
     dust_levels: render_scene.dust_view.levels,
     dust_unit: render_scene.dust_view.unit,
     layer_ref_hi: (layer_refs_addr >> 32) as u32,
+    // the view options: the coma's 1/ρ normalisation (with a nucleus pixel) and the exposure
+    // correction; off and EV 0 the composite's math is the plain one (factor exactly 1)
+    dust_nucleus_px: render_scene.dust_nucleus_px.unwrap_or([0.0; 2]),
+    dust_rho_min: crate::scene::dust::DUST_RHO_MIN_PX,
+    dust_rho_ref: crate::scene::dust::DUST_RHO_REF_PX,
+    dust_white_scale: crate::scene::dust::exposure_ev_white_scale(render_scene.dust_exposure_ev),
+    dust_rho_norm: (render_scene.dust_view_flags & crate::scene::dust::DUST_VIEW_RHO_NORM != 0
+      && render_scene.dust_nucleus_px.is_some()) as u32,
+    _pad: [0; 2],
     layer_unit_au: {
       // AU per unit of each layer's global depth: the macro layer is in AU, micro layers in km
       // (`frame_scale` = AU per layer unit)
@@ -2939,6 +3005,7 @@ mod dust_volume_detail_tests {
       },
       eye_m: [0.0; 3],
       nucleus_m: None,
+      nucleus_rte: None,
       volume_detail: detail,
       haze_detail: haze,
     }
@@ -2993,6 +3060,90 @@ mod dust_volume_detail_tests {
     assert!(rs.depth_layers[0].dust_calls.iter().all(|c| c.haze_detail == 1));
     rs.set_dust_haze_detail(dust::DUST_HAZE_DETAIL_DEFAULT);
     assert_eq!(fingerprints(&rs), at_default);
+  }
+
+  /// The display-only 1/ρ normalisation (`DUST_VIEW_RHO_NORM`, bit 3) never reaches the splat's
+  /// push constants nor the frame reuse fingerprint: the pyramid and the reuse are the same with
+  /// the aid on or off, while the drawing aids (flow) still change both
+  #[test]
+  fn rho_norm_flag_never_reaches_the_splat_nor_the_draw_inputs() {
+    let camera = CameraRenderData::new(&TransformComponent::default(), &CameraComponent::default(), 1.0, [800, 600]);
+    for view in [0, dust::DUST_VIEW_FLOW, dust::DUST_VIEW_TRACERS | dust::DUST_VIEW_FLOW] {
+      let plain = dust_splat_pc(&call2(4, 8), &camera, [800, 600], view, 1.0);
+      let with = dust_splat_pc(&call2(4, 8), &camera, [800, 600], view | dust::DUST_VIEW_RHO_NORM, 1.0);
+      assert_eq!(bytemuck::bytes_of(&with), bytemuck::bytes_of(&plain), "view {view}");
+      assert_eq!(plain.flags & dust::DUST_VIEW_RHO_NORM, 0);
+    }
+    let mut rs = RenderScene::new((TransformComponent::default(), CameraComponent::default()), 0, 0, [800, 600]);
+    let mut layer = RenderLayer::new(1, 1.0, Vec3f32::from_array([0.0, 0.0, 0.0]), 0.1, 1000.0);
+    layer.dust_calls = alloc::vec![call(DUST_VOLUME_DETAIL_DEFAULT)];
+    rs.depth_layers.push(layer);
+    let flow = dust::DustFlowUniform::default();
+    for specks in [false, true] {
+      let plain = dust_draw_inputs(&rs, 0, &flow, specks);
+      assert_eq!(dust_draw_inputs(&rs, dust::DUST_VIEW_RHO_NORM, &flow, specks), plain);
+      assert_ne!(dust_draw_inputs(&rs, dust::DUST_VIEW_FLOW, &flow, specks), plain, "a drawing aid still draws");
+      assert_eq!(
+        dust_draw_inputs(&rs, dust::DUST_VIEW_FLOW | dust::DUST_VIEW_RHO_NORM, &flow, specks),
+        dust_draw_inputs(&rs, dust::DUST_VIEW_FLOW, &flow, specks)
+      );
+    }
+    assert_eq!(dust::DUST_VIEW_RHO_NORM & dust::DUST_VIEW_DRAW_MASK, 0);
+    assert_eq!(dust::DUST_VIEW_FLOW & dust::DUST_VIEW_DRAW_MASK, dust::DUST_VIEW_FLOW);
+    // the trajectory lines (bit 2) are a logic-thread aid: the draw inputs never see them
+    for specks in [false, true] {
+      let plain = dust_draw_inputs(&rs, 0, &flow, specks);
+      assert_eq!(dust_draw_inputs(&rs, dust::DUST_VIEW_TRAJECTORIES, &flow, specks), plain);
+      assert_eq!(
+        dust_draw_inputs(&rs, dust::DUST_VIEW_FLOW | dust::DUST_VIEW_TRAJECTORIES | dust::DUST_VIEW_RHO_NORM, &flow, specks),
+        dust_draw_inputs(&rs, dust::DUST_VIEW_FLOW, &flow, specks)
+      );
+    }
+    assert_eq!(dust::DUST_VIEW_TRAJECTORIES & dust::DUST_VIEW_DRAW_MASK, 0);
+    // nor the splat's push constants
+    let camera = CameraRenderData::new(&TransformComponent::default(), &CameraComponent::default(), 1.0, [800, 600]);
+    let with = dust_splat_pc(&call2(DUST_VOLUME_DETAIL_DEFAULT, dust::DUST_HAZE_DETAIL_DEFAULT), &camera, [800, 600], dust::DUST_VIEW_FLOW | dust::DUST_VIEW_TRAJECTORIES | dust::DUST_VIEW_RHO_NORM, 1.0);
+    let without = dust_splat_pc(&call2(DUST_VOLUME_DETAIL_DEFAULT, dust::DUST_HAZE_DETAIL_DEFAULT), &camera, [800, 600], dust::DUST_VIEW_FLOW, 1.0);
+    assert_eq!(bytemuck::bytes_of(&with), bytemuck::bytes_of(&without));
+    assert_eq!(with.flags & dust::DUST_VIEW_TRAJECTORIES, 0);
+  }
+
+  /// The nucleus pixel of the 1/ρ normalisation: the first call's `nucleus_rte` through the
+  /// splat's projection; none without dust or a nucleus, and the pixel of a nucleus on the
+  /// view axis is the viewport centre
+  #[test]
+  fn dust_nucleus_px_projects_the_first_call() {
+    let mut rs = RenderScene::new((TransformComponent::default(), CameraComponent::default()), 0, 0, [800, 600]);
+    assert_eq!(dust_nucleus_px(&rs), None, "no dust");
+    let mut layer = RenderLayer::new(1, 1.0, Vec3f32::from_array([0.0, 0.0, 0.0]), 0.1, 1000.0);
+    layer.dust_calls = alloc::vec![call(DUST_VOLUME_DETAIL_DEFAULT)];
+    rs.depth_layers.push(layer);
+    assert_eq!(dust_nucleus_px(&rs), None, "no nucleus");
+    // a point on the view axis in front of the eye: the view-space axis the projection treats
+    // as depth (w > 0, clip x = y = 0), carried to the world by the rotation's transpose
+    use aethervk_oshal_rlib::math::vector::{Vector4, vec4f64::Vec4f64};
+    let camera = rs.camera_data.rebuild_for_layer(0.1, 1000.0, 1.0);
+    let mut view_rot_only = camera.view_f64;
+    view_rot_only.cols[3] = Vec4f64::from_components(0.0, 0.0, 0.0, 1.0);
+    let depth_axis = (0..6)
+      .map(|k| {
+        let mut d = [0.0f64; 3];
+        d[k % 3] = if k < 3 { 10.0 } else { -10.0 };
+        d
+      })
+      .find(|d| {
+        let c = camera.proj_f64.mul_vector(Vec4f64::from_components(d[0], d[1], d[2], 1.0));
+        c.w() > 0.0 && c.x().abs() < 1e-9 && c.y().abs() < 1e-9
+      })
+      .expect("a depth axis");
+    let on_axis: [f64; 3] = core::array::from_fn(|i| {
+      (0..3).map(|j| view_rot_only.cols[i][j] * depth_axis[j]).sum()
+    });
+    rs.depth_layers[0].dust_calls[0].nucleus_rte = Some(on_axis);
+    let px = dust_nucleus_px(&rs).expect("a nucleus in front of the eye");
+    assert!((px[0] - 400.0).abs() < 1e-2 && (px[1] - 300.0).abs() < 1e-2, "{px:?}");
+    rs.depth_layers[0].dust_calls[0].nucleus_rte = Some([-on_axis[0], -on_axis[1], -on_axis[2]]);
+    assert_eq!(dust_nucleus_px(&rs), None, "behind a perspective eye");
   }
 
   /// The call's volume detail reaches the push constants' flags (bits 8–10) and nothing else: at

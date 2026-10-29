@@ -24,6 +24,7 @@ pub mod df;
 pub mod phase;
 pub mod specks;
 pub mod splat;
+pub mod trajectories;
 pub use phase::*;
 pub use splat::*;
 
@@ -151,7 +152,7 @@ pub const DUST_VOLUME_DETAIL_DEFAULT: u32 = 16;
 pub const DUST_VOLUME_DETAIL_MIN: u32 = 1;
 pub const DUST_VOLUME_DETAIL_MAX: u32 = 16;
 /// [`DustSplatPushConstants::flags`] bits 8–10: `log2(16 / volume detail)`, 0 at the default.
-/// Bits 0–1 and 16–17 are the view's flags (`DUST_VIEW_*`), 20–27 the diagnostics' value,
+/// Bits 0–3 and 16–17 are the view's flags (`DUST_VIEW_*`), 20–27 the diagnostics' value,
 /// 28–29 host-internal ([`DUST_VIEW_VOLUME_SPILL`], [`DUST_VIEW_EDGE_ODD`]): 8–10 were free.
 /// Per draw call (`gpu::frame::dust_splat_pc`), never in the frame's `PYR_FLAGS`
 /// (`cmd_dust_frame_begin` gets the view flags only).
@@ -160,6 +161,8 @@ const _: () = assert!(
   (7 << DUST_FLAGS_VOLUME_DETAIL_SHIFT)
     & (DUST_VIEW_TRACERS
       | DUST_VIEW_FLOW
+      | DUST_VIEW_TRAJECTORIES
+      | DUST_VIEW_RHO_NORM
       | DUST_VIEW_DEBUG_STREAM
       | DUST_VIEW_DEBUG_SAMPLE
       | (0xFF << 20)
@@ -204,6 +207,8 @@ const _: () = assert!(
   (7 << DUST_FLAGS_HAZE_DETAIL_SHIFT)
     & (DUST_VIEW_TRACERS
       | DUST_VIEW_FLOW
+      | DUST_VIEW_TRAJECTORIES
+      | DUST_VIEW_RHO_NORM
       | DUST_VIEW_DEBUG_STREAM
       | DUST_VIEW_DEBUG_SAMPLE
       | (0xFF << 20)
@@ -301,6 +306,82 @@ pub fn dust_reuse_px_default() -> u32 {
 /// [`DUST_VIEW_FLOW`]: synchrone marks ([`flow_factor`])
 pub const DUST_VIEW_TRACERS: u32 = 1;
 pub const DUST_VIEW_FLOW: u32 = 2;
+/// [`DUST_VIEW_TRAJECTORIES`]: ~[`trajectories::DUST_TRAJECTORY_TARGET`] grain paths drawn as
+/// lines from emission to now (one per sampled cluster, coloured per jet), built on the logic
+/// thread from the same closed-form propagation the dust uses ([`trajectories`]). Display only:
+/// a `TrajectoryComponent` per jet, never the splat (`DUST_VIEW_DRAW_MASK` strips it), never a
+/// scene dump.
+pub const DUST_VIEW_TRAJECTORIES: u32 = 1 << 2;
+/// [`DUST_VIEW_RHO_NORM`]: the coma's 1/ρ normalisation of the display (standard cometary
+/// imaging: the optical depth is multiplied by the projected distance from the nucleus,
+/// [`rho_norm_factor`]), so the ρ⁻¹ column of a steady coma shows as a flat field and the jets
+/// and the tail stand out of it instead of being hidden by a clipped core. Display only: the
+/// composite and the white-point measurement see it (`rho_normalised_levels`), never the splat,
+/// the pyramid or the reuse hash (`gpu::frame::prepare_dust` masks it out of the draw flags).
+pub const DUST_VIEW_RHO_NORM: u32 = 1 << 3;
+/// the view flags a user can set (`SimulationContext::set_dust_view_flags`)
+pub const DUST_VIEW_USER_MASK: u32 =
+  DUST_VIEW_TRACERS | DUST_VIEW_FLOW | DUST_VIEW_TRAJECTORIES | DUST_VIEW_RHO_NORM;
+/// the flags that reach the dust pipelines (the splat's `PYR_FLAGS`, the draw inputs' hash, the
+/// cadence): everything but the display-only aids (the 1/ρ normalisation, the trajectory lines)
+pub const DUST_VIEW_DRAW_MASK: u32 = !(DUST_VIEW_RHO_NORM | DUST_VIEW_TRAJECTORIES);
+/// [`DUST_VIEW_RHO_NORM`]: the distance (px) the normalisation saturates at around the nucleus
+/// (its disc and the singularity of 1/ρ), and the distance at which the factor is 1
+pub const DUST_RHO_MIN_PX: f32 = 8.0;
+pub const DUST_RHO_REF_PX: f32 = 16.0;
+/// The 1/ρ normalisation's factor of a pixel (or texel centre) at `rho_px` from the nucleus:
+/// `max(ρ, ρ_min) / ρ_ref` (mirror of `composite.frag`). `None` (no nucleus on screen): 1.
+pub fn rho_norm_factor(rho_px: Option<f32>, rho_min: f32, rho_ref: f32) -> f32 {
+  match rho_px {
+    Some(r) if r.is_finite() && rho_ref > 0.0 => r.max(rho_min) / rho_ref,
+    _ => 1.0,
+  }
+}
+/// Accepted range of the user's exposure correction (EV, `SimulationContext::set_dust_exposure_ev`)
+pub const DUST_EXPOSURE_EV_MIN: f32 = -6.0;
+pub const DUST_EXPOSURE_EV_MAX: f32 = 6.0;
+/// Clamps an exposure correction to [`DUST_EXPOSURE_EV_MIN`, `DUST_EXPOSURE_EV_MAX`] (0 if not
+/// finite).
+pub fn clamp_dust_exposure_ev(ev: f32) -> f32 {
+  if ev.is_finite() {
+    ev.clamp(DUST_EXPOSURE_EV_MIN, DUST_EXPOSURE_EV_MAX)
+  } else {
+    0.0
+  }
+}
+/// The factor the display's white point is multiplied by for an exposure correction `ev`:
+/// `2^(−ev)`, exactly 1 at 0 (the image is bit-identical to the uncorrected one).
+pub fn exposure_ev_white_scale(ev: f32) -> f32 {
+  let ev = clamp_dust_exposure_ev(ev);
+  if ev == 0.0 {
+    1.0
+  } else {
+    <f32 as FloatLike>::pow(2.0, -ev)
+  }
+}
+/// Mirror of `composite.frag`'s dust display with the view options: the optical depth `tau` of a
+/// pixel at `rho_px` from the nucleus (`None`: no nucleus), the white point `white`, the black
+/// point and softening of [`display_stretch`], the 1/ρ normalisation (`rho_norm`,
+/// [`DUST_VIEW_RHO_NORM`]) and the exposure correction `ev`. With `rho_norm` off and `ev = 0`
+/// it is `display_stretch(tau / white, black, s)` bit for bit.
+pub fn display_stretch_view(
+  tau: f32,
+  white: f32,
+  black: f32,
+  s: f32,
+  rho_norm: bool,
+  rho_px: Option<f32>,
+  ev: f32,
+) -> f32 {
+  let white = if white > 0.0 { white } else { 1.0 };
+  let tau = if rho_norm {
+    tau * rho_norm_factor(rho_px, DUST_RHO_MIN_PX, DUST_RHO_REF_PX)
+  } else {
+    tau
+  };
+  let white = white * exposure_ev_white_scale(ev);
+  display_stretch(tau / white, black, s)
+}
 /// diagnostics (`AETHERVK_DUST_DEBUG_STREAM=<s>`): the splat draws one stream of every tier; the
 /// value sits in bits 20..27 of the flags
 pub const DUST_VIEW_DEBUG_STREAM: u32 = 1 << 16;

@@ -347,9 +347,12 @@ struct Args {
   /// `--lab-table T.tsv`: append the scored row; `--lab-table-md T.tsv`: print the tables
   lab_table: Option<PathBuf>,
   lab_table_md: Option<PathBuf>,
-  /// `--view-flags F`: dust view flags (`DUST_VIEW_TRACERS` 1, `DUST_VIEW_FLOW` 2; default 0, the
-  /// plain optical depth, what the Monte-Carlo truth compares with and the app's default)
+  /// `--view-flags F`: dust view flags (`DUST_VIEW_TRACERS` 1, `DUST_VIEW_FLOW` 2,
+  /// `DUST_VIEW_RHO_NORM` 8; default 0, the plain optical depth, what the Monte-Carlo truth
+  /// compares with and the app's default)
   view_flags: u32,
+  /// `--exposure-ev X`: the display's exposure correction (`set_dust_exposure_ev`; default 0)
+  exposure_ev: f32,
   /// `--check`: the largest allowed 2-D rms of the frame against its Monte-Carlo truth
   mc_max: f64,
   /// `--afrho-aperture-km R`: the aperture Afρ of the render and of the truth inside R km of the
@@ -368,7 +371,7 @@ fn usage() -> ! {
      \x20      [--north-up] [--earth-field-km KM] [--ortho] [--start YYYY-MM-DD[THH:MM:SS[Z]]] [--spk FILE.bsp]\n\
      \x20      [--quiet] [--settle-frames N] [--no-jet] [--hide-sun] [--no-trajectories] [--full-teardown] [--no-sheet]\n\
      \x20      [--jet LAT,LON,SPEED_MS,APERTURE_DEG[,SIGMA_FRAC]]... [--pole RA_DEG,DEC_DEG,W0_DEG,RATE_DEG_PER_DAY]\n\
-     \x20      [--ignite-days D] [--prestart] [--ripple-max R] [--spin-hours H] [--mc N] [--mc-max R] [--mc-age-min S] [--view-flags F]\n\
+     \x20      [--ignite-days D] [--prestart] [--ripple-max R] [--spin-hours H] [--mc N] [--mc-max R] [--mc-age-min S] [--view-flags F] [--exposure-ev X]\n\
      \x20      [--afrho-aperture-km R] [--isotropic]\n\
      \x20      [--path-frames N [--path-fps 60] [--path-speed X | --path-dt-s T] [--orbit-deg-per-s 10 | --eye-step-m S] [--dolly-m-per-frame D] [--path-keep 0,31]]\n\
      \x20      [--lab DIR [--lab-frame N] [--lab-truth N] [--lab-path N [--lab-path-eps 1,2,4,16]] [--lab-table T.tsv]]\n\
@@ -419,6 +422,7 @@ fn parse_args() -> Args {
     mc: 0,
     mc_max: 0.15,
     view_flags: 0,
+    exposure_ev: 0.0,
     mc_tier: None,
     mc_age_max: None,
     mc_age_min: None,
@@ -509,6 +513,7 @@ fn parse_args() -> Args {
       }
       "--mc" => a.mc = next(&mut i).parse().unwrap_or_else(|_| usage()),
       "--view-flags" => a.view_flags = next(&mut i).parse().unwrap_or_else(|_| usage()),
+      "--exposure-ev" => a.exposure_ev = next(&mut i).parse().unwrap_or_else(|_| usage()),
       "--mc-tier" => a.mc_tier = Some(next(&mut i).parse().unwrap_or_else(|_| usage())),
       "--mc-age-max" => a.mc_age_max = Some(next(&mut i).parse().unwrap_or_else(|_| usage())),
       "--mc-age-min" => a.mc_age_min = Some(next(&mut i).parse().unwrap_or_else(|_| usage())),
@@ -765,6 +770,9 @@ struct FrameRec {
   mean_lum: f64,
   p99_lum: f64,
   nonblack_frac: f64,
+  /// the flow-pulse exposure metric (`saturated_fraction`, `core_median`, `annulus_median`,
+  /// `core_over_annulus` in `stats.jsonl`)
+  flow_metric: FlowMetric,
   render_task: u64,
   /// wall time per render generation (ms) and the dust passes' GPU time
   /// (`Device::dust_gpu_timings`: the last frame measured before this one was downloaded)
@@ -1315,7 +1323,7 @@ impl FrameRec {
       })
       .collect();
     format!(
-      "{{\"frame\":{},\"epoch\":\"{}\",\"epoch_target\":\"{}\",\"since_ignition_s\":{},\"seek_ok\":{},\"r_helio_au\":{:.6},\"comet_au\":{},\"tiers\":[{}],\"coma_radius_km\":{:.3},\"camera\":{{\"pos_au\":{},\"quat_xyzw\":[{:.9},{:.9},{:.9},{:.9}],\"half_height_au\":{:.9},\"half_height_km\":{:.1},\"m_per_px_nucleus\":{:.6e}}},\"nucleus_px\":[{:.2},{:.2}],\"nucleus_rgb\":[{},{},{}],\"mean_luminance\":{:.4},\"p99_luminance\":{:.2},\"nonblack_fraction\":{:.6},\"mc\":{},\"specks\":{},\"exposure\":{},\"hue_ramp\":[{}],\"render_task\":{},\"render_ms\":{:.2},\"dust_gpu\":{},\"dust_profile\":{},\"dust_budget\":{},\"dust_log\":\"{}\"}}",
+      "{{\"frame\":{},\"epoch\":\"{}\",\"epoch_target\":\"{}\",\"since_ignition_s\":{},\"seek_ok\":{},\"r_helio_au\":{:.6},\"comet_au\":{},\"tiers\":[{}],\"coma_radius_km\":{:.3},\"camera\":{{\"pos_au\":{},\"quat_xyzw\":[{:.9},{:.9},{:.9},{:.9}],\"half_height_au\":{:.9},\"half_height_km\":{:.1},\"m_per_px_nucleus\":{:.6e}}},\"nucleus_px\":[{:.2},{:.2}],\"nucleus_rgb\":[{},{},{}],\"mean_luminance\":{:.4},\"p99_luminance\":{:.2},\"nonblack_fraction\":{:.6},\"saturated_fraction\":{},\"core_median\":{},\"annulus_median\":{},\"core_over_annulus\":{},\"mc\":{},\"specks\":{},\"exposure\":{},\"hue_ramp\":[{}],\"render_task\":{},\"render_ms\":{:.2},\"dust_gpu\":{},\"dust_profile\":{},\"dust_budget\":{},\"dust_log\":\"{}\"}}",
       self.index,
       self.epoch,
       self.epoch_target,
@@ -1341,6 +1349,10 @@ impl FrameRec {
       self.mean_lum,
       self.p99_lum,
       self.nonblack_frac,
+      json_f(self.flow_metric.saturated_fraction),
+      json_f(self.flow_metric.core_median),
+      json_f(self.flow_metric.annulus_median),
+      json_f(self.flow_metric.core_over_annulus),
       self
         .mc
         .as_ref()
@@ -1821,6 +1833,14 @@ fn hide_trajectories(ctx: &SimulationContext, scene_id: u64, keep: &[EntityId]) 
   let mut ids = Vec::new();
   g.scene.query1(|id, _: &TrajectoryComponent| ids.push(id));
   g.scene.query1(|id, _: &EffectiveTrajectoryComponent| ids.push(id));
+  // the dust trajectory lines (`--view-flags 4`) are a dust view aid, not an orbit line: kept
+  let mut dust_lines = Vec::new();
+  g.scene.query1(
+    |id, _: &aethervk_core_rlib::scene::trajectory::DustTrajectoryLinesComponent| {
+      dust_lines.push(id)
+    },
+  );
+  ids.retain(|id| !dust_lines.contains(id));
   ids.sort_unstable_by_key(|id| id.as_ffi());
   ids.dedup();
   let mut n = 0;
@@ -1996,22 +2016,100 @@ fn bgra_to_rgba(buf: &mut [u8]) {
   }
 }
 
-fn luminance_stats(rgba: &[u8]) -> (f64, f64, f64) {
+/// The flow-pulse exposure metric of a frame: how much of the display clips and how the
+/// nucleus core compares with the surrounding coma (the reviewer's "flow far too bright near
+/// the nucleus" is a saturated core: a core/annulus ratio far above the plain render's).
+#[derive(Clone, Copy, Debug)]
+struct FlowMetric {
+  /// fraction of pixels whose display luminance is ≥ 250/255 (clipped or about to)
+  saturated_fraction: f64,
+  /// median luminance inside ρ < 2 R_nuc,px around the nucleus pixel (NaN without pixels)
+  core_median: f64,
+  /// median luminance in 10 R_nuc,px ≤ ρ ≤ 50 R_nuc,px (NaN without pixels)
+  annulus_median: f64,
+  /// `core_median / annulus_median` (NaN when either is NaN or the annulus is black)
+  core_over_annulus: f64,
+}
+
+impl FlowMetric {
+  const NAN: FlowMetric = FlowMetric {
+    saturated_fraction: f64::NAN,
+    core_median: f64::NAN,
+    annulus_median: f64::NAN,
+    core_over_annulus: f64::NAN,
+  };
+}
+
+fn median_f32(v: &mut [f32]) -> f64 {
+  if v.is_empty() {
+    return f64::NAN;
+  }
+  v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+  let n = v.len();
+  if n % 2 == 1 {
+    v[n / 2] as f64
+  } else {
+    (v[n / 2 - 1] as f64 + v[n / 2] as f64) / 2.0
+  }
+}
+
+/// Mean, p99 and non-black fraction of the display luminance, plus the flow metric for a
+/// nucleus at `nucleus_px` with radius `nucleus_px_radius` (None: no nucleus on screen).
+fn luminance_stats(
+  rgba: &[u8],
+  width: u32,
+  nucleus: Option<((f64, f64), f64)>,
+) -> (f64, f64, f64, FlowMetric) {
   let n = rgba.len() / 4;
   let mut lums: Vec<f32> = Vec::with_capacity(n);
   let mut sum = 0.0f64;
   let mut nonblack = 0usize;
-  for px in rgba.chunks_exact(4) {
+  let mut saturated = 0usize;
+  let mut core: Vec<f32> = Vec::new();
+  let mut annulus: Vec<f32> = Vec::new();
+  let w = width.max(1) as usize;
+  for (idx, px) in rgba.chunks_exact(4).enumerate() {
     let l = 0.2126 * px[0] as f32 + 0.7152 * px[1] as f32 + 0.0722 * px[2] as f32;
     sum += l as f64;
     if px[0] > 8 || px[1] > 8 || px[2] > 8 {
       nonblack += 1;
     }
+    if l >= 250.0 {
+      saturated += 1;
+    }
+    if let Some(((cx, cy), r)) = nucleus {
+      if r.is_finite() && r > 0.0 {
+        let x = (idx % w) as f64 - cx;
+        let y = (idx / w) as f64 - cy;
+        let rho = (x * x + y * y).sqrt() / r;
+        if rho < 2.0 {
+          core.push(l);
+        } else if (10.0..=50.0).contains(&rho) {
+          annulus.push(l);
+        }
+      }
+    }
     lums.push(l);
+  }
+  if n == 0 {
+    return (f64::NAN, f64::NAN, f64::NAN, FlowMetric::NAN);
   }
   lums.sort_by(|a, b| a.partial_cmp(b).unwrap());
   let p99 = lums[((n as f64 * 0.99) as usize).min(n - 1)] as f64;
-  (sum / n as f64, p99, nonblack as f64 / n as f64)
+  let core_median = median_f32(&mut core);
+  let annulus_median = median_f32(&mut annulus);
+  let core_over_annulus = if annulus_median > 0.0 {
+    core_median / annulus_median
+  } else {
+    f64::NAN
+  };
+  let flow = FlowMetric {
+    saturated_fraction: saturated as f64 / n as f64,
+    core_median,
+    annulus_median,
+    core_over_annulus,
+  };
+  (sum / n as f64, p99, nonblack as f64 / n as f64, flow)
 }
 
 // ───────────────────────────── main ─────────────────────────────
@@ -2284,6 +2382,7 @@ fn main() {
 
   // view settings
   ctx.set_dust_view_flags(scene_id, args.view_flags);
+  ctx.set_dust_exposure_ev(scene_id, args.exposure_ev);
   if let Some(k) = args.mc_tier {
     // the render side of `--mc-tier`: the frame's splat draws that tier only
     unsafe { std::env::set_var("AETHERVK_DUST_DEBUG_TIER", k.to_string()) };
@@ -3058,7 +3157,25 @@ fn main() {
     );
     let o = ((iy * args.width + ix) * 4) as usize;
     let rgb = (rgba[o], rgba[o + 1], rgba[o + 2]);
-    let (mean_l, p99_l, nonblack) = luminance_stats(&rgba);
+    let nucleus_px_radius = NUCLEUS_RADIUS_KM as f64 * 1e3 / m_per_px_nucleus;
+    let on_screen = px.is_finite()
+      && py.is_finite()
+      && px >= 0.0
+      && py >= 0.0
+      && px < args.width as f64
+      && py < args.height as f64;
+    let (mean_l, p99_l, nonblack, flow_metric) = luminance_stats(
+      &rgba,
+      args.width,
+      on_screen.then_some(((px, py), nucleus_px_radius)),
+    );
+    log_line(&format!(
+      "[observer] flow metric frame {i}: sat {:.6} core {:.2} annulus {:.2} ratio {:.3}",
+      flow_metric.saturated_fraction,
+      flow_metric.core_median,
+      flow_metric.annulus_median,
+      flow_metric.core_over_annulus
+    ));
     // the hue ramp along the tail axis: the on-screen anti-solar direction from the nucleus
     // (pixel y runs against `up`), from two nucleus radii (at least 8 px: the box must clear the
     // nucleus's pixels) to the end of the lit dust
@@ -3068,7 +3185,6 @@ fn main() {
       jet_color[2] as f32,
     ];
     let (stream_hue_deg, _) = oklab_hue_cl(stream_rgb);
-    let nucleus_px_radius = NUCLEUS_RADIUS_KM as f64 * 1e3 / m_per_px_nucleus;
     let hue_ray = {
       let anti = normalize(comet);
       let v = (dot(anti, right), -dot(anti, up));
@@ -3420,6 +3536,7 @@ fn main() {
       mean_lum: mean_l,
       p99_lum: p99_l,
       nonblack_frac: nonblack,
+      flow_metric,
       render_task: tid,
       render_ms,
       dust_gpu,

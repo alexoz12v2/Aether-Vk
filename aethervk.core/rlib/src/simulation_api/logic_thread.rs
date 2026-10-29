@@ -3016,6 +3016,9 @@ fn execute_simulation_tick_fixed_update_phase(
       None => Ok(None),
     };
 
+    // the dust trajectory lines view aid (display only; built from the host ring just ticked)
+    utils::update_dust_trajectories(&scene, now_scaled_us as f64 * 1e-6);
+
     // ------------------------------------------------------------------------------------
     // SPICE EZR Kernel: Commit Comet Cartesian state update from dashmap to scene
     // ------------------------------------------------------------------------------------
@@ -3118,6 +3121,9 @@ fn execute_simulation_tick_fixed_update_phase(
     // the transforms are committed: now surface a GPU failure of this tick, if any
     Some((gpu_sync?, steps_executed))
   } else {
+    // paused: the trajectory lines still follow the flag (toggled, or a seek that rebuilt the
+    // dust while paused); nothing is rebuilt at an unchanged sim time
+    utils::update_dust_trajectories(&scene, now_scaled_us as f64 * 1e-6);
     None
   };
 
@@ -3889,6 +3895,118 @@ mod utils {
     }
   }
 
+  /// Dust trajectory lines (`dust::DUST_VIEW_TRAJECTORIES`), once per logic tick after the
+  /// emission tick: with the flag set, one `TrajectoryComponent` per visible jet (its stream
+  /// colour) on a child of root marked `DustTrajectoryLinesComponent`, rebuilt at every new sim
+  /// time (`now_s`) from the jet's host ring (`dust::trajectories::trajectory_component`); with
+  /// the flag clear, or for a jet gone or empty, the lines are removed. Display only, never
+  /// serialized (`scene_dump`).
+  pub fn update_dust_trajectories(scene_ctx: &SceneContext, now_s: f64) {
+    use crate::scene::{
+      HiddenComponent, particles::ParticleSystemComponent,
+      trajectory::DustTrajectoryLinesComponent,
+    };
+    let scene = &scene_ctx.scene;
+    let flags = scene_ctx.dust_view_flags.load(core::sync::atomic::Ordering::Relaxed);
+    if flags & crate::scene::dust::DUST_VIEW_TRAJECTORIES == 0 {
+      sync_dust_trajectory_lines(scene, scene_ctx.root_entity, None, alloc::vec::Vec::new());
+      return;
+    }
+    // the lines already built at this sim time (a paused clock rebuilds nothing)
+    let mut built_at: alloc::vec::Vec<(EntityId, f64)> = alloc::vec::Vec::new();
+    scene.query1(|_, m: &DustTrajectoryLinesComponent| built_at.push((m.system, m.t_s)));
+    // no nested scene lookups inside the query callback (`dust_draw_calls`' deadlock note)
+    let mut lines = alloc::vec::Vec::new();
+    scene.query1_without::<ParticleSystemComponent, HiddenComponent, _>(|id, ps| {
+      let line = if built_at.iter().any(|(s, t)| *s == id && *t == now_s) {
+        None
+      } else {
+        let sys = ps.dust.lock();
+        crate::scene::dust::trajectories::trajectory_component(
+          &sys,
+          now_s,
+          crate::scene::dust::trajectories::trajectory_line_color(ps.draw_params.stream_color),
+        )
+      };
+      lines.push((id, now_s, line));
+    });
+    let comet = scene_ctx.comet.map(|c| c.body);
+    sync_dust_trajectory_lines(scene, scene_ctx.root_entity, comet, lines);
+  }
+
+  /// Applies `lines` (`(jet, sim time, lines)`; `None` lines = keep the jet's current entity as
+  /// it is) to the scene: a `dust_trajectories_<jet>` child of `root` per jet with lines
+  /// (`TransformComponent` + `TrajectoryComponent` + `DustTrajectoryLinesComponent`, following
+  /// the Earth observer's light-time displacement of `comet` like the comet tracks), and the
+  /// entities of jets absent from `lines` removed. An empty `lines` removes every entity.
+  pub fn sync_dust_trajectory_lines(
+    scene: &crate::scene::Scene,
+    root: EntityId,
+    comet: Option<EntityId>,
+    lines: alloc::vec::Vec<(
+      EntityId,
+      f64,
+      Option<crate::scene::trajectory::TrajectoryComponent>,
+    )>,
+  ) {
+    use crate::scene::trajectory::{DustTrajectoryLinesComponent, TrajectoryComponent};
+    let mut existing: alloc::vec::Vec<(EntityId, EntityId)> = alloc::vec::Vec::new();
+    scene.query1(|e, m: &DustTrajectoryLinesComponent| existing.push((e, m.system)));
+    for (entity, system) in &existing {
+      let keep = lines.iter().any(|(s, _, _)| s == system);
+      if !keep {
+        oshal::log!("[Dust trajectories] jet {}: lines removed", system.as_ffi());
+        scene.remove_entity(*entity);
+      }
+    }
+    // diagnostics: once per change of a jet's line count
+    let describe = |system: EntityId, line: &TrajectoryComponent, previous: Option<usize>| {
+      let cp = &line.control_points_f64;
+      if previous == Some(cp.len()) {
+        return;
+      }
+      let (n_lines, extent_km) = crate::scene::dust::trajectories::describe_control_points(cp);
+      oshal::log!(
+        "[Dust trajectories] jet {}: {n_lines} lines, {} control points, extent {extent_km:.1} km, colour {:?}",
+        system.as_ffi(),
+        cp.len(),
+        line.color
+      );
+    };
+    for (system, t_s, line) in lines {
+      let entity = existing.iter().find(|(_, s)| *s == system).map(|(e, _)| *e);
+      let Some(line) = line else {
+        // nothing new for this jet: keep its entity as it is (or none)
+        continue;
+      };
+      match entity {
+        Some(e) => {
+          let previous = scene
+            .with_component(e, |c: &TrajectoryComponent| c.control_points_f64.len());
+          describe(system, &line, previous);
+          if scene
+            .with_component_mut(e, |c: &mut TrajectoryComponent| *c = line.clone())
+            .is_none()
+          {
+            let _ = scene.add_component(e, line);
+          }
+          let _ = scene.with_component_mut(e, |m: &mut DustTrajectoryLinesComponent| m.t_s = t_s);
+        }
+        None => {
+          describe(system, &line, None);
+          let e = scene.spawn_entity(alloc::format!("dust_trajectories_{}", system.as_ffi()));
+          scene.set_parent(e, Some(root));
+          let _ = scene.add_component(e, crate::scene::TransformComponent::default());
+          let _ = scene.add_component(e, DustTrajectoryLinesComponent { system, t_s });
+          let _ = scene.add_component(e, line);
+          if let Some(comet) = comet {
+            crate::simulation_api::earth_observer::mark_light_time_track(scene, e, comet);
+          }
+        }
+      }
+    }
+  }
+
   /// Segments of the analytical comet track built by [`keplerian_track_bezier_au`].
   /// 2048: the Hermite error of a cubic segment grows with (Δanomaly)⁴; with 128 segments the
   /// drawn 67P track missed the comet by 7.3 km at the osculation epoch (visible at km zoom),
@@ -4316,6 +4434,8 @@ mod utils {
         .active_physics_task
         .store(true, core::sync::atomic::Ordering::Release);
     }
+    // the trajectory lines of the rebuilt history (a seek-driven run never ticks the physics)
+    update_dust_trajectories(scene_write, scaled_us as f64 * 1e-6);
     // the whole history appeared at once: past a day's jump what the views' feedback learned no
     // longer applies (it restarts from its cheap warm-up state, `DustViewHost::reset_feedback`); a
     // shorter seek (timeline scrubbing, the observer's camera path) shows nearly the same dust and
