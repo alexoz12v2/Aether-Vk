@@ -128,7 +128,7 @@ public sealed class StateDto
 }
 
 /// <summary>
-/// The Model tab. The grain and activity values (diameter … Afρ₀) are the defaults for new jets,
+/// The Model tab. The grain and activity values (diameter … Q_d₀) are the defaults for new jets,
 /// and what each jet of an older save (without its own, <see cref="JetDto"/>) inherits on load.
 /// </summary>
 public sealed class ModelDto
@@ -139,10 +139,26 @@ public sealed class ModelDto
   public float GeometricAlbedo { get; set; } = 0.04f;
   public float SizeQ { get; set; } = 3.5f;
   public float SizeRange { get; set; } = 10;
-  public float Afrho0Cm { get; set; } = 100;
-  public float AfrhoPower { get; set; } = 2;
-  public float AfrhoCutoffAu { get; set; } = 15;
-  public float AfrhoMaxValueCm { get; set; } = 100000;
+  // the dust production law: Q_d(r_h) = min(max, Q_d₀ · r_h^−k), 0 beyond the cutoff. Null only in
+  // saves written before Q_d replaced Afρ: the legacy fields below are converted then
+  [JsonPropertyName("dust_rate_1au_kgs")]
+  public float? DustRate1AuKgs { get; set; }
+  [JsonPropertyName("dust_rate_power")]
+  public float? DustRatePower { get; set; }
+  [JsonPropertyName("dust_rate_cutoff_au")]
+  public float? DustRateCutoffAu { get; set; }
+  [JsonPropertyName("dust_rate_max_kgs")]
+  public float? DustRateMaxKgs { get; set; }
+
+  // Obsolete: read only to convert pre-Q_d saves (Afρ at 1 AU in cm and its law); never written
+  [JsonPropertyName("afrho0_cm"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+  public float? Afrho0Cm { get; set; }
+  [JsonPropertyName("afrho_power"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+  public float? AfrhoPower { get; set; }
+  [JsonPropertyName("afrho_cutoff_au"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+  public float? AfrhoCutoffAu { get; set; }
+  [JsonPropertyName("afrho_max_value_cm"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+  public float? AfrhoMaxValueCm { get; set; }
   public double DustSoftening { get; set; } = 0.01;
   public bool DustTracers { get; set; }
   public bool DustFlow { get; set; }
@@ -174,6 +190,12 @@ public sealed class JetDto
   public float? GeometricAlbedo { get; set; }
   public float? SizeQ { get; set; }
   public float? SizeRange { get; set; }
+  /// <summary>This jet's Q_d at 1 AU (kg/s); null in saves written before it (inherits or converts).</summary>
+  [JsonPropertyName("dust_rate_1au_kgs")]
+  public float? DustRate1AuKgs { get; set; }
+
+  // Obsolete: read only to convert pre-Q_d saves (this jet's Afρ at 1 AU in cm); never written
+  [JsonPropertyName("afrho0_cm"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
   public float? Afrho0Cm { get; set; }
 }
 

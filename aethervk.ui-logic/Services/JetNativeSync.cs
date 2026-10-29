@@ -10,8 +10,8 @@ namespace AetherVk.Logic.Services;
 public static class JetNativeSync
 {
   /// <summary>
-  /// The native grain and activity parameters of <paramref name="j"/>: its own grain and Afρ₀, and
-  /// the model-wide shape of the Afρ law (exponent, cutoff, max) from <paramref name="s"/>.
+  /// The native grain and activity parameters of <paramref name="j"/>: its own grain and Q_d₀, and
+  /// the model-wide shape of the Q_d law (exponent, cutoff, max) from <paramref name="s"/>.
   /// </summary>
   public static ParticleSystemModel BuildModel(ModelSession s, JetViewModel j) => new(
     DiametreUm: j.DiametreUm,
@@ -20,10 +20,10 @@ public static class JetNativeSync
     GeometricAlbedo: j.GeometricAlbedo,
     SizeQ: j.SizeQ,
     SizeRange: j.SizeRange,
-    Afrho0Cm: j.Afrho0Cm,
-    AfrhoPower: s.AfrhoPower,
-    AfrhoCutoffAu: s.AfrhoCutoffAu,
-    AfrhoMaxValueCm: s.AfrhoMaxValueCm);
+    DustRate1AuKgs: j.DustRate1AuKgs,
+    DustRatePower: s.DustRatePower,
+    DustRateCutoffAu: s.DustRateCutoffAu,
+    DustRateMaxKgs: s.DustRateMaxKgs);
 
   public static ParticleSystemJet BuildJet(JetViewModel j, float nucleusRadiusKm, long emissionStartUs = long.MaxValue) => new(
     LatitudeRad: j.LatitudeRad,
@@ -70,7 +70,7 @@ public static class JetNativeSync
   /// <summary>
   /// Creates <paramref name="jet"/>'s native particle system and stores its id, β and dust
   /// production rate. <c>AddParticleSystem</c> returns no computed values, and every jet has its
-  /// own (its own grain and Afρ₀): a later jet reads them back with an unchanged modify.
+  /// own (its own grain and Q_d₀): a later jet reads them back with an unchanged modify.
   /// A refusal (id 0: no comet, render frontend or clock, or the device could not create the
   /// system) is not silent: it sets <see cref="JetViewModel.NativeError"/>, which a success clears.
   /// </summary>

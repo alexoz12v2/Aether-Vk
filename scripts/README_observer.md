@@ -184,7 +184,8 @@ device loss. The `[GPU lost]` lines in the run's stdout name the faulting addres
 `TryInitComet` (SPK 1000012, SBDB elements, `OsculatingAtStart`) and wait for
 `CometInitialized` → rotation model (pole RA 0°, Dec 90°, 12.4 h, body-fixed) written to the
 scene and the cartesian cache → one jet (`tests/emit_particles_test.rs` parameters: aperture
-0.5 rad, 2.0 ± 0.5 m/s, 100 µm, 0.533 g/cm³, Afρ₀ 100 cm, power 2, cutoff 15 AU, nucleus 2 km,
+0.5 rad, 2.0 ± 0.5 m/s, 100 µm, 0.533 g/cm³, `Q_d(1 AU)` = the rate an Afρ₀ of 100 cm converts
+to (`dust_rate_from_afrho_kgs`, 1.03 kg/s), power 2, cutoff 15 AU, nucleus 2 km,
 site lat 20° lon 0°, colour (1, 0.6, 0.2), seed 7, TTL 30 d) → dust view flags 2, flow speed 1,
 softening 1e-2 → windowless presentation engine + camera → per frame `seek_epoch_sync`, wait for
 every tier `caught_up`, re-pose the camera from the comet's global AU position, wait for a few
