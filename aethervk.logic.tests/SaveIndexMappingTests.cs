@@ -158,6 +158,34 @@ public class SaveIndexMappingTests
     Assert.Equal(b with { GizmoMode = BillboardGizmoMode.None }, SaveIndexMapping.FromDto(SaveIndexMapping.ToDto(b)));
   }
 
+  /// <summary>The trajectory lines, coma 1/ρ normalisation and dust exposure survive a save.</summary>
+  [Fact]
+  public void ModelDustDisplayOptions_RoundTrip()
+  {
+    var model = new ModelSession { DustTrajectories = true, DustRhoNorm = true, DustExposureEv = -2.75 };
+    var json = SaveIndexIo.ToJson(new SaveIndex { Model = SaveIndexMapping.ToDto(model) });
+    var dto = System.Text.Json.JsonSerializer.Deserialize(
+      System.Text.Json.JsonSerializer.Serialize(SaveIndexMapping.ToDto(model), SaveIndexJsonContext.Default.ModelDto),
+      SaveIndexJsonContext.Default.ModelDto)!;
+    var m2 = new ModelSession();
+    SaveIndexMapping.Apply(dto, m2);
+    Assert.Equal((true, true, -2.75), (m2.DustTrajectories, m2.DustRhoNorm, m2.DustExposureEv));
+    Assert.Equal(json, SaveIndexIo.ToJson(new SaveIndex { Model = SaveIndexMapping.ToDto(m2) }));
+  }
+
+  /// <summary>A save written before these options existed opens with them at their defaults.</summary>
+  [Fact]
+  public void ModelDustDisplayOptions_OldSave_MapsToDefaults()
+  {
+    var old = System.Text.Json.JsonSerializer.Deserialize(
+      "{\"dust_tracers\": true, \"dust_flow\": true, \"dust_flow_speed\": 2}", SaveIndexJsonContext.Default.ModelDto)!;
+    var m = new ModelSession { DustTrajectories = true, DustRhoNorm = true, DustExposureEv = 3 };
+    SaveIndexMapping.Apply(old, m);
+    Assert.True(m.DustTracers);
+    Assert.True(m.DustFlow);
+    Assert.Equal((false, false, 0.0), (m.DustTrajectories, m.DustRhoNorm, m.DustExposureEv));
+  }
+
   [Fact]
   public void Appearance_ByKey_FallsBackWithoutItsMesh()
   {

@@ -599,7 +599,7 @@ impl RenderPasses {
       NonZeroHandle::new_unchecked(device.create_descriptor_set_layout(&layout_ci, None)?)
     };
 
-    // Push constant range for CompositePushConstants (36 bytes, fragment stage)
+    // Push constant range for CompositePushConstants (128 bytes, fragment stage)
     let push_constant_range = vk::PushConstantRange::default()
       .stage_flags(vk::ShaderStageFlags::FRAGMENT)
       .offset(0)

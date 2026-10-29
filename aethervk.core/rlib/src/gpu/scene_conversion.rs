@@ -326,6 +326,8 @@ impl SceneConversionExt2 for Scene {
       dust_feedback_gen: 0,
       dust_sim_speed: 0.0,
       dust_view_flags: 0,
+      dust_exposure_ev: 0.0,
+      dust_nucleus_px: None,
       dust_flow: Default::default(),
       dust_view: Default::default(),
       layer_ref_dist: core::array::from_fn(|i| layer_ref_dists.get(&(i as u32)).copied().unwrap_or(0.0)),
@@ -911,6 +913,27 @@ impl SceneConversionExt2 for Scene {
             None,
           )
         };
+        // dust trajectory lines diagnostics (`DUST_VIEW_TRAJECTORIES`): once per change of
+        // the piece count, what reaches the trajectory batch
+        if self
+          .with_component(id, |_: &crate::scene::trajectory::DustTrajectoryLinesComponent| ())
+          .is_some()
+        {
+          static LAST_PIECES: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(usize::MAX);
+          let pieces = rel.len() / 4;
+          if LAST_PIECES.swap(pieces, core::sync::atomic::Ordering::Relaxed) != pieces {
+            aethervk_oshal_rlib::log!(
+              "[Dust trajectories] draw: entity {} layer {layer_idx}: {} segments -> {pieces} pieces, anchored {}, rte |pos| {:.3e}",
+              id.as_ffi(),
+              traj.control_points_f64.len() / 4,
+              anchor.is_some(),
+              {
+                let p = rte.position;
+                (p.x() * p.x() + p.y() * p.y() + p.z() * p.z()).sqrt()
+              }
+            );
+          }
+        }
         let mut t = traj.clone();
         t.control_points = rel;
         (layer_idx, id, t, identity, anchor)
@@ -1932,6 +1955,13 @@ impl Scene {
       )
       .unwrap_or(0.0);
     let scene_time_s = self.sim_time_s().map(|t| t - delay_s);
+    // the telescope's nucleus: displaced by the light-time offset like the comet's micro layer
+    let lt_offset_m = self
+      .with_component(
+        camera_entity,
+        |l: &crate::simulation_api::earth_observer::LightTimeViewComponent| l.offset_au,
+      )
+      .map_or([0.0; 3], |o| [o[0] * au, o[1] * au, o[2] * au]);
     // no nested scene lookups inside the query callback (see the deadlock note above)
     let mut systems = alloc::vec::Vec::new();
     self.query1_without::<ParticleSystemComponent, HiddenComponent, _>(|id, ps| {
@@ -1957,6 +1987,13 @@ impl Scene {
         } else {
           1.0e-3 // micro layers are in km
         };
+        let nucleus_rte = nucleus_m.map(|n| {
+          dust_rte_position(
+            [n[0] + lt_offset_m[0], n[1] + lt_offset_m[1], n[2] + lt_offset_m[2]],
+            eye_m,
+            units_per_m,
+          )
+        });
         let calls = states
           .into_iter()
           .map(|state| {
@@ -1972,6 +2009,7 @@ impl Scene {
               state,
               eye_m,
               nucleus_m,
+              nucleus_rte,
               // the render thread stamps the scene's setting (`RenderScene::set_dust_volume_detail`)
               volume_detail: crate::scene::dust::DUST_VOLUME_DETAIL_DEFAULT,
               haze_detail: crate::scene::dust::DUST_HAZE_DETAIL_DEFAULT,

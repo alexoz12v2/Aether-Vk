@@ -237,6 +237,15 @@
   <data name="Tabs_Model_DustFlowSpeed" xml:space="preserve">
     <value>Time-lapse del flusso</value>
   </data>
+  <data name="Tabs_Model_DustTrajectories" xml:space="preserve">
+    <value>Linee di traiettoria</value>
+  </data>
+  <data name="Tabs_Model_DustRhoNorm" xml:space="preserve">
+    <value>Normalizzazione 1/ρ della chioma</value>
+  </data>
+  <data name="Tabs_Model_DustExposure" xml:space="preserve">
+    <value>Esposizione polvere</value>
+  </data>
   <data name="Tabs_Model_ShowReferenceError" xml:space="preserve">
     <value>mostra errore posizione-riferimento</value>
   </data>

@@ -382,6 +382,20 @@ pub struct DustViewHost {
   pub white: f32,
   /// median dust texel of the last measured frame (same units), 0 = none
   pub p50: f32,
+  /// the white point and median of the 1/ρ-normalised field (`dust::rho_normalised_levels`,
+  /// `dust::DUST_VIEW_RHO_NORM`), adapted from every readback whose frame knew its nucleus pixel
+  /// alongside the plain pair (so a toggle of the aid swaps settled whites, never blends them)
+  pub white_norm: f32,
+  pub p50_norm: f32,
+  /// the view flags of the frame begun last ([`DustViewHost::display`] picks the white by them)
+  pub view_flags: u32,
+  /// the nucleus' framebuffer pixel of the frame about to begin ([`Device::dust_set_nucleus_px`];
+  /// NaN = unknown) and the one of each readback slot's frame
+  nucleus_px_next: [f32; 2],
+  /// the coma 1/ρ normalisation is shown (`DUST_VIEW_RHO_NORM`): a display-only option, set
+  /// with the nucleus px because the frame flags reaching `frame_begin` have it masked out
+  rho_norm: bool,
+  slot_nucleus_px: [[f32; 2]; DUST_READBACK_SLOTS],
   /// the white point last logged (`[Dust exposure]`, on a quarter-stop move)
   white_logged: f32,
   /// the readback being absorbed: (its regime, it reused the previous image), for that log
@@ -1025,6 +1039,12 @@ impl Default for DustViewHost {
     Self {
       white: dust::mag_arcsec2_to_white(dust::DUST_WHITE_SEED_MAG),
       p50: 0.0,
+      white_norm: dust::mag_arcsec2_to_white(dust::DUST_WHITE_SEED_MAG),
+      p50_norm: 0.0,
+      view_flags: 0,
+      nucleus_px_next: [f32::NAN; 2],
+      rho_norm: false,
+      slot_nucleus_px: [[f32::NAN; 2]; DUST_READBACK_SLOTS],
       white_logged: 0.0,
       absorb_tag: (0, false),
       absorb_refined: false,
@@ -1116,15 +1136,28 @@ impl DustViewHost {
     m * dust::WHITE_TILE_UNIT_REL
   }
 
-  /// Folds one frame's header and white-point level (recorded with `unit`) into the white
-  /// point, the median and the unit.
+  /// [`DustViewHost::absorb_at`] of a frame whose nucleus pixel is unknown (the plain white only)
   pub fn absorb(&mut self, header: &[u32], level: &[u32], texel_px: u32, unit: f32) {
+    self.absorb_at(header, level, 1, texel_px, unit, [f32::NAN; 2]);
+  }
+
+  /// Folds one frame's header and white-point level (recorded with `unit`; `level_w` texels
+  /// wide) into the white point, the median and the unit; `nucleus_px` (the nucleus' framebuffer
+  /// pixel when that frame was drawn, NaN = unknown) feeds the 1/ρ-normalised pair.
+  pub fn absorb_at(&mut self, header: &[u32], level: &[u32], level_w: u32, texel_px: u32, unit: f32, nucleus_px: [f32; 2]) {
     // a flat field (`dust::level_is_flat`) measures no white point: the exposure keeps its own
-    let measured = if dust::level_is_flat(level) {
+    let flat = dust::level_is_flat(level);
+    let measured = if flat {
       None
     } else {
       dust::white_point_from_level(level, texel_px, unit)
     };
+    if !flat && nucleus_px[0].is_finite() && nucleus_px[1].is_finite() {
+      if let Some((p99, p50)) = dust::rho_normalised_levels(level, level_w, texel_px, unit, Some(nucleus_px)) {
+        self.white_norm = dust::adapt_white(self.white_norm, p99);
+        self.p50_norm = dust::adapt_white(self.p50_norm, p50);
+      }
+    }
     if let Some((p99, p50)) = measured {
       self.white = dust::adapt_white(self.white, p99);
       self.p50 = dust::adapt_white(self.p50, p50);
@@ -1353,12 +1386,21 @@ impl DustViewHost {
     }
   }
 
-  /// what the composite needs: `(white, auto softening)`
+  /// what the composite needs: `(white, auto softening)`; with `dust::DUST_VIEW_RHO_NORM` in
+  /// [`DustViewHost::view_flags`] the normalised field's pair, the plain one otherwise
   pub fn display(&self) -> (f32, f32) {
-    (
-      dust::display_white_v4(self.white),
-      dust::auto_softening(self.p50, self.white),
-    )
+    let (white, p50) = if self.rho_norm {
+      (self.white_norm, self.p50_norm)
+    } else {
+      (self.white, self.p50)
+    };
+    (dust::display_white_v4(white), dust::auto_softening(p50, white))
+  }
+
+  /// the plain measured white as the composite would show it without the view options (the
+  /// HUD's physical readout, `DustExposure::of`)
+  pub fn display_white_measured(&self) -> f32 {
+    dust::display_white_v4(self.white)
   }
 }
 
@@ -1583,8 +1625,11 @@ pub struct DustViewParams {
   pub levels: u32,
   /// exposure-scaled optical depth × px² per count
   pub unit: f32,
-  /// white point (the seed surface brightness before any measurement)
+  /// white point (the seed surface brightness before any measurement) the composite divides by:
+  /// the plain measured one, or the 1/ρ-normalised field's with `dust::DUST_VIEW_RHO_NORM`
   pub white: f32,
+  /// the plain measured white whatever the view options (the HUD's physical readout)
+  pub white_measured: f32,
   /// the median dust texel (0 before any measurement)
   pub p50: f32,
   /// auto softening (`dust::auto_softening`)
@@ -2182,6 +2227,23 @@ impl Device {
   /// frames ago into the white point, median and unit, then records the header write (level
   /// table, `flags`, `flow`, the tracer height) and the zeroing of the levels. Returns this
   /// frame's [`DustViewParams`] (the unit the splats must use). Before the propagates.
+  /// The nucleus' framebuffer pixel (x right, y down; `None` = unknown) of the frame about to
+  /// begin on `pe`: the 1/ρ-normalised white point (`dust::DUST_VIEW_RHO_NORM`) measures that
+  /// frame's readback around it. Called before `cmd_dust_frame_begin*`.
+  pub fn dust_set_nucleus_px(
+    &self,
+    pe: gpu::PresentationEngineHandle,
+    nucleus_px: Option<[f32; 2]>,
+    rho_norm: bool,
+  ) {
+    let res = self.res.read();
+    if let Some(view) = res.dust_manager.as_ref().and_then(|m| m.views.get(&pe)) {
+      let mut host = view.host.lock();
+      host.nucleus_px_next = nucleus_px.unwrap_or([f32::NAN; 2]);
+      host.rho_norm = rho_norm;
+    }
+  }
+
   pub fn cmd_dust_frame_begin(
     &self,
     cmd: vk::CommandBuffer,
@@ -2521,7 +2583,8 @@ impl Device {
         host.readback_haze = host.slot_haze[slot];
         host.absorb_tag = (regime_rb, host.ts_reused[slot]);
         host.absorb_refined = host.slot_refined[slot];
-        host.absorb(estimate.as_deref().unwrap_or(header), level, 1 << lvl, unit);
+        let nucleus_px = host.slot_nucleus_px[slot];
+        host.absorb_at(estimate.as_deref().unwrap_or(header), level, lw, 1 << lvl, unit, nucleus_px);
         host.feedback_store(regime_rb);
         host.last_regime = regime_rb;
         // the packet queue of that frame: records drawn, packets appended (the rest in-thread)
@@ -2714,7 +2777,10 @@ impl Device {
     let unit = host.unit();
     host.slot_unit[slot] = unit;
     host.slot_haze[slot] = dust::haze_detail_from_flags(flags);
+    host.slot_nucleus_px[slot] = host.nucleus_px_next;
+    host.view_flags = flags;
     let (white, softening) = host.display();
+    let white_measured = host.display_white_measured();
     let p50 = host.p50;
     let shell = host.shell;
     let shell_override = host.shell_override;
@@ -3014,6 +3080,7 @@ impl Device {
       levels: view.layout.level_count(),
       unit,
       white,
+      white_measured,
       p50,
       softening,
       d_max_m: d_max,
@@ -4190,12 +4257,15 @@ impl Device {
       // the measurement grid from the finished pyramid (every tier is splatted by now)
       dust::measure_from_pyramid(&view.layout, words);
       let unit = host.slot_unit[slot];
+      let nucleus_px = host.slot_nucleus_px[slot];
       let n = (lw * lh * dust::PYRAMID_TEXEL_WORDS) as usize;
-      host.absorb(
+      host.absorb_at(
         &words[..dust::PYRAMID_HEADER_WORDS as usize],
         &words[lvl_off as usize..lvl_off as usize + n],
+        lw,
         1 << lvl,
         unit,
+        nucleus_px,
       );
       host.frame += 1;
       return Ok(());
@@ -5027,6 +5097,7 @@ impl Device {
       levels: view.layout.level_count(),
       unit: host.unit(),
       white,
+      white_measured: host.display_white_measured(),
       p50: host.p50,
       softening,
       d_max_m: host.shell.d_max_m,

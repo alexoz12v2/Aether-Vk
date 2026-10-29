@@ -50,6 +50,12 @@ layout(push_constant, std430) uniform CompositePush {
     float dustUnit;         // 56: tau x px^2 per count
     uint  layerRefHi;       // 60: LayerRefs address, high word
     vec4  layerUnitAu[2];   // 64: AU per global-depth unit of layers 0..7
+    vec2  dustNucleusPx;    // 96: the nucleus' framebuffer pixel (y down) of the 1/rho normalisation
+    float dustRhoMin;       // 104: dust::DUST_RHO_MIN_PX, the normalisation saturates inside it
+    float dustRhoRef;       // 108: dust::DUST_RHO_REF_PX, factor 1 there
+    float dustWhiteScale;   // 112: exposure correction 2^-EV on the white (exactly 1 at EV 0)
+    uint  dustRhoNorm;      // 116: 1 = coma 1/rho normalisation (dust::DUST_VIEW_RHO_NORM)
+    uvec2 _pad;             // 120 (total 128)
 };
 
 // Distance reference of each depth layer (layer units, 0 = absolute): micro meshes write their
@@ -198,6 +204,17 @@ void main() {
             }
             if (!occluded) {
                 float white = dustWhite > 0.0 ? dustWhite : 1.0;
+                // the view options (mirror of dust::display_stretch_view): the coma's 1/rho
+                // normalisation (the optical depth times the projected distance from the
+                // nucleus, saturated inside dustRhoMin) and the exposure correction on the
+                // white; off and EV 0 leave tau and white untouched
+                // (the colour words scale with tau: the hue rgb/tau stays the stream colour)
+                if (dustRhoNorm != 0u) {
+                    float k = max(length(gl_FragCoord.xy - dustNucleusPx), dustRhoMin) / dustRhoRef;
+                    tau *= k;
+                    rgb *= k;
+                }
+                white *= dustWhiteScale;
                 float a = displayStretch(tau / white, dustBlackPoint, dustSoftening);
                 if (a > 0.0) {
                     vec3 hue = rgb / max(tau, 1e-30);

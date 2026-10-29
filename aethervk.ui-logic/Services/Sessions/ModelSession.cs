@@ -23,6 +23,12 @@ public sealed partial class ModelSession : ObservableObject, ITabSession
   public bool DustTracers { get; set; } = false;
   /// <summary>Flow pulses (brightness marks on synchrones), a visual aid; off by default.</summary>
   public bool DustFlow { get; set; } = false;
+  /// <summary>Trajectory lines: the paths of ~200 grains since they left the nucleus, visual only.</summary>
+  public bool DustTrajectories { get; set; } = false;
+  /// <summary>Coma 1/ρ normalisation of the dust brightness (display only), off by default.</summary>
+  public bool DustRhoNorm { get; set; } = false;
+  /// <summary>Dust exposure compensation in stops over the automatic exposure, in [-6, 6], visual only.</summary>
+  public double DustExposureEv { get; set; } = 0.0;
   /// <summary>Time-lapse factor of the dust flow marks (Model tab), 1 = real motion, visual only.</summary>
   public double DustFlowSpeed { get; set; } = 1.0;
   /// <summary>The nucleus sphere gizmo is shown (Model tab), visual only.</summary>

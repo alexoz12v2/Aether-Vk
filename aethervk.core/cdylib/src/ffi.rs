@@ -978,7 +978,9 @@ pub unsafe extern "C" fn avkSimulationContext_resetDustViewFeedback(
 }
 
 /// Sets the dust view aids of `scene_id`: bit 0 tracers (bright dots on a sparse set of real
-/// particles), bit 1 flow animation (synchrone pulses travelling outward); other bits are ignored.
+/// particles), bit 1 flow animation (synchrone pulses travelling outward), bit 3 the coma's 1/ρ
+/// normalisation of the display (the optical depth times the projected distance from the
+/// nucleus: a steady coma shows flat, the jets and the tail stand out); other bits are ignored.
 /// Returns false without the scene.
 ///
 /// # Safety
@@ -995,6 +997,30 @@ pub unsafe extern "C" fn avkSimulationContext_setDustViewFlags(
   }
   let ctx_ref = unsafe { &*ctx };
   ctx_ref.set_dust_view_flags(scene_id, flags).is_some()
+}
+
+/// Sets the dust exposure correction of `scene_id` in EV: the display's white point is divided
+/// by 2^`ev` (+1 shows the dust twice as bright), clamped to [-6, 6], 0 if not finite. Display
+/// only: the HUD's surface brightness stays the measured one. Returns 0 on success, -1 for a null
+/// context and -2 without the scene.
+///
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setDustExposureEv(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  ev: f32,
+) -> i32 {
+  if ctx.is_null() {
+    return -1;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  match ctx_ref.set_dust_exposure_ev(scene_id, ev) {
+    Some(_) => 0,
+    None => -2,
+  }
 }
 
 /// Sets the time-lapse factor of the dust flow marks of `scene_id`: 1 = the marks move with the
@@ -3456,6 +3482,29 @@ fn restore_scene_from_path(ctx_ref: &SimulationContext, scene_id: u64, path: &st
 mod tests {
   use super::*;
   use anise::time::{Duration, Epoch};
+
+  /// `setDustExposureEv`: -1 for a null context, -2 without the scene; the value applied is
+  /// clamped to [-6, 6] and a non-finite one reads as 0 (`set_dust_exposure_ev`)
+  #[test]
+  fn set_dust_exposure_ev_status_and_clamp() {
+    extern crate std;
+    assert_eq!(unsafe { avkSimulationContext_setDustExposureEv(core::ptr::null_mut(), 1, 1.0) }, -1);
+    let Ok(ctx) = SimulationContext::startup(None) else {
+      std::println!("Skipping: no Vulkan device");
+      return;
+    };
+    let start = Epoch::from_gregorian_utc(2025, 10, 1, 0, 0, 0, 0);
+    let mut ctx = ctx;
+    let scene_id = ctx.create_empty_scene2(true, start, start + Duration::from_days(30.0)).unwrap().scene_id;
+    let ctx_ptr: *mut SimulationContext = Box::into_raw(ctx);
+    assert_eq!(unsafe { avkSimulationContext_setDustExposureEv(ctx_ptr, u64::MAX, 1.0) }, -2);
+    assert_eq!(unsafe { avkSimulationContext_setDustExposureEv(ctx_ptr, scene_id, 1.5) }, 0);
+    let ctx_ref = unsafe { &*ctx_ptr };
+    assert_eq!(ctx_ref.set_dust_exposure_ev(scene_id, 9.0), Some(6.0));
+    assert_eq!(ctx_ref.set_dust_exposure_ev(scene_id, -9.0), Some(-6.0));
+    assert_eq!(ctx_ref.set_dust_exposure_ev(scene_id, f32::NAN), Some(0.0));
+    drop(unsafe { Box::from_raw(ctx_ptr) });
+  }
 
   /// Savefile path through the FFI (skipped without a Vulkan device): `dumpSceneToFile` writes the
   /// named file with the engine's version and compatibility JSON, `restoreSceneFromFile` brings
