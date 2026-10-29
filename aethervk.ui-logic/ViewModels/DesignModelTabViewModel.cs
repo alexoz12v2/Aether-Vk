@@ -49,6 +49,7 @@ public partial class DesignModelTabViewModel
 
   public IRelayCommand AddJetCommand    => new RelayCommand(() => { });
   public IRelayCommand<JetViewModel?> RemoveJetCommand => new RelayCommand<JetViewModel?>(_ => { });
+  public IRelayCommand RetryNativeJetsCommand => new RelayCommand(() => { });
   public IRelayCommand CopyGrainToAllJetsCommand => new RelayCommand(() => { });
   public float ManualNucleusRadiusKm { get; set; } = 2.0f;
   public float? ManualNucleusRadiusKmNullable { get; set; } = 2.0f;

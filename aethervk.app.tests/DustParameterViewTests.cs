@@ -58,7 +58,7 @@ public class DustParameterViewTests
     Assert.DoesNotContain("DustDiameterBox", inActivity);
 
     var inSize = Ids(size);
-    Assert.Contains("SizeQBox", inSize);
+    Assert.DoesNotContain("SizeQBox", Ids(view)); // q is per jet only (JetSizeQ)
     Assert.Contains("SizeRangeBox", inSize);
     Assert.Contains("SizeDistributionPlot", inSize);
     Assert.Contains("SizeDistributionAdvancedHelp", inSize);

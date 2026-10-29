@@ -313,13 +313,8 @@ public sealed class AppSaveFileHost : ISaveFileHost
   /// The session's text for a committed epoch: the proposed text when it names the same instant
   /// (the usual case: the tab compares the two strings), else ISO-8601 UTC.
   /// </summary>
-  internal static string EpochText(EpochParts epoch, string proposed)
-  {
-    var at = TimeUtils.FromTaiParts(epoch.Centuries, epoch.Nanoseconds);
-    if (TimeUtils.TryParseIso8601(proposed, out var p) && Math.Abs((p - at).TotalMilliseconds) < 1)
-      return proposed;
-    return at.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", System.Globalization.CultureInfo.InvariantCulture);
-  }
+  internal static string EpochText(EpochParts epoch, string proposed) =>
+    TimeUtils.EpochText(epoch.Centuries, epoch.Nanoseconds, proposed);
 
   public async Task<bool> CommitCometAsync(string spkPath, SpkDto spk, TimeRange range)
   {
@@ -350,7 +345,7 @@ public sealed class AppSaveFileHost : ISaveFileHost
       _cometConfig.SetNucleusRadiusKm(spk.NucleusRadiusKm);
     var model = Model;
     JetNativeSync.EnsureNative(_runtime, model, JetNativeSync.EffectiveNucleusRadiusKm(model, comet));
-    _messenger.Send(new CometCommittedMessage());
+    _messenger.Send(new CometCommittedMessage(range));
     comet.NotifyRestored();
     return true;
   }

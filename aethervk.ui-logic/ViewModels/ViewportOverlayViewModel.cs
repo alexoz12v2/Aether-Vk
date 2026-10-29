@@ -36,6 +36,7 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
 
   private readonly CompositeDisposable _disposables = [];
   private CameraProjectionState? _currentProjection;
+  private double? _earthCometDistanceAu;
 
   // ── Camera Mode Badge ──────────────────────────────────────────────────────
   [ObservableProperty]
@@ -264,6 +265,26 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
       })
       .AddDisposableTo(_disposables);
 
+    // the Earth observer's distance to the comet: the scale bar's length at the comet
+    _cameraService
+      .CameraTransform
+      .Sample(OrbitDebugRefreshInterval, schedulerProvider.MainThread)
+      .Subscribe(state =>
+      {
+        double? d = null;
+        if (state != null && _cameraService.CurrentMode == CameraMode.EarthPosition
+            && _cameraService.LastKnownCometPositionAu is { } c)
+        {
+          double dx = state.PosX - c.X, dy = state.PosY - c.Y, dz = state.PosZ - c.Z;
+          d = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+        }
+        bool changed = d is null != _earthCometDistanceAu is null
+          || (d is { } a && _earthCometDistanceAu is { } b && Math.Abs(a - b) > 1e-4 * b);
+        _earthCometDistanceAu = d;
+        if (changed) UpdateMeasurementIndicator();
+      })
+      .AddDisposableTo(_disposables);
+
     _dispatcher.DispatchAsync(() =>
     {
       UpdateMeasurementIndicator();
@@ -438,91 +459,110 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
       ShowMeasurementIndicator = false;
       return;
     }
+    double? atComet = _cameraService.CurrentMode == CameraMode.EarthPosition ? _earthCometDistanceAu : null;
+    if (Measure(_currentProjection, _viewportVm.Width, atComet) is { } m)
+      SetMeasurement(m.Nice, m.WidthPx, m.Unit, m.Suffix);
+    else
+      ShowMeasurementIndicator = false;
+  }
 
-    double target_px_width = Math.Max(24.0, _viewportVm.Width * 0.07);
+  /// <summary>Lengths up to this are shown in km on the ortho scale bar, AU beyond (≈ 0.067 AU).</summary>
+  internal const double MaxKmOnScaleBar = 1e7;
 
-    if (!_currentProjection.IsPerspective)
+  /// <summary>
+  /// The scale bar for <paramref name="proj"/> on a viewport <paramref name="widthPx"/> wide: a nice
+  /// length (ortho: mm … km up to <see cref="MaxKmOnScaleBar"/>, then AU) or angle (perspective),
+  /// the bar's width in px, and in perspective with <paramref name="targetDistanceAu"/> (the Earth
+  /// observer's distance to the comet) the length the angle spans there. Null: degenerate.
+  /// </summary>
+  internal static (double Nice, double WidthPx, string Unit, string Suffix)? Measure(
+    CameraProjectionState proj, double widthPx, double? targetDistanceAu)
+  {
+    if (!(widthPx > 0))
+      return null;
+    double targetPx = Math.Max(24.0, widthPx * 0.07);
+
+    if (!proj.IsPerspective)
     {
-      double W_au = _currentProjection.Right - _currentProjection.Left;
-      if (W_au > 0)
+      double wAu = proj.Right - proj.Left;
+      if (!(wAu > 0))
+        return null;
+      double pxPerKm = widthPx / (wAu * AuToKm);
+      double minKm = targetPx / pxPerKm;
+      if (minKm >= MaxKmOnScaleBar)
       {
-        double min_au = target_px_width * (W_au / _viewportVm.Width);
+        double niceAu = GetNiceNumber(minKm / AuToKm);
+        return (niceAu, niceAu * (widthPx / wAu), "AU", string.Empty);
+      }
+      if (minKm >= 1.0)
+      {
+        double niceKm = GetNiceNumber(minKm);
+        return (niceKm, niceKm * pxPerKm, "km", string.Empty);
+      }
+      double minM = minKm * 1000.0;
+      if (minM >= 1.0)
+      {
+        double niceM = GetNiceNumber(minM);
+        return (niceM, niceM * pxPerKm / 1e3, "m", string.Empty);
+      }
+      if (minM >= 0.01)
+      {
+        double niceCm = GetNiceNumber(minM * 100.0);
+        return (niceCm, niceCm * pxPerKm / 1e5, "cm", string.Empty);
+      }
+      double niceMm = GetNiceNumber(minM * 1000.0);
+      return (niceMm, niceMm * pxPerKm / 1e6, "mm", string.Empty);
+    }
 
-        if (min_au < 1e-6)
-        {
-          double min_km = min_au * 1.495978707e8;
-          if (min_km < 1.0)
-          {
-            double min_m = min_km * 1000.0;
-            if (min_m < 0.01)
-            {
-              double nice_mm = GetNiceNumber(min_m * 1000.0);
-              SetMeasurement(nice_mm, nice_mm * (_viewportVm.Width / (W_au * 1.495978707e14)), "mm");
-            }
-            else if (min_m < 1.0)
-            {
-              double nice_cm = GetNiceNumber(min_m * 100.0);
-              SetMeasurement(nice_cm, nice_cm * (_viewportVm.Width / (W_au * 1.495978707e13)), "cm");
-            }
-            else
-            {
-              double nice_m = GetNiceNumber(min_m);
-              SetMeasurement(nice_m, nice_m * (_viewportVm.Width / (W_au * 1.495978707e11)), "m");
-            }
-          }
-          else
-          {
-            double nice_km = GetNiceNumber(min_km);
-            SetMeasurement(nice_km, nice_km * (_viewportVm.Width / (W_au * 1.495978707e8)), "km");
-          }
-        }
-        else
-        {
-          double nice_au = GetNiceNumber(min_au);
-          SetMeasurement(nice_au, nice_au * (_viewportVm.Width / W_au), "AU");
-        }
-      }
-      else
-      {
-        ShowMeasurementIndicator = false;
-      }
+    double wRad = 2.0 * Math.Atan(Math.Tan(proj.Fov / 2.0) * proj.Aspect);
+    double wArcsec = wRad * 180.0 / Math.PI * 3600.0;
+    if (!(wArcsec > 0))
+      return null;
+    double minArcsec = targetPx * (wArcsec / widthPx);
+    double nice, arcsec;
+    string unit;
+    if (minArcsec >= 3600.0)
+    {
+      nice = GetNiceNumber(minArcsec / 3600.0);
+      arcsec = nice * 3600.0;
+      unit = "deg";
+    }
+    else if (minArcsec >= 60.0)
+    {
+      nice = GetNiceNumber(minArcsec / 60.0);
+      arcsec = nice * 60.0;
+      unit = "arcmin";
     }
     else
     {
-      double W_rad =
-        2.0 * Math.Atan(Math.Tan(_currentProjection.Fov / 2.0) * _currentProjection.Aspect);
-      double W_arcsec = (W_rad * 180.0 / Math.PI) * 3600.0;
-
-      if (W_arcsec > 0)
-      {
-        double min_arcsec = target_px_width * (W_arcsec / _viewportVm.Width);
-
-        if (min_arcsec >= 3600.0)
-        {
-          double nice_deg = GetNiceNumber(min_arcsec / 3600.0);
-          SetMeasurement(nice_deg, nice_deg * 3600.0 * (_viewportVm.Width / W_arcsec), "deg");
-        }
-        else if (min_arcsec >= 60.0)
-        {
-          double nice_min = GetNiceNumber(min_arcsec / 60.0);
-          SetMeasurement(nice_min, nice_min * 60.0 * (_viewportVm.Width / W_arcsec), "arcmin");
-        }
-        else
-        {
-          double nice_arcsec = GetNiceNumber(min_arcsec);
-          SetMeasurement(nice_arcsec, nice_arcsec * (_viewportVm.Width / W_arcsec), "arcsec");
-        }
-      }
-      else
-      {
-        ShowMeasurementIndicator = false;
-      }
+      nice = GetNiceNumber(minArcsec);
+      arcsec = nice;
+      unit = "arcsec";
     }
+    string suffix = string.Empty;
+    if (targetDistanceAu is { } d && d > 0 && !double.IsInfinity(d))
+    {
+      double km = 2.0 * d * AuToKm * Math.Tan(arcsec / 3600.0 * Math.PI / 180.0 / 2.0);
+      suffix = string.Concat(" ≈ ", FormatKm(km), " at the comet");
+    }
+    return (nice, arcsec * (widthPx / wArcsec), unit, suffix);
+  }
+
+  /// <summary>A length in km to about three significant digits ("61 300 km", "4.2 km").</summary>
+  internal static string FormatKm(double km)
+  {
+    var ci = System.Globalization.CultureInfo.CurrentCulture;
+    if (km >= 100.0)
+    {
+      double mag = Math.Pow(10, Math.Floor(Math.Log10(km)) - 2);
+      return (Math.Round(km / mag) * mag).ToString("#,0", ci) + " km";
+    }
+    return km.ToString(km >= 10.0 ? "0.#" : "0.##", ci) + " km";
   }
 
   /// Shows the scale bar, or hides it when the projection produced a degenerate value
   /// (NaN/∞ bounds), so the label can never read "0 AU" or "NaN km".
-  private void SetMeasurement(double nice, double widthPx, string unit)
+  private void SetMeasurement(double nice, double widthPx, string unit, string suffix = "")
   {
     if (!(nice > 0) || double.IsInfinity(nice) || !(widthPx > 0) || double.IsInfinity(widthPx))
     {
@@ -530,7 +570,7 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
       return;
     }
     MeasurementIndicatorWidth = widthPx;
-    MeasurementIndicatorText = $"{FormatNiceNumber(nice)} {unit}";
+    MeasurementIndicatorText = $"{FormatNiceNumber(nice)} {unit}{suffix}";
     ShowMeasurementIndicator = true;
   }
 

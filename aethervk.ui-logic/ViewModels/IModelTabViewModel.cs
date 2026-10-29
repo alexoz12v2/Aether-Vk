@@ -21,6 +21,7 @@ public partial interface IModelTabViewModel : ICursorWarpingViewModel
 
   /// <summary>Removes the given jet from the list.</summary>
   IRelayCommand<JetViewModel?> RemoveJetCommand { get; }
+  IRelayCommand RetryNativeJetsCommand { get; }
 
   /// <summary>Copies the selected jet's grain and activity parameters to every other jet.</summary>
   IRelayCommand CopyGrainToAllJetsCommand { get; }

@@ -39,27 +39,37 @@ public static class JetNativeSync
   public static float EffectiveNucleusRadiusKm(ModelSession model, CometSession? comet) =>
     model.ManualNucleusRadiusKm > 0f ? model.ManualNucleusRadiusKm : comet?.NucleusRadiusKm ?? 0f;
 
+  /// <summary>Shown on a jet the core refused (<see cref="JetViewModel.NativeError"/>).</summary>
+  public const string RefusedText =
+    "Not in the simulation: the core refused this jet (the log has the reason). Retry, or commit again.";
+
   /// <summary>
   /// Adds every jet of <paramref name="session"/> without a native system (the comet must be
   /// committed). The first system of the scene goes through <c>AddFirstParticleSystem</c>.
+  /// Returns how many jets the core refused; each keeps <see cref="JetViewModel.NativeError"/>.
   /// </summary>
-  public static void EnsureNative(INativeRuntimeService runtime, ModelSession session, float nucleusRadiusKm)
+  public static int EnsureNative(INativeRuntimeService runtime, ModelSession session, float nucleusRadiusKm)
   {
     bool any = false;
     foreach (var jet in session.Jets)
       any |= jet.NativePsId != 0;
+    int refused = 0;
     foreach (var jet in session.Jets)
     {
       if (jet.NativePsId != 0) continue;
       AddNative(runtime, BuildModel(session, jet), BuildJet(jet, nucleusRadiusKm), jet, isFirst: !any);
       any |= jet.NativePsId != 0;
+      if (jet.NativePsId == 0) refused++;
     }
+    return refused;
   }
 
   /// <summary>
   /// Creates <paramref name="jet"/>'s native particle system and stores its id, β and dust
   /// production rate. <c>AddParticleSystem</c> returns no computed values, and every jet has its
   /// own (its own grain and Afρ₀): a later jet reads them back with an unchanged modify.
+  /// A refusal (id 0: no comet, render frontend or clock, or the device could not create the
+  /// system) is not silent: it sets <see cref="JetViewModel.NativeError"/>, which a success clears.
   /// </summary>
   public static void AddNative(INativeRuntimeService runtime, ParticleSystemModel model,
     ParticleSystemJet psJet, JetViewModel jet, bool isFirst)
@@ -68,6 +78,7 @@ public static class JetNativeSync
     {
       var computed = runtime.AddFirstParticleSystem(model, psJet, out ulong psId);
       jet.NativePsId = psId;
+      jet.NativeError = psId == 0 ? RefusedText : null;
       if (computed is not null)
       {
         jet.Beta = computed.Beta;
@@ -75,8 +86,10 @@ public static class JetNativeSync
       }
       return;
     }
-    runtime.AddParticleSystem(model, psJet, out ulong id);
+    bool ok = runtime.AddParticleSystem(model, psJet, out ulong id);
+    if (!ok) id = 0; // never trust an id the call did not stand behind
     jet.NativePsId = id;
+    jet.NativeError = id == 0 ? RefusedText : null;
     if (id != 0 && runtime.ModifyParticleSystem(id, model, psJet, out var props) && props is not null)
     {
       jet.Beta = props.Beta;

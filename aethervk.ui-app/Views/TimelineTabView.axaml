@@ -49,7 +49,7 @@
             <TextBox AutomationProperties.AutomationId="EndEpochBox"
               ToolTip.Tip="End of the simulated period (ISO 8601). It must be at least 1 day after the start. Typing here only proposes a range; commit it in the Comet tab." Text="{Binding EndEpoch}" Width="180" Watermark="e.g. 2000-02-01T12:00:00Z" />
 
-            <Button Content="Restore" Command="{Binding RestoreCommand}" IsEnabled="{Binding CanRestore}" ToolTip.Tip="Restore Proposed to Last Committed" ToolTip.ShowDelay="1000" />
+            <Button Content="Restore" Command="{Binding RestoreCommand}" IsEnabled="{Binding CanRestore}" ToolTip.Tip="Puts the committed range back in the boxes" ToolTip.ShowDelay="1000" />
 
             <!-- Indicator: proposed range differs from committed -->
             <TextBlock Text="●" Foreground="{DynamicResource Sem.Warning}" IsVisible="{Binding IsProposedDifferentFromCommitted}" ToolTip.Tip="Proposed range differs from committed" VerticalAlignment="Center" />
@@ -77,6 +77,13 @@
               <TextBlock Text="Committed Range:" FontWeight="SemiBold" FontSize="12" Foreground="{DynamicResource Text.Secondary}" />
               <TextBlock AutomationProperties.AutomationId="CommittedRangeText" Text="{Binding DisplayCommittedRange}" FontSize="12" FontFamily="Cascadia Mono, Consolas, monospace" />
             </StackPanel>
+          </StackPanel>
+
+          <!-- Edited after a commit: the engine keeps the committed range until a recommit -->
+          <StackPanel AutomationProperties.AutomationId="RangeLockedPanel" Orientation="Horizontal" Spacing="8" IsVisible="{Binding IsRangeLocked}">
+            <TextBlock Text="{x:Static vm:TimelineTabViewModel.RangeLockedText}" Foreground="{DynamicResource Sem.Warning}" FontSize="11" TextWrapping="Wrap" MaxWidth="520" VerticalAlignment="Center" />
+            <Button AutomationProperties.AutomationId="RecommitWithRangeButton" Content="Recommit with this range" Command="{Binding RecommitWithRangeCommand}"
+                    ToolTip.Tip="Commits the comet again (as Download &amp; Commit in the Comet tab) with the range in the boxes. The dust restarts from the new start." />
           </StackPanel>
 
           <!-- Error Message -->

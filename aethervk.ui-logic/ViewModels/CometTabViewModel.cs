@@ -275,6 +275,15 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
       })
       .AddDisposableTo(_disposables);
 
+    // the Timeline's "Recommit with this range": the same Download & Commit, with the proposed range
+    _timeline.RecommitRequests
+      .Subscribe(_ =>
+      {
+        if (DownloadAndCommitCommand.CanExecute(null))
+          DownloadAndCommitCommand.Execute(null);
+      })
+      .AddDisposableTo(_disposables);
+
     // 2. Almanac committed state from CometConfigService
     _cometConfig
       .IsAlmanacCommitted.ObserveOn(schedulerProvider.MainThread)
@@ -572,7 +581,7 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
       if (committed)
       {
         CommittedSpkRecordId = SelectedSpkRecord.RecordId;
-        _cometMessenger.Send(new Messages.CometCommittedMessage());
+        _cometMessenger.Send(new Messages.CometCommittedMessage(_currentProposedTimeRange));
 
         // Update session
         var session = CurrentSession;
