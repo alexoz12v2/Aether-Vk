@@ -575,6 +575,19 @@ public class DesktopBillboardTests
     Assert.Null(DesktopBillboardGeometry.PhysicalSize(b, double.NaN));
   }
 
+  /// A viewport zoomed far into the image (0.01″/px: the 360″ image would be 36 000 px wide) gets
+  /// no physical size, so Apply leaves the billboard as it is instead of a window too large to
+  /// show; the conversion text says why.
+  [Fact]
+  public void PhysicalSize_LargerThanAWindowCanBe_IsRefused()
+  {
+    var b = Bb() with { ImageArcsecPerPx = 0.3, ImageWidthPx = 1200, ImageHeightPx = 1200 };
+    Assert.Null(DesktopBillboardGeometry.PhysicalSize(b, 0.01));
+    Assert.NotNull(DesktopBillboardGeometry.PhysicalSize(b, 0.03)); // 12 000 px
+    Assert.Contains("too large", DesktopBillboardGeometry.ConversionText(b, 0.01, null));
+    Assert.DoesNotContain("too large", DesktopBillboardGeometry.ConversionText(b, 0.3, null));
+  }
+
   /// Apply binds; a new viewport scale re-sizes bound billboards only; a manual size edit unbinds
   /// while moves and rotations keep the binding; Create records the texture's native size.
   [Fact]

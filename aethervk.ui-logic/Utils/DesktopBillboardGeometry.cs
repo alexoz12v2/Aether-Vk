@@ -93,7 +93,12 @@ public static class DesktopBillboardGeometry
         || ImageAngularHeightRad(b, cometDistanceKm) is not { } angle)
       return null;
     double h = angle / (viewportArcsecPerPx * ArcsecToRad);
-    return (h * b.ImageWidthPx / b.ImageHeightPx, h);
+    double w = h * b.ImageWidthPx / b.ImageHeightPx;
+    // a viewport zoomed far into the image (a field of a few ″) would ask for a window too large
+    // to create: it vanished instead of showing
+    if (Math.Max(w, h) > MaxSidePx)
+      return null;
+    return (w, h);
   }
 
   /// <summary>Room around the rotated image for the gizmo handles, px.</summary>
@@ -106,6 +111,10 @@ public static class DesktopBillboardGeometry
 
   /// <summary>Extra slack around a handle for hit testing, px.</summary>
   public const double HitSlack = 4;
+
+  /// <summary>Largest side a physical size may give, px: beyond it the window cannot be created
+  /// (the viewport is zoomed far into the image) and the size is refused.</summary>
+  public const double MaxSidePx = 16384;
 
   /// <summary>Smallest image side a scale drag can produce, px.</summary>
   public const double MinSidePx = 16;
@@ -408,7 +417,12 @@ public static class DesktopBillboardGeometry
     if (ImageHeightAtCometKm(b, cometDistanceKm) is { } km)
       text += string.Format(ci, " ({0:0} km)", km);
     if (Usable(viewportArcsecPerPx))
-      text += string.Format(ci, " → viewport {0:0.####}″/px → {1:0} px", viewportArcsecPerPx, arcsec / viewportArcsecPerPx!.Value);
+    {
+      double px = arcsec / viewportArcsecPerPx!.Value;
+      text += string.Format(ci, " → viewport {0:0.####}″/px → {1:0} px", viewportArcsecPerPx, px);
+      if (px * Math.Max(1.0, (double)b.ImageWidthPx / b.ImageHeightPx) > MaxSidePx)
+        text += string.Format(ci, " (too large, over {0:0} px: widen the viewport's field or use Match camera to image)", MaxSidePx);
+    }
     if (DesktopPxPerImagePx(b) is { } k)
       text += string.Format(ci, " · 1 image px = {0:0.###} desktop px", k);
     return text;
