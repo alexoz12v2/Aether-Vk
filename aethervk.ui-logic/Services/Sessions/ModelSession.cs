@@ -14,7 +14,7 @@ public sealed partial class ModelSession : ObservableObject, ITabSession
 {
   /// <summary>
   /// "show reference-position error" checkbox. Plain property on purpose: the observable ones are
-  /// the dust model (the tab re-plots them, and pushes the Afρ law to every jet).
+  /// the dust model (the tab re-plots them, and pushes the Q_d law to every jet).
   /// </summary>
   public bool ShowReferencePositionError { get; set; }
   /// <summary>Dust display stretch softening (Model tab "dust visibility"), visual only.</summary>
@@ -57,13 +57,13 @@ public sealed partial class ModelSession : ObservableObject, ITabSession
   // ── Grain and activity defaults for new jets ────────────────────────────────────
   // Every jet owns its grain and activity parameters (JetViewModel); these are the values a newly
   // added jet starts from, and what a jet of an older save (written before jets had their own)
-  // inherits. Editing them changes no existing jet. The Afρ law's shape (AfrhoPower,
-  // AfrhoCutoffAu, AfrhoMaxValueCm) is model-wide: it is copied into every jet's native parameters.
+  // inherits. Editing them changes no existing jet. The Q_d law's shape (DustRatePower,
+  // DustRateCutoffAu, DustRateMaxKgs) is model-wide: it is copied into every jet's native parameters.
   // See ParticleSystemEmitParams in particles.rs for units and valid ranges.
 
   /// <summary>The defaults below as one value (what a new jet starts from).</summary>
   public JetGrain DefaultGrain =>
-    new(DiametreUm, DensityGCm3, ScatteringEfficiency, GeometricAlbedo, SizeQ, SizeRange, Afrho0Cm);
+    new(DiametreUm, DensityGCm3, ScatteringEfficiency, GeometricAlbedo, SizeQ, SizeRange, DustRate1AuKgs);
 
   /// <summary>
   /// Diameter of a single dust grain in micrometres (μm).
@@ -93,8 +93,8 @@ public sealed partial class ModelSession : ObservableObject, ITabSession
 
   /// <summary>
   /// Geometric albedo p of the dust: the reflected radiance factor at zero phase (A(0) = 4p of
-  /// the Afρ literature). Cometary dust 0.03–0.06; valid range 0.01–0.5. Default: 0.04.
-  /// Enters the brightness (τ · p · Φ(α) / r_h²) and the Afρ → production conversion.
+  /// the photometric literature). Cometary dust 0.03–0.06; valid range 0.01–0.5. Default: 0.04.
+  /// Enters the brightness (τ · p · Φ(α) / r_h²) only (not the production rate).
   /// Corresponds to <c>ParticleSystemEmitParams.geometric_albedo</c>.
   /// </summary>
   [ObservableProperty]
@@ -118,35 +118,34 @@ public sealed partial class ModelSession : ObservableObject, ITabSession
   private float _sizeRange = JetGrain.Default.SizeRange;
 
   /// <summary>
-  /// Afρ photometric parameter at 1 AU heliocentric distance, in cm.
-  /// Range: ~8–1,000,000 cm. Typical active comet: 500–50,000 cm.
-  /// 67P default: 100 cm (relatively low activity).
-  /// Corresponds to <c>ParticleSystemEmitParams.afrho_0_cm</c>.
+  /// Dust mass production rate Q_d at 1 AU heliocentric distance, in kg/s (default for new jets).
+  /// It no longer depends on the albedo or the grain size (those set brightness and β only).
+  /// Default: 2 kg/s per jet.
+  /// Corresponds to <c>ParticleSystemEmitParams.dust_rate_1au_kgs</c>.
   /// </summary>
   [ObservableProperty]
-  private float _afrho0Cm = JetGrain.Default.Afrho0Cm;
+  private float _dustRate1AuKgs = JetGrain.Default.DustRate1AuKgs;
 
   /// <summary>
-  /// Afρ power-law decay exponent. Range 1.0–4.0; default 2.0 (quadratic). Model-wide (every jet).
-  /// Corresponds to <c>ParticleSystemEmitParams.afrho_power</c>.
+  /// Q_d power-law decay exponent k (Q_d ∝ r_h^−k). Range 1.0–4.0; default 2.0. Model-wide (every jet).
+  /// Corresponds to <c>ParticleSystemEmitParams.dust_rate_power</c>.
   /// </summary>
   [ObservableProperty]
-  private float _afrhoPower = 2.0f;
+  private float _dustRatePower = 2.0f;
 
   /// <summary>
   /// Heliocentric distance cut-off in AU beyond which emission drops to zero.
   /// Must be ≥ 3 AU. Default: 15 AU. Model-wide (every jet).
-  /// Corresponds to <c>ParticleSystemEmitParams.afrho_cutoff_au</c>.
+  /// Corresponds to <c>ParticleSystemEmitParams.dust_rate_cutoff_au</c>.
   /// </summary>
   [ObservableProperty]
-  private float _afrhoCutoffAu = 15.0f;
+  private float _dustRateCutoffAu = 15.0f;
 
   /// <summary>
-  /// Upper clamp on the Afρ value to prevent infinite emission at small distances, in cm.
-  /// Example: 100,000 cm (= 1 km), or leave at default 500,000 cm for hyperactive comets.
-  /// Model-wide (every jet).
-  /// Corresponds to <c>ParticleSystemEmitParams.afrho_max_value_cm</c>.
+  /// Upper clamp on Q_d to prevent infinite emission at small distances, in kg/s.
+  /// Default: 2000 kg/s. Model-wide (every jet).
+  /// Corresponds to <c>ParticleSystemEmitParams.dust_rate_max_kgs</c>.
   /// </summary>
   [ObservableProperty]
-  private float _afrhoMaxValueCm = 100_000f;
+  private float _dustRateMaxKgs = 2000f;
 }

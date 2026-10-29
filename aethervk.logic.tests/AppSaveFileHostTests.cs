@@ -129,7 +129,7 @@ public sealed class AppSaveFileHostTests
   };
 
   /// <summary>
-  /// A save written before jets had their own grain: each jet inherits the model's grain and Afρ₀
+  /// A save written before jets had their own grain: each jet inherits the model's grain and Q_d₀
   /// (which stay the defaults for new jets); a jet with its own keeps them, and the capture writes
   /// both the model's and each jet's.
   /// </summary>
@@ -140,19 +140,60 @@ public sealed class AppSaveFileHostTests
     var model = new ModelDto
     {
       DiametreUm = 150, DensityGCm3 = 0.9f, ScatteringEfficiency = 1.3f, GeometricAlbedo = 0.05f,
-      SizeQ = 3.1f, SizeRange = 25, Afrho0Cm = 420,
+      SizeQ = 3.1f, SizeRange = 25, DustRate1AuKgs = 4.2f,
     };
-    rig.Host.ApplyModel(model, [new JetDto { Seed = 1 }, new JetDto { Seed = 2, DiametreUm = 20, Afrho0Cm = 60 }]);
+    rig.Host.ApplyModel(model, [new JetDto { Seed = 1 }, new JetDto { Seed = 2, DiametreUm = 20, DustRate1AuKgs = 0.6f }]);
 
-    var inherited = new AetherVk.Logic.Models.JetGrain(150f, 0.9f, 1.3f, 0.05f, 3.1f, 25f, 420f);
+    var inherited = new AetherVk.Logic.Models.JetGrain(150f, 0.9f, 1.3f, 0.05f, 3.1f, 25f, 4.2f);
     Assert.Equal(inherited, rig.Model.Jets[0].Grain);
-    Assert.Equal(inherited with { DiametreUm = 20f, Afrho0Cm = 60f }, rig.Model.Jets[1].Grain);
+    Assert.Equal(inherited with { DiametreUm = 20f, DustRate1AuKgs = 0.6f }, rig.Model.Jets[1].Grain);
     Assert.Equal(inherited, rig.Model.DefaultGrain);
 
     var snap = rig.Host.Capture();
-    Assert.Equal((150f, 420f), (snap.Model.DiametreUm, snap.Model.Afrho0Cm));
+    Assert.Equal((150f, 4.2f), (snap.Model.DiametreUm, snap.Model.DustRate1AuKgs));
     Assert.Equal([150f, 20f], snap.Jets.Select(j => j.DiametreUm!.Value));
     Assert.Equal([0.9f, 0.9f], snap.Jets.Select(j => j.DensityGCm3!.Value));
+    Assert.Null(snap.Model.Afrho0Cm);
+    Assert.All(snap.Jets, j => Assert.Null(j.Afrho0Cm));
+  }
+
+  /// <summary>
+  /// A save written before Q_d replaced Afρ (afrho_* fields, no dust_rate_*): each jet's Q_d₀ is
+  /// the rate the old engine derived from its Afρ₀ with its own grain and speeds; the model default
+  /// is converted with the new-jet speed, the max scales as Q₀/Afρ₀; exponent and cutoff are copied.
+  /// </summary>
+  [Fact]
+  public void PreQdSave_ConvertsAfrhoToDustRate()
+  {
+    var rig = new Rig();
+    var model = new ModelDto
+    {
+      DiametreUm = 100, DensityGCm3 = 0.8f, GeometricAlbedo = 0.04f, SizeRange = 10,
+      Afrho0Cm = 100, AfrhoPower = 2.5f, AfrhoCutoffAu = 9, AfrhoMaxValueCm = 100_000,
+    };
+    var jets = new[]
+    {
+      new JetDto { Seed = 1, VelocityMeanMs = 2, VelocityStdMs = 0.5f, Afrho0Cm = 100 },
+      new JetDto { Seed = 2, VelocityMeanMs = 3.1f, VelocityStdMs = 0.6f, DiametreUm = 250, DensityGCm3 = 1,
+        GeometricAlbedo = 0.05f, Afrho0Cm = 537 },
+      new JetDto { Seed = 3, VelocityMeanMs = 2 },
+    };
+    rig.Host.ApplyModel(model, jets);
+
+    double q0Model = LegacyAfrho.DustRateKgs(100, 100, 0.8, 2.5, 0.625, 0.04, 10);
+    Assert.Equal((float)q0Model, rig.Model.DustRate1AuKgs, 1e-6f * (float)q0Model);
+    Assert.Equal((float)(q0Model * 1000), rig.Model.DustRateMaxKgs, 1e-3f * (float)q0Model * 1000);
+    Assert.Equal((2.5f, 9f), (rig.Model.DustRatePower, rig.Model.DustRateCutoffAu));
+    Assert.Equal(1.5510886453350254f, rig.Model.Jets[0].DustRate1AuKgs, 1e-5f);
+    Assert.Equal(33.05519924265463f, rig.Model.Jets[1].DustRate1AuKgs, 1e-4f);
+    // no Afρ₀ of its own: the model's converted default
+    Assert.Equal(rig.Model.DustRate1AuKgs, rig.Model.Jets[2].DustRate1AuKgs);
+
+    // a re-save writes Q_d only
+    var snap = rig.Host.Capture();
+    var json = SaveIndexIo.ToJson(new SaveIndex { Model = snap.Model, Jets = [.. snap.Jets] });
+    Assert.DoesNotContain("afrho", json, StringComparison.OrdinalIgnoreCase);
+    Assert.Contains("\"dust_rate_1au_kgs\"", json);
   }
 
   [Fact]

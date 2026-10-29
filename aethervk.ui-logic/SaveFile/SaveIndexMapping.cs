@@ -157,10 +157,10 @@ public static class SaveIndexMapping
     GeometricAlbedo = m.GeometricAlbedo,
     SizeQ = m.SizeQ,
     SizeRange = m.SizeRange,
-    Afrho0Cm = m.Afrho0Cm,
-    AfrhoPower = m.AfrhoPower,
-    AfrhoCutoffAu = m.AfrhoCutoffAu,
-    AfrhoMaxValueCm = m.AfrhoMaxValueCm,
+    DustRate1AuKgs = m.DustRate1AuKgs,
+    DustRatePower = m.DustRatePower,
+    DustRateCutoffAu = m.DustRateCutoffAu,
+    DustRateMaxKgs = m.DustRateMaxKgs,
     DustSoftening = m.DustSoftening,
     DustTracers = m.DustTracers,
     DustFlow = m.DustFlow,
@@ -172,7 +172,44 @@ public static class SaveIndexMapping
     ManualNucleusRadiusKm = m.ManualNucleusRadiusKm,
   };
 
-  /// <summary>Writes <paramref name="d"/> into <paramref name="m"/> (jets are separate).</summary>
+  /// <summary>
+  /// The new-jet speed a pre-Q_d save's model default Afρ₀ is converted with: the centre of the
+  /// random draw a new jet starts from (2.5 ± 0.625 m/s).
+  /// </summary>
+  internal const float LegacyModelVelocityMeanMs = 2.5f;
+  internal const float LegacyModelVelocityStdMs = 0.625f;
+
+  /// <summary>
+  /// The model's default Q_d₀ (kg/s): the save's own, else (a pre-Q_d save) its default Afρ₀
+  /// converted with the model grain and the new-jet speed, else the built-in default.
+  /// </summary>
+  public static float DustRate1AuOf(ModelDto d)
+  {
+    if (d.DustRate1AuKgs is { } q)
+      return q;
+    if (d.Afrho0Cm is { } afrho)
+      return (float)LegacyAfrho.DustRateKgs(afrho, d.DiametreUm, d.DensityGCm3,
+        LegacyModelVelocityMeanMs, LegacyModelVelocityStdMs, d.GeometricAlbedo, d.SizeRange);
+    return JetGrain.Default.DustRate1AuKgs;
+  }
+
+  /// <summary>
+  /// The model's Q_d clamp (kg/s): the save's own, else (a pre-Q_d save) the Afρ clamp scaled as
+  /// the default Q_d₀ to its Afρ₀ (Q ∝ Afρ for a given grain), else the built-in default.
+  /// </summary>
+  public static float DustRateMaxOf(ModelDto d)
+  {
+    if (d.DustRateMaxKgs is { } q)
+      return q;
+    if (d.AfrhoMaxValueCm is { } maxCm && d.Afrho0Cm is { } afrho && afrho > 0)
+      return (float)(DustRate1AuOf(d) * ((double)maxCm / afrho));
+    return new ModelSession().DustRateMaxKgs;
+  }
+
+  /// <summary>
+  /// Writes <paramref name="d"/> into <paramref name="m"/> (jets are separate). A pre-Q_d save's
+  /// Afρ law is converted (<see cref="DustRate1AuOf"/>, <see cref="DustRateMaxOf"/>).
+  /// </summary>
   public static void Apply(ModelDto d, ModelSession m)
   {
     m.DiametreUm = d.DiametreUm;
@@ -181,10 +218,10 @@ public static class SaveIndexMapping
     m.GeometricAlbedo = d.GeometricAlbedo;
     m.SizeQ = d.SizeQ;
     m.SizeRange = d.SizeRange;
-    m.Afrho0Cm = d.Afrho0Cm;
-    m.AfrhoPower = d.AfrhoPower;
-    m.AfrhoCutoffAu = d.AfrhoCutoffAu;
-    m.AfrhoMaxValueCm = d.AfrhoMaxValueCm;
+    m.DustRate1AuKgs = DustRate1AuOf(d);
+    m.DustRatePower = d.DustRatePower ?? d.AfrhoPower ?? 2f;
+    m.DustRateCutoffAu = d.DustRateCutoffAu ?? d.AfrhoCutoffAu ?? 15f;
+    m.DustRateMaxKgs = DustRateMaxOf(d);
     m.DustSoftening = d.DustSoftening;
     m.DustTracers = d.DustTracers;
     m.DustFlow = d.DustFlow;
@@ -212,26 +249,34 @@ public static class SaveIndexMapping
     GeometricAlbedo = j.GeometricAlbedo,
     SizeQ = j.SizeQ,
     SizeRange = j.SizeRange,
-    Afrho0Cm = j.Afrho0Cm,
+    DustRate1AuKgs = j.DustRate1AuKgs,
   };
 
   /// <summary>
   /// The jet of <paramref name="d"/>; a grain or activity value the save lacks (written before
   /// jets had their own) comes from <paramref name="modelGrain"/>, the model's value of that save
-  /// (the built-in defaults when null).
+  /// (the built-in defaults when null). A pre-Q_d jet (its own Afρ₀, no Q_d₀) gets the Q_d₀ the
+  /// old engine derived from that Afρ₀ with the jet's grain and speeds (<see cref="LegacyAfrho"/>).
   /// </summary>
   public static JetViewModel FromDto(JetDto d, JetGrain? modelGrain = null)
   {
     var c = d.StreamColor is { Length: 4 } s ? s : [1, 1, 1, 1];
     var m = modelGrain ?? JetGrain.Default;
+    float diametreUm = d.DiametreUm ?? m.DiametreUm;
+    float densityGCm3 = d.DensityGCm3 ?? m.DensityGCm3;
+    float albedo = d.GeometricAlbedo ?? m.GeometricAlbedo;
+    float sizeRange = d.SizeRange ?? m.SizeRange;
+    float rate = d.DustRate1AuKgs ?? (d.Afrho0Cm is { } afrho
+      ? (float)LegacyAfrho.DustRateKgs(afrho, diametreUm, densityGCm3, d.VelocityMeanMs, d.VelocityStdMs, albedo, sizeRange)
+      : m.DustRate1AuKgs);
     var grain = new JetGrain(
-      d.DiametreUm ?? m.DiametreUm,
-      d.DensityGCm3 ?? m.DensityGCm3,
+      diametreUm,
+      densityGCm3,
       d.ScatteringEfficiency ?? m.ScatteringEfficiency,
-      d.GeometricAlbedo ?? m.GeometricAlbedo,
+      albedo,
       d.SizeQ ?? m.SizeQ,
-      d.SizeRange ?? m.SizeRange,
-      d.Afrho0Cm ?? m.Afrho0Cm);
+      sizeRange,
+      rate);
     return new JetViewModel(d.LatitudeDeg, d.LongitudeDeg, d.ApertureDeg, d.VelocityMeanMs, d.VelocityStdMs,
       new Vector4(c[0], c[1], c[2], c[3]), d.PreviewVisible, d.Seed, grain);
   }

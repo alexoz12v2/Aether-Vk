@@ -17,8 +17,8 @@ using Xunit;
 namespace AetherVk.AppTests;
 
 /// <summary>
-/// The dust-parameter layout an astronomer asked for: physical grain parameters on top, the Afρ
-/// activity law and the grain size law in collapsed "Advanced" expanders with their plots and "?"
+/// The dust-parameter layout an astronomer asked for: physical grain parameters on top, the Q_d
+/// production law and the grain size law in collapsed "Advanced" expanders with their plots and "?"
 /// help flyouts; in the Comet tab the period (h) is the control and the °/day rate is advanced.
 /// </summary>
 public class DustParameterViewTests
@@ -49,11 +49,11 @@ public class DustParameterViewTests
     Assert.False(size.IsExpanded);
 
     var inActivity = Ids(activity);
-    Assert.Contains("Afrho0Box", inActivity);
-    Assert.Contains("AfrhoPowerBox", inActivity);
-    Assert.Contains("AfrhoCutoffBox", inActivity);
-    Assert.Contains("AfrhoMaxBox", inActivity);
-    Assert.Contains("AfrhoCurvePlot", inActivity);
+    Assert.Contains("DustRate0Box", inActivity);
+    Assert.Contains("DustRatePowerBox", inActivity);
+    Assert.Contains("DustRateCutoffBox", inActivity);
+    Assert.Contains("DustRateMaxBox", inActivity);
+    Assert.Contains("DustRateCurvePlot", inActivity);
     Assert.Contains("ActivityAdvancedHelp", inActivity);
     Assert.DoesNotContain("DustDiameterBox", inActivity);
 
@@ -69,7 +69,7 @@ public class DustParameterViewTests
       Assert.Contains(id, outside);
 
     var help = All(activity).OfType<PropertyHelpButton>().Single(h => AutomationProperties.GetAutomationId(h) == "ActivityAdvancedHelp");
-    Assert.Contains("not a grain distribution", help.HelpContent);
+    Assert.Contains("it does not depend on the grain or the speed", help.HelpContent);
 
     // the plots get their models and draw without throwing once expanded (the defaults' two and
     // the selected jet's two)
@@ -80,7 +80,7 @@ public class DustParameterViewTests
     Dispatcher.UIThread.RunJobs();
     var plots = All(view).OfType<CurvePlot>().ToList();
     Assert.Equal(
-      new[] { "AfrhoCurvePlot", "JetAfrhoCurvePlot", "JetSizeDistributionPlot", "SizeDistributionPlot" },
+      new[] { "DustRateCurvePlot", "JetDustRateCurvePlot", "JetSizeDistributionPlot", "SizeDistributionPlot" },
       plots.Select(AutomationProperties.GetAutomationId).OrderBy(id => id, System.StringComparer.Ordinal));
     Assert.All(plots, p => Assert.NotNull(p.Model));
     window.UpdateLayout();
@@ -90,9 +90,9 @@ public class DustParameterViewTests
   }
 
   /// <summary>
-  /// The selected jet's own grain and activity: collapsed "Grain" and "Advanced: activity (Afρ)"
+  /// The selected jet's own grain and activity: collapsed "Grain" and "Advanced: activity (Q_d)"
   /// expanders in the jet panel with their boxes, plots and help, and the "Copy to all jets"
-  /// button. Afρ stays out of sight: the Σ read-out is in the model-wide advanced expander.
+  /// button. The Σ read-out is in the model-wide advanced expander.
   /// </summary>
   [AvaloniaFact]
   public void Model_JetPanel_HasItsOwnGrainAndActivity()
@@ -115,7 +115,7 @@ public class DustParameterViewTests
                "JetSizeDistributionPlot", "JetGrainHelp" })
       Assert.Contains(id, inGrain);
     var inActivity = Ids(activity);
-    foreach (var id in new[] { "JetAfrho0", "JetAfrhoCurvePlot", "AfrhoNowText", "JetActivityHelp" })
+    foreach (var id in new[] { "JetDustRate0", "JetDustRateCurvePlot", "DustRateNowText", "JetActivityHelp" })
       Assert.Contains(id, inActivity);
 
     var outside = Ids(view).Except(inGrain).Except(inActivity).ToList();
@@ -158,3 +158,26 @@ public class DustParameterViewTests
   }
 }
 #endif
+
+/// <summary>The reviewer asked for Afρ to go: the Model tab's markup names only the production rate Q_d.</summary>
+public class ModelTabMarkupTests
+{
+  private static string ModelTabAxaml()
+  {
+    for (var d = new System.IO.DirectoryInfo(System.AppContext.BaseDirectory); d is not null; d = d.Parent)
+    {
+      var p = System.IO.Path.Combine(d.FullName, "aethervk.ui-app", "Views", "ModelTabView.axaml");
+      if (System.IO.File.Exists(p)) return System.IO.File.ReadAllText(p);
+    }
+    throw new System.IO.FileNotFoundException("aethervk.ui-app/Views/ModelTabView.axaml");
+  }
+
+  [Fact]
+  public void ModelTabView_MentionsNoAfrho()
+  {
+    var text = ModelTabAxaml();
+    Assert.DoesNotContain("Afρ", text);
+    Assert.DoesNotContain("afrho", text, System.StringComparison.OrdinalIgnoreCase);
+    Assert.Contains("Q_d at 1 AU (kg/s)", text);
+  }
+}

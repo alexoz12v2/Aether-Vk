@@ -5,37 +5,37 @@ using Xunit;
 
 namespace AetherVk.Logic.Tests;
 
-/// The Model tab's Afρ(r_h) and grain-size plots: the engine's Afρ law and the normalised size law.
+/// The Model tab's Q_d(r_h) and grain-size plots: the engine's production law and the normalised size law.
 public class DustCurvesTests
 {
   private static double LogSlope(Func<double, double> f, double x1, double x2) =>
     (Math.Log(f(x2)) - Math.Log(f(x1))) / (Math.Log(x2) - Math.Log(x1));
 
   [Fact]
-  public void Afrho_At1Au_IsAfrho0()
+  public void DustRate_At1Au_IsQ0()
   {
-    Assert.Equal(100.0, DustCurves.AfrhoCm(1.0, 100, 2, 15, 100_000), 9);
-    Assert.Equal(5000.0, DustCurves.AfrhoCm(1.0, 5000, 3.1, 6, 1e6), 6);
+    Assert.Equal(2.0, DustCurves.DustRateKgs(1.0, 2, 2, 15, 2000), 9);
+    Assert.Equal(50.0, DustCurves.DustRateKgs(1.0, 50, 3.1, 6, 1e6), 6);
   }
 
   [Fact]
-  public void Afrho_IsClampedAtMax_NearTheSun()
+  public void DustRate_IsClampedAtMax_NearTheSun()
   {
-    // 100 · 0.01^-2 = 1e6 > 1e5
-    Assert.Equal(100_000.0, DustCurves.AfrhoCm(0.01, 100, 2, 15, 100_000), 9);
-    var pts = DustCurves.SampleAfrho(1e5, 2, 15, 2e5);
-    Assert.All(pts, p => Assert.True(p.Y <= 2e5 * (1 + 1e-12)));
-    // the clamp kink r = (1e5/2e5)^(1/2) is sampled exactly
-    Assert.Contains(pts, p => Math.Abs(p.X - Math.Sqrt(0.5)) < 1e-12 && Math.Abs(p.Y - 2e5) < 1e-6);
+    // 2 · 0.01^-2 = 2e4 > 2000
+    Assert.Equal(2000.0, DustCurves.DustRateKgs(0.01, 2, 2, 15, 2000), 9);
+    var pts = DustCurves.SampleDustRate(1e3, 2, 15, 2e3);
+    Assert.All(pts, p => Assert.True(p.Y <= 2e3 * (1 + 1e-12)));
+    // the clamp kink r = (1e3/2e3)^(1/2) is sampled exactly
+    Assert.Contains(pts, p => Math.Abs(p.X - Math.Sqrt(0.5)) < 1e-12 && Math.Abs(p.Y - 2e3) < 1e-6);
   }
 
   [Fact]
-  public void Afrho_IsZero_AtAndBeyondTheCutoff()
+  public void DustRate_IsZero_AtAndBeyondTheCutoff()
   {
-    Assert.Equal(0.0, DustCurves.AfrhoCm(15.0, 100, 2, 15, 1e5));
-    Assert.Equal(0.0, DustCurves.AfrhoCm(20.0, 100, 2, 15, 1e5));
-    Assert.True(DustCurves.AfrhoCm(14.999, 100, 2, 15, 1e5) > 0);
-    var pts = DustCurves.SampleAfrho(100, 2, 15, 1e5);
+    Assert.Equal(0.0, DustCurves.DustRateKgs(15.0, 2, 2, 15, 2000));
+    Assert.Equal(0.0, DustCurves.DustRateKgs(20.0, 2, 2, 15, 2000));
+    Assert.True(DustCurves.DustRateKgs(14.999, 2, 2, 15, 2000) > 0);
+    var pts = DustCurves.SampleDustRate(2, 2, 15, 2000);
     Assert.Equal(0.5, pts[0].X, 12);
     Assert.Equal(16.0, pts[^1].X, 12);
     Assert.All(pts.Where(p => p.X >= 15), p => Assert.Equal(0.0, p.Y));
@@ -47,33 +47,26 @@ public class DustCurvesTests
   [InlineData(1.0)]
   [InlineData(2.0)]
   [InlineData(3.7)]
-  public void Afrho_LogLogSlope_IsMinusPower(double k)
+  public void DustRate_LogLogSlope_IsMinusPower(double k)
   {
-    double slope = LogSlope(r => DustCurves.AfrhoCm(r, 100, k, 15, 1e9), 2, 4);
+    double slope = LogSlope(r => DustCurves.DustRateKgs(r, 2, k, 15, 1e9), 2, 4);
     Assert.Equal(-k, slope, 9);
   }
 
   [Fact]
-  public void ProductionRate_ScalesWithTheClampedAfrho()
+  public void DustRatePlot_HasLogYDecades_AndTheMarkerInsideTheRange()
   {
-    // Q(1 AU) = 10 kg/s, k = 2: at 2 AU a quarter
-    Assert.Equal(2.5, DustCurves.ProductionRateKgs(2, 10, 100, 2, 15, 1e5), 9);
-    Assert.Equal(0.0, DustCurves.ProductionRateKgs(16, 10, 100, 2, 15, 1e5), 9);
-    Assert.True(double.IsNaN(DustCurves.ProductionRateKgs(2, 10, 100, 2, 0.9, 1e5)));
-  }
-
-  [Fact]
-  public void AfrhoPlot_HasLogYDecades_AndTheMarkerInsideTheRange()
-  {
-    var m = DustCurves.AfrhoPlot(100, 2, 15, 1e5, 1.3);
+    var m = DustCurves.DustRatePlot(2, 2, 15, 2000, 1.3);
     Assert.True(m.YLog);
     Assert.False(m.XLog);
     Assert.Equal(1.3, m.MarkerX, 12);
-    Assert.True(m.YMin <= 100.0 / (15 * 15) && m.YMax >= 400);
+    Assert.True(m.YMin <= 2.0 / (15 * 15) && m.YMax >= 8);
+    Assert.Equal("Q_d (kg/s)", m.YLabel);
+    Assert.Equal("Q_d(r_h)", m.Series[0].Label);
     Assert.All(m.YTicks, t => Assert.InRange(t.Value, m.YMin, m.YMax));
     Assert.All(m.XTicks, t => Assert.InRange(t.Value, m.XMin, m.XMax));
-    Assert.True(double.IsNaN(DustCurves.AfrhoPlot(100, 2, 15, 1e5, double.NaN).MarkerX));
-    Assert.True(double.IsNaN(DustCurves.AfrhoPlot(100, 2, 15, 1e5, 40).MarkerX));
+    Assert.True(double.IsNaN(DustCurves.DustRatePlot(2, 2, 15, 2000, double.NaN).MarkerX));
+    Assert.True(double.IsNaN(DustCurves.DustRatePlot(2, 2, 15, 2000, 40).MarkerX));
   }
 
   private static double Integrate(Func<double, double> f, double a, double b, int n = 20000)
@@ -130,31 +123,31 @@ public class DustCurvesTests
   }
 
   /// <summary>
-  /// Σ Afρ and Σ Q_d add the jets (each its own Afρ₀ and rate, the law shared); at r_h each jet's
-  /// rate scales with its own Afρ; a jet without a native rate drops Σ Q_d (it would be partial).
+  /// Σ Q_d adds the jets (each its own Q_d₀, the law shared); at r_h each jet's rate follows the
+  /// law, the cap applying per jet.
   /// </summary>
   [Fact]
   public void TotalActivityText_AddsTheJets()
   {
-    Assert.Contains("no jets", DustCurves.TotalActivityText([], 2, 15, 1e5, 1.0));
-    var t = DustCurves.TotalActivityText([(100, 1.0), (300, 2.0)], 2, 15, 1e5, 2.0);
-    Assert.StartsWith("Σ 2 jets at 1 AU: Σ Afρ 400 cm → Σ Q_d ≈ 3 kg/s", t);
-    // at 2 AU, k = 2: every Afρ and rate is a quarter
-    Assert.EndsWith("now (r_h 2.00 AU): Σ Afρ 100 cm → Σ Q_d ≈ 0.75 kg/s", t);
-    // the cap applies per jet: 2 × min(1e5, 8e4 · 0.5⁻²) = 2e5
-    Assert.Contains("Σ Afρ 2e5 cm", DustCurves.TotalActivityText([(8e4, 1.0), (8e4, 1.0)], 2, 15, 1e5, 0.5));
-    var partial = DustCurves.TotalActivityText([(100, 1.0), (100, double.NaN)], 2, 15, 1e5, double.NaN);
-    Assert.Equal("Σ 2 jets at 1 AU: Σ Afρ 200 cm", partial);
+    Assert.Contains("no jets", DustCurves.TotalActivityText([], 2, 15, 2000, 1.0));
+    var t = DustCurves.TotalActivityText([1.0, 3.0], 2, 15, 2000, 2.0);
+    Assert.StartsWith("Σ 2 jets at 1 AU: Σ Q_d 4 kg/s", t);
+    // at 2 AU, k = 2: every rate is a quarter
+    Assert.EndsWith("now (r_h 2.00 AU): Σ Q_d 1 kg/s", t);
+    // the cap applies per jet: 2 × min(2000, 800 · 0.5⁻²) = 4000
+    Assert.Contains("Σ Q_d 4000 kg/s", DustCurves.TotalActivityText([800, 800], 2, 15, 2000, 0.5));
+    Assert.Equal("Σ 2 jets at 1 AU: Σ Q_d 2 kg/s", DustCurves.TotalActivityText([1.0, 1.0], 2, 15, 2000, double.NaN));
   }
 
   [Fact]
-  public void AfrhoNowText_ScalesTheJetsRate_OrAsksForACommit()
+  public void DustRateNowText_FollowsTheLaw_OrAsksForACommit()
   {
-    Assert.Contains("commit", DustCurves.AfrhoNowText(double.NaN, 100, 2, 15, 1e5, 10, 1));
-    var t = DustCurves.AfrhoNowText(2, 100, 2, 15, 1e5, 10, 1);
-    Assert.Contains("25 cm", t);
-    Assert.Contains("2.5 kg/s", t);
-    Assert.DoesNotContain("kg/s", DustCurves.AfrhoNowText(2, 100, 2, 15, 1e5, double.NaN, 0));
+    Assert.Contains("commit", DustCurves.DustRateNowText(double.NaN, 10, 2, 15, 2000, 1));
+    var t = DustCurves.DustRateNowText(2, 10, 2, 15, 2000, 1);
+    Assert.StartsWith("Q_d now (r_h 2.00 AU): 2.5 kg/s", t);
+    Assert.Contains("jet 1", t);
+    Assert.Contains("defaults", DustCurves.DustRateNowText(2, 10, 2, 15, 2000, 0));
+    Assert.Contains("0 kg/s", DustCurves.DustRateNowText(16, 10, 2, 15, 2000, 1));
   }
 
   [Theory]

@@ -537,7 +537,7 @@
                   <Panel Grid.Row="14" Grid.Column="2" Classes="unit-overlay">
                     <TextBox Classes="computed"
                              Text="{Binding DustProductionRateAt1AuKgs, StringFormat='{}{0:F4}'}"
-                             ToolTip.Tip="Computed, read-only. Dust mass production rate at 1 AU from the Sun in kg/s, derived from Afρ₀, grain density, size, albedo and ejection speed." />
+                             ToolTip.Tip="Computed, read-only. Dust mass production rate at 1 AU from the Sun in kg/s, as the engine applies it: this jet's Q_d at 1 AU clamped to the model-wide max." />
                     <TextBlock Classes="unit-of-measurement" Text="kg/s" />
                   </Panel>
 
@@ -551,7 +551,7 @@
                     <TextBlock Text="Grain" />
                     <controls:PropertyHelpButton AutomationProperties.AutomationId="JetGrainHelp"
                                                  HelpHeader="Grain (this jet)"
-                                                 HelpContent="This jet's own dust grains: every jet has its own, and a new jet starts from the defaults further down.&#x0A;&#x0A;Grain radii follow n(s) ∝ s^−q from s₀/F to s₀·F, s₀ = diameter/2 (q = 3.5, F = 10, 100 µm → radii 5–500 µm).&#x0A;&#x0A;Diameter, density and Q_pr set β ∝ Q_pr/(ρ·s), how hard sunlight pushes the grains away from the Sun. The albedo sets how bright they are and, with Afρ, how much mass the jet emits.&#x0A;&#x0A;Limitation: q only changes the individual bright specks; the continuous dust rendering is built for q = 3.5 whatever q is." />
+                                                 HelpContent="This jet's own dust grains: every jet has its own, and a new jet starts from the defaults further down.&#x0A;&#x0A;Grain radii follow n(s) ∝ s^−q from s₀/F to s₀·F, s₀ = diameter/2 (q = 3.5, F = 10, 100 µm → radii 5–500 µm).&#x0A;&#x0A;Diameter, density and Q_pr set β ∝ Q_pr/(ρ·s), how hard sunlight pushes the grains away from the Sun. The albedo sets how bright they are; the amount of dust is the jet's production rate Q_d (Advanced: activity).&#x0A;&#x0A;Limitation: q only changes the individual bright specks; the continuous dust rendering is built for q = 3.5 whatever q is." />
                   </StackPanel>
                 </Expander.Header>
                 <StackPanel Spacing="8">
@@ -592,7 +592,7 @@
 
                       <TextBlock Grid.Row="6" Grid.Column="0" Text="Albedo" />
                       <TextBox Grid.Row="6" Grid.Column="2" AutomationProperties.AutomationId="JetAlbedo"
-                        ToolTip.Tip="Geometric albedo of this jet's dust (0.01 to 0.5; cometary dust 0.03 to 0.06). It scales the brightness and the Afρ → kg/s conversion.">
+                        ToolTip.Tip="Geometric albedo of this jet's dust (0.01 to 0.5; cometary dust 0.03 to 0.06). It scales the brightness only; the amount of dust is the jet's production rate Q_d.">
                         <i:Interaction.Behaviors>
                           <b:NumericTextBoxBehavior Value="{Binding GeometricAlbedo}" Minimum="0.01" Maximum="0.5" />
                         </i:Interaction.Behaviors>
@@ -628,32 +628,32 @@
                 </StackPanel>
               </Expander>
 
-              <!-- ──── This jet's activity: its own Afρ₀, the law's shape is shared ── -->
+              <!-- ──── This jet's activity: its own Q_d₀, the law's shape is shared ── -->
               <Expander AutomationProperties.AutomationId="JetActivityExpander" Margin="12,8,12,0">
                 <Expander.Header>
                   <StackPanel Orientation="Horizontal" Spacing="4">
-                    <TextBlock Text="Advanced: activity (Afρ)" />
+                    <TextBlock Text="Advanced: activity (Q_d)" />
                     <controls:PropertyHelpButton AutomationProperties.AutomationId="JetActivityHelp"
                                                  HelpHeader="Activity (this jet)"
-                                                 HelpContent="This jet's Afρ at 1 AU: how much dust it produces. The jets add up: the comet's total is the Σ read-out under the list.&#x0A;&#x0A;Afρ(r) = min(max, Afρ₀ · r⁻ᵏ), zero beyond the cutoff; the exponent k, the cutoff and the max are shared by every jet (Advanced: activity (Afρ) under Defaults for new jets).&#x0A;&#x0A;The engine turns this jet's Afρ into its production rate Q_d with its own grain (density, size, albedo) and speed." />
+                                                 HelpContent="This jet's dust mass production rate Q_d at 1 AU from the Sun, in kg/s: how much dust it produces. The jets add up: the comet's total is the Σ read-out under the list.&#x0A;&#x0A;Q_d(r) = min(max, Q_d₀ · r⁻ᵏ), zero beyond the cutoff; the exponent k, the cutoff and the max are shared by every jet (Advanced: activity (Q_d) under Defaults for new jets).&#x0A;&#x0A;Q_d does not depend on the grain (density, size, albedo) or the speed: those set the brightness and β only." />
                   </StackPanel>
                 </Expander.Header>
                 <StackPanel Spacing="8">
                   <Grid ColumnDefinitions="*,12,1.6*" DataContext="{Binding SelectedJet}" x:DataType="vm:JetViewModel">
-                    <TextBlock Grid.Column="0" Text="Afρ₀ (at 1 AU)" />
+                    <TextBlock Grid.Column="0" Text="Q_d at 1 AU (kg/s)" />
                     <Panel Grid.Column="2" Classes="unit-overlay">
-                      <TextBox AutomationProperties.AutomationId="JetAfrho0"
-                        ToolTip.Tip="Afρ of this jet at 1 AU from the Sun, in cm: its dust activity (albedo x filling factor x aperture radius, from the brightness of the coma). Active comets total about 10² to 10⁵ cm.">
+                      <TextBox AutomationProperties.AutomationId="JetDustRate0"
+                        ToolTip.Tip="Dust mass production rate of this jet at 1 AU from the Sun; it scales as r_h^−k up to the max, and stops beyond the cutoff. Comets range from well under 1 kg/s to thousands of kg/s.">
                         <i:Interaction.Behaviors>
-                          <b:NumericTextBoxBehavior Value="{Binding Afrho0Cm}" Minimum="1" Maximum="2000000" />
+                          <b:NumericTextBoxBehavior Value="{Binding DustRate1AuKgs}" Minimum="0" Maximum="1000000" Format="0.###" />
                         </i:Interaction.Behaviors>
                       </TextBox>
-                      <TextBlock Classes="unit-of-measurement" Text="cm" />
+                      <TextBlock Classes="unit-of-measurement" Text="kg/s" />
                     </Panel>
                   </Grid>
 
-                  <controls:CurvePlot AutomationProperties.AutomationId="JetAfrhoCurvePlot"
-                                    Model="{Binding JetAfrhoPlot}"
+                  <controls:CurvePlot AutomationProperties.AutomationId="JetDustRateCurvePlot"
+                                    Model="{Binding JetDustRatePlot}"
                                     Height="140" HorizontalAlignment="Stretch"
                                     PlotBackground="{DynamicResource Bg.Surface}"
                                     PrimaryBrush="{DynamicResource Accent.Primary}"
@@ -661,8 +661,8 @@
                                     MarkerBrush="{DynamicResource Sem.Warning}"
                                     AxisBrush="{DynamicResource Text.Disabled}"
                                     TextBrush="{DynamicResource Text.Secondary}" />
-                  <TextBlock AutomationProperties.AutomationId="AfrhoNowText"
-                             Text="{Binding AfrhoNowText}"
+                  <TextBlock AutomationProperties.AutomationId="DustRateNowText"
+                             Text="{Binding DustRateNowText}"
                              FontSize="11" TextWrapping="Wrap"
                              Foreground="{DynamicResource Text.Secondary}" />
                 </StackPanel>
@@ -674,7 +674,7 @@
                       Padding="10,2"
                       Content="Copy to all jets"
                       Command="{Binding CopyGrainToAllJetsCommand}"
-                      ToolTip.Tip="Gives every other jet this jet's grain and activity: diameter, density, Q_pr, albedo, q, F and Afρ₀. Their sites, speeds and colours stay as they are." />
+                      ToolTip.Tip="Gives every other jet this jet's grain and activity: diameter, density, Q_pr, albedo, q, F and Q_d₀. Their sites, speeds and colours stay as they are." />
             </StackPanel><!-- /detail StackPanel -->
           </Border><!-- /detail outer Border -->
 
@@ -691,7 +691,7 @@
                            Foreground="{DynamicResource Text.Secondary}" />
                 <controls:PropertyHelpButton AutomationProperties.AutomationId="JetDefaultsHelp"
                                              HelpHeader="Defaults for new jets"
-                                             HelpContent="Every jet has its own grain (diameter, density, Q_pr, albedo, q, F) and its own Afρ₀: edit them in the selected jet's Grain and Activity panels.&#x0A;&#x0A;The values here are what a newly added jet starts from; changing them does not change existing jets. Only the shape of the Afρ law (exponent, cutoff, max, under Advanced: activity) is shared by every jet." />
+                                             HelpContent="Every jet has its own grain (diameter, density, Q_pr, albedo, q, F) and its own Q_d₀: edit them in the selected jet's Grain and Activity panels.&#x0A;&#x0A;The values here are what a newly added jet starts from; changing them does not change existing jets. Only the shape of the Q_d law (exponent, cutoff, max, under Advanced: activity) is shared by every jet." />
               </StackPanel>
             </Border>
 
@@ -741,7 +741,7 @@
                 <TextBlock Text="{Binding StrGeometricAlbedo}" />
                 <controls:PropertyHelpButton AutomationProperties.AutomationId="DustAlbedoHelp"
                                              HelpHeader="{Binding StrGeometricAlbedo}"
-                                             HelpContent="Geometric albedo of new jets' dust; cometary dust 0.03–0.06; scales brightness and the Afρ → kg/s conversion." />
+                                             HelpContent="Geometric albedo of new jets' dust; cometary dust 0.03–0.06; scales brightness only (not the production rate Q_d)." />
               </StackPanel>
               <TextBox Grid.Row="6" Grid.Column="2" AutomationProperties.AutomationId="DustAlbedoBox">
                 <i:Interaction.Behaviors>
@@ -755,10 +755,10 @@
             <Expander AutomationProperties.AutomationId="ActivityAdvancedExpander" Margin="12,0,12,8">
               <Expander.Header>
                 <StackPanel Orientation="Horizontal" Spacing="4">
-                  <TextBlock Text="Advanced: activity (Afρ)" />
+                  <TextBlock Text="Advanced: activity (Q_d)" />
                   <controls:PropertyHelpButton AutomationProperties.AutomationId="ActivityAdvancedHelp"
-                                               HelpHeader="Activity (Afρ)"
-                                               HelpContent="Afρ is not a grain distribution: it is how much dust the comet produces at each distance from the Sun.&#x0A;&#x0A;Afρ(r) = min(max, Afρ₀ · r⁻ᵏ), zero beyond the cutoff.&#x0A;• Afρ₀: activity at 1 AU (cm), per jet; the value here is the default for new jets.&#x0A;• Exponent k: how fast activity falls with solar distance (k = 2: twice as far → 4× less dust).&#x0A;• Cutoff: distance where activity stops.&#x0A;• Max: cap close to the Sun.&#x0A;k, cutoff and max are shared by every jet.&#x0A;&#x0A;The engine turns Afρ into a production rate Q = 2ρ·s·v·Afρ / (3·p·f_v·(1+(σ/v)²)) kg/s (ρ density, s grain radius, v speed, p albedo, f_v speed factor of the size spread).&#x0A;&#x0A;Afρ is a brightness measurement, so it fixes how bright the coma is. Density and diameter do not set the amount of dust: they set how much mass that brightness needs, and how hard radiation pressure pushes the grains (β ∝ 1/(ρ·s)), i.e. how much the coma curves away from the Sun." />
+                                               HelpHeader="Activity (Q_d)"
+                                               HelpContent="Q_d is the dust mass production rate: how much dust (kg/s) the comet produces at each distance from the Sun.&#x0A;&#x0A;Q_d(r) = min(max, Q_d₀ · r⁻ᵏ), zero beyond the cutoff.&#x0A;• Q_d at 1 AU: the rate at 1 AU (kg/s), per jet; the value here is the default for new jets.&#x0A;• Exponent k: how fast the rate falls with solar distance (k = 2: twice as far → 4× less dust).&#x0A;• Cutoff: distance where the emission stops.&#x0A;• Max: cap on the rate close to the Sun.&#x0A;k, cutoff and max are shared by every jet.&#x0A;&#x0A;Q_d sets the amount of dust directly: it does not depend on the grain or the speed. Density, diameter and albedo set how bright that dust is and how hard radiation pressure pushes the grains (β ∝ 1/(ρ·s)), i.e. how much the coma curves away from the Sun." />
                 </StackPanel>
               </Expander.Header>
               <StackPanel Spacing="8">
@@ -767,53 +767,53 @@
                            Text="{Binding TotalActivityText}"
                            FontSize="11" TextWrapping="Wrap"
                            Foreground="{DynamicResource Text.Secondary}"
-                           ToolTip.Tip="The comet's total activity: the jets' Afρ add up, and so do their dust production rates Q_d (each from its own grain and speed). Shown at 1 AU from the Sun and, with a committed comet, at its current distance." />
+                           ToolTip.Tip="The comet's total activity: the jets' dust production rates Q_d add up. Shown at 1 AU from the Sun and, with a committed comet, at its current distance." />
                 <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto,8,Auto,8,Auto,8,Auto">
 
-                  <TextBlock Grid.Row="0" Grid.Column="0" Text="Afρ₀ (at 1 AU)" />
+                  <TextBlock Grid.Row="0" Grid.Column="0" Text="Q_d at 1 AU (kg/s)" />
                   <Panel Grid.Row="0" Grid.Column="2" Classes="unit-overlay">
-                    <TextBox AutomationProperties.AutomationId="Afrho0Box"
-                      ToolTip.Tip="Default Afρ at 1 AU for new jets, in cm: the standard dust-activity proxy (albedo x filling factor x aperture radius, from the brightness of the coma). Active comets range from about 10² to 10⁵ cm. Each jet then has its own (its Activity panel).">
+                    <TextBox AutomationProperties.AutomationId="DustRate0Box"
+                      ToolTip.Tip="Default dust mass production rate at 1 AU from the Sun for new jets, in kg/s; it scales as r_h^−k up to the max, and stops beyond the cutoff. Each jet then has its own (its Activity panel).">
                       <i:Interaction.Behaviors>
-                        <b:NumericTextBoxBehavior Value="{Binding CurrentSession.Afrho0Cm}" Minimum="1" Maximum="2000000" />
+                        <b:NumericTextBoxBehavior Value="{Binding CurrentSession.DustRate1AuKgs}" Minimum="0" Maximum="1000000" Format="0.###" />
                       </i:Interaction.Behaviors>
                     </TextBox>
-                    <TextBlock Classes="unit-of-measurement" Text="cm" />
+                    <TextBlock Classes="unit-of-measurement" Text="kg/s" />
                   </Panel>
 
-                  <TextBlock Grid.Row="2" Grid.Column="0" Text="Afρ exponent k" />
-                  <TextBox Grid.Row="2" Grid.Column="2" AutomationProperties.AutomationId="AfrhoPowerBox"
-                    ToolTip.Tip="Exponent k of the activity law Afρ(r) = Afρ₀ · r⁻ᵏ, with r the distance from the Sun in AU. 2 is the classic value; larger k means activity drops faster as the comet recedes. Shared by every jet.">
+                  <TextBlock Grid.Row="2" Grid.Column="0" Text="Q_d law exponent" />
+                  <TextBox Grid.Row="2" Grid.Column="2" AutomationProperties.AutomationId="DustRatePowerBox"
+                    ToolTip.Tip="Exponent k of the production law Q_d(r) = Q_d₀ · r⁻ᵏ, with r the distance from the Sun in AU. 2 is the classic value; larger k means the rate drops faster as the comet recedes. Shared by every jet.">
                     <i:Interaction.Behaviors>
-                      <b:NumericTextBoxBehavior Value="{Binding CurrentSession.AfrhoPower}" Minimum="1" Maximum="4" />
+                      <b:NumericTextBoxBehavior Value="{Binding CurrentSession.DustRatePower}" Minimum="1" Maximum="4" />
                     </i:Interaction.Behaviors>
                   </TextBox>
 
-                  <TextBlock Grid.Row="4" Grid.Column="0" Text="Afρ cutoff" />
+                  <TextBlock Grid.Row="4" Grid.Column="0" Text="Cutoff (AU)" />
                   <Panel Grid.Row="4" Grid.Column="2" Classes="unit-overlay">
-                    <TextBox AutomationProperties.AutomationId="AfrhoCutoffBox"
+                    <TextBox AutomationProperties.AutomationId="DustRateCutoffBox"
                       ToolTip.Tip="Distance from the Sun, in AU (at least 3), beyond which the comet emits no dust. Shared by every jet.">
                       <i:Interaction.Behaviors>
-                        <b:NumericTextBoxBehavior Value="{Binding CurrentSession.AfrhoCutoffAu}" Minimum="3" Maximum="100" />
+                        <b:NumericTextBoxBehavior Value="{Binding CurrentSession.DustRateCutoffAu}" Minimum="3" Maximum="100" />
                       </i:Interaction.Behaviors>
                     </TextBox>
                     <TextBlock Classes="unit-of-measurement" Text="AU" />
                   </Panel>
 
-                  <TextBlock Grid.Row="6" Grid.Column="0" Text="Afρ max" />
+                  <TextBlock Grid.Row="6" Grid.Column="0" Text="Q_d max (kg/s)" />
                   <Panel Grid.Row="6" Grid.Column="2" Classes="unit-overlay">
-                    <TextBox AutomationProperties.AutomationId="AfrhoMaxBox"
-                      ToolTip.Tip="Upper limit on each jet's Afρ in cm, so that activity does not grow without bound close to the Sun. Shared by every jet.">
+                    <TextBox AutomationProperties.AutomationId="DustRateMaxBox"
+                      ToolTip.Tip="Upper limit on each jet's dust production rate in kg/s, so that the emission does not grow without bound close to the Sun. Shared by every jet.">
                       <i:Interaction.Behaviors>
-                        <b:NumericTextBoxBehavior Value="{Binding CurrentSession.AfrhoMaxValueCm}" Minimum="1" Maximum="10000000" />
+                        <b:NumericTextBoxBehavior Value="{Binding CurrentSession.DustRateMaxKgs}" Minimum="0.001" Maximum="10000000" Format="0.###" />
                       </i:Interaction.Behaviors>
                     </TextBox>
-                    <TextBlock Classes="unit-of-measurement" Text="cm" />
+                    <TextBlock Classes="unit-of-measurement" Text="kg/s" />
                   </Panel>
                 </Grid>
 
-                <controls:CurvePlot AutomationProperties.AutomationId="AfrhoCurvePlot"
-                                    Model="{Binding AfrhoPlot}"
+                <controls:CurvePlot AutomationProperties.AutomationId="DustRateCurvePlot"
+                                    Model="{Binding DustRatePlot}"
                                     Height="140" HorizontalAlignment="Stretch"
                                     PlotBackground="{DynamicResource Bg.Surface}"
                                     PrimaryBrush="{DynamicResource Accent.Primary}"

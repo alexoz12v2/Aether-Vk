@@ -1775,7 +1775,10 @@ impl SceneDump {
   /// 8: `SerializedCamera` keeps the aspect ratio, the orthographic extents and the focus distance
   ///    (a restore used to reset them to 16:9, ±1 and 10); the compatibility JSON lists jets
   ///    without entity ids (savefile states must match across application runs).
-  pub const CURRENT_VERSION: u32 = 8;
+  /// 9: the jets' activity fields are a dust production rate `Q_d` in kg/s
+  ///    (`dust_rate_1au_kgs`, `dust_rate_max_kgs`), not an Afρ in cm: a v8 dump would read its
+  ///    Afρ as kg/s, so v8 dumps are refused.
+  pub const CURRENT_VERSION: u32 = 9;
 }
 
 /// Serialized representation of a single scene entity.

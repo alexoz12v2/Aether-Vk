@@ -1422,20 +1422,24 @@ fn afrho_closure_from_a_steady_isotropic_coma() {
   use crate::scene::particles::ParticleSystemEmitParams;
   let (rc0, vc0) = comet_state();
   let r_h = norm(rc0) / AU_M;
-  let ep = ParticleSystemEmitParams {
+  let mut ep = ParticleSystemEmitParams {
     diametre_um: 100.0,
     density_gcm3: 0.533,
     scattering_efficiency: 1.0,
     geometric_albedo: 0.04,
-    afrho_0_cm: 100.0,
-    afrho_power: 2.0,
-    afrho_cutoff_au: 15.0,
-    afrho_max_value_cm: 1.0e6,
+    dust_rate_1au_kgs: 0.0,
+    dust_rate_power: 2.0,
+    dust_rate_cutoff_au: 15.0,
+    dust_rate_max_kgs: 0.0,
     start_velocity_mean: 2.0,
     start_velocity_std: 0.5,
     aperture_rad: core::f32::consts::PI,
     ..bytemuck::Zeroable::zeroed()
   };
+  // the activity input is a dust rate (v9); the test keeps measuring Afρ, so the input is the
+  // rate an Afρ of 100 cm at 1 AU (max 1e6 cm) converts to
+  ep.dust_rate_1au_kgs = ep.dust_rate_from_afrho_kgs(100.0);
+  ep.dust_rate_max_kgs = ep.dust_rate_from_afrho_kgs(1.0e6);
   let q = ep.dust_production_rate_kgs(r_h as f32) as f64;
   let afrho_in_cm = 100.0 * r_h.powf(-2.0);
   let ttl = 60.0 * 86400.0;

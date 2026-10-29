@@ -23,12 +23,16 @@ namespace AetherVk.AppTests;
 public class FileMenuViewTests
 {
   [AvaloniaFact]
-  public void MainWindow_ShowsTheFileMenu_TitleAndDirtyMarker_AndAsksBeforeClosing()
+  public async Task MainWindow_ShowsTheFileMenu_TitleAndDirtyMarker_AndAsksBeforeClosing()
   {
     var services = (App.Host ?? throw new InvalidOperationException("DI host not initialized")).Services;
     var vm = services.GetRequiredService<MainWindowViewModel>();
-    if (services.GetService<Logic.SaveFile.SaveFileService>() is null)
+    if (services.GetService<Logic.SaveFile.SaveFileService>() is not { } saves)
       return; // mocked native runtime: no savefile services
+    // start clean: the shared host keeps what earlier tests left (a commit settling late made the
+    // baseline stale, so the reverted edit still read as dirty)
+    await saves.NewAsync();
+    Dispatcher.UIThread.RunJobs();
     var models = services.GetRequiredService<ITabStateService<ModelSession>>();
     var model = models.GetSession(models.ActiveSessionIds[0]);
 
@@ -54,10 +58,24 @@ public class FileMenuViewTests
 
     model.DiametreUm = before;
     vm.RefreshTitle();
-    Assert.False(window.Title!.EndsWith(" *", StringComparison.Ordinal));
+    Assert.False(window.Title!.EndsWith(" *", StringComparison.Ordinal), DirtyDiff(services));
     window.Close();
     Dispatcher.UIThread.RunJobs();
     Assert.False(window.IsVisible);
+  }
+
+  // where the current fingerprint departs from the baseline (diagnostics for a dirty title)
+  private static string DirtyDiff(IServiceProvider services)
+  {
+    var (baseline, now) = services.GetRequiredService<Logic.SaveFile.SaveFileService>().FingerprintPair();
+    if (baseline is null)
+      return "no baseline";
+    int i = 0;
+    while (i < baseline.Length && i < now.Length && baseline[i] == now[i])
+      i++;
+    int from = Math.Max(0, i - 80);
+    string Around(string s) => s.Substring(Math.Min(from, s.Length), Math.Min(240, Math.Max(0, s.Length - from)));
+    return $"fingerprint differs at {i}: baseline …{Around(baseline)}… now …{Around(now)}…";
   }
 
   [AvaloniaTheory]

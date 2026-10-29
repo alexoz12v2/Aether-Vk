@@ -717,20 +717,21 @@ fn test_cleanup_comet_keeps_parented_camera() {
     let scenes = ctx.scenes.read();
     let scene_arc = scenes.get_scene(scene_id).unwrap();
     let g = scene_arc.read();
-    if g.scene.get_parent(cam) == Some(g.root_entity) {
+    // the cleanup reparents, then drops the cache entry, under a read guard: wait for both
+    let cached = scenes
+      .cartesian_state_cache
+      .contains_key(&crate::simulation_api::structs::SceneEntityId::new(scene_id, comet.body));
+    if g.scene.get_parent(cam) == Some(g.root_entity) && !cached {
       let world_after = g.scene.global_transform_f64(cam).expect("camera must survive").position;
       assert!(
         (world_after - world_before).length() < 1e-9,
         "{world_before:?} -> {world_after:?}"
       );
-      assert!(!scenes.cartesian_state_cache.contains_key(
-        &crate::simulation_api::structs::SceneEntityId::new(scene_id, comet.body)
-      ));
       break;
     }
     assert!(
       t0.elapsed().as_secs() < 5,
-      "CleanupComet did not reparent the camera"
+      "CleanupComet did not reparent the camera and drop the comet's cached state"
     );
     drop(g);
     drop(scenes);
@@ -2586,23 +2587,29 @@ fn test_jet_ignition_bounds_dust_age_across_seeks() {
       render_frontend,
       ctx.render_device_handle(),
       jet,
-      ParticleSystemEmitParams {
-        latitude_rad: lat,
-        longitude_rad: lon,
-        aperture_rad: 0.5,
-        start_velocity_mean: 2.0,
-        start_velocity_std: 0.5,
-        seed: 7,
-        diametre_um: 100.0,
-        density_gcm3: 0.533,
-        scattering_efficiency: 1.0,
-        geometric_albedo: 0.04,
-        size_q: 3.5,
-        size_range: 10.0,
-        afrho_0_cm: 100.0,
-        afrho_power: 2.0,
-        afrho_cutoff_au: 15.0,
-        afrho_max_value_cm: 100_000.0,
+      {
+        let mut p = ParticleSystemEmitParams {
+          latitude_rad: lat,
+          longitude_rad: lon,
+          aperture_rad: 0.5,
+          start_velocity_mean: 2.0,
+          start_velocity_std: 0.5,
+          seed: 7,
+          diametre_um: 100.0,
+          density_gcm3: 0.533,
+          scattering_efficiency: 1.0,
+          geometric_albedo: 0.04,
+          size_q: 3.5,
+          size_range: 10.0,
+          dust_rate_1au_kgs: 0.0,
+          dust_rate_power: 2.0,
+          dust_rate_cutoff_au: 15.0,
+          dust_rate_max_kgs: 0.0,
+        };
+        // the activity as a dust rate: the former Afρ 100.0 cm (max 100_000.0 cm) converted
+        p.dust_rate_1au_kgs = p.dust_rate_from_afrho_kgs(100.0);
+        p.dust_rate_max_kgs = p.dust_rate_from_afrho_kgs(100_000.0);
+        p
       },
       ParticleSystemDrawParams {
         stream_color: [1.0, 0.6, 0.2, 1.0],
@@ -2818,23 +2825,29 @@ fn test_jet_without_rotation_model_emits_and_settles() {
       render_frontend,
       ctx.render_device_handle(),
       jet,
-      ParticleSystemEmitParams {
-        latitude_rad: lat,
-        longitude_rad: lon,
-        aperture_rad: 0.5,
-        start_velocity_mean: 2.0,
-        start_velocity_std: 0.5,
-        seed: 7,
-        diametre_um: 100.0,
-        density_gcm3: 0.533,
-        scattering_efficiency: 1.0,
-        geometric_albedo: 0.04,
-        size_q: 3.5,
-        size_range: 10.0,
-        afrho_0_cm: 100.0,
-        afrho_power: 2.0,
-        afrho_cutoff_au: 15.0,
-        afrho_max_value_cm: 100_000.0,
+      {
+        let mut p = ParticleSystemEmitParams {
+          latitude_rad: lat,
+          longitude_rad: lon,
+          aperture_rad: 0.5,
+          start_velocity_mean: 2.0,
+          start_velocity_std: 0.5,
+          seed: 7,
+          diametre_um: 100.0,
+          density_gcm3: 0.533,
+          scattering_efficiency: 1.0,
+          geometric_albedo: 0.04,
+          size_q: 3.5,
+          size_range: 10.0,
+          dust_rate_1au_kgs: 0.0,
+          dust_rate_power: 2.0,
+          dust_rate_cutoff_au: 15.0,
+          dust_rate_max_kgs: 0.0,
+        };
+        // the activity as a dust rate: the former Afρ 100.0 cm (max 100_000.0 cm) converted
+        p.dust_rate_1au_kgs = p.dust_rate_from_afrho_kgs(100.0);
+        p.dust_rate_max_kgs = p.dust_rate_from_afrho_kgs(100_000.0);
+        p
       },
       ParticleSystemDrawParams {
         stream_color: [1.0, 0.6, 0.2, 1.0],

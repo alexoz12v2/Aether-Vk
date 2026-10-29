@@ -113,7 +113,7 @@ fn jet_entity_is_child_of_comet() {
 struct EmitParamsOnly(ParticleSystemEmitParams);
 impl crate::scene::Component for EmitParamsOnly {}
 
-fn jet_dto(diametre_um: f32, afrho_0_cm: f32, latitude_rad: f32) -> crate::scene::ParticleSystemDTO {
+fn jet_dto(diametre_um: f32, afrho_cm: f32, latitude_rad: f32) -> crate::scene::ParticleSystemDTO {
   let mut dto = crate::scene::ParticleSystemDTO::zeroed();
   dto.diametre_um = diametre_um;
   dto.density_gcm3 = 0.533;
@@ -121,13 +121,15 @@ fn jet_dto(diametre_um: f32, afrho_0_cm: f32, latitude_rad: f32) -> crate::scene
   dto.geometric_albedo = 0.04;
   dto.size_q = 3.5;
   dto.size_range = 10.0;
-  dto.afrho_0_cm = afrho_0_cm;
-  dto.afrho_power = 2.0;
-  dto.afrho_cutoff_au = 5.0;
-  dto.afrho_max_value_cm = 100_000.0;
+  dto.dust_rate_power = 2.0;
+  dto.dust_rate_cutoff_au = 5.0;
   dto.latitude_rad = latitude_rad;
   dto.start_velocity_mean = 60.0;
   dto.start_velocity_std = 5.0;
+  // the activity as a dust rate: `afrho_cm` (max 100 000 cm) converted with the jet's grain
+  let p = ParticleSystemEmitParams::from_dto(&dto);
+  dto.dust_rate_1au_kgs = p.dust_rate_from_afrho_kgs(afrho_cm);
+  dto.dust_rate_max_kgs = p.dust_rate_from_afrho_kgs(100_000.0);
   dto
 }
 
@@ -152,14 +154,14 @@ fn two_systems_keep_distinct_emit_params_after_modify() {
     EmitParamsOnly(ParticleSystemEmitParams::from_dto(&jet_dto(10.0, 50.0, -0.91))),
   );
 
-  // modify jet a: a 300 µm, denser, brighter grain with a different Afρ law
+  // modify jet a: a 300 µm, denser, brighter grain with a different dust rate law
   let mut modified = jet_dto(300.0, 1200.0, -1.08);
   modified.density_gcm3 = 1.0;
   modified.scattering_efficiency = 1.5;
   modified.geometric_albedo = 0.06;
   modified.size_q = 3.0;
   modified.size_range = 30.0;
-  modified.afrho_power = 3.0;
+  modified.dust_rate_power = 3.0;
   scene.with_component_mut(jet_a, |p: &mut EmitParamsOnly| {
     p.0 = ParticleSystemEmitParams::from_dto(&modified);
   });

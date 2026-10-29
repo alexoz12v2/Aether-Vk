@@ -123,7 +123,7 @@ public sealed partial class JetViewModel : ObservableObject
   private float _scatteringEfficiency = JetGrain.Default.ScatteringEfficiency;
 
   /// <summary>
-  /// Geometric albedo p of the dust (0.01–0.5): brightness and the Afρ → production conversion.
+  /// Geometric albedo p of the dust (0.01–0.5): brightness only (not the production rate).
   /// Corresponds to <c>ParticleSystemEmitParams.geometric_albedo</c>.
   /// </summary>
   [ObservableProperty]
@@ -141,11 +141,12 @@ public sealed partial class JetViewModel : ObservableObject
   private float _sizeRange = JetGrain.Default.SizeRange;
 
   /// <summary>
-  /// This jet's Afρ at 1 AU in cm (its activity; the law's exponent, cutoff and max are model-wide).
-  /// Corresponds to <c>ParticleSystemEmitParams.afrho_0_cm</c>.
+  /// This jet's dust mass production rate Q_d at 1 AU in kg/s (its activity; the law's exponent,
+  /// cutoff and max are model-wide). It no longer depends on the albedo or the grain size.
+  /// Corresponds to <c>ParticleSystemEmitParams.dust_rate_1au_kgs</c>.
   /// </summary>
   [ObservableProperty]
-  private float _afrho0Cm = JetGrain.Default.Afrho0Cm;
+  private float _dustRate1AuKgs = JetGrain.Default.DustRate1AuKgs;
 
   /// <summary>
   /// The grain and activity parameters as one value; setting it assigns each property (each one
@@ -153,7 +154,7 @@ public sealed partial class JetViewModel : ObservableObject
   /// </summary>
   public JetGrain Grain
   {
-    get => new(DiametreUm, DensityGCm3, ScatteringEfficiency, GeometricAlbedo, SizeQ, SizeRange, Afrho0Cm);
+    get => new(DiametreUm, DensityGCm3, ScatteringEfficiency, GeometricAlbedo, SizeQ, SizeRange, DustRate1AuKgs);
     set
     {
       DiametreUm = value.DiametreUm;
@@ -162,7 +163,7 @@ public sealed partial class JetViewModel : ObservableObject
       GeometricAlbedo = value.GeometricAlbedo;
       SizeQ = value.SizeQ;
       SizeRange = value.SizeRange;
-      Afrho0Cm = value.Afrho0Cm;
+      DustRate1AuKgs = value.DustRate1AuKgs;
     }
   }
 
@@ -176,7 +177,7 @@ public sealed partial class JetViewModel : ObservableObject
   private float _beta;
 
   /// <summary>
-  /// Dust production rate in kg/s at 1 AU, derived from Afρ parameters.
+  /// Dust production rate in kg/s at 1 AU as the engine applies it (min(Q_d₀, max)).
   /// Populated from <c>ParticleSystemComputedDTO.DustProductionRateAt1AuKgs</c>.
   /// </summary>
   [ObservableProperty]

@@ -538,15 +538,15 @@ public class ModelTabViewModelTests
     Assert.Equal(0.04f, session.GeometricAlbedo);
     Assert.Equal(3.5f, session.SizeQ);
     Assert.Equal(10f, session.SizeRange);
-    Assert.Equal(100f, session.Afrho0Cm);
-    Assert.Equal(2.0f, session.AfrhoPower);
-    Assert.Equal(15.0f, session.AfrhoCutoffAu);
-    Assert.Equal(100_000f, session.AfrhoMaxValueCm);
+    Assert.Equal(2f, session.DustRate1AuKgs);
+    Assert.Equal(2.0f, session.DustRatePower);
+    Assert.Equal(15.0f, session.DustRateCutoffAu);
+    Assert.Equal(2000f, session.DustRateMaxKgs);
   }
 
   /// <summary>
   /// ModelSession common properties must raise PropertyChanged when set,
-  /// so the ViewModel can re-plot the defaults and push the model-wide Afρ law to every jet.
+  /// so the ViewModel can re-plot the defaults and push the model-wide Q_d law to every jet.
   /// </summary>
   [Fact]
   public void ModelSession_CommonProperties_RaisePropertyChanged()
@@ -561,10 +561,10 @@ public class ModelTabViewModelTests
     session.GeometricAlbedo = 0.06f;
     session.SizeQ = 3.0f;
     session.SizeRange = 20f;
-    session.Afrho0Cm = 1000f;
-    session.AfrhoPower = 3.0f;
-    session.AfrhoCutoffAu = 6.0f;
-    session.AfrhoMaxValueCm = 200_000f;
+    session.DustRate1AuKgs = 10f;
+    session.DustRatePower = 3.0f;
+    session.DustRateCutoffAu = 6.0f;
+    session.DustRateMaxKgs = 4000f;
 
     Assert.Contains(nameof(ModelSession.DiametreUm), raised);
     Assert.Contains(nameof(ModelSession.DensityGCm3), raised);
@@ -572,10 +572,10 @@ public class ModelTabViewModelTests
     Assert.Contains(nameof(ModelSession.GeometricAlbedo), raised);
     Assert.Contains(nameof(ModelSession.SizeQ), raised);
     Assert.Contains(nameof(ModelSession.SizeRange), raised);
-    Assert.Contains(nameof(ModelSession.Afrho0Cm), raised);
-    Assert.Contains(nameof(ModelSession.AfrhoPower), raised);
-    Assert.Contains(nameof(ModelSession.AfrhoCutoffAu), raised);
-    Assert.Contains(nameof(ModelSession.AfrhoMaxValueCm), raised);
+    Assert.Contains(nameof(ModelSession.DustRate1AuKgs), raised);
+    Assert.Contains(nameof(ModelSession.DustRatePower), raised);
+    Assert.Contains(nameof(ModelSession.DustRateCutoffAu), raised);
+    Assert.Contains(nameof(ModelSession.DustRateMaxKgs), raised);
   }
 
   // ── Compound CanAddJet gate ────────────────────────────────────────────────
@@ -596,7 +596,7 @@ public class ModelTabViewModelTests
   // ── PushModelToAllJets reactive pipeline ──────────────────────────────────
 
   /// <summary>
-  /// When a model-wide property (the Afρ law's shape) changes, PushModelToAllJets must call
+  /// When a model-wide property (the Q_d law's shape) changes, PushModelToAllJets must call
   /// ModifyParticleSystem for every jet with a non-zero NativePsId, each with its own grain.
   /// A grain default (diameter …) changes no existing jet. Verifies the full reactive pipeline:
   /// PropertyChanged → Throttle → PushModelToAllJets → FFI. ImmediateScheduler (used in TestSetup)
@@ -639,12 +639,12 @@ public class ModelTabViewModelTests
     Assert.Equal(100f, s.Vm.Jets!.Single().DiametreUm);
 
     // Mutate a model-wide property — with ImmediateScheduler the Throttle fires synchronously
-    s.Session.AfrhoPower = 3.0f;
+    s.Session.DustRatePower = 3.0f;
 
     // Pipeline must have fired: PropertyChanged → Throttle → PushModelToAllJets → ModifyParticleSystem
     Assert.Single(modifyCalls);
     Assert.Equal(jetId, modifyCalls[0].id);
-    Assert.Equal(3.0f, modifyCalls[0].model.AfrhoPower);
+    Assert.Equal(3.0f, modifyCalls[0].model.DustRatePower);
     Assert.Equal(100f, modifyCalls[0].model.DiametreUm);
   }
 
@@ -670,7 +670,7 @@ public class ModelTabViewModelTests
         {
           modifyCalls.Add((id, model));
           // β ∝ 1/diameter, like the engine (enough to tell the jets apart)
-          comp = new ParticleSystemComputedProperties(10f / model.DiametreUm, model.Afrho0Cm * 0.01f);
+          comp = new ParticleSystemComputedProperties(10f / model.DiametreUm, model.DustRate1AuKgs);
         }))
       .Returns(true);
     s.Vm.AddJetCommand.Execute(null);
@@ -717,8 +717,8 @@ public class ModelTabViewModelTests
     s.Session.GeometricAlbedo = 0.06f;
     s.Session.SizeQ = 3.0f;
     s.Session.SizeRange = 30f;
-    s.Session.Afrho0Cm = 700f;
-    s.Session.AfrhoPower = 2.5f;
+    s.Session.DustRate1AuKgs = 7f;
+    s.Session.DustRatePower = 2.5f;
     ParticleSystemModel? captured = null;
     ulong outId = 5;
     s.Runtime
@@ -734,17 +734,17 @@ public class ModelTabViewModelTests
 
     var jet = s.Vm.Jets!.Single();
     // q is per jet only: a new jet starts at 3.5 whatever the session holds (an older save's value)
-    var expected = new AetherVk.Logic.Models.JetGrain(42f, 1.3f, 1.4f, 0.06f, 3.5f, 30f, 700f);
+    var expected = new AetherVk.Logic.Models.JetGrain(42f, 1.3f, 1.4f, 0.06f, 3.5f, 30f, 7f);
     Assert.Equal(expected, jet.Grain);
     Assert.Equal(expected with { SizeQ = 3.0f }, s.Session.DefaultGrain);
-    Assert.Equal(new ParticleSystemModel(42f, 1.3f, 1.4f, 0.06f, 3.5f, 30f, 700f, 2.5f, 15f, 100_000f), captured);
+    Assert.Equal(new ParticleSystemModel(42f, 1.3f, 1.4f, 0.06f, 3.5f, 30f, 7f, 2.5f, 15f, 2000f), captured);
 
     s.Session.DiametreUm = 7f;
-    s.Session.Afrho0Cm = 9f;
+    s.Session.DustRate1AuKgs = 9f;
     Assert.Equal(expected, jet.Grain);
   }
 
-  /// <summary>"Copy to all jets" gives the siblings the selected jet's grain and Afρ₀, nothing else.</summary>
+  /// <summary>"Copy to all jets" gives the siblings the selected jet's grain and Q_d₀, nothing else.</summary>
   [Fact]
   public void CopyGrainToAllJets_CopiesTheGrainOnly()
   {
@@ -760,21 +760,35 @@ public class ModelTabViewModelTests
 
     Assert.Equal(first.Grain, second.Grain);
     Assert.Equal(site, (second.LatitudeDeg, second.LongitudeDeg, second.StartVelocityMeanMs, second.StreamColor));
-    Assert.Contains(modifyCalls, c => c.id == 22ul && c.model.DiametreUm == 250f && c.model.Afrho0Cm == 900f);
+    Assert.Contains(modifyCalls, c => c.id == 22ul && c.model.DiametreUm == 250f && c.model.DustRate1AuKgs == 900f);
     Assert.DoesNotContain(modifyCalls, c => c.id == 21ul);
   }
 
-  /// <summary>The Σ read-out adds the jets' Afρ₀ and their native rates.</summary>
+  /// <summary>The Σ read-out adds the jets' Q_d₀.</summary>
   [Fact]
   public void TotalActivityText_SumsTheJets()
   {
     var s = new TestSetup();
     AddTwoJetsRecordingModifies(s);
-    s.Vm.Jets![0].DustProductionRateAt1AuKgs = 1.5f;
-    s.Vm.Jets[1].Afrho0Cm = 300f;
-    s.Vm.Jets[1].DustProductionRateAt1AuKgs = 2.5f;
-    Assert.Contains("Σ 2 jets at 1 AU: Σ Afρ 400 cm", s.Vm.TotalActivityText);
-    Assert.Contains("Σ Q_d ≈ 4 kg/s", s.Vm.TotalActivityText);
+    s.Vm.Jets![0].DustRate1AuKgs = 1.5f;
+    s.Vm.Jets[1].DustRate1AuKgs = 2.5f;
+    Assert.Contains("Σ 2 jets at 1 AU: Σ Q_d 4 kg/s", s.Vm.TotalActivityText);
+  }
+
+  /// <summary>No "Afρ" survives in the strings the Model tab exposes (reviewer request: Q_d only).</summary>
+  [Fact]
+  public void ExposedStrings_MentionNoAfrho()
+  {
+    var s = new TestSetup();
+    AddTwoJetsRecordingModifies(s);
+    s.Vm.SelectedJet = s.Vm.Jets![0];
+    foreach (var text in new[] { s.Vm.TotalActivityText, s.Vm.DustRateNowText,
+               s.Vm.DustRatePlot?.YLabel ?? "", s.Vm.JetDustRatePlot?.YLabel ?? "",
+               s.Vm.DustRatePlot?.Series[0].Label ?? "", s.Vm.JetDustRatePlot?.Series[0].Label ?? "" })
+    {
+      Assert.DoesNotContain("Afρ", text);
+      Assert.DoesNotContain("afrho", text, System.StringComparison.OrdinalIgnoreCase);
+    }
   }
 
   // ── RemoveJet edge cases ───────────────────────────────────────────────────

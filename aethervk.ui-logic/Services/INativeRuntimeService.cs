@@ -3191,7 +3191,7 @@ public record AnimationTarget(
 }
 
 /// <summary>
-/// Grain and activity parameters of one dust jet (its own: no jet shares them). The Afρ law's
+/// Grain and activity parameters of one dust jet (its own: no jet shares them). The Q_d law's
 /// shape (power, cutoff, max) is model-wide in the UI and copied into every jet's record.
 /// </summary>
 public record ParticleSystemModel(
@@ -3201,10 +3201,10 @@ public record ParticleSystemModel(
   float GeometricAlbedo,
   float SizeQ,
   float SizeRange,
-  float Afrho0Cm,
-  float AfrhoPower,
-  float AfrhoCutoffAu,
-  float AfrhoMaxValueCm
+  float DustRate1AuKgs,
+  float DustRatePower,
+  float DustRateCutoffAu,
+  float DustRateMaxKgs
 );
 
 /// <summary>
@@ -3338,10 +3338,10 @@ internal readonly struct ParticleSystemDTO(ParticleSystemModel model, ParticleSy
   public readonly float SizeQ = model.SizeQ;
   public readonly float SizeRange = model.SizeRange;
 
-  public readonly float Afrho0Cm = model.Afrho0Cm;
-  public readonly float AfrhoPower = model.AfrhoPower;
-  public readonly float AfrhoCutoffAu = model.AfrhoCutoffAu;
-  public readonly float AfrhoMaxValueCm = model.AfrhoMaxValueCm;
+  public readonly float DustRate1AuKgs = model.DustRate1AuKgs;
+  public readonly float DustRatePower = model.DustRatePower;
+  public readonly float DustRateCutoffAu = model.DustRateCutoffAu;
+  public readonly float DustRateMaxKgs = model.DustRateMaxKgs;
 
   // -- start jet specific properties --
   public readonly float LatitudeRad = jet.LatitudeRad;

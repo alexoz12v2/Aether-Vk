@@ -287,10 +287,10 @@ public sealed class ThesisScenarioTests(ITestOutputHelper output)
         s.Expand("JetGrainExpander", "JetDiametreUm");
         s.TypeInto(s.Find("JetDiametreUm"), Ui.Num(diametre));
       }
-      if (sc.Jets[k].Afrho0Cm is { } afrho0)
+      if (sc.Jets[k].DustRate1AuKgs is { } rate0)
       {
-        s.Expand("JetActivityExpander", "JetAfrho0");
-        s.TypeInto(s.Find("JetAfrho0"), Ui.Num(afrho0));
+        s.Expand("JetActivityExpander", "JetDustRate0");
+        s.TypeInto(s.Find("JetDustRate0"), Ui.Num(rate0));
       }
     }
   }

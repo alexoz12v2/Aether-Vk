@@ -252,7 +252,7 @@ fn size_law_weights_and_counts_from_mass_and_flux_agree() {
 /// the steady-jet density at 5 km (`Q_N / (Ω_cone v r²)`) → the shell radius at Ω_px = 1e-6 sr.
 #[test]
 fn default_jet_counts_and_shell_radius() {
-  let p = ParticleSystemEmitParams {
+  let mut p = ParticleSystemEmitParams {
     latitude_rad: 20.0_f32.to_radians(),
     longitude_rad: 0.0,
     aperture_rad: 0.5,
@@ -265,11 +265,14 @@ fn default_jet_counts_and_shell_radius() {
     geometric_albedo: 0.04,
     size_q: 3.5,
     size_range: 10.0,
-    afrho_0_cm: 100.0,
-    afrho_power: 2.0,
-    afrho_cutoff_au: 15.0,
-    afrho_max_value_cm: 100_000.0,
+    dust_rate_1au_kgs: 0.0,
+    dust_rate_power: 2.0,
+    dust_rate_cutoff_au: 15.0,
+    dust_rate_max_kgs: 0.0,
   };
+  // the activity as a dust rate: the former Afρ 100.0 cm (max 100_000.0 cm) converted
+  p.dust_rate_1au_kgs = p.dust_rate_from_afrho_kgs(100.0);
+  p.dust_rate_max_kgs = p.dust_rate_from_afrho_kgs(100_000.0);
   let (q, f) = (SIZE_Q, SIZE_RANGE);
   let s_ref = 0.5 * p.diametre_um as f64;
   let rho = p.density_gcm3 as f64;

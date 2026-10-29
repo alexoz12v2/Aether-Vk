@@ -96,6 +96,9 @@ public sealed class SaveFileService
     }
   }
 
+  /// <summary>Test diagnostics: the baseline and the current fingerprint (null baseline = never checked).</summary>
+  internal (string? Baseline, string Now) FingerprintPair() => (_fingerprint, Fingerprint(_host.Capture()));
+
   /// <summary>The comparable part of a snapshot, as JSON.</summary>
   internal static string Fingerprint(SaveSnapshot s)
   {

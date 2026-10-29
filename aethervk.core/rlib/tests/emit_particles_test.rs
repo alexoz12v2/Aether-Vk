@@ -17,14 +17,15 @@ fn default_params() -> ParticleSystemEmitParams {
   params.start_velocity_mean = 2.0;
   params.start_velocity_std = 0.5;
   params.aperture_rad = 0.5;
-  params.afrho_0_cm = 100.0;
-  params.afrho_power = 2.0;
-  params.afrho_cutoff_au = 15.0;
-  params.afrho_max_value_cm = 100_000.0;
+  params.dust_rate_power = 2.0;
+  params.dust_rate_cutoff_au = 15.0;
   params.scattering_efficiency = 1.0;
   params.geometric_albedo = 0.04;
   params.size_q = 3.5;
   params.size_range = 10.0;
+  // the activity as a dust rate: the former Afρ 100 cm (max 100 000 cm) converted
+  params.dust_rate_1au_kgs = params.dust_rate_from_afrho_kgs(100.0);
+  params.dust_rate_max_kgs = params.dust_rate_from_afrho_kgs(100_000.0);
   params
 }
 
@@ -115,7 +116,7 @@ fn ring_budget_holds_at_extreme_speed() {
 #[test]
 fn nothing_beyond_cutoff() {
   let mut p = default_params();
-  p.afrho_cutoff_au = 3.0;
+  p.dust_rate_cutoff_au = 3.0;
   let host = run(&p, RING_CAPACITY_LOW, 5.5, 180.0, 600);
   assert_eq!(host.ring.live(), 0);
   assert!(host.draw_state().is_none());

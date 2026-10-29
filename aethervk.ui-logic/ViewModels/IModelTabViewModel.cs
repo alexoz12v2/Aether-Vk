@@ -79,21 +79,21 @@ public partial interface IModelTabViewModel : ICursorWarpingViewModel
   /// </summary>
   AetherVk.Logic.Services.ModelSession? CurrentSession { get; }
 
-  /// <summary>Afρ(r_h) of the defaults for new jets (engine law), marker at the comet's r_h.</summary>
-  AetherVk.Logic.Utils.CurvePlotModel? AfrhoPlot { get; }
+  /// <summary>Q_d(r_h) of the defaults for new jets (engine law), marker at the comet's r_h.</summary>
+  AetherVk.Logic.Utils.CurvePlotModel? DustRatePlot { get; }
 
   /// <summary>Grain size PDFs by number and by cross-section, of the defaults for new jets.</summary>
   AetherVk.Logic.Utils.CurvePlotModel? SizeDistributionPlot { get; }
 
-  /// <summary>Afρ(r_h) of the selected jet; null without a selection.</summary>
-  AetherVk.Logic.Utils.CurvePlotModel? JetAfrhoPlot { get; }
+  /// <summary>Q_d(r_h) of the selected jet; null without a selection.</summary>
+  AetherVk.Logic.Utils.CurvePlotModel? JetDustRatePlot { get; }
 
   /// <summary>Grain size PDFs of the selected jet; null without a selection.</summary>
   AetherVk.Logic.Utils.CurvePlotModel? JetSizeDistributionPlot { get; }
 
-  /// <summary>"Afρ now: X cm → Q_d ≈ Y kg/s" read-out of the selected jet, under its Afρ plot.</summary>
-  string AfrhoNowText { get; }
+  /// <summary>"Q_d now (r_h X AU): Y kg/s" read-out of the selected jet, under its Q_d plot.</summary>
+  string DustRateNowText { get; }
 
-  /// <summary>"Σ Afρ → Σ Q_d" over every jet (the whole comet's activity).</summary>
+  /// <summary>"Σ Q_d" over every jet (the whole comet's activity).</summary>
   string TotalActivityText { get; }
 }
