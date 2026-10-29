@@ -28,7 +28,7 @@ public sealed class AppSaveFileHostTests
 {
   private delegate bool GetAppearance(out CometAppearanceDto appearance);
 
-  private sealed class Rig
+  internal sealed class Rig
   {
     public readonly Mock<INativeRuntimeService> Runtime = new();
     public readonly TestSchedulerProvider Schedulers = new();
@@ -40,6 +40,8 @@ public sealed class AppSaveFileHostTests
     public readonly AssetLibraryService Assets;
     public readonly DesktopBillboardService Billboards = new();
     public readonly AppSaveFileHost Host;
+    /// <summary>A real messenger: the tabs built on this rig receive the host's messages.</summary>
+    public readonly ForwardingCometMessenger Messenger = new();
     public ImportedAsset[] NativeAssets = [];
     public CometAppearanceDto NativeAppearance;
     private readonly Dictionary<ExternalStateType, Action<nint>> _listeners = [];
@@ -87,7 +89,7 @@ public sealed class AppSaveFileHostTests
       storage.Setup(s => s.GetSessionPath(It.IsAny<string>())).Returns("/tmp/avk_host_tests");
       Assets = new AssetLibraryService(Runtime.Object, Schedulers, storage.Object);
       Host = new AppSaveFileHost(Runtime.Object, Sessions(Comet).Object, Sessions(Timeline).Object, Sessions(Model).Object,
-        CometConfig, TimelineService, Assets, Billboards, new CameraServiceRegistry(), new Mock<ICometMessenger>().Object,
+        CometConfig, TimelineService, Assets, Billboards, new CameraServiceRegistry(), Messenger,
         new BreadcrumbService(), Schedulers);
     }
 

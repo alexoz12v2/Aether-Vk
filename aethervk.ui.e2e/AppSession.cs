@@ -121,6 +121,8 @@ public sealed class AppSession : IDisposable
         UseShellExecute = false,
         RedirectStandardOutput = logPath is not null,
         RedirectStandardError = logPath is not null,
+        // the observer line lives in the diagnostic panel, hidden by default
+        Environment = { ["AETHERVK_DIAGNOSTIC_PANELS"] = "1" },
       },
     };
     if (logPath is not null)

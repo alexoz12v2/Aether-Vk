@@ -67,6 +67,14 @@
                     ToolTip.Tip="Sets Start and End so the timeline ends at the image epoch and starts N nucleus rotation periods earlier (N x period, never less than 1 day). The simulated dust history then covers N full spins before the image. It only proposes the range: commit it in the Comet tab." />
           </StackPanel>
           
+          <!-- R3: jets ignite this long before the committed start, so the tail exists when play starts -->
+          <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+            <TextBlock Text="Dust lead time:" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" />
+            <TextBox AutomationProperties.AutomationId="DustLeadDaysBox"
+              ToolTip.Tip="Days the jets start emitting before the start epoch (0 to 30; 30 = one dust lifetime, the default). With 30 the tail is already fully formed when the timeline starts; with 0 the jets switch on at the start and the tail grows from nothing. Used the next time the comet is committed." Text="{Binding DustLeadDays}" Width="56" />
+            <TextBlock Text="days before the start" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" />
+          </StackPanel>
+
           <StackPanel Orientation="Horizontal" Spacing="24" Margin="0,8,0,0">
             <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding HasProposedState}">
               <TextBlock Text="Proposed Range:" FontWeight="SemiBold" FontSize="12" Foreground="{DynamicResource Text.Secondary}" />

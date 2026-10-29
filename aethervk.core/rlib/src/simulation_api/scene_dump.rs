@@ -583,7 +583,8 @@ pub(crate) fn serial_to_texture(st: &SerializedTexture) -> Texture {
 /// Compatibility "hash" of a scene: a deterministic JSON object of everything that shapes the
 /// simulation, so a dump is only restored into a scene configured the same way (and, later, so a
 /// cached state can be looked up by configuration). Floats use Rust's shortest round-trip
-/// formatting. Jets are listed without their entity ids, ordered by their parameters and TTL: ids
+/// formatting. Jets are listed without their entity ids, ordered by their parameters, TTL and
+/// ignition (a state dumped with another ignition holds another dust history): ids
 /// differ between runs of the application, so a saved state must match a scene rebuilt from the
 /// same settings. Drawing options (stream colour, labels, camera) are not part of it.
 pub fn compatibility_json(
@@ -636,7 +637,7 @@ pub fn compatibility_json(
   });
   let mut jets = alloc::vec::Vec::new();
   scene.query1(|_id, ps: &ParticleSystemComponent| {
-    jets.push((ps.emission_params, ps.ttl_us));
+    jets.push((ps.emission_params, ps.ttl_us, ps.emission_start_us));
   });
   let jets = jets_compatibility_json(jets);
   format!(
@@ -648,17 +649,23 @@ pub fn compatibility_json(
   )
 }
 
-/// The `jets` entries of [`compatibility_json`]: each jet's emission parameters and TTL, sorted,
-/// **without entity ids** (they differ between runs, and the savefile hashes this JSON).
+/// The `jets` entries of [`compatibility_json`]: each jet's emission parameters, TTL and ignition
+/// (`emission_start_us`, resolved), sorted, **without entity ids** (they differ between runs, and
+/// the savefile hashes this JSON).
 pub fn jets_compatibility_json(
-  jets: impl IntoIterator<Item = (crate::scene::particles::v2::ParticleSystemEmitParams, aethervk_oshal_rlib::os::time::timeus_t)>,
+  jets: impl IntoIterator<
+    Item = (crate::scene::particles::v2::ParticleSystemEmitParams, aethervk_oshal_rlib::os::time::timeus_t, i64),
+  >,
 ) -> alloc::string::String {
   use alloc::{format, string::String, vec::Vec};
-  let mut jets: Vec<(String, _)> = jets.into_iter().map(|(p, ttl)| (format!("{p:?}"), ttl)).collect();
+  let mut jets: Vec<(String, _, _)> =
+    jets.into_iter().map(|(p, ttl, ignition)| (format!("{p:?}"), ttl, ignition)).collect();
   jets.sort();
   let jets: Vec<String> = jets
     .into_iter()
-    .map(|(p, ttl)| format!("{{\"ttl_us\":{ttl},\"params\":\"{}\"}}", p.replace('"', "'")))
+    .map(|(p, ttl, ignition)| {
+      format!("{{\"ttl_us\":{ttl},\"ignition_us\":{ignition},\"params\":\"{}\"}}", p.replace('"', "'"))
+    })
     .collect();
   jets.join(",")
 }

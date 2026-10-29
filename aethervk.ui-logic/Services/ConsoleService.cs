@@ -40,6 +40,9 @@ public class ConsoleService : ObservableObject, IDisposable
     Console.WriteLine(msg);
     _fileSink?.Write(msg);
     _messageQueue.Enqueue(msg);
+    // the core aborts right after its panic hook: this thread is the last chance to write
+    if (_fileSink is not null && message.StartsWith(CrashReport.NativePanicPrefix, StringComparison.Ordinal))
+      CrashReport.Write(_fileSink, "Native engine panic", message);
   }
 
   private void FlushMessages(object? state)

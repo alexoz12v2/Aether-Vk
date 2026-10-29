@@ -242,7 +242,7 @@ public partial class ModelTabViewModel
         else
         {
           // idempotent: a savefile open may have created them already
-          JetNativeSync.EnsureNative(_runtimeService, session, EffectiveNucleusRadiusKm);
+          JetNativeSync.EnsureNative(_runtimeService, session, EffectiveNucleusRadiusKm, _timelineService.IgnitionUs());
         }
       })
       .AddDisposableTo(_disposables);
@@ -348,7 +348,8 @@ public partial class ModelTabViewModel
 
   private void AddJetNatively(JetViewModel jet, ModelSession session, bool isFirst)
   {
-    JetNativeSync.AddNative(_runtimeService, BuildModel(session, jet), BuildJet(jet), jet, isFirst);
+    JetNativeSync.AddNative(_runtimeService, BuildModel(session, jet),
+      JetNativeSync.BuildJet(jet, EffectiveNucleusRadiusKm, _timelineService.IgnitionUs()), jet, isFirst);
     // a new native jet starts without angles: the selected one gets them back
     if (ShowJetAngles && ReferenceEquals(jet, SelectedJet) && jet.NativePsId != 0)
       _runtimeService.SetJetAngleVisibility(jet.NativePsId, true);
@@ -362,7 +363,7 @@ public partial class ModelTabViewModel
   private void RetryNativeJets()
   {
     if (!IsCometCommitted || CurrentSession is not { } session) return;
-    JetNativeSync.EnsureNative(_runtimeService, session, EffectiveNucleusRadiusKm);
+    JetNativeSync.EnsureNative(_runtimeService, session, EffectiveNucleusRadiusKm, _timelineService.IgnitionUs());
     RefreshTotalActivityText();
   }
 

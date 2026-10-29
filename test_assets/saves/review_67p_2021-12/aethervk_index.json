@@ -1,0 +1,382 @@
+{
+  "format_version": 1,
+  "app_version": "1.0.0",
+  "created_at": "2026-10-28T09:43:54.3680876+00:00",
+  "modified_at": "2026-10-29T10:01:04.4984172+00:00",
+  "timeline": {
+    "committed_start": [
+      0,
+      692539200000000000
+    ],
+    "committed_end": [
+      0,
+      693921600000000000
+    ],
+    "proposed_start": "2021-12-17T15:48:00",
+    "proposed_end": "2021-12-28T00:00:00",
+    "current_epoch": [
+      0,
+      693921600000000000
+    ],
+    "start_paused": true,
+    "speed": 3
+  },
+  "spk": [
+    {
+      "file": "spk/spk_m30_90000703_2021-12-15_2025-11-11.bsp",
+      "naif_id": 1000012,
+      "designation": "67P",
+      "full_name": "   67P/Churyumov-Gerasimenko",
+      "record_id": "90000703",
+      "coverage": {
+        "start": [
+          0,
+          692798400000000000
+        ],
+        "end": [
+          0,
+          816091200000000000
+        ]
+      },
+      "sbdb": {
+        "spk_id": 1000012,
+        "designation": "67P",
+        "full_name": "67P/Churyumov-Gerasimenko",
+        "kind": "cn",
+        "prefix": "P",
+        "orbit_class_name": "Jupiter-family Comet",
+        "orbit_class_code": "JFc",
+        "is_neo": true,
+        "is_pha": false,
+        "orbit_id": "K284/1",
+        "tp": 2457247.588657812,
+        "elements_epoch_jd": 2457305.5,
+        "e": 0.6409081308996354,
+        "q": 1.243265640702404,
+        "i": 7.040294937543767,
+        "om": 50.13557377155012,
+        "w": 12.79824970228189
+      },
+      "reference_orbit_mode": "osculating_at_start",
+      "nucleus_radius_km": 1.7,
+      "rotation": {
+        "pole_ra_deg": 69.54,
+        "pole_dec_deg": 64.11,
+        "prime_meridian_deg": 0,
+        "pole_ra_rate_deg_cen": 0,
+        "pole_dec_rate_deg_cen": 0,
+        "rate_deg_day": 696,
+        "body_fixed_orientation": true
+      },
+      "created_at": "2026-10-28T09:43:54.3680876+00:00",
+      "last_used_at": "2026-10-28T09:43:54.3680876+00:00",
+      "committed": false
+    },
+    {
+      "file": "spk/spk_67P_90000703_2021-12-12_2021-12-28.bsp",
+      "naif_id": 1000012,
+      "designation": "67P",
+      "full_name": "   67P/Churyumov-Gerasimenko",
+      "record_id": "90000703",
+      "coverage": {
+        "start": [
+          0,
+          692539200000000000
+        ],
+        "end": [
+          0,
+          693921600000000000
+        ]
+      },
+      "sbdb": {
+        "spk_id": 1000012,
+        "designation": "67P",
+        "full_name": "67P/Churyumov-Gerasimenko",
+        "kind": "cn",
+        "prefix": "P",
+        "orbit_class_name": "Jupiter-family Comet",
+        "orbit_class_code": "JFc",
+        "is_neo": true,
+        "is_pha": false,
+        "orbit_id": "K284/1",
+        "tp": 2457247.588657812,
+        "elements_epoch_jd": 2457305.5,
+        "e": 0.6409081308996354,
+        "q": 1.243265640702404,
+        "i": 7.040294937543767,
+        "om": 50.13557377155012,
+        "w": 12.79824970228189
+      },
+      "reference_orbit_mode": "osculating_at_start",
+      "nucleus_radius_km": 1.7,
+      "rotation": {
+        "pole_ra_deg": 69.54,
+        "pole_dec_deg": 64.11,
+        "prime_meridian_deg": 0,
+        "pole_ra_rate_deg_cen": 0,
+        "pole_dec_rate_deg_cen": 0,
+        "rate_deg_day": 696.2127316680096,
+        "body_fixed_orientation": true
+      },
+      "created_at": "2026-10-29T10:01:04.4984172+00:00",
+      "last_used_at": "2026-10-29T10:01:04.4984172+00:00",
+      "committed": true
+    }
+  ],
+  "states": [
+    {
+      "compat_hash": "b74fbcd2459afc8a",
+      "compatibility_json": "{\u0022version\u0022:8,\u0022start\u0022:[0,692798400000000000],\u0022end\u0022:[0,816091200000000000],\u0022comet_naif\u0022:1000012,\u0022nucleus_radius_km\u0022:1.7000000476837158,\u0022rotation\u0022:[69.54,64.11,0.0,0.0,0.0,696.0,true],\u0022reference_elements\u0022:[0.6496929224352853,1.2106184810454397,3.871668248071364,36.335033366295626,22.133856197513357,2459520.564503622],\u0022dust_tiers\u0022:3,\u0022jets\u0022:[{\u0022ttl_us\u0022:2592000000000,\u0022params\u0022:\u0022ParticleSystemEmitParams { latitude_rad: -0.94247776, longitude_rad: 0.0, aperture_rad: 0.05235988, start_velocity_mean: 60.0, start_velocity_std: 5.0, seed: 3777064823, diametre_um: 30.0, density_gcm3: 0.8, scattering_efficiency: 1.0, geometric_albedo: 0.04, size_q: 2.1, size_range: 10.0, afrho_0_cm: 100.0, afrho_power: 2.0, afrho_cutoff_au: 15.0, afrho_max_value_cm: 100000.0 }\u0022},{\u0022ttl_us\u0022:2592000000000,\u0022params\u0022:\u0022ParticleSystemEmitParams { latitude_rad: -1.1693705, longitude_rad: 0.0, aperture_rad: 0.034906585, start_velocity_mean: 70.0, start_velocity_std: 3.0, seed: 3737610402, diametre_um: 30.0, density_gcm3: 0.8, scattering_efficiency: 1.0, geometric_albedo: 0.04, size_q: 2.1, size_range: 10.0, afrho_0_cm: 100.0, afrho_power: 2.0, afrho_cutoff_au: 15.0, afrho_max_value_cm: 100000.0 }\u0022}]}",
+      "file": "states/b74fbcd2459afc8a/scene.bin",
+      "dump_version": 8,
+      "created_at": "2026-10-28T09:43:54.3680876+00:00",
+      "modified_at": "2026-10-28T09:43:54.3680876+00:00",
+      "last_used_at": "2026-10-28T09:43:54.3680876+00:00",
+      "latest": false
+    },
+    {
+      "compat_hash": "fd6124613f8e79c7",
+      "compatibility_json": "{\u0022version\u0022:8,\u0022start\u0022:[0,692539200000000000],\u0022end\u0022:[0,693921600000000000],\u0022comet_naif\u0022:1000012,\u0022nucleus_radius_km\u0022:1.7000000476837158,\u0022rotation\u0022:[69.54,64.11,0.0,0.0,0.0,696.2127316680096,true],\u0022reference_elements\u0022:[0.6496932682886161,1.2106177098909632,3.8716701615871654,36.33508118246466,22.13367372091925,2459520.5643791636],\u0022dust_tiers\u0022:3,\u0022jets\u0022:[{\u0022ttl_us\u0022:2592000000000,\u0022params\u0022:\u0022ParticleSystemEmitParams { latitude_rad: -0.17453292, longitude_rad: 0.0, aperture_rad: 0.017453292, start_velocity_mean: 50.0, start_velocity_std: 0.7800244, seed: 1892684929, diametre_um: 30.0, density_gcm3: 0.8, scattering_efficiency: 1.0, geometric_albedo: 0.04, size_q: 2.1, size_range: 10.0, afrho_0_cm: 100.0, afrho_power: 2.0, afrho_cutoff_au: 15.0, afrho_max_value_cm: 100000.0 }\u0022},{\u0022ttl_us\u0022:2592000000000,\u0022params\u0022:\u0022ParticleSystemEmitParams { latitude_rad: -0.94247776, longitude_rad: 0.0, aperture_rad: 0.008726711, start_velocity_mean: 70.0, start_velocity_std: 6.0, seed: 12716195, diametre_um: 30.0, density_gcm3: 0.8, scattering_efficiency: 1.0, geometric_albedo: 0.04, size_q: 2.1, size_range: 10.0, afrho_0_cm: 100.0, afrho_power: 2.0, afrho_cutoff_au: 15.0, afrho_max_value_cm: 100000.0 }\u0022},{\u0022ttl_us\u0022:2592000000000,\u0022params\u0022:\u0022ParticleSystemEmitParams { latitude_rad: 0.6981317, longitude_rad: 0.0, aperture_rad: 0.0034906585, start_velocity_mean: 8.0, start_velocity_std: 0.35233048, seed: 1273352477, diametre_um: 30.0, density_gcm3: 0.8, scattering_efficiency: 1.0, geometric_albedo: 0.04, size_q: 2.1, size_range: 10.0, afrho_0_cm: 100.0, afrho_power: 2.0, afrho_cutoff_au: 15.0, afrho_max_value_cm: 100000.0 }\u0022}]}",
+      "file": "states/fd6124613f8e79c7/scene.bin",
+      "dump_version": 8,
+      "created_at": "2026-10-29T10:01:04.4984172+00:00",
+      "modified_at": "2026-10-29T10:01:04.4984172+00:00",
+      "last_used_at": "2026-10-29T10:01:04.4984172+00:00",
+      "latest": true
+    }
+  ],
+  "model": {
+    "diametre_um": 30,
+    "density_g_cm3": 0.8,
+    "scattering_efficiency": 1,
+    "geometric_albedo": 0.04,
+    "size_q": 2.1,
+    "size_range": 10,
+    "afrho0_cm": 100,
+    "afrho_power": 2,
+    "afrho_cutoff_au": 15,
+    "afrho_max_value_cm": 100000,
+    "dust_softening": 0.020653801558105492,
+    "dust_tracers": false,
+    "dust_flow": false,
+    "dust_flow_speed": 1,
+    "sphere_gizmo_visible": true,
+    "sphere_gizmo_parts": 12,
+    "show_jet_angles": true,
+    "show_reference_position_error": false,
+    "manual_nucleus_radius_km": 2
+  },
+  "jets": [
+    {
+      "latitude_deg": -54,
+      "longitude_deg": 0,
+      "aperture_deg": 0.50000376,
+      "velocity_mean_ms": 70,
+      "velocity_std_ms": 6,
+      "stream_color": [
+        0.7019608,
+        0.4745098,
+        0.92156863,
+        1
+      ],
+      "preview_visible": true,
+      "seed": 12716195,
+      "diametre_um": 30,
+      "density_g_cm3": 0.8,
+      "scattering_efficiency": 1,
+      "geometric_albedo": 0.04,
+      "size_q": 2.1,
+      "size_range": 10,
+      "afrho0_cm": 100
+    },
+    {
+      "latitude_deg": -67,
+      "longitude_deg": 0,
+      "aperture_deg": 0.2,
+      "velocity_mean_ms": 70,
+      "velocity_std_ms": 0.30233926,
+      "stream_color": [
+        0.03529412,
+        0.43137255,
+        0.92156863,
+        1
+      ],
+      "preview_visible": true,
+      "seed": 633654374,
+      "diametre_um": 30,
+      "density_g_cm3": 0.8,
+      "scattering_efficiency": 1,
+      "geometric_albedo": 0.04,
+      "size_q": 2.1,
+      "size_range": 10,
+      "afrho0_cm": 100
+    },
+    {
+      "latitude_deg": -10,
+      "longitude_deg": 0,
+      "aperture_deg": 1,
+      "velocity_mean_ms": 50,
+      "velocity_std_ms": 0.7800244,
+      "stream_color": [
+        0.84313726,
+        0.92156863,
+        0.14117648,
+        1
+      ],
+      "preview_visible": true,
+      "seed": 1892684929,
+      "diametre_um": 30,
+      "density_g_cm3": 0.8,
+      "scattering_efficiency": 1,
+      "geometric_albedo": 0.04,
+      "size_q": 2.1,
+      "size_range": 10,
+      "afrho0_cm": 100
+    },
+    {
+      "latitude_deg": 40,
+      "longitude_deg": 0,
+      "aperture_deg": 0.2,
+      "velocity_mean_ms": 8,
+      "velocity_std_ms": 0.35233048,
+      "stream_color": [
+        0.5882353,
+        0.92156863,
+        0.45490196,
+        1
+      ],
+      "preview_visible": true,
+      "seed": 1273352477,
+      "diametre_um": 30,
+      "density_g_cm3": 0.8,
+      "scattering_efficiency": 1,
+      "geometric_albedo": 0.04,
+      "size_q": 2.1,
+      "size_range": 10,
+      "afrho0_cm": 100
+    }
+  ],
+  "viewports": [
+    {
+      "mode": "earth_position",
+      "camera": {
+        "transform": [
+          -0.10541222980787833,
+          0.9777679773435753,
+          -4.8877824338971995E-05,
+          0.0321633192149128,
+          -0.08938396312232387,
+          0.9366822970451933,
+          -0.3370494065204194
+        ],
+        "projection": {
+          "is_perspective": false,
+          "fov": 0.0017667218,
+          "aspect": 1.6322675,
+          "near": 0.0001,
+          "far": 0.9381795,
+          "left": -0.00066557305,
+          "right": 0.00066557305,
+          "bottom": -0.00040775983,
+          "top": 0.00040775983,
+          "focus_distance": 10
+        }
+      },
+      "orbit_offset_au": [
+        -2.378708607864155E-08,
+        -7.340726693172428E-09,
+        2.3291876871667228E-08
+      ],
+      "observer": {
+        "lat_deg": 0,
+        "lon_deg": 0,
+        "elevation_m": 0,
+        "orientation": "comet_tracking",
+        "inertial_look": [
+          0.16813734706752537,
+          -0.039370241803462505,
+          0.9220159076494651,
+          -0.3465061076269285
+        ],
+        "body_fixed_look": [
+          0.16813734706752537,
+          -0.039370241803462505,
+          0.9220159076494651,
+          -0.3465061076269285
+        ],
+        "topocentric": false,
+        "projection": null,
+        "up": "celestial_north"
+      },
+      "display": {
+        "ortho_unit": "km",
+        "fov_unit": "deg",
+        "ortho_proportions_locked": true,
+        "show_behind_camera": true
+      }
+    }
+  ],
+  "assets": [
+    {
+      "key": "c:/users/virgi/downloads/67p/gerasimenko/assets/textures/f36cb09f67126fa5_fits_lt_67p_header_4x3.fits",
+      "kind": "texture",
+      "label": "f36cb09f67126fa5_fits_lt_67p_header_4x3",
+      "original_source": "y:/aethervk_handoff/untracked_src/test_assets/fits_lt_67p_header_4x3.fits",
+      "stored_file": "assets/textures/f36cb09f67126fa5_f36cb09f67126fa5_fits_lt_67p_header_4x3.fits",
+      "content_hash": "f36cb09f67126fa5",
+      "imported_at": "2026-10-29T07:26:35.9855027+00:00",
+      "channel_hint": null,
+      "bundled_textures": null
+    },
+    {
+      "key": "c:/users/virgi/downloads/67p/gerasimenko/assets/textures/06c59da80f2a7c7a_67p_20211225_26_27_28_liverpool2m0_g_r_i_z_1x-02.fit",
+      "kind": "texture",
+      "label": "06c59da80f2a7c7a_67p_20211225_26_27_28_Liverpool2m0_g_r_i_z_1x-02",
+      "original_source": "y:/downloads/67p 20211225\u002B26\u002B27\u002B28 liverpool2m0 g\u002Br\u002Bi\u002Bz 1x-02.fit",
+      "stored_file": "assets/textures/06c59da80f2a7c7a_06c59da80f2a7c7a_67p_20211225_26_27_28_Liverpool2m0_g_r_i_z_1x-02.fit",
+      "content_hash": "06c59da80f2a7c7a",
+      "imported_at": "2026-10-29T07:26:35.9855027+00:00",
+      "channel_hint": null,
+      "bundled_textures": null
+    }
+  ],
+  "comet_appearance": {
+    "mode": "default",
+    "mesh_key": null,
+    "albedo_key": null,
+    "normal_key": null,
+    "roughness_key": null,
+    "ao_key": null,
+    "yaw_pitch_roll_deg": [
+      0,
+      0,
+      0
+    ],
+    "translation_radii": [
+      0,
+      0,
+      0
+    ]
+  },
+  "billboards": [
+    {
+      "id": "d4b3aa8c-ba53-45ce-bb36-2ae6d454d65f",
+      "texture_key": "c:/users/virgi/downloads/67p/gerasimenko/assets/textures/06c59da80f2a7c7a_67p_20211225_26_27_28_liverpool2m0_g_r_i_z_1x-02.fit",
+      "center_x": 1094.22351634844,
+      "center_y": 444.183033211636,
+      "width_px": 699.040408389268,
+      "height_px": 699.040408389268,
+      "alpha": 0.28773584905660377,
+      "rotation_deg": 0,
+      "visible": true,
+      "image_arcsec_per_px": 0.30367712154309917,
+      "image_height_km": null,
+      "image_width_px": 1200,
+      "image_height_px": 1200,
+      "physical_size_bound": true,
+      "fits_stretch": null,
+      "image_nucleus_x": 593.061643360283,
+      "image_nucleus_y": 604.370835825222
+    }
+  ]
+}
