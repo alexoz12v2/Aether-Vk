@@ -150,7 +150,7 @@ public sealed class ReviewerMailTests(ITestOutputHelper output)
 
   private void Step(string name) => output.WriteLine($"{DateTime.Now:HH:mm:ss} {name}");
 
-  private static void CopyDir(string from, string to)
+  internal static void CopyDir(string from, string to)
   {
     Directory.CreateDirectory(to);
     foreach (var f in Directory.GetFiles(from, "*", SearchOption.AllDirectories))
