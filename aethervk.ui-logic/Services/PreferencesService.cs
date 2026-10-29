@@ -168,7 +168,7 @@ public sealed class PreferencesService
         return;
       }
       _file = file;
-      _file.RecentSaves = _file.RecentSaves.Where(Directory.Exists).Take(PreferencesFile.MaxRecentSaves).ToList();
+      _file.RecentSaves = _file.RecentSaves.Where(p => Directory.Exists(p) || File.Exists(p)).Take(PreferencesFile.MaxRecentSaves).ToList();
       if (_file.InputBindings is { } bindings)
         _registry.Replace(bindings.Select(FromDto));
       LoadOutcome = "loaded";

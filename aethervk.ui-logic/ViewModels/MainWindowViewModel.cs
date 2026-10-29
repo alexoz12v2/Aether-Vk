@@ -127,10 +127,16 @@ public partial class MainWindowViewModel : ViewModelBase
       _noRecentItem.IsVisible = recent.Count == 0;
   }
 
+  /// <summary>The open save's name: the <c>.avk</c> without its extension, else the folder's.</summary>
+  private static string SaveName(SaveFileService saves) =>
+    saves.CurrentArchivePath is { } avk ? System.IO.Path.GetFileNameWithoutExtension(avk)
+    : saves.CurrentSaveDir is { } dir ? System.IO.Path.GetFileName(dir)
+    : "Untitled";
+
   public void RefreshTitle()
   {
     if (_saveFiles is null) return;
-    var name = _saveFiles.CurrentSaveDir is { } dir ? System.IO.Path.GetFileName(dir) : "Untitled";
+    var name = SaveName(_saveFiles);
     WindowTitle = $"{AppName} — {name}{(_saveFiles.IsDirty ? " *" : string.Empty)}";
   }
 
@@ -141,7 +147,7 @@ public partial class MainWindowViewModel : ViewModelBase
   public async Task<bool> ConfirmDiscardAsync()
   {
     if (_saveFiles is null || !_saveFiles.IsDirty || _unsavedPrompt is null) return true;
-    var name = _saveFiles.CurrentSaveDir is { } dir ? System.IO.Path.GetFileName(dir) : "Untitled";
+    var name = SaveName(_saveFiles);
     return await _unsavedPrompt.AskAsync(name) switch
     {
       UnsavedChoice.Save => await SaveCoreAsync(),
@@ -161,17 +167,18 @@ public partial class MainWindowViewModel : ViewModelBase
   private async Task OpenSaveAsync()
   {
     if (_saveFiles is null) return;
-    var path = await _fileDialogService.ShowOpenFileDialogAsync($"Open ({SaveIndex.FileName})", ["json"]);
+    var path = await _fileDialogService.ShowOpenFileDialogAsync($"Open (.avk or {SaveIndex.FileName})", ["avk", "json"]);
     if (string.IsNullOrEmpty(path)) return;
-    if (!string.Equals(System.IO.Path.GetFileName(path), SaveIndex.FileName, StringComparison.Ordinal))
+    if (!SaveArchive.IsArchive(path!)
+        && !string.Equals(System.IO.Path.GetFileName(path), SaveIndex.FileName, StringComparison.Ordinal))
     {
-      _ = _breadcrumbService.ShowMessageAsync("Open", $"Pick the {SaveIndex.FileName} of a save folder.", default, 2);
+      _ = _breadcrumbService.ShowMessageAsync("Open", $"Pick an .avk save, or the {SaveIndex.FileName} of a save folder.", default, 2);
       return;
     }
     await OpenPathAsync(path!);
   }
 
-  /// <summary>Opens the save at <paramref name="path"/> (folder or index), asking about unsaved changes first.</summary>
+  /// <summary>Opens the save at <paramref name="path"/> (.avk, folder or index), asking about unsaved changes first.</summary>
   public async Task OpenPathAsync(string path)
   {
     if (_saveFiles is null || !await ConfirmDiscardAsync()) return;
@@ -184,18 +191,32 @@ public partial class MainWindowViewModel : ViewModelBase
   [RelayCommand]
   private async Task SaveAsAsync() => await SaveAsCoreAsync();
 
+  [RelayCommand]
+  private async Task SaveAsFolderAsync() => await SaveAsFolderCoreAsync();
+
   private async Task<bool> SaveCoreAsync()
   {
     if (_saveFiles is null) return false;
-    if (_saveFiles.CurrentSaveDir is { } dir)
-      return await _saveFiles.SaveAsync(dir);
+    if (_saveFiles.CurrentSavePath is { } path)
+      return await _saveFiles.SaveAsync(path);
     return await SaveAsCoreAsync();
   }
 
+  /// <summary>Save As: one <c>.avk</c> file (the default since the reviewer report of 2026-10-29).</summary>
   private async Task<bool> SaveAsCoreAsync()
   {
     if (_saveFiles is null) return false;
-    var dir = await _fileDialogService.PickFolderAsync("Save As (choose or create a folder)");
+    var path = await _fileDialogService.ShowSaveFileDialogAsync("Save As", "avk", ["avk"]);
+    if (string.IsNullOrEmpty(path)) return false;
+    if (!SaveArchive.IsArchive(path!)) path += SaveArchive.Extension;
+    return await _saveFiles.SaveAsync(path!);
+  }
+
+  /// <summary>Save As Folder: the folder layout (docs/savefile.md), for inspecting a save.</summary>
+  private async Task<bool> SaveAsFolderCoreAsync()
+  {
+    if (_saveFiles is null) return false;
+    var dir = await _fileDialogService.PickFolderAsync("Save As Folder (choose or create a folder)");
     if (string.IsNullOrEmpty(dir)) return false;
     return await _saveFiles.SaveAsync(dir!);
   }
@@ -229,6 +250,7 @@ public partial class MainWindowViewModel : ViewModelBase
       fileMenu.Items.Add(new MenuItemViewModel { IsSeparator = true });
       fileMenu.Items.Add(new MenuItemViewModel { Header = "Save", Gesture = "Ctrl+S", Command = SaveCommand });
       fileMenu.Items.Add(new MenuItemViewModel { Header = "Save As...", Gesture = "Ctrl+Shift+S", Command = SaveAsCommand });
+      fileMenu.Items.Add(new MenuItemViewModel { Header = "Save As Folder...", Command = SaveAsFolderCommand });
       MainMenu.Add(fileMenu);
     }
 
