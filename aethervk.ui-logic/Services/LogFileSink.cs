@@ -29,6 +29,12 @@ public sealed class LogFileSink : IDisposable
   private readonly object _lastLineLock = new object();
   private string _lastLine = string.Empty;
 
+  // The newest lines, for a crash report (CrashReport); guarded by _lastLineLock
+  private readonly System.Collections.Generic.Queue<string> _recent = new();
+
+  /// <summary>How many of the newest lines <see cref="RecentLines"/> keeps.</summary>
+  public const int RecentLineCount = 200;
+
   public string FilePath { get; }
 
   public string FolderPath => Path.GetDirectoryName(FilePath) ?? string.Empty;
@@ -114,8 +120,20 @@ public sealed class LogFileSink : IDisposable
     lock (_lastLineLock)
     {
       _lastLine = line;
+      _recent.Enqueue(line);
+      if (_recent.Count > RecentLineCount)
+        _recent.Dequeue();
     }
     Enqueue(w => w.WriteLine(line));
+  }
+
+  /// <summary>The newest <see cref="RecentLineCount"/> lines written, oldest first.</summary>
+  public string[] RecentLines()
+  {
+    lock (_lastLineLock)
+    {
+      return _recent.ToArray();
+    }
   }
 
   /// <summary>

@@ -196,6 +196,36 @@ public sealed class TimelineService : IDisposable
 
   public void RequestRecommit() => _recommitRequestSubject.OnNext(System.Reactive.Unit.Default);
 
+  /// <summary>The longest dust lead time: the jet TTL (JET_TTL_US, 30 d) and the SPK margin before the start.</summary>
+  public const double MaxDustLeadDays = 30;
+
+  private double _dustLeadDays = MaxDustLeadDays;
+
+  /// <summary>
+  /// How long before the committed start the jets ignite (reviewer report 2026-10-29: igniting at the
+  /// start left no tail until Run to End rebuilt the last TTL). The default, one TTL, gives a tail
+  /// already formed at the start. Applies to jets created from now on (the next commit).
+  /// </summary>
+  public double DustLeadDays
+  {
+    get => _dustLeadDays;
+    set => _dustLeadDays = double.IsNaN(value) ? MaxDustLeadDays : Math.Min(MaxDustLeadDays, Math.Max(0, value));
+  }
+
+  /// <summary>
+  /// The ignition jets are created with: the committed start minus <see cref="DustLeadDays"/>, TDB
+  /// µs since J2000; <c>long.MaxValue</c> (the scene clock) without a committed comet.
+  /// </summary>
+  public long IgnitionUs() => IgnitionUs(_cometConfigService.CommittedInputs?.Range, DustLeadDays);
+
+  internal static long IgnitionUs(TimeRange? committed, double leadDays)
+  {
+    if (committed is null) return long.MaxValue;
+    const long UsPerDay = 86_400L * 1_000_000L;
+    long startUs = committed.StartCenturies * 36525L * UsPerDay + (long)(committed.StartNs / 1000UL);
+    return startUs - (long)Math.Round(leadDays * UsPerDay);
+  }
+
   public bool SnapshotRestore()
   {
       bool ok = _runtimeService.RestoreSnapshotSync();

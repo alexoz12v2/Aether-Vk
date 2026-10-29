@@ -686,6 +686,10 @@
                              Foreground="{DynamicResource Accent.Primary}"
                              FontWeight="SemiBold" />
 
+                  <CheckBox AutomationProperties.AutomationId="DiagnosticPanelsCheckBox" Content="Show diagnostic panels (all viewports)"
+                            IsChecked="{ReflectionBinding $parent[UserControl].DataContext.ShowDiagnosticPanels}"
+                            ToolTip.Tip="The camera coordinates, dust history, observer line and orbit debug panels over the viewport. For checking the engine; hidden by default." />
+
                   <CheckBox AutomationProperties.AutomationId="ComparisonLockCheckBox" Content="Lock viewport for comparison"
                             IsChecked="{Binding IsComparisonLocked}"
                             ToolTip.Tip="Refuse mouse orbit, pan and zoom and grey the projection, so the view stays matched to a telescope image." />

@@ -44,6 +44,9 @@ public sealed class PreferencesFile
   /// <summary>Orbit-debug HUD panel expanded; missing = expanded.</summary>
   [JsonPropertyName("hud_orbit_expanded")]
   public bool? HudOrbitExpanded { get; set; }
+  /// <summary>Diagnostic HUD panels (camera coordinates, orbit debug) shown; missing = hidden.</summary>
+  [JsonPropertyName("show_diagnostic_panels")]
+  public bool? ShowDiagnosticPanels { get; set; }
 }
 
 public sealed class BindingDto
@@ -130,6 +133,19 @@ public sealed class PreferencesService
   public bool HudCameraExpanded => _file.HudCameraExpanded ?? true;
 
   public bool HudOrbitExpanded => _file.HudOrbitExpanded ?? true;
+
+  /// <summary>Forces <see cref="ShowDiagnosticPanels"/> on (the e2e reads the observer line).</summary>
+  public const string DiagnosticPanelsEnvVar = "AETHERVK_DIAGNOSTIC_PANELS";
+
+  /// <summary>The diagnostic HUD panels (camera coordinates, dust history, observer line, orbit
+  /// debug) are shown: hidden unless enabled in Settings or by <see cref="DiagnosticPanelsEnvVar"/>
+  /// = 1 (reviewer report 2026-10-29: coordinate windows that would not close, meaningless to a
+  /// user).</summary>
+  public bool ShowDiagnosticPanels =>
+    (_file.ShowDiagnosticPanels ?? false) || Environment.GetEnvironmentVariable(DiagnosticPanelsEnvVar) == "1";
+
+  /// <summary>Raised by <see cref="SetShowDiagnosticPanels"/> with the new value.</summary>
+  public event Action<bool>? ShowDiagnosticPanelsChanged;
 
   /// <summary>What <see cref="Load"/> did: "defaults", "loaded", "corrupt", "newer".</summary>
   public string LoadOutcome { get; private set; } = "defaults";
@@ -222,6 +238,13 @@ public sealed class PreferencesService
   {
     _file.HudOrbitExpanded = expanded;
     Save();
+  }
+
+  public void SetShowDiagnosticPanels(bool shown)
+  {
+    _file.ShowDiagnosticPanels = shown;
+    Save();
+    ShowDiagnosticPanelsChanged?.Invoke(ShowDiagnosticPanels);
   }
 
   /// <summary>Moves <paramref name="saveDir"/> to the front of the recent saves.</summary>

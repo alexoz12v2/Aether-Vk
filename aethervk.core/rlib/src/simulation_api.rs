@@ -35,6 +35,8 @@ pub mod scene_api;
 pub mod scene_dump;
 #[cfg(test)]
 mod scene_dump_tests;
+#[cfg(test)]
+mod review_67p_repro_tests;
 pub mod structs;
 pub mod time_api;
 const MAX_UNSCALED_DELTA_MS: u32 = 500_u32;

@@ -1,4 +1,5 @@
 using System;
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Reactive.Disposables;
 using AetherVk.Logic.Services;
@@ -22,6 +23,10 @@ public sealed partial class CameraMatrixDebugViewModel : ObservableObject, IDisp
     partial void OnIsExpandedChanged(bool value) => _preferences?.SetHudCameraExpanded(value);
 
     [RelayCommand] private void ToggleExpanded() => IsExpanded = !IsExpanded;
+
+    /// <summary>The panel is shown at all (<see cref="PreferencesService.ShowDiagnosticPanels"/>;
+    /// shown without preferences).</summary>
+    [ObservableProperty] private bool _isShown = true;
 
     /// <summary>Dust history per age tier (<see cref="FormatDustHistory"/>), empty without dust.</summary>
     [ObservableProperty] private string _dustHistory = string.Empty;
@@ -49,6 +54,13 @@ public sealed partial class CameraMatrixDebugViewModel : ObservableObject, IDisp
     {
         _preferences = preferences;
         _isExpanded = preferences?.HudCameraExpanded ?? true;
+        if (preferences is not null)
+        {
+            _isShown = preferences.ShowDiagnosticPanels;
+            Action<bool> shown = v => schedulerProvider.MainThread.Schedule(() => IsShown = v);
+            preferences.ShowDiagnosticPanelsChanged += shown;
+            _disposables.Add(Disposable.Create(() => preferences.ShowDiagnosticPanelsChanged -= shown));
+        }
         _disposables.Add(
             Observable.Timer(TimeSpan.Zero, TimeSpan.FromMilliseconds(500), schedulerProvider.Background)
                 .Select(_ =>

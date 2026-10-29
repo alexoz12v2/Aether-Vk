@@ -56,7 +56,7 @@ class Program
     AppDomain.CurrentDomain.UnhandledException += (_, e) =>
     {
       logSink.Write($"[FATAL] Unhandled exception (terminating: {e.IsTerminating}): {e.ExceptionObject}");
-      logSink.Flush(TimeSpan.FromSeconds(2));
+      CrashReport.Write(logSink, "Unhandled exception", $"terminating: {e.IsTerminating}\n{e.ExceptionObject}");
     };
     TaskScheduler.UnobservedTaskException += (_, e) =>
     {

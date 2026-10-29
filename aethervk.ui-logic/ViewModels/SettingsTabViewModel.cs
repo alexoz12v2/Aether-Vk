@@ -20,6 +20,21 @@ public partial class SettingsTabViewModel
   private readonly CompositeDisposable _disposables = [];
   private readonly INativeRuntimeService _runtimeService;
   private readonly ISchedulerProvider _schedulerProvider;
+  private readonly PreferencesService _preferences;
+
+  /// <summary>The diagnostic HUD panels over every viewport (camera coordinates, dust history,
+  /// observer line, orbit debug); hidden by default, saved to preferences.json.</summary>
+  public bool ShowDiagnosticPanels
+  {
+    get => _preferences.ShowDiagnosticPanels;
+    set
+    {
+      if (value == _preferences.ShowDiagnosticPanels)
+        return;
+      _preferences.SetShowDiagnosticPanels(value);
+      OnPropertyChanged();
+    }
+  }
 
   [ObservableProperty]
   private string _cameraModeName = "Up Zenith";
@@ -62,6 +77,7 @@ public partial class SettingsTabViewModel
     _translationService = translationService;
     _runtimeService = runtimeService;
     _schedulerProvider = schedulerProvider;
+    _preferences = preferences;
     CometAppearance = new CometAppearanceViewModel(
       runtimeService,
       assetLibrary,

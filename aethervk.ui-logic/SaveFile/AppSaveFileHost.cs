@@ -101,6 +101,7 @@ public sealed class AppSaveFileHost : ISaveFileHost
       ProposedStart = NullIfEmpty(timeline.ProposedStartEpoch),
       ProposedEnd = NullIfEmpty(timeline.ProposedEndEpoch),
       Speed = timeline.Speed,
+      DustLeadDays = timeline.DustLeadDays,
     };
     LiveComet? live = null;
     if (inputs is not null)
@@ -294,6 +295,8 @@ public sealed class AppSaveFileHost : ISaveFileHost
     if (timeline.ProposedStart is { } ps) session.ProposedStartEpoch = ps;
     if (timeline.ProposedEnd is { } pe) session.ProposedEndEpoch = pe;
     if (timeline.Speed is { } speed) session.Speed = speed;
+    session.DustLeadDays = timeline.DustLeadDays;
+    _timeline.DustLeadDays = timeline.DustLeadDays ?? TimelineService.MaxDustLeadDays;
     if (committed && timeline.CommittedStart is { } cs && timeline.CommittedEnd is { } ce)
     {
       session.CommittedStartEpoch = EpochText(cs, session.ProposedStartEpoch);
@@ -344,7 +347,7 @@ public sealed class AppSaveFileHost : ISaveFileHost
     if (spk.NucleusRadiusKm > 0)
       _cometConfig.SetNucleusRadiusKm(spk.NucleusRadiusKm);
     var model = Model;
-    JetNativeSync.EnsureNative(_runtime, model, JetNativeSync.EffectiveNucleusRadiusKm(model, comet));
+    JetNativeSync.EnsureNative(_runtime, model, JetNativeSync.EffectiveNucleusRadiusKm(model, comet), _timeline.IgnitionUs());
     _messenger.Send(new CometCommittedMessage(range));
     comet.NotifyRestored();
     return true;
