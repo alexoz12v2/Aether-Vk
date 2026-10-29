@@ -41,9 +41,14 @@ public sealed class SaveFileService
   private readonly Dictionary<string, AssetDto> _assetOrigins = new(StringComparer.Ordinal);
   private string? _lastReusedHash;
 
+  private readonly string _archiveWorkRoot;
+
+  /// <param name="archiveWorkRoot">Where <c>.avk</c> saves are unpacked and staged
+  /// (<see cref="SaveArchive.DefaultWorkRoot"/> when null).</param>
   public SaveFileService(ISaveFileHost host, ISystemClock clock, PreferencesService? preferences = null,
-    string appVersion = "")
+    string appVersion = "", string? archiveWorkRoot = null)
   {
+    _archiveWorkRoot = archiveWorkRoot ?? SaveArchive.DefaultWorkRoot();
     _host = host;
     _clock = clock;
     _preferences = preferences;
@@ -53,8 +58,15 @@ public sealed class SaveFileService
 
   private readonly IDisposable _reuseSubscription;
 
-  /// <summary>The folder of the open save; null for an unsaved session.</summary>
+  /// <summary>The folder of the open save (for an <c>.avk</c>, its work folder); null for an
+  /// unsaved session.</summary>
   public string? CurrentSaveDir { get; private set; }
+
+  /// <summary>The <c>.avk</c> the open save came from or was saved to; null for a folder save.</summary>
+  public string? CurrentArchivePath { get; private set; }
+
+  /// <summary>What the user opened or saved: the <c>.avk</c>, else the folder.</summary>
+  public string? CurrentSavePath => CurrentArchivePath ?? CurrentSaveDir;
 
   /// <summary>The index as last written or opened (null for an unsaved session).</summary>
   public SaveIndex? CurrentIndex => _index;
@@ -157,6 +169,7 @@ public sealed class SaveFileService
   private void Forget()
   {
     CurrentSaveDir = null;
+    CurrentArchivePath = null;
     _index = null;
     _assetOrigins.Clear();
     _lastReusedHash = null;
@@ -167,7 +180,9 @@ public sealed class SaveFileService
   /// <summary>
   /// Saves into <paramref name="saveDir"/> (Save: the open save's folder; Save As: a new one).
   /// SPK and assets are copied in, the scene is dumped to <c>states/&lt;hash&gt;/scene.bin</c>, and
-  /// the index is written last, atomically.
+  /// the index is written last, atomically. A path ending in <c>.avk</c> saves a single file: the
+  /// folder is written into a work folder (the open archive's, else a new one) and packed
+  /// (<see cref="SaveArchive.Pack"/>).
   /// </summary>
   public async Task<bool> SaveAsync(string saveDir)
   {
@@ -175,7 +190,9 @@ public sealed class SaveFileService
     bool ok;
     try
     {
-      ok = await SaveCoreAsync(Path.GetFullPath(saveDir));
+      ok = SaveArchive.IsArchive(saveDir)
+        ? await SaveArchiveCoreAsync(Path.GetFullPath(saveDir))
+        : await SaveCoreAsync(Path.GetFullPath(saveDir));
     }
     finally
     {
@@ -185,7 +202,30 @@ public sealed class SaveFileService
     return ok;
   }
 
-  private async Task<bool> SaveCoreAsync(string dir)
+  private async Task<bool> SaveArchiveCoreAsync(string archive)
+  {
+    var work = string.Equals(CurrentArchivePath, archive, StringComparison.Ordinal) && CurrentSaveDir is { } open
+      ? open
+      : Path.Combine(_archiveWorkRoot, $"save-{_clock.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N").Substring(0, 8)}");
+    if (!await SaveCoreAsync(work, recent: false))
+      return false;
+    try
+    {
+      SaveArchive.Pack(work, archive);
+    }
+    catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+    {
+      _host.Notify("Save", $"Could not write {archive}: {e.Message}", error: true);
+      // the work folder holds the save: the next Save packs it again
+      CurrentArchivePath = archive;
+      return false;
+    }
+    CurrentArchivePath = archive;
+    _preferences?.AddRecentSave(archive);
+    return true;
+  }
+
+  private async Task<bool> SaveCoreAsync(string dir, bool recent = true)
   {
     var now = _clock.UtcNow;
     var snap = _host.Capture();
@@ -223,10 +263,11 @@ public sealed class SaveFileService
     }
 
     CurrentSaveDir = dir;
+    CurrentArchivePath = null;
     _index = index;
     foreach (var a in index.Assets) _assetOrigins[a.Key] = a;
     _fingerprint = Fingerprint(snap);
-    _preferences?.AddRecentSave(dir);
+    if (recent) _preferences?.AddRecentSave(dir);
     return true;
   }
 
@@ -354,6 +395,8 @@ public sealed class SaveFileService
   /// cache entries, resets the application, then rebuilds it from the index: assets, model and
   /// jets, comet, appearance, scene state (or a seek), cameras and billboards. Paused.
   /// </summary>
+  /// A path ending in <c>.avk</c> is unpacked into a new work folder first
+  /// (<see cref="SaveArchive.Extract"/>; a refused archive opens nothing).
   public async Task<OpenResult> OpenAsync(string saveDir)
   {
     if (string.Equals(Path.GetFileName(saveDir), SaveIndex.FileName, StringComparison.Ordinal))
@@ -362,7 +405,9 @@ public sealed class SaveFileService
     OpenResult result;
     try
     {
-      result = await OpenCoreAsync(Path.GetFullPath(saveDir));
+      result = SaveArchive.IsArchive(saveDir)
+        ? await OpenArchiveCoreAsync(Path.GetFullPath(saveDir))
+        : await OpenCoreAsync(Path.GetFullPath(saveDir));
     }
     finally
     {
@@ -372,7 +417,29 @@ public sealed class SaveFileService
     return result;
   }
 
-  private async Task<OpenResult> OpenCoreAsync(string dir)
+  private async Task<OpenResult> OpenArchiveCoreAsync(string archive)
+  {
+    string dir;
+    try
+    {
+      SaveArchive.CleanWorkRoot(_archiveWorkRoot, _clock.UtcNow.LocalDateTime, keep: CurrentSaveDir);
+      dir = SaveArchive.Extract(archive, _archiveWorkRoot, _clock.UtcNow.LocalDateTime);
+    }
+    catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException)
+    {
+      _host.Notify("Open", $"{Path.GetFileName(archive)} could not be opened: {e.Message}", error: true);
+      return new OpenResult(false, e is InvalidDataException ? SaveIndexError.Unreadable : SaveIndexError.Missing);
+    }
+    var result = await OpenCoreAsync(dir, recent: false);
+    if (result.Success)
+    {
+      CurrentArchivePath = archive;
+      _preferences?.AddRecentSave(archive);
+    }
+    return result;
+  }
+
+  private async Task<OpenResult> OpenCoreAsync(string dir, bool recent = true)
   {
     var (index, error) = SaveIndexIo.Read(dir);
     if (index is null)
@@ -450,7 +517,7 @@ public sealed class SaveFileService
     foreach (var (liveKey, saved) in byKey.Values.Select(v => (v.Key, v.Saved)))
       _assetOrigins[liveKey] = saved;
     _fingerprint = Fingerprint(_host.Capture());
-    _preferences?.AddRecentSave(dir);
+    if (recent) _preferences?.AddRecentSave(dir);
     return new OpenResult(true, StateRestored: restored, Sought: sought, ExpiredStates: expiredStates,
       ExpiredSpk: expiredSpk, MissingFiles: missing);
   }
