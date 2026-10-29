@@ -125,17 +125,17 @@ const SAVE_JETS: [SaveJet; 4] = [
 
 /// The DTO the UI sends for `jet` (the model's grain / activity values copied into the record).
 fn save_dto(jet: &SaveJet, emission_start_us: i64) -> ParticleSystemDTO {
-  ParticleSystemDTO {
+  let mut dto = ParticleSystemDTO {
     diametre_um: 30.0,
     density_gcm3: 0.8,
     scattering_efficiency: 1.0,
     geometric_albedo: 0.04,
     size_q: 2.1,
     size_range: 10.0,
-    afrho_0_cm: 100.0,
-    afrho_power: 2.0,
-    afrho_cutoff_au: 15.0,
-    afrho_max_value_cm: 100_000.0,
+    dust_rate_1au_kgs: 0.0,
+    dust_rate_power: 2.0,
+    dust_rate_cutoff_au: 15.0,
+    dust_rate_max_kgs: 0.0,
     latitude_rad: jet.lat_deg.to_radians(),
     longitude_rad: jet.lon_deg.to_radians(),
     aperture_rad: jet.aperture_deg.to_radians(),
@@ -146,7 +146,12 @@ fn save_dto(jet: &SaveJet, emission_start_us: i64) -> ParticleSystemDTO {
     seed: jet.seed,
     _pad: 0,
     emission_start_us,
-  }
+  };
+  // the activity the save held as an Afρ of 100.0 cm (max 100_000.0 cm), as a dust rate (v9)
+  let p = crate::scene::particles::ParticleSystemEmitParams::from_dto(&dto);
+  dto.dust_rate_1au_kgs = p.dust_rate_from_afrho_kgs(100.0);
+  dto.dust_rate_max_kgs = p.dust_rate_from_afrho_kgs(100_000.0);
+  dto
 }
 
 fn fmt_epoch(e: Epoch) -> String {

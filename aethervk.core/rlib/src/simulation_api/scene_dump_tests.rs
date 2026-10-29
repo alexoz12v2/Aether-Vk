@@ -611,6 +611,6 @@ mod scene_dump_tests {
       assert_eq!(format!("{:?}", restored.projection), format!("{:?}", original.projection));
       assert_eq!(restored.focus_distance, original.focus_distance);
     }
-    assert_eq!(SceneDump::CURRENT_VERSION, 8);
+    assert_eq!(SceneDump::CURRENT_VERSION, 9);
   }
 }

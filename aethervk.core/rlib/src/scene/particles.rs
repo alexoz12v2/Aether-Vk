@@ -64,36 +64,24 @@ pub mod v2 {
     /// mass → cross-section conversion, the Afρ closure and the speck counts. 0 or out of range
     /// reads as 10 ([`Self::size_range`]).
     pub size_range: f32,
-    /// "Af-rho" photometric parameter. measures comet's dust activity, equal to product of - dust albedo - filling factor - size of viewing area .
-    ///
-    /// It is dependant on the
-    /// sun-comet nucleus distance and is proportional to the dust production rate in kg/s.
-    /// Here we report afrho parameter at distance of 1 AU, which we compose to a cutoff distance
-    /// and max value with a power curve of exponent `k`
-    /// Note: datasets like `locdprod` of https://pdssbn.astro.umd.edu/holdings/ear-c-phot-3-rdr-lowell-comet-db-v1.0/dataset.shtml
-    /// measures its logarithm base 10 with blue frequencies albedo and UV frequencies albedo. (we want
-    /// blue one. We are not registering logarithm, but base value here)
-    /// Unit of measurement: cm
-    /// Large range, from ~50 cm to ~250_000 cm
-    /// Example from database:
-    ///
-    /// | activity level   | comet                 | year | value          | distance | source                                                                                        |
-    /// | ---------------- | --------------------- | ---- | -------------- | -------- | --------------------------------------------------------------------------------------------- |
-    /// | low activity     | 2P/Encke              | 1984 | 8.128 cm       | 0.913 AU | https://pdssbn.astro.umd.edu/holdings/ear-c-phot-3-rdr-lowell-comet-db-v1.0/data/locdprod.tab |
-    /// | medium activity  | 1P/Halley             | 2007 | 23.94 cm       | 2 AU     | https://www.aanda.org/articles/aa/full_html/2013/09/aa22020-13/aa22020-13.html                |
-    /// | high activity    | 47P/Ashbroook-Jackson | 1978 | 537.03 cm      | 2.288 AU | https://pdssbn.astro.umd.edu/holdings/ear-c-phot-3-rdr-lowell-comet-db-v1.0/data/locdprod.tab |
-    /// | extreme activity | Hale-Bopp             | 1995 | 1,000,000 cm   | 0.914 AU | https://cara.uai.it/measuring-comets                                                          |
-    // TODO C# side: function to fit in these 4 params a measurement from a given distance
-    pub afrho_0_cm: f32,
-    /// "Af-rho" parameter power curve exponent. from 1.0 to 4.0 (default 2.0, quadratic decay)
-    pub afrho_power: f32,
-    /// "Af-rho" distance parameter, over which, computed afro is dropped to zero, nullifying
-    /// particle emission. eg. 5 AU or higher. Not lower than 3 AU
-    pub afrho_cutoff_au: f32,
-    /// "Af-rho" maxium value, so that when distance is really low, emission doesn't get infinitely
-    /// large values. Unit: cm
-    /// Example value: 100_000 cm
-    pub afrho_max_value_cm: f32,
+    /// Dust production rate `Q_d` of this jet at a heliocentric distance of 1 AU, in kg/s. The
+    /// activity input of the model (reviewer request R6: Afρ is no longer an input, it stays a
+    /// validation observable, see [`Self::dust_rate_from_afrho_kgs`]). The rate at another
+    /// distance follows the power law `Q_d(r) = Q_d(1 AU) · r^-k` composed with
+    /// [`Self::dust_rate_cutoff_au`] and [`Self::dust_rate_max_kgs`]
+    /// ([`Self::dust_production_rate_kgs`]).
+    /// Unit of measurement: kg/s. Typical range: ~0.01 kg/s (2P/Encke-class low activity) to
+    /// several 1000 kg/s (Hale-Bopp-class), default 2 kg/s per jet.
+    pub dust_rate_1au_kgs: f32,
+    /// heliocentric power-law exponent `k` of the dust production rate, from 1.0 to 4.0 (default
+    /// 2.0, quadratic decay)
+    pub dust_rate_power: f32,
+    /// heliocentric distance at or after which the dust production rate is 0, nullifying particle
+    /// emission. eg. 5 AU or higher, default 15 AU. Not lower than 3 AU
+    pub dust_rate_cutoff_au: f32,
+    /// maximum dust production rate, so that when the distance is really low, emission doesn't
+    /// get infinitely large values. Unit: kg/s, default 2000 kg/s
+    pub dust_rate_max_kgs: f32,
   }
 
   impl ParticleSystemEmitParams {
@@ -190,17 +178,16 @@ pub mod v2 {
     /// mean size of the q = 3.5 distribution is `s_ref`) this is the thesis / Agarwal form
     /// `Q_d = 2 ρ_d s_ref v_ref Afρ / (3 p f_v (1 + v_std_rel²))`. Verified by
     /// `afrho_closure_from_a_steady_isotropic_coma`.
-    pub fn dust_production_rate_kgs(&self, r_helio_au: f32) -> f32 {
-      use aethervk_oshal_rlib::math::FloatLike;
-      // clamp to cutoff distance
-      if r_helio_au >= self.afrho_cutoff_au || !(self.geometric_albedo > 0.0) {
+    ///
+    /// Since scene dump v9 the activity input is `Q_d` itself ([`Self::dust_rate_1au_kgs`]), so
+    /// this conversion is no longer on the emission path: it is kept for validation (the closure
+    /// test, the observer's analytic aperture Afρ) and for reading pre-v9 saves whose activity was
+    /// an Afρ in cm. Returns 0 when the albedo is not positive (the conversion is undefined).
+    pub fn dust_rate_from_afrho_kgs(&self, afrho_cm: f32) -> f32 {
+      if !(self.geometric_albedo > 0.0) {
         return 0.0_f32;
       }
-
-      let current_afrho_cm =
-        self.afrho_0_cm * <f32 as FloatLike>::pow(r_helio_au, -self.afrho_power);
-      let clamped_afrho_cm = <f32 as FloatLike>::min(current_afrho_cm, self.afrho_max_value_cm);
-      let afrho_m = clamped_afrho_cm / 100_f32;
+      let afrho_m = afrho_cm / 100_f32;
       let radius_m = self.diametre_um * 0.5e-6_f32;
       let density_kgm3 = self.density_gcm3 * 1e3_f32;
       let dist = self.size_distribution();
@@ -215,6 +202,33 @@ pub mod v2 {
       // the ejection speed does not depend on the heliocentric distance (as the Godot version)
       (2.0 * density_kgm3 * radius_m * v_ref * afrho_m)
         / (3.0 * self.geometric_albedo * f_v * (1.0 + v_std_rel * v_std_rel))
+    }
+
+    /// Inverse of [`Self::dust_rate_from_afrho_kgs`]: the Afρ (cm) a steady coma of production
+    /// rate `q_kgs` would show with this jet's grain and speed parameters. 0 when the conversion
+    /// factor is 0 (albedo not positive or no ejection speed).
+    pub fn afrho_cm_from_dust_rate(&self, q_kgs: f32) -> f32 {
+      let factor = self.dust_rate_from_afrho_kgs(1.0) as f64;
+      if factor == 0.0 || !factor.is_finite() {
+        return 0.0_f32;
+      }
+      (q_kgs as f64 / factor) as f32
+    }
+
+    /// Dust production rate of this jet at the heliocentric distance `r_helio_au`, in kg/s:
+    /// `min(Q_d(1 AU) · r^-k, Q_d max)` below the cutoff distance, 0 at or after it (and never
+    /// negative). Independent of the albedo: the activity input is a mass rate, the photometry
+    /// (albedo, size law) only enters the rendered brightness and the Afρ closure.
+    pub fn dust_production_rate_kgs(&self, r_helio_au: f32) -> f32 {
+      use aethervk_oshal_rlib::math::FloatLike;
+      // clamp to cutoff distance
+      if r_helio_au >= self.dust_rate_cutoff_au {
+        return 0.0_f32;
+      }
+
+      let current_kgs =
+        self.dust_rate_1au_kgs * <f32 as FloatLike>::pow(r_helio_au, -self.dust_rate_power);
+      <f32 as FloatLike>::min(current_kgs, self.dust_rate_max_kgs).max(0.0)
     }
   }
 
@@ -345,10 +359,10 @@ pub mod v2 {
         geometric_albedo: dto.geometric_albedo,
         size_q: dto.size_q,
         size_range: dto.size_range,
-        afrho_0_cm: dto.afrho_0_cm,
-        afrho_power: dto.afrho_power,
-        afrho_cutoff_au: dto.afrho_cutoff_au,
-        afrho_max_value_cm: dto.afrho_max_value_cm,
+        dust_rate_1au_kgs: dto.dust_rate_1au_kgs,
+        dust_rate_power: dto.dust_rate_power,
+        dust_rate_cutoff_au: dto.dust_rate_cutoff_au,
+        dust_rate_max_kgs: dto.dust_rate_max_kgs,
         latitude_rad: dto.latitude_rad,
         longitude_rad: dto.longitude_rad,
         aperture_rad: dto.aperture_rad,

@@ -3,7 +3,7 @@ namespace AetherVk.UI.E2E;
 /// <summary>
 /// A jet site; <see cref="SpeedMs"/> and <see cref="ApertureDeg"/> are left at the application's
 /// random defaults when null. With a speed, its σ is <see cref="SpeedStdFraction"/> of it.
-/// <see cref="DiametreUm"/> (grain diameter, µm) and <see cref="Afrho0Cm"/> (Afρ at 1 AU, cm) are
+/// <see cref="DiametreUm"/> (grain diameter, µm) and <see cref="DustRate1AuKgs"/> (Q_d at 1 AU, kg/s) are
 /// the jet's own grain and activity; null keeps the Model tab's defaults for new jets.
 /// </summary>
 public sealed record Jet(
@@ -13,7 +13,7 @@ public sealed record Jet(
   double? ApertureDeg = null,
   double SpeedStdFraction = 0.2,
   double? DiametreUm = null,
-  double? Afrho0Cm = null
+  double? DustRate1AuKgs = null
 );
 
 /// <summary>

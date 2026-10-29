@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Numerics;
 using AetherVk.Logic.Models;
 using AetherVk.Logic.SaveFile;
@@ -112,7 +113,7 @@ public class SaveIndexMappingTests
     var jet = new AetherVk.Logic.ViewModels.JetViewModel(10, -20, 33, 2.5f, 0.25f, new Vector4(0.1f, 0.2f, 0.3f, 1), true, 7u, grain);
     var dto = SaveIndexMapping.ToDto(jet);
     Assert.Equal((250f, 0.8f, 1.2f, 0.05f, 3.2f, 20f, 900f),
-      (dto.DiametreUm, dto.DensityGCm3, dto.ScatteringEfficiency, dto.GeometricAlbedo, dto.SizeQ, dto.SizeRange, dto.Afrho0Cm));
+      (dto.DiametreUm, dto.DensityGCm3, dto.ScatteringEfficiency, dto.GeometricAlbedo, dto.SizeQ, dto.SizeRange, dto.DustRate1AuKgs));
     var back = System.Text.Json.JsonSerializer.Deserialize(
       SaveIndexIo.ToJson(new SaveIndex { Jets = [dto] }), SaveIndexJsonContext.Default.SaveIndex)!;
     // the model's values must not override a jet's own
@@ -131,7 +132,7 @@ public class SaveIndexMappingTests
   [Fact]
   public void ModelJetsSbdbRotationBillboards_RoundTrip()
   {
-    var model = new ModelSession { DiametreUm = 321, AfrhoPower = 1.5f, DustFlow = true, ManualNucleusRadiusKm = 4.5f };
+    var model = new ModelSession { DiametreUm = 321, DustRatePower = 1.5f, DustFlow = true, ManualNucleusRadiusKm = 4.5f };
     var m2 = new ModelSession();
     SaveIndexMapping.Apply(SaveIndexMapping.ToDto(model), m2);
     Assert.Equal(SaveIndexIo.ToJson(new SaveIndex { Model = SaveIndexMapping.ToDto(model) }),
@@ -247,5 +248,68 @@ public class SaveIndexMappingTests
     Assert.Equal(b, SaveIndexMapping.FromDto(back.Billboards[0]));
     Assert.Null(SaveIndexMapping.FromDto(new BillboardDto { Id = b.Id, TextureKey = "/a.png" }).ImageNucleusPx);
     Assert.Null(SaveIndexMapping.FromDto(new BillboardDto { Id = b.Id, TextureKey = "/a.png", ImageNucleusX = 3 }).ImageNucleusPx);
+  }
+
+  /// <summary>
+  /// A pre-Q_d index (afrho_* keys, no dust_rate_*) maps to converted rates; a new index round-trips
+  /// its Q_d law and its JSON carries no Afρ key.
+  /// </summary>
+  [Fact]
+  public void PreQdIndex_IsConverted_AndNewIndexWritesNoAfrho()
+  {
+    const string oldJson = """
+      {"model": {"diametre_um": 100, "density_g_cm3": 0.8, "geometric_albedo": 0.04, "size_range": 10,
+                 "afrho0_cm": 100, "afrho_power": 2, "afrho_cutoff_au": 15, "afrho_max_value_cm": 100000},
+       "jets": [{"velocity_mean_ms": 2, "velocity_std_ms": 0.5, "afrho0_cm": 100},
+                {"velocity_mean_ms": 1.5, "velocity_std_ms": 0.3, "diametre_um": 20, "density_g_cm3": 0.5,
+                 "geometric_albedo": 0.03, "size_range": 3, "afrho0_cm": 8.128}]}
+      """;
+    var old = System.Text.Json.JsonSerializer.Deserialize(oldJson, SaveIndexJsonContext.Default.SaveIndex)!;
+    Assert.Null(old.Model.DustRate1AuKgs);
+    Assert.Equal(100f, old.Model.Afrho0Cm);
+    var m = new ModelSession();
+    SaveIndexMapping.Apply(old.Model, m);
+    float q0 = (float)LegacyAfrho.DustRateKgs(100, 100, 0.8, 2.5, 0.625, 0.04, 10);
+    Assert.Equal(q0, m.DustRate1AuKgs, 1e-6f * q0);
+    Assert.Equal(q0 * 1000f, m.DustRateMaxKgs, q0);
+    Assert.Equal((2f, 15f), (m.DustRatePower, m.DustRateCutoffAu));
+    Assert.Equal(1.5510886453350254f, SaveIndexMapping.FromDto(old.Jets[0], m.DefaultGrain).DustRate1AuKgs, 1e-5f);
+    Assert.Equal(0.013690648521032838f, SaveIndexMapping.FromDto(old.Jets[1], m.DefaultGrain).DustRate1AuKgs, 1e-7f);
+
+    // a new-format index: the law round-trips and no Afρ key is written
+    var fresh = new ModelSession { DustRate1AuKgs = 0.25f, DustRatePower = 2.5f, DustRateCutoffAu = 9, DustRateMaxKgs = 50 };
+    var jet = new AetherVk.Logic.ViewModels.JetViewModel(1, 2, 3, 2.5f, 0.25f, new Vector4(1, 1, 1, 1), true, 1u,
+      AetherVk.Logic.Models.JetGrain.Default with { DustRate1AuKgs = 0.125f });
+    var json = SaveIndexIo.ToJson(new SaveIndex { Model = SaveIndexMapping.ToDto(fresh), Jets = [SaveIndexMapping.ToDto(jet)] });
+    Assert.DoesNotContain("afrho", json, StringComparison.OrdinalIgnoreCase);
+    Assert.Contains("\"dust_rate_1au_kgs\": 0.25", json);
+    Assert.Contains("\"dust_rate_max_kgs\": 50", json);
+    var back = System.Text.Json.JsonSerializer.Deserialize(json, SaveIndexJsonContext.Default.SaveIndex)!;
+    var m2 = new ModelSession();
+    SaveIndexMapping.Apply(back.Model, m2);
+    Assert.Equal((0.25f, 2.5f, 9f, 50f), (m2.DustRate1AuKgs, m2.DustRatePower, m2.DustRateCutoffAu, m2.DustRateMaxKgs));
+    Assert.Equal(0.125f, SaveIndexMapping.FromDto(back.Jets[0], m2.DefaultGrain).DustRate1AuKgs);
+    // a new-format jet keeps its Q_d₀ even next to a stale Afρ₀
+    back.Jets[0].Afrho0Cm = 100;
+    Assert.Equal(0.125f, SaveIndexMapping.FromDto(back.Jets[0]).DustRate1AuKgs);
+  }
+
+  /// <summary>The reviewer's save (pre-Q_d, Afρ₀ 100 cm per jet) opens with every jet's Q_d₀ converted.</summary>
+  [Fact]
+  public void ReviewFixture_JetsGetConvertedDustRates()
+  {
+    var (index, error) = SaveIndexIo.Read(ReviewSaveReproTests.FixtureDir());
+    Assert.NotNull(index);
+    Assert.All(index!.Jets, j => Assert.Null(j.DustRate1AuKgs));
+    Assert.All(index.Jets, j => Assert.NotNull(j.Afrho0Cm));
+    var m = new ModelSession();
+    SaveIndexMapping.Apply(index.Model, m);
+    var jets = index.Jets.Select(j => SaveIndexMapping.FromDto(j, m.DefaultGrain)).ToList();
+    Assert.All(jets, j => Assert.True(j.DustRate1AuKgs > 0));
+    var j0 = index.Jets[0];
+    float expected = (float)LegacyAfrho.DustRateKgs(j0.Afrho0Cm!.Value, j0.DiametreUm ?? m.DiametreUm,
+      j0.DensityGCm3 ?? m.DensityGCm3, j0.VelocityMeanMs, j0.VelocityStdMs, j0.GeometricAlbedo ?? m.GeometricAlbedo,
+      j0.SizeRange ?? m.SizeRange);
+    Assert.Equal(expected, jets[0].DustRate1AuKgs);
   }
 }

@@ -1769,7 +1769,7 @@ fn set_rotation(ctx: &SimulationContext, scene_id: u64, body: EntityId, model: B
 }
 
 fn jet_params(seed: u32, isotropic: bool) -> ParticleSystemEmitParams {
-  ParticleSystemEmitParams {
+  let mut p = ParticleSystemEmitParams {
     latitude_rad: 20.0_f32.to_radians(),
     longitude_rad: 0.0,
     aperture_rad: if isotropic {
@@ -1790,11 +1790,17 @@ fn jet_params(seed: u32, isotropic: bool) -> ParticleSystemEmitParams {
       .unwrap_or(0.04),
     size_q: 3.5,
     size_range: 10.0,
-    afrho_0_cm: 100.0,
-    afrho_power: 2.0,
-    afrho_cutoff_au: 15.0,
-    afrho_max_value_cm: 100_000.0,
-  }
+    dust_rate_1au_kgs: 0.0,
+    dust_rate_power: 2.0,
+    dust_rate_cutoff_au: 15.0,
+    dust_rate_max_kgs: 0.0,
+  };
+  // the activity input is a dust rate (v9); the observer's reference recipe stays the one an Afρ
+  // of 100 cm at 1 AU (max 100 000 cm) converts to, so every capture keeps its physics (with
+  // `OBSERVER_ALBEDO=0` the conversion is 0: no emission, as before)
+  p.dust_rate_1au_kgs = p.dust_rate_from_afrho_kgs(100.0);
+  p.dust_rate_max_kgs = p.dust_rate_from_afrho_kgs(100_000.0);
+  p
 }
 
 /// `--no-trajectories`: `HiddenComponent` on every entity drawing a trajectory line
@@ -3139,7 +3145,8 @@ fn main() {
           afrho_in_cm: {
             let p = jet_params(7, args.isotropic);
             let r_h = norm(comet) as f32;
-            (p.afrho_0_cm * r_h.powf(-p.afrho_power)).min(p.afrho_max_value_cm) as f64
+            // the recipe's Afρ(r_h): the jet's dust rate converted back (validation observable)
+            p.afrho_cm_from_dust_rate(p.dust_production_rate_kgs(r_h)) as f64
           },
           isotropic: args.isotropic,
         };
@@ -3552,7 +3559,8 @@ fn main() {
         afrho_in_cm: {
           let p = jet_params(7, args.isotropic);
           let r_h = norm(comet_p0) as f32;
-          (p.afrho_0_cm * r_h.powf(-p.afrho_power)).min(p.afrho_max_value_cm) as f64
+          // the recipe's Afρ(r_h): the jet's dust rate converted back (validation observable)
+          p.afrho_cm_from_dust_rate(p.dust_production_rate_kgs(r_h)) as f64
         },
         isotropic: args.isotropic,
       }
@@ -3661,6 +3669,16 @@ fn main() {
       while entries.is_empty() && t_l.elapsed().as_secs_f64() < 5.0 {
         std::thread::sleep(std::time::Duration::from_millis(5));
         entries = ctx.dust_frame_ledger(pe, prev_seq + 1);
+      }
+      // the hold before step 0 drains the frames queued during the still phase until 0.6 s of
+      // silence; a render stall ends it early and the rest (reused, step-0 inputs) are recorded
+      // here. They are not this step's frame: drop them, the last entry is still checked in full.
+      if entries.len() > 1 && entries[..entries.len() - 1].iter().all(|e| e.reused) {
+        eprintln!(
+          "[observer] camera path frame {k}: {} queued frame(s) from before the step (reused), skipped",
+          entries.len() - 1
+        );
+        entries.drain(..entries.len() - 1);
       }
       let mut t_err = f64::NAN;
       let mut eye_err = f64::NAN;
