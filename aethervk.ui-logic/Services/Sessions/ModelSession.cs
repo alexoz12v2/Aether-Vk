@@ -77,7 +77,7 @@ public sealed partial class ModelSession : ObservableObject, ITabSession
   /// <summary>
   /// Volume density of a dust grain in g/cm³.
   /// Range: 0.1–7 g/cm³. Typical cometary dust: 0.5–1.0 g/cm³.
-  /// 67P default: 0.533 g/cm³.
+  /// 67P default: 0.8 g/cm³ (GIADA dust; 0.533 is the nucleus).
   /// Corresponds to <c>ParticleSystemEmitParams.density_gcm3</c>.
   /// </summary>
   [ObservableProperty]
