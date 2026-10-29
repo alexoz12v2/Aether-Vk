@@ -5072,8 +5072,8 @@ pub use computed_properties::*;
 /// Module containing the DTO used for particle system related FFI functions
 pub mod particles_dto {
   /// Particle system emission and draw commands of one jet. Every field is the jet's own (its grain
-  /// and activity too: add / modify never touch sibling jets); the UI keeps the Afρ law's shape
-  /// (power, cutoff, max) model-wide and copies it into every jet's record.
+  /// and activity too: add / modify never touch sibling jets); the UI keeps the dust production
+  /// rate law's shape (power, cutoff, max) model-wide and copies it into every jet's record.
   #[repr(C)]
   #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
   pub struct ParticleSystemDTO {
@@ -5087,10 +5087,12 @@ pub mod particles_dto {
     /// size range factor `F` (`ParticleSystemEmitParams::size_range`, default 10)
     pub size_range: f32,
 
-    pub afrho_0_cm: f32, // new values with respect to AetherVk Web
-    pub afrho_power: f32,
-    pub afrho_cutoff_au: f32,
-    pub afrho_max_value_cm: f32,
+    /// dust production rate at 1 AU in kg/s (`ParticleSystemEmitParams::dust_rate_1au_kgs`; v9:
+    /// was an Afρ in cm)
+    pub dust_rate_1au_kgs: f32,
+    pub dust_rate_power: f32,
+    pub dust_rate_cutoff_au: f32,
+    pub dust_rate_max_kgs: f32,
 
     // -- jet site and ejection properties --
     pub latitude_rad: f32,
@@ -5111,7 +5113,7 @@ pub mod particles_dto {
   // 10 grain/activity f32 (40 B) + jet 5 f32 + colour 4 f32 + radius + seed (44 B) + `_pad` + i64
   const _: () = assert!(core::mem::size_of::<ParticleSystemDTO>() == 96);
   const _: () = assert!(core::mem::offset_of!(ParticleSystemDTO, emission_start_us) == 88);
-  const _: () = assert!(core::mem::offset_of!(ParticleSystemDTO, afrho_0_cm) == 24);
+  const _: () = assert!(core::mem::offset_of!(ParticleSystemDTO, dust_rate_1au_kgs) == 24);
 }
 
 pub use particles_dto::*;

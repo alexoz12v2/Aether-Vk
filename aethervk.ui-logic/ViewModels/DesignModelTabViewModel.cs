@@ -74,18 +74,18 @@ public partial class DesignModelTabViewModel
   
   public AetherVk.Logic.Services.ModelSession? CurrentSession { get; } = new AetherVk.Logic.Services.ModelSession();
 
-  public AetherVk.Logic.Utils.CurvePlotModel? AfrhoPlot { get; } =
-    AetherVk.Logic.Utils.DustCurves.AfrhoPlot(100, 2, 15, 100_000, 1.3);
+  public AetherVk.Logic.Utils.CurvePlotModel? DustRatePlot { get; } =
+    AetherVk.Logic.Utils.DustCurves.DustRatePlot(2, 2, 15, 2000, 1.3);
   public AetherVk.Logic.Utils.CurvePlotModel? SizeDistributionPlot { get; } =
     AetherVk.Logic.Utils.DustCurves.SizeDistributionPlot(100, 10, 3.5);
-  public AetherVk.Logic.Utils.CurvePlotModel? JetAfrhoPlot { get; } =
-    AetherVk.Logic.Utils.DustCurves.AfrhoPlot(100, 2, 15, 100_000, 1.3);
+  public AetherVk.Logic.Utils.CurvePlotModel? JetDustRatePlot { get; } =
+    AetherVk.Logic.Utils.DustCurves.DustRatePlot(2, 2, 15, 2000, 1.3);
   public AetherVk.Logic.Utils.CurvePlotModel? JetSizeDistributionPlot { get; } =
     AetherVk.Logic.Utils.DustCurves.SizeDistributionPlot(100, 10, 3.5);
-  public string AfrhoNowText { get; } =
-    AetherVk.Logic.Utils.DustCurves.AfrhoNowText(1.3, 100, 2, 15, 100_000, 0.5, 1);
+  public string DustRateNowText { get; } =
+    AetherVk.Logic.Utils.DustCurves.DustRateNowText(1.3, 2, 2, 15, 2000, 1);
   public string TotalActivityText { get; } =
-    AetherVk.Logic.Utils.DustCurves.TotalActivityText([(100, 0.5), (100, 0.5)], 2, 15, 100_000, 1.3);
+    AetherVk.Logic.Utils.DustCurves.TotalActivityText([2.0, 2.0], 2, 15, 2000, 1.3);
 
   public void SetCursorPosition(int x, int y) { }
 }

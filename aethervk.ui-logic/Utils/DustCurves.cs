@@ -50,7 +50,7 @@ public sealed class PlotSeries
 /// <summary>
 /// Everything a curve plot draws, computed in the logic layer so it is unit-testable: the series,
 /// the axis ranges (log or linear), the ticks and an optional vertical marker. On a log axis a
-/// value ≤ 0 is drawn on the bottom edge (Afρ beyond the cutoff).
+/// value ≤ 0 is drawn on the bottom edge (Q_d beyond the cutoff).
 /// </summary>
 public sealed class CurvePlotModel
 {
@@ -71,61 +71,47 @@ public sealed class CurvePlotModel
 }
 
 /// <summary>
-/// The Model tab's dust curves: Afρ(r_h) with the engine's law (<c>particles.rs</c>
+/// The Model tab's dust curves: Q_d(r_h) with the engine's law (<c>particles.rs</c>
 /// <c>dust_production_rate_kgs</c>) and the grain size law n(s) ∝ s^−q between s₀/F and s₀·F.
 /// </summary>
 public static class DustCurves
 {
-  public const int AfrhoSamples = 240;
+  public const int DustRateSamples = 240;
   public const int SizeSamples = 120;
-  /// <summary>Afρ plot x range starts here (AU).</summary>
-  public const double AfrhoXMinAu = 0.5;
+  /// <summary>Q_d plot x range starts here (AU).</summary>
+  public const double DustRateXMinAu = 0.5;
 
   private static bool IsFinite(double v) => !double.IsNaN(v) && !double.IsInfinity(v);
 
-  // ── Afρ(r_h) ──────────────────────────────────────────────────────────────────
+  // ── Q_d(r_h) ──────────────────────────────────────────────────────────────────
 
   /// <summary>
-  /// Afρ (cm) at heliocentric distance <paramref name="rAu"/>, exactly as the engine:
-  /// 0 at or beyond the cutoff, else min(max, Afρ₀ · r^−k).
+  /// Dust production rate Q_d (kg/s) at heliocentric distance <paramref name="rAu"/>, exactly as
+  /// the engine: 0 at or beyond the cutoff, else min(max, Q_d₀ · r^−k).
   /// </summary>
-  public static double AfrhoCm(double rAu, double afrho0Cm, double power, double cutoffAu, double maxCm)
+  public static double DustRateKgs(double rAu, double rate1AuKgs, double power, double cutoffAu, double maxKgs)
   {
     if (!(rAu > 0) || rAu >= cutoffAu)
       return 0.0;
-    double a = afrho0Cm * Math.Pow(rAu, -power);
-    return Math.Min(a, maxCm);
+    double q = rate1AuKgs * Math.Pow(rAu, -power);
+    return Math.Min(q, maxKgs);
   }
 
   /// <summary>
-  /// Dust production rate at <paramref name="rAu"/> from the engine's rate at 1 AU: the engine's
-  /// rate is linear in the clamped Afρ and nothing else in it depends on r_h. NaN when the 1 AU
-  /// Afρ is 0 (cutoff ≤ 1 AU: no reference to scale from).
-  /// </summary>
-  public static double ProductionRateKgs(double rAu, double rateAt1AuKgs,
-    double afrho0Cm, double power, double cutoffAu, double maxCm)
-  {
-    double at1 = AfrhoCm(1.0, afrho0Cm, power, cutoffAu, maxCm);
-    if (!(at1 > 0))
-      return double.NaN;
-    return rateAt1AuKgs * AfrhoCm(rAu, afrho0Cm, power, cutoffAu, maxCm) / at1;
-  }
-
-  /// <summary>
-  /// Afρ(r_h) samples over [0.5 AU, cutoff + 1 AU]: uniform in r, plus the clamp kink and the
+  /// Q_d(r_h) samples over [0.5 AU, cutoff + 1 AU]: uniform in r, plus the clamp kink and the
   /// last point before the cutoff and the cutoff itself (0), so the drop is drawn vertical.
   /// </summary>
-  public static IReadOnlyList<PlotPoint> SampleAfrho(double afrho0Cm, double power, double cutoffAu, double maxCm)
+  public static IReadOnlyList<PlotPoint> SampleDustRate(double rate1AuKgs, double power, double cutoffAu, double maxKgs)
   {
-    double x0 = AfrhoXMinAu;
-    double x1 = AfrhoXMaxAu(cutoffAu);
-    var xs = new List<double>(AfrhoSamples + 4);
-    for (int i = 0; i <= AfrhoSamples; i++)
-      xs.Add(x0 + (x1 - x0) * i / AfrhoSamples);
-    // clamp kink: Afρ₀ r^−k = max ⇔ r = (Afρ₀ / max)^(1/k)
-    if (power > 0 && maxCm > 0 && afrho0Cm > 0)
+    double x0 = DustRateXMinAu;
+    double x1 = DustRateXMaxAu(cutoffAu);
+    var xs = new List<double>(DustRateSamples + 4);
+    for (int i = 0; i <= DustRateSamples; i++)
+      xs.Add(x0 + (x1 - x0) * i / DustRateSamples);
+    // clamp kink: Q_d₀ r^−k = max ⇔ r = (Q_d₀ / max)^(1/k)
+    if (power > 0 && maxKgs > 0 && rate1AuKgs > 0)
     {
-      double rk = Math.Pow(afrho0Cm / maxCm, 1.0 / power);
+      double rk = Math.Pow(rate1AuKgs / maxKgs, 1.0 / power);
       if (rk > x0 && rk < x1)
         xs.Add(rk);
     }
@@ -141,26 +127,26 @@ public static class DustCurves
     {
       if (x == prev) continue;
       prev = x;
-      pts.Add(new PlotPoint(x, AfrhoCm(x, afrho0Cm, power, cutoffAu, maxCm)));
+      pts.Add(new PlotPoint(x, DustRateKgs(x, rate1AuKgs, power, cutoffAu, maxKgs)));
     }
     return pts;
   }
 
-  public static double AfrhoXMaxAu(double cutoffAu)
+  public static double DustRateXMaxAu(double cutoffAu)
   {
     double x1 = (IsFinite(cutoffAu) ? cutoffAu : 15.0) + 1.0;
-    return Math.Max(x1, AfrhoXMinAu + 1.0);
+    return Math.Max(x1, DustRateXMinAu + 1.0);
   }
 
-  /// <summary>The Afρ(r_h) plot: linear r_h axis, log Afρ axis, marker at the comet's r_h (NaN = none).</summary>
-  public static CurvePlotModel AfrhoPlot(double afrho0Cm, double power, double cutoffAu, double maxCm, double rhNowAu)
+  /// <summary>The Q_d(r_h) plot: linear r_h axis, log Q_d axis, marker at the comet's r_h (NaN = none).</summary>
+  public static CurvePlotModel DustRatePlot(double rate1AuKgs, double power, double cutoffAu, double maxKgs, double rhNowAu)
   {
-    var pts = SampleAfrho(afrho0Cm, power, cutoffAu, maxCm);
-    double xMin = AfrhoXMinAu, xMax = AfrhoXMaxAu(cutoffAu);
+    var pts = SampleDustRate(rate1AuKgs, power, cutoffAu, maxKgs);
+    double xMin = DustRateXMinAu, xMax = DustRateXMaxAu(cutoffAu);
     var (yMin, yMax) = LogRange(pts);
     var model = new CurvePlotModel
     {
-      Series = new[] { new PlotSeries("Afρ(r_h)", pts) },
+      Series = new[] { new PlotSeries("Q_d(r_h)", pts) },
       XMin = xMin,
       XMax = xMax,
       YMin = yMin,
@@ -168,7 +154,7 @@ public static class DustCurves
       XLog = false,
       YLog = true,
       XLabel = "r_h (AU)",
-      YLabel = "Afρ (cm)",
+      YLabel = "Q_d (kg/s)",
       XTicks = LinearTicks(xMin, xMax, 5),
       YTicks = LogTicks(yMin, yMax),
     };
@@ -181,62 +167,47 @@ public static class DustCurves
   }
 
   /// <summary>
-  /// The one-line read-out under the Afρ plot. <paramref name="rateAt1AuKgs"/> NaN = no jet (no
-  /// production rate to scale); <paramref name="rhNowAu"/> NaN = no committed comet.
+  /// The one-line read-out under the Q_d plot: "Q_d now (r_h X AU): Y kg/s", of jet
+  /// <paramref name="jetIndex"/> (0 = the defaults for new jets); <paramref name="rhNowAu"/> NaN =
+  /// no committed comet.
   /// </summary>
-  public static string AfrhoNowText(double rhNowAu, double afrho0Cm, double power, double cutoffAu, double maxCm,
-    double rateAt1AuKgs, int jetIndex)
+  public static string DustRateNowText(double rhNowAu, double rate1AuKgs, double power, double cutoffAu, double maxKgs,
+    int jetIndex)
   {
     if (!IsFinite(rhNowAu) || !(rhNowAu > 0))
-      return "Afρ now: commit a comet to see its current distance from the Sun.";
+      return "Q_d now: commit a comet to see its current distance from the Sun.";
     var ci = CultureInfo.InvariantCulture;
-    double a = AfrhoCm(rhNowAu, afrho0Cm, power, cutoffAu, maxCm);
-    string text = "Afρ now (r_h " + rhNowAu.ToString("0.00", ci) + " AU): " + FormatNumber(a) + " cm";
-    if (IsFinite(rateAt1AuKgs))
-    {
-      double q = ProductionRateKgs(rhNowAu, rateAt1AuKgs, afrho0Cm, power, cutoffAu, maxCm);
-      if (IsFinite(q))
-        text += " → dust production Q_d ≈ " + FormatNumber(q) + " kg/s (jet " + jetIndex.ToString(ci) + ")";
-    }
+    double q = DustRateKgs(rhNowAu, rate1AuKgs, power, cutoffAu, maxKgs);
+    string text = "Q_d now (r_h " + rhNowAu.ToString("0.00", ci) + " AU): " + FormatNumber(q) + " kg/s";
+    text += jetIndex > 0 ? " (jet " + jetIndex.ToString(ci) + ")" : " (defaults for new jets)";
     return text;
   }
 
   /// <summary>
-  /// The whole comet's activity: Σ Afρ and Σ Q_d over the jets (each with its own Afρ₀ and engine
-  /// rate at 1 AU, the Afρ law's shape shared), at 1 AU and, with a committed comet, at
-  /// <paramref name="rhNowAu"/>. Afρ and Q_d add up: each jet's coma brightness is linear in its
-  /// production. A rate NaN = a jet without a native system: Σ Q_d is left out (it would be partial).
+  /// The whole comet's activity: Σ Q_d over the jets (each with its own Q_d₀, the law's shape
+  /// shared), at 1 AU and, with a committed comet, at <paramref name="rhNowAu"/>. The rates add up:
+  /// each jet's coma brightness is linear in its production.
   /// </summary>
-  public static string TotalActivityText(IReadOnlyList<(double Afrho0Cm, double RateAt1AuKgs)> jets,
-    double power, double cutoffAu, double maxCm, double rhNowAu)
+  public static string TotalActivityText(IReadOnlyList<double> jetRates1AuKgs,
+    double power, double cutoffAu, double maxKgs, double rhNowAu)
   {
-    if (jets.Count == 0)
+    if (jetRates1AuKgs.Count == 0)
       return "Σ activity: no jets.";
     var ci = CultureInfo.InvariantCulture;
-    bool rates = true;
-    double afrho1 = 0, q1 = 0, afrhoNow = 0, qNow = 0;
+    double q1 = 0, qNow = 0;
     bool now = IsFinite(rhNowAu) && rhNowAu > 0;
-    foreach (var (afrho0, rate) in jets)
+    foreach (double q0 in jetRates1AuKgs)
     {
-      afrho1 += AfrhoCm(1.0, afrho0, power, cutoffAu, maxCm);
-      rates &= IsFinite(rate);
-      q1 += rate;
+      q1 += DustRateKgs(1.0, q0, power, cutoffAu, maxKgs);
       if (now)
-      {
-        afrhoNow += AfrhoCm(rhNowAu, afrho0, power, cutoffAu, maxCm);
-        // a jet with no Afρ at 1 AU (cutoff ≤ 1 AU) has no rate to scale: it emits nothing now either
-        double q = ProductionRateKgs(rhNowAu, rate, afrho0, power, cutoffAu, maxCm);
-        qNow += IsFinite(q) ? q : 0;
-      }
+        qNow += DustRateKgs(rhNowAu, q0, power, cutoffAu, maxKgs);
     }
-    string Part(string where, double afrho, double q) =>
-      where + ": Σ Afρ " + FormatNumber(afrho) + " cm" + (rates ? " → Σ Q_d ≈ " + FormatNumber(q) + " kg/s" : "");
-    string text = Part("Σ " + jets.Count.ToString(ci) + (jets.Count == 1 ? " jet" : " jets") + " at 1 AU", afrho1, q1);
+    int n = jetRates1AuKgs.Count;
+    string text = "Σ " + n.ToString(ci) + (n == 1 ? " jet" : " jets") + " at 1 AU: Σ Q_d " + FormatNumber(q1) + " kg/s";
     if (now)
-      text += "; now (r_h " + rhNowAu.ToString("0.00", ci) + " AU)" + Part("", afrhoNow, qNow);
+      text += "; now (r_h " + rhNowAu.ToString("0.00", ci) + " AU): Σ Q_d " + FormatNumber(qNow) + " kg/s";
     return text;
   }
-
   // ── grain size law ───────────────────────────────────────────────────────────
 
   /// <summary>Smallest F the plots use: F = 1 is a single size (a delta), not a curve.</summary>
