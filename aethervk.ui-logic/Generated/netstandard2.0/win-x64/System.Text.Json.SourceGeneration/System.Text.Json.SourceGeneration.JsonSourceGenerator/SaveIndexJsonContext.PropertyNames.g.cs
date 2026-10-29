@@ -67,7 +67,11 @@ namespace AetherVk.Logic.SaveFile
         private static readonly global::System.Text.Json.JsonEncodedText PropName_geometric_albedo = global::System.Text.Json.JsonEncodedText.Encode("geometric_albedo");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_size_q = global::System.Text.Json.JsonEncodedText.Encode("size_q");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_size_range = global::System.Text.Json.JsonEncodedText.Encode("size_range");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_dust_rate_1au_kgs = global::System.Text.Json.JsonEncodedText.Encode("dust_rate_1au_kgs");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_afrho0_cm = global::System.Text.Json.JsonEncodedText.Encode("afrho0_cm");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_dust_rate_power = global::System.Text.Json.JsonEncodedText.Encode("dust_rate_power");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_dust_rate_cutoff_au = global::System.Text.Json.JsonEncodedText.Encode("dust_rate_cutoff_au");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_dust_rate_max_kgs = global::System.Text.Json.JsonEncodedText.Encode("dust_rate_max_kgs");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_afrho_power = global::System.Text.Json.JsonEncodedText.Encode("afrho_power");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_afrho_cutoff_au = global::System.Text.Json.JsonEncodedText.Encode("afrho_cutoff_au");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_afrho_max_value_cm = global::System.Text.Json.JsonEncodedText.Encode("afrho_max_value_cm");
@@ -75,6 +79,9 @@ namespace AetherVk.Logic.SaveFile
         private static readonly global::System.Text.Json.JsonEncodedText PropName_dust_tracers = global::System.Text.Json.JsonEncodedText.Encode("dust_tracers");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_dust_flow = global::System.Text.Json.JsonEncodedText.Encode("dust_flow");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_dust_flow_speed = global::System.Text.Json.JsonEncodedText.Encode("dust_flow_speed");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_dust_trajectories = global::System.Text.Json.JsonEncodedText.Encode("dust_trajectories");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_dust_rho_norm = global::System.Text.Json.JsonEncodedText.Encode("dust_rho_norm");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_dust_exposure_ev = global::System.Text.Json.JsonEncodedText.Encode("dust_exposure_ev");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_sphere_gizmo_visible = global::System.Text.Json.JsonEncodedText.Encode("sphere_gizmo_visible");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_sphere_gizmo_parts = global::System.Text.Json.JsonEncodedText.Encode("sphere_gizmo_parts");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_show_jet_angles = global::System.Text.Json.JsonEncodedText.Encode("show_jet_angles");
@@ -155,6 +162,7 @@ namespace AetherVk.Logic.SaveFile
         private static readonly global::System.Text.Json.JsonEncodedText PropName_current_epoch = global::System.Text.Json.JsonEncodedText.Encode("current_epoch");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_start_paused = global::System.Text.Json.JsonEncodedText.Encode("start_paused");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_speed = global::System.Text.Json.JsonEncodedText.Encode("speed");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_dust_lead_days = global::System.Text.Json.JsonEncodedText.Encode("dust_lead_days");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_ortho_unit = global::System.Text.Json.JsonEncodedText.Encode("ortho_unit");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_fov_unit = global::System.Text.Json.JsonEncodedText.Encode("fov_unit");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_ortho_proportions_locked = global::System.Text.Json.JsonEncodedText.Encode("ortho_proportions_locked");

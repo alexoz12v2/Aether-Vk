@@ -14,6 +14,9 @@ public partial class DesignModelTabViewModel : IModelTabViewModel
     public string StrDustFlow { get; set; } = "Flow pulses";
     public string StrDustTracers { get; set; } = "Particle tracers";
     public string StrDustFlowSpeed { get; set; } = "Flow time-lapse";
+    public string StrDustTrajectories { get; set; } = "Trajectory lines";
+    public string StrDustRhoNorm { get; set; } = "Coma 1/ρ normalisation";
+    public string StrDustExposure { get; set; } = "Dust exposure";
     public string StrShowReferenceError { get; set; } = "show reference-position error";
     public string StrSun { get; set; } = "Sun";
     public string StrDistance { get; set; } = "Distance";

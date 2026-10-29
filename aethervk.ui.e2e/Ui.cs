@@ -256,7 +256,10 @@ public static partial class Ui
     }
 
     var nameBox = WaitFor(() => dialog.FindElementsByAccessibilityId("1148").FirstOrDefault(e => e.Displayed)
-                                ?? dialog.FindElementsByAccessibilityId("1152").FirstOrDefault(e => e.Displayed),
+                                ?? dialog.FindElementsByAccessibilityId("1152").FirstOrDefault(e => e.Displayed)
+                                // a save dialog: its name box is a combo box hosting edit 1001
+                                ?? dialog.FindElementsByAccessibilityId("1001").FirstOrDefault(e => e.Displayed)
+                                ?? dialog.FindElementsByAccessibilityId("FileNameControlHost").FirstOrDefault(e => e.Displayed),
       what: "the file name box");
     nameBox.RealClick();
     Win32.Chord(Win32.VK_CONTROL, (byte)'A');

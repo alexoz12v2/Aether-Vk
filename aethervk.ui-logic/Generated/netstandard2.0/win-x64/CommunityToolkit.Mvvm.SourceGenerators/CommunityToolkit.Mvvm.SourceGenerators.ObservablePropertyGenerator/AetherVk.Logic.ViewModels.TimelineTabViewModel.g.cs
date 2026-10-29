@@ -62,11 +62,13 @@ namespace AetherVk.Logic.ViewModels
                     OnIsProposedDifferentFromCommittedChanging(default, value);
                     OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsProposedDifferentFromCommitted);
                     OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.CanRestore);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsRangeLocked);
                     _isProposedDifferentFromCommitted = value;
                     OnIsProposedDifferentFromCommittedChanged(value);
                     OnIsProposedDifferentFromCommittedChanged(default, value);
                     OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsProposedDifferentFromCommitted);
                     OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.CanRestore);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsRangeLocked);
                 }
             }
         }
@@ -212,11 +214,13 @@ namespace AetherVk.Logic.ViewModels
                     OnHasCommittedStateChanging(default, value);
                     OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.HasCommittedState);
                     OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.CanRestore);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsRangeLocked);
                     _hasCommittedState = value;
                     OnHasCommittedStateChanged(value);
                     OnHasCommittedStateChanged(default, value);
                     OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.HasCommittedState);
                     OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.CanRestore);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsRangeLocked);
                 }
             }
         }
@@ -366,6 +370,27 @@ namespace AetherVk.Logic.ViewModels
                     OnModelRotationsChanged(value);
                     OnModelRotationsChanged(default, value);
                     OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.ModelRotations);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_dustLeadDays"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public double DustLeadDays
+        {
+            get => _dustLeadDays;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<double>.Default.Equals(_dustLeadDays, value))
+                {
+                    OnDustLeadDaysChanging(value);
+                    OnDustLeadDaysChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.DustLeadDays);
+                    _dustLeadDays = value;
+                    OnDustLeadDaysChanged(value);
+                    OnDustLeadDaysChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.DustLeadDays);
                 }
             }
         }
@@ -744,5 +769,27 @@ namespace AetherVk.Logic.ViewModels
         /// <remarks>This method is invoked right after the value of <see cref="ModelRotations"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnModelRotationsChanged(int oldValue, int newValue);
+        /// <summary>Executes the logic for when <see cref="DustLeadDays"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="DustLeadDays"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnDustLeadDaysChanging(double value);
+        /// <summary>Executes the logic for when <see cref="DustLeadDays"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="DustLeadDays"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnDustLeadDaysChanging(double oldValue, double newValue);
+        /// <summary>Executes the logic for when <see cref="DustLeadDays"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="DustLeadDays"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnDustLeadDaysChanged(double value);
+        /// <summary>Executes the logic for when <see cref="DustLeadDays"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="DustLeadDays"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnDustLeadDaysChanged(double oldValue, double newValue);
     }
 }

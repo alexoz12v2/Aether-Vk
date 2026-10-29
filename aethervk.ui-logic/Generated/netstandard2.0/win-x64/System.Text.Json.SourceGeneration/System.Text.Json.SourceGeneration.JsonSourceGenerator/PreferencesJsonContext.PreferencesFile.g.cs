@@ -46,7 +46,7 @@ namespace AetherVk.Logic.Services
 
         private static global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[] PreferencesFilePropInit(global::System.Text.Json.JsonSerializerOptions options)
         {
-            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[11];
+            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[12];
 
             var info0 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<int>
             {
@@ -272,6 +272,26 @@ namespace AetherVk.Logic.Services
             
             properties[10] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<bool?>(options, info10);
 
+            var info11 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<bool?>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.Services.PreferencesFile),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.Services.PreferencesFile)obj).ShowDiagnosticPanels,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.Services.PreferencesFile)obj).ShowDiagnosticPanels = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "ShowDiagnosticPanels",
+                JsonPropertyName = "show_diagnostic_panels",
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.Services.PreferencesFile).GetProperty("ShowDiagnosticPanels", InstanceMemberBindingFlags, null, typeof(bool?), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[11] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<bool?>(options, info11);
+
             return properties;
         }
 
@@ -307,6 +327,8 @@ namespace AetherVk.Logic.Services
             global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.Services.PreferencesFile)value).HudCameraExpanded, NullableBoolean);
             writer.WritePropertyName(PropName_hud_orbit_expanded);
             global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.Services.PreferencesFile)value).HudOrbitExpanded, NullableBoolean);
+            writer.WritePropertyName(PropName_show_diagnostic_panels);
+            global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.Services.PreferencesFile)value).ShowDiagnosticPanels, NullableBoolean);
 
             writer.WriteEndObject();
         }

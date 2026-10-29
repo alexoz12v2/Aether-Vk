@@ -6,6 +6,29 @@ namespace AetherVk.Logic.ViewModels.Debug
     /// <inheritdoc/>
     partial class CometOrbitDebugViewModel
     {
+        /// <inheritdoc cref="_diagnosticsShown"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public bool DiagnosticsShown
+        {
+            get => _diagnosticsShown;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_diagnosticsShown, value))
+                {
+                    OnDiagnosticsShownChanging(value);
+                    OnDiagnosticsShownChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.DiagnosticsShown);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsShown);
+                    _diagnosticsShown = value;
+                    OnDiagnosticsShownChanged(value);
+                    OnDiagnosticsShownChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.DiagnosticsShown);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsShown);
+                }
+            }
+        }
+
         /// <inheritdoc cref="_isVisible"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
@@ -270,6 +293,28 @@ namespace AetherVk.Logic.ViewModels.Debug
             }
         }
 
+        /// <summary>Executes the logic for when <see cref="DiagnosticsShown"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="DiagnosticsShown"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnDiagnosticsShownChanging(bool value);
+        /// <summary>Executes the logic for when <see cref="DiagnosticsShown"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="DiagnosticsShown"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnDiagnosticsShownChanging(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="DiagnosticsShown"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="DiagnosticsShown"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnDiagnosticsShownChanged(bool value);
+        /// <summary>Executes the logic for when <see cref="DiagnosticsShown"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="DiagnosticsShown"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnDiagnosticsShownChanged(bool oldValue, bool newValue);
         /// <summary>Executes the logic for when <see cref="IsVisible"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="IsVisible"/> is changed.</remarks>

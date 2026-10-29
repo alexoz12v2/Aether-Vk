@@ -109,7 +109,7 @@ public sealed class AppSession : IDisposable
   /// Starts the app and waits past the splash for the main window. With <paramref name="logPath"/>
   /// its stdout / stderr (the C# console and the core's log callback) are written there.
   /// </summary>
-  public static AppSession Launch(string? logPath = null, TimeSpan? startupTimeout = null)
+  public static AppSession Launch(string? logPath = null, TimeSpan? startupTimeout = null, bool diagnosticPanels = true)
   {
     EnsureDriver();
     var exe = AppPath();
@@ -122,9 +122,10 @@ public sealed class AppSession : IDisposable
         RedirectStandardOutput = logPath is not null,
         RedirectStandardError = logPath is not null,
         // the observer line lives in the diagnostic panel, hidden by default
-        Environment = { ["AETHERVK_DIAGNOSTIC_PANELS"] = "1" },
       },
     };
+    if (diagnosticPanels)
+      process.StartInfo.Environment["AETHERVK_DIAGNOSTIC_PANELS"] = "1";
     if (logPath is not null)
     {
       Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);

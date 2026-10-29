@@ -46,7 +46,7 @@ namespace AetherVk.Logic.SaveFile
 
         private static global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[] TimelineDtoPropInit(global::System.Text.Json.JsonSerializerOptions options)
         {
-            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[7];
+            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[8];
 
             var info0 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<global::AetherVk.Logic.SaveFile.EpochParts>
             {
@@ -188,6 +188,26 @@ namespace AetherVk.Logic.SaveFile
             
             properties[6] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<int?>(options, info6);
 
+            var info7 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<double?>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.TimelineDto),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.TimelineDto)obj).DustLeadDays,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.TimelineDto)obj).DustLeadDays = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "DustLeadDays",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.TimelineDto).GetProperty("DustLeadDays", InstanceMemberBindingFlags, null, typeof(double?), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[7] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<double?>(options, info7);
+
             return properties;
         }
 
@@ -214,6 +234,8 @@ namespace AetherVk.Logic.SaveFile
             writer.WriteBoolean(PropName_start_paused, ((global::AetherVk.Logic.SaveFile.TimelineDto)value).StartPaused);
             writer.WritePropertyName(PropName_speed);
             global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.SaveFile.TimelineDto)value).Speed, NullableInt32);
+            writer.WritePropertyName(PropName_dust_lead_days);
+            global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.SaveFile.TimelineDto)value).DustLeadDays, NullableDouble);
 
             writer.WriteEndObject();
         }

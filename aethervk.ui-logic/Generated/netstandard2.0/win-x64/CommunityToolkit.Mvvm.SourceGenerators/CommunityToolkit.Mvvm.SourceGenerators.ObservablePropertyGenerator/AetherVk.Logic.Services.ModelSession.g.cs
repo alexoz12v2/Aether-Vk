@@ -132,86 +132,86 @@ namespace AetherVk.Logic.Services
             }
         }
 
-        /// <inheritdoc cref="_afrho0Cm"/>
+        /// <inheritdoc cref="_dustRate1AuKgs"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-        public float Afrho0Cm
+        public float DustRate1AuKgs
         {
-            get => _afrho0Cm;
+            get => _dustRate1AuKgs;
             set
             {
-                if (!global::System.Collections.Generic.EqualityComparer<float>.Default.Equals(_afrho0Cm, value))
+                if (!global::System.Collections.Generic.EqualityComparer<float>.Default.Equals(_dustRate1AuKgs, value))
                 {
-                    OnAfrho0CmChanging(value);
-                    OnAfrho0CmChanging(default, value);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.Afrho0Cm);
-                    _afrho0Cm = value;
-                    OnAfrho0CmChanged(value);
-                    OnAfrho0CmChanged(default, value);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.Afrho0Cm);
+                    OnDustRate1AuKgsChanging(value);
+                    OnDustRate1AuKgsChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.DustRate1AuKgs);
+                    _dustRate1AuKgs = value;
+                    OnDustRate1AuKgsChanged(value);
+                    OnDustRate1AuKgsChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.DustRate1AuKgs);
                 }
             }
         }
 
-        /// <inheritdoc cref="_afrhoPower"/>
+        /// <inheritdoc cref="_dustRatePower"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-        public float AfrhoPower
+        public float DustRatePower
         {
-            get => _afrhoPower;
+            get => _dustRatePower;
             set
             {
-                if (!global::System.Collections.Generic.EqualityComparer<float>.Default.Equals(_afrhoPower, value))
+                if (!global::System.Collections.Generic.EqualityComparer<float>.Default.Equals(_dustRatePower, value))
                 {
-                    OnAfrhoPowerChanging(value);
-                    OnAfrhoPowerChanging(default, value);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.AfrhoPower);
-                    _afrhoPower = value;
-                    OnAfrhoPowerChanged(value);
-                    OnAfrhoPowerChanged(default, value);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.AfrhoPower);
+                    OnDustRatePowerChanging(value);
+                    OnDustRatePowerChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.DustRatePower);
+                    _dustRatePower = value;
+                    OnDustRatePowerChanged(value);
+                    OnDustRatePowerChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.DustRatePower);
                 }
             }
         }
 
-        /// <inheritdoc cref="_afrhoCutoffAu"/>
+        /// <inheritdoc cref="_dustRateCutoffAu"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-        public float AfrhoCutoffAu
+        public float DustRateCutoffAu
         {
-            get => _afrhoCutoffAu;
+            get => _dustRateCutoffAu;
             set
             {
-                if (!global::System.Collections.Generic.EqualityComparer<float>.Default.Equals(_afrhoCutoffAu, value))
+                if (!global::System.Collections.Generic.EqualityComparer<float>.Default.Equals(_dustRateCutoffAu, value))
                 {
-                    OnAfrhoCutoffAuChanging(value);
-                    OnAfrhoCutoffAuChanging(default, value);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.AfrhoCutoffAu);
-                    _afrhoCutoffAu = value;
-                    OnAfrhoCutoffAuChanged(value);
-                    OnAfrhoCutoffAuChanged(default, value);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.AfrhoCutoffAu);
+                    OnDustRateCutoffAuChanging(value);
+                    OnDustRateCutoffAuChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.DustRateCutoffAu);
+                    _dustRateCutoffAu = value;
+                    OnDustRateCutoffAuChanged(value);
+                    OnDustRateCutoffAuChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.DustRateCutoffAu);
                 }
             }
         }
 
-        /// <inheritdoc cref="_afrhoMaxValueCm"/>
+        /// <inheritdoc cref="_dustRateMaxKgs"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-        public float AfrhoMaxValueCm
+        public float DustRateMaxKgs
         {
-            get => _afrhoMaxValueCm;
+            get => _dustRateMaxKgs;
             set
             {
-                if (!global::System.Collections.Generic.EqualityComparer<float>.Default.Equals(_afrhoMaxValueCm, value))
+                if (!global::System.Collections.Generic.EqualityComparer<float>.Default.Equals(_dustRateMaxKgs, value))
                 {
-                    OnAfrhoMaxValueCmChanging(value);
-                    OnAfrhoMaxValueCmChanging(default, value);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.AfrhoMaxValueCm);
-                    _afrhoMaxValueCm = value;
-                    OnAfrhoMaxValueCmChanged(value);
-                    OnAfrhoMaxValueCmChanged(default, value);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.AfrhoMaxValueCm);
+                    OnDustRateMaxKgsChanging(value);
+                    OnDustRateMaxKgsChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.DustRateMaxKgs);
+                    _dustRateMaxKgs = value;
+                    OnDustRateMaxKgsChanged(value);
+                    OnDustRateMaxKgsChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.DustRateMaxKgs);
                 }
             }
         }
@@ -348,93 +348,93 @@ namespace AetherVk.Logic.Services
         /// <remarks>This method is invoked right after the value of <see cref="SizeRange"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnSizeRangeChanged(float oldValue, float newValue);
-        /// <summary>Executes the logic for when <see cref="Afrho0Cm"/> is changing.</summary>
+        /// <summary>Executes the logic for when <see cref="DustRate1AuKgs"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="Afrho0Cm"/> is changed.</remarks>
+        /// <remarks>This method is invoked right before the value of <see cref="DustRate1AuKgs"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnAfrho0CmChanging(float value);
-        /// <summary>Executes the logic for when <see cref="Afrho0Cm"/> is changing.</summary>
+        partial void OnDustRate1AuKgsChanging(float value);
+        /// <summary>Executes the logic for when <see cref="DustRate1AuKgs"/> is changing.</summary>
         /// <param name="oldValue">The previous property value that is being replaced.</param>
         /// <param name="newValue">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="Afrho0Cm"/> is changed.</remarks>
+        /// <remarks>This method is invoked right before the value of <see cref="DustRate1AuKgs"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnAfrho0CmChanging(float oldValue, float newValue);
-        /// <summary>Executes the logic for when <see cref="Afrho0Cm"/> just changed.</summary>
+        partial void OnDustRate1AuKgsChanging(float oldValue, float newValue);
+        /// <summary>Executes the logic for when <see cref="DustRate1AuKgs"/> just changed.</summary>
         /// <param name="value">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="Afrho0Cm"/> is changed.</remarks>
+        /// <remarks>This method is invoked right after the value of <see cref="DustRate1AuKgs"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnAfrho0CmChanged(float value);
-        /// <summary>Executes the logic for when <see cref="Afrho0Cm"/> just changed.</summary>
+        partial void OnDustRate1AuKgsChanged(float value);
+        /// <summary>Executes the logic for when <see cref="DustRate1AuKgs"/> just changed.</summary>
         /// <param name="oldValue">The previous property value that was replaced.</param>
         /// <param name="newValue">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="Afrho0Cm"/> is changed.</remarks>
+        /// <remarks>This method is invoked right after the value of <see cref="DustRate1AuKgs"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnAfrho0CmChanged(float oldValue, float newValue);
-        /// <summary>Executes the logic for when <see cref="AfrhoPower"/> is changing.</summary>
+        partial void OnDustRate1AuKgsChanged(float oldValue, float newValue);
+        /// <summary>Executes the logic for when <see cref="DustRatePower"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="AfrhoPower"/> is changed.</remarks>
+        /// <remarks>This method is invoked right before the value of <see cref="DustRatePower"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnAfrhoPowerChanging(float value);
-        /// <summary>Executes the logic for when <see cref="AfrhoPower"/> is changing.</summary>
+        partial void OnDustRatePowerChanging(float value);
+        /// <summary>Executes the logic for when <see cref="DustRatePower"/> is changing.</summary>
         /// <param name="oldValue">The previous property value that is being replaced.</param>
         /// <param name="newValue">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="AfrhoPower"/> is changed.</remarks>
+        /// <remarks>This method is invoked right before the value of <see cref="DustRatePower"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnAfrhoPowerChanging(float oldValue, float newValue);
-        /// <summary>Executes the logic for when <see cref="AfrhoPower"/> just changed.</summary>
+        partial void OnDustRatePowerChanging(float oldValue, float newValue);
+        /// <summary>Executes the logic for when <see cref="DustRatePower"/> just changed.</summary>
         /// <param name="value">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="AfrhoPower"/> is changed.</remarks>
+        /// <remarks>This method is invoked right after the value of <see cref="DustRatePower"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnAfrhoPowerChanged(float value);
-        /// <summary>Executes the logic for when <see cref="AfrhoPower"/> just changed.</summary>
+        partial void OnDustRatePowerChanged(float value);
+        /// <summary>Executes the logic for when <see cref="DustRatePower"/> just changed.</summary>
         /// <param name="oldValue">The previous property value that was replaced.</param>
         /// <param name="newValue">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="AfrhoPower"/> is changed.</remarks>
+        /// <remarks>This method is invoked right after the value of <see cref="DustRatePower"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnAfrhoPowerChanged(float oldValue, float newValue);
-        /// <summary>Executes the logic for when <see cref="AfrhoCutoffAu"/> is changing.</summary>
+        partial void OnDustRatePowerChanged(float oldValue, float newValue);
+        /// <summary>Executes the logic for when <see cref="DustRateCutoffAu"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="AfrhoCutoffAu"/> is changed.</remarks>
+        /// <remarks>This method is invoked right before the value of <see cref="DustRateCutoffAu"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnAfrhoCutoffAuChanging(float value);
-        /// <summary>Executes the logic for when <see cref="AfrhoCutoffAu"/> is changing.</summary>
+        partial void OnDustRateCutoffAuChanging(float value);
+        /// <summary>Executes the logic for when <see cref="DustRateCutoffAu"/> is changing.</summary>
         /// <param name="oldValue">The previous property value that is being replaced.</param>
         /// <param name="newValue">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="AfrhoCutoffAu"/> is changed.</remarks>
+        /// <remarks>This method is invoked right before the value of <see cref="DustRateCutoffAu"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnAfrhoCutoffAuChanging(float oldValue, float newValue);
-        /// <summary>Executes the logic for when <see cref="AfrhoCutoffAu"/> just changed.</summary>
+        partial void OnDustRateCutoffAuChanging(float oldValue, float newValue);
+        /// <summary>Executes the logic for when <see cref="DustRateCutoffAu"/> just changed.</summary>
         /// <param name="value">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="AfrhoCutoffAu"/> is changed.</remarks>
+        /// <remarks>This method is invoked right after the value of <see cref="DustRateCutoffAu"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnAfrhoCutoffAuChanged(float value);
-        /// <summary>Executes the logic for when <see cref="AfrhoCutoffAu"/> just changed.</summary>
+        partial void OnDustRateCutoffAuChanged(float value);
+        /// <summary>Executes the logic for when <see cref="DustRateCutoffAu"/> just changed.</summary>
         /// <param name="oldValue">The previous property value that was replaced.</param>
         /// <param name="newValue">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="AfrhoCutoffAu"/> is changed.</remarks>
+        /// <remarks>This method is invoked right after the value of <see cref="DustRateCutoffAu"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnAfrhoCutoffAuChanged(float oldValue, float newValue);
-        /// <summary>Executes the logic for when <see cref="AfrhoMaxValueCm"/> is changing.</summary>
+        partial void OnDustRateCutoffAuChanged(float oldValue, float newValue);
+        /// <summary>Executes the logic for when <see cref="DustRateMaxKgs"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="AfrhoMaxValueCm"/> is changed.</remarks>
+        /// <remarks>This method is invoked right before the value of <see cref="DustRateMaxKgs"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnAfrhoMaxValueCmChanging(float value);
-        /// <summary>Executes the logic for when <see cref="AfrhoMaxValueCm"/> is changing.</summary>
+        partial void OnDustRateMaxKgsChanging(float value);
+        /// <summary>Executes the logic for when <see cref="DustRateMaxKgs"/> is changing.</summary>
         /// <param name="oldValue">The previous property value that is being replaced.</param>
         /// <param name="newValue">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="AfrhoMaxValueCm"/> is changed.</remarks>
+        /// <remarks>This method is invoked right before the value of <see cref="DustRateMaxKgs"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnAfrhoMaxValueCmChanging(float oldValue, float newValue);
-        /// <summary>Executes the logic for when <see cref="AfrhoMaxValueCm"/> just changed.</summary>
+        partial void OnDustRateMaxKgsChanging(float oldValue, float newValue);
+        /// <summary>Executes the logic for when <see cref="DustRateMaxKgs"/> just changed.</summary>
         /// <param name="value">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="AfrhoMaxValueCm"/> is changed.</remarks>
+        /// <remarks>This method is invoked right after the value of <see cref="DustRateMaxKgs"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnAfrhoMaxValueCmChanged(float value);
-        /// <summary>Executes the logic for when <see cref="AfrhoMaxValueCm"/> just changed.</summary>
+        partial void OnDustRateMaxKgsChanged(float value);
+        /// <summary>Executes the logic for when <see cref="DustRateMaxKgs"/> just changed.</summary>
         /// <param name="oldValue">The previous property value that was replaced.</param>
         /// <param name="newValue">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="AfrhoMaxValueCm"/> is changed.</remarks>
+        /// <remarks>This method is invoked right after the value of <see cref="DustRateMaxKgs"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnAfrhoMaxValueCmChanged(float oldValue, float newValue);
+        partial void OnDustRateMaxKgsChanged(float oldValue, float newValue);
     }
 }

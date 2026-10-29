@@ -54,6 +54,42 @@ partial class ModelTabViewModel
         }
     }
 
+    private string _strDustTrajectories = string.Empty;
+    public string StrDustTrajectories
+    {
+        get => _strDustTrajectories;
+        set
+        {
+            if (_strDustTrajectories == value) return;
+            _strDustTrajectories = value;
+            OnPropertyChanged(nameof(StrDustTrajectories));
+        }
+    }
+
+    private string _strDustRhoNorm = string.Empty;
+    public string StrDustRhoNorm
+    {
+        get => _strDustRhoNorm;
+        set
+        {
+            if (_strDustRhoNorm == value) return;
+            _strDustRhoNorm = value;
+            OnPropertyChanged(nameof(StrDustRhoNorm));
+        }
+    }
+
+    private string _strDustExposure = string.Empty;
+    public string StrDustExposure
+    {
+        get => _strDustExposure;
+        set
+        {
+            if (_strDustExposure == value) return;
+            _strDustExposure = value;
+            OnPropertyChanged(nameof(StrDustExposure));
+        }
+    }
+
     private string _strShowReferenceError = string.Empty;
     public string StrShowReferenceError
     {
@@ -385,6 +421,9 @@ partial class ModelTabViewModel
         StrDustFlow = _translationService.GetString("Tabs_Model_DustFlow");
         StrDustTracers = _translationService.GetString("Tabs_Model_DustTracers");
         StrDustFlowSpeed = _translationService.GetString("Tabs_Model_DustFlowSpeed");
+        StrDustTrajectories = _translationService.GetString("Tabs_Model_DustTrajectories");
+        StrDustRhoNorm = _translationService.GetString("Tabs_Model_DustRhoNorm");
+        StrDustExposure = _translationService.GetString("Tabs_Model_DustExposure");
         StrShowReferenceError = _translationService.GetString("Tabs_Model_ShowReferenceError");
         StrSun = _translationService.GetString("Tabs_Model_Sun");
         StrDistance = _translationService.GetString("Tabs_Model_Distance");

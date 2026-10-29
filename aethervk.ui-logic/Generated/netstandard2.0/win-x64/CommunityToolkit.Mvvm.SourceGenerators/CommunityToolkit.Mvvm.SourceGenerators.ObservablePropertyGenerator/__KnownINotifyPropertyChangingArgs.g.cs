@@ -130,22 +130,22 @@ namespace CommunityToolkit.Mvvm.ComponentModel.__Internals
         [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
         [global::System.Obsolete("This field is not intended to be referenced directly by user code")]
         public static readonly global::System.ComponentModel.PropertyChangingEventArgs SizeRange = new global::System.ComponentModel.PropertyChangingEventArgs("SizeRange");
-        /// <summary>The cached <see cref="global::System.ComponentModel.PropertyChangingEventArgs"/> instance for all "Afrho0Cm" generated properties.</summary>
+        /// <summary>The cached <see cref="global::System.ComponentModel.PropertyChangingEventArgs"/> instance for all "DustRate1AuKgs" generated properties.</summary>
         [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
         [global::System.Obsolete("This field is not intended to be referenced directly by user code")]
-        public static readonly global::System.ComponentModel.PropertyChangingEventArgs Afrho0Cm = new global::System.ComponentModel.PropertyChangingEventArgs("Afrho0Cm");
-        /// <summary>The cached <see cref="global::System.ComponentModel.PropertyChangingEventArgs"/> instance for all "AfrhoPower" generated properties.</summary>
+        public static readonly global::System.ComponentModel.PropertyChangingEventArgs DustRate1AuKgs = new global::System.ComponentModel.PropertyChangingEventArgs("DustRate1AuKgs");
+        /// <summary>The cached <see cref="global::System.ComponentModel.PropertyChangingEventArgs"/> instance for all "DustRatePower" generated properties.</summary>
         [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
         [global::System.Obsolete("This field is not intended to be referenced directly by user code")]
-        public static readonly global::System.ComponentModel.PropertyChangingEventArgs AfrhoPower = new global::System.ComponentModel.PropertyChangingEventArgs("AfrhoPower");
-        /// <summary>The cached <see cref="global::System.ComponentModel.PropertyChangingEventArgs"/> instance for all "AfrhoCutoffAu" generated properties.</summary>
+        public static readonly global::System.ComponentModel.PropertyChangingEventArgs DustRatePower = new global::System.ComponentModel.PropertyChangingEventArgs("DustRatePower");
+        /// <summary>The cached <see cref="global::System.ComponentModel.PropertyChangingEventArgs"/> instance for all "DustRateCutoffAu" generated properties.</summary>
         [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
         [global::System.Obsolete("This field is not intended to be referenced directly by user code")]
-        public static readonly global::System.ComponentModel.PropertyChangingEventArgs AfrhoCutoffAu = new global::System.ComponentModel.PropertyChangingEventArgs("AfrhoCutoffAu");
-        /// <summary>The cached <see cref="global::System.ComponentModel.PropertyChangingEventArgs"/> instance for all "AfrhoMaxValueCm" generated properties.</summary>
+        public static readonly global::System.ComponentModel.PropertyChangingEventArgs DustRateCutoffAu = new global::System.ComponentModel.PropertyChangingEventArgs("DustRateCutoffAu");
+        /// <summary>The cached <see cref="global::System.ComponentModel.PropertyChangingEventArgs"/> instance for all "DustRateMaxKgs" generated properties.</summary>
         [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
         [global::System.Obsolete("This field is not intended to be referenced directly by user code")]
-        public static readonly global::System.ComponentModel.PropertyChangingEventArgs AfrhoMaxValueCm = new global::System.ComponentModel.PropertyChangingEventArgs("AfrhoMaxValueCm");
+        public static readonly global::System.ComponentModel.PropertyChangingEventArgs DustRateMaxKgs = new global::System.ComponentModel.PropertyChangingEventArgs("DustRateMaxKgs");
         /// <summary>The cached <see cref="global::System.ComponentModel.PropertyChangingEventArgs"/> instance for all "EntityId" generated properties.</summary>
         [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
         [global::System.Obsolete("This field is not intended to be referenced directly by user code")]
@@ -562,6 +562,10 @@ namespace CommunityToolkit.Mvvm.ComponentModel.__Internals
         [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
         [global::System.Obsolete("This field is not intended to be referenced directly by user code")]
         public static readonly global::System.ComponentModel.PropertyChangingEventArgs ConflictMessage = new global::System.ComponentModel.PropertyChangingEventArgs("ConflictMessage");
+        /// <summary>The cached <see cref="global::System.ComponentModel.PropertyChangingEventArgs"/> instance for all "NativeError" generated properties.</summary>
+        [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
+        [global::System.Obsolete("This field is not intended to be referenced directly by user code")]
+        public static readonly global::System.ComponentModel.PropertyChangingEventArgs NativeError = new global::System.ComponentModel.PropertyChangingEventArgs("NativeError");
         /// <summary>The cached <see cref="global::System.ComponentModel.PropertyChangingEventArgs"/> instance for all "LatitudeDeg" generated properties.</summary>
         [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
         [global::System.Obsolete("This field is not intended to be referenced directly by user code")]
@@ -698,26 +702,26 @@ namespace CommunityToolkit.Mvvm.ComponentModel.__Internals
         [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
         [global::System.Obsolete("This field is not intended to be referenced directly by user code")]
         public static readonly global::System.ComponentModel.PropertyChangingEventArgs ShowJetAngles = new global::System.ComponentModel.PropertyChangingEventArgs("ShowJetAngles");
-        /// <summary>The cached <see cref="global::System.ComponentModel.PropertyChangingEventArgs"/> instance for all "AfrhoPlot" generated properties.</summary>
+        /// <summary>The cached <see cref="global::System.ComponentModel.PropertyChangingEventArgs"/> instance for all "DustRatePlot" generated properties.</summary>
         [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
         [global::System.Obsolete("This field is not intended to be referenced directly by user code")]
-        public static readonly global::System.ComponentModel.PropertyChangingEventArgs AfrhoPlot = new global::System.ComponentModel.PropertyChangingEventArgs("AfrhoPlot");
+        public static readonly global::System.ComponentModel.PropertyChangingEventArgs DustRatePlot = new global::System.ComponentModel.PropertyChangingEventArgs("DustRatePlot");
         /// <summary>The cached <see cref="global::System.ComponentModel.PropertyChangingEventArgs"/> instance for all "SizeDistributionPlot" generated properties.</summary>
         [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
         [global::System.Obsolete("This field is not intended to be referenced directly by user code")]
         public static readonly global::System.ComponentModel.PropertyChangingEventArgs SizeDistributionPlot = new global::System.ComponentModel.PropertyChangingEventArgs("SizeDistributionPlot");
-        /// <summary>The cached <see cref="global::System.ComponentModel.PropertyChangingEventArgs"/> instance for all "JetAfrhoPlot" generated properties.</summary>
+        /// <summary>The cached <see cref="global::System.ComponentModel.PropertyChangingEventArgs"/> instance for all "JetDustRatePlot" generated properties.</summary>
         [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
         [global::System.Obsolete("This field is not intended to be referenced directly by user code")]
-        public static readonly global::System.ComponentModel.PropertyChangingEventArgs JetAfrhoPlot = new global::System.ComponentModel.PropertyChangingEventArgs("JetAfrhoPlot");
+        public static readonly global::System.ComponentModel.PropertyChangingEventArgs JetDustRatePlot = new global::System.ComponentModel.PropertyChangingEventArgs("JetDustRatePlot");
         /// <summary>The cached <see cref="global::System.ComponentModel.PropertyChangingEventArgs"/> instance for all "JetSizeDistributionPlot" generated properties.</summary>
         [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
         [global::System.Obsolete("This field is not intended to be referenced directly by user code")]
         public static readonly global::System.ComponentModel.PropertyChangingEventArgs JetSizeDistributionPlot = new global::System.ComponentModel.PropertyChangingEventArgs("JetSizeDistributionPlot");
-        /// <summary>The cached <see cref="global::System.ComponentModel.PropertyChangingEventArgs"/> instance for all "AfrhoNowText" generated properties.</summary>
+        /// <summary>The cached <see cref="global::System.ComponentModel.PropertyChangingEventArgs"/> instance for all "DustRateNowText" generated properties.</summary>
         [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
         [global::System.Obsolete("This field is not intended to be referenced directly by user code")]
-        public static readonly global::System.ComponentModel.PropertyChangingEventArgs AfrhoNowText = new global::System.ComponentModel.PropertyChangingEventArgs("AfrhoNowText");
+        public static readonly global::System.ComponentModel.PropertyChangingEventArgs DustRateNowText = new global::System.ComponentModel.PropertyChangingEventArgs("DustRateNowText");
         /// <summary>The cached <see cref="global::System.ComponentModel.PropertyChangingEventArgs"/> instance for all "TotalActivityText" generated properties.</summary>
         [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
         [global::System.Obsolete("This field is not intended to be referenced directly by user code")]
@@ -742,6 +746,22 @@ namespace CommunityToolkit.Mvvm.ComponentModel.__Internals
         [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
         [global::System.Obsolete("This field is not intended to be referenced directly by user code")]
         public static readonly global::System.ComponentModel.PropertyChangingEventArgs DustFlow = new global::System.ComponentModel.PropertyChangingEventArgs("DustFlow");
+        /// <summary>The cached <see cref="global::System.ComponentModel.PropertyChangingEventArgs"/> instance for all "DustTrajectories" generated properties.</summary>
+        [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
+        [global::System.Obsolete("This field is not intended to be referenced directly by user code")]
+        public static readonly global::System.ComponentModel.PropertyChangingEventArgs DustTrajectories = new global::System.ComponentModel.PropertyChangingEventArgs("DustTrajectories");
+        /// <summary>The cached <see cref="global::System.ComponentModel.PropertyChangingEventArgs"/> instance for all "DustRhoNorm" generated properties.</summary>
+        [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
+        [global::System.Obsolete("This field is not intended to be referenced directly by user code")]
+        public static readonly global::System.ComponentModel.PropertyChangingEventArgs DustRhoNorm = new global::System.ComponentModel.PropertyChangingEventArgs("DustRhoNorm");
+        /// <summary>The cached <see cref="global::System.ComponentModel.PropertyChangingEventArgs"/> instance for all "DustExposureEv" generated properties.</summary>
+        [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
+        [global::System.Obsolete("This field is not intended to be referenced directly by user code")]
+        public static readonly global::System.ComponentModel.PropertyChangingEventArgs DustExposureEv = new global::System.ComponentModel.PropertyChangingEventArgs("DustExposureEv");
+        /// <summary>The cached <see cref="global::System.ComponentModel.PropertyChangingEventArgs"/> instance for all "DustExposureEvText" generated properties.</summary>
+        [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
+        [global::System.Obsolete("This field is not intended to be referenced directly by user code")]
+        public static readonly global::System.ComponentModel.PropertyChangingEventArgs DustExposureEvText = new global::System.ComponentModel.PropertyChangingEventArgs("DustExposureEvText");
         /// <summary>The cached <see cref="global::System.ComponentModel.PropertyChangingEventArgs"/> instance for all "DustFlowSpeed" generated properties.</summary>
         [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
         [global::System.Obsolete("This field is not intended to be referenced directly by user code")]
@@ -838,6 +858,10 @@ namespace CommunityToolkit.Mvvm.ComponentModel.__Internals
         [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
         [global::System.Obsolete("This field is not intended to be referenced directly by user code")]
         public static readonly global::System.ComponentModel.PropertyChangingEventArgs CanRestore = new global::System.ComponentModel.PropertyChangingEventArgs("CanRestore");
+        /// <summary>The cached <see cref="global::System.ComponentModel.PropertyChangingEventArgs"/> instance for all "IsRangeLocked" generated properties.</summary>
+        [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
+        [global::System.Obsolete("This field is not intended to be referenced directly by user code")]
+        public static readonly global::System.ComponentModel.PropertyChangingEventArgs IsRangeLocked = new global::System.ComponentModel.PropertyChangingEventArgs("IsRangeLocked");
         /// <summary>The cached <see cref="global::System.ComponentModel.PropertyChangingEventArgs"/> instance for all "HasError" generated properties.</summary>
         [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
         [global::System.Obsolete("This field is not intended to be referenced directly by user code")]
@@ -898,6 +922,10 @@ namespace CommunityToolkit.Mvvm.ComponentModel.__Internals
         [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
         [global::System.Obsolete("This field is not intended to be referenced directly by user code")]
         public static readonly global::System.ComponentModel.PropertyChangingEventArgs ModelRotations = new global::System.ComponentModel.PropertyChangingEventArgs("ModelRotations");
+        /// <summary>The cached <see cref="global::System.ComponentModel.PropertyChangingEventArgs"/> instance for all "DustLeadDays" generated properties.</summary>
+        [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
+        [global::System.Obsolete("This field is not intended to be referenced directly by user code")]
+        public static readonly global::System.ComponentModel.PropertyChangingEventArgs DustLeadDays = new global::System.ComponentModel.PropertyChangingEventArgs("DustLeadDays");
         /// <summary>The cached <see cref="global::System.ComponentModel.PropertyChangingEventArgs"/> instance for all "ComponentName" generated properties.</summary>
         [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
         [global::System.Obsolete("This field is not intended to be referenced directly by user code")]
@@ -1158,6 +1186,10 @@ namespace CommunityToolkit.Mvvm.ComponentModel.__Internals
         [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
         [global::System.Obsolete("This field is not intended to be referenced directly by user code")]
         public static readonly global::System.ComponentModel.PropertyChangingEventArgs EarthObserverScaleText = new global::System.ComponentModel.PropertyChangingEventArgs("EarthObserverScaleText");
+        /// <summary>The cached <see cref="global::System.ComponentModel.PropertyChangingEventArgs"/> instance for all "DiagnosticsShown" generated properties.</summary>
+        [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
+        [global::System.Obsolete("This field is not intended to be referenced directly by user code")]
+        public static readonly global::System.ComponentModel.PropertyChangingEventArgs DiagnosticsShown = new global::System.ComponentModel.PropertyChangingEventArgs("DiagnosticsShown");
         /// <summary>The cached <see cref="global::System.ComponentModel.PropertyChangingEventArgs"/> instance for all "IsShown" generated properties.</summary>
         [global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]
         [global::System.Obsolete("This field is not intended to be referenced directly by user code")]

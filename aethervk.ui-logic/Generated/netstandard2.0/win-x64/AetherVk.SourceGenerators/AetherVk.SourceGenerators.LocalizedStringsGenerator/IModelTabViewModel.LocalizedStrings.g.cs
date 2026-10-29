@@ -9,6 +9,9 @@ public partial interface IModelTabViewModel
     string StrDustFlow { get; set; }
     string StrDustTracers { get; set; }
     string StrDustFlowSpeed { get; set; }
+    string StrDustTrajectories { get; set; }
+    string StrDustRhoNorm { get; set; }
+    string StrDustExposure { get; set; }
     string StrShowReferenceError { get; set; }
     string StrSun { get; set; }
     string StrDistance { get; set; }
