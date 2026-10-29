@@ -525,7 +525,7 @@
                                   <Button Content="Model range" Margin="0,0,6,4"
                                           AutomationProperties.AutomationId="BillboardFitsModelRange"
                                           Command="{Binding RequestModelRangeCommand}"
-                                          ToolTip.Tip="Propose the Timeline tab's model range: its N nucleus rotations ending at this observation. Commit it in the Comet tab as usual." />
+                                          ToolTip.Tip="Model range: puts this observation's epoch (mid-exposure, else DATE-OBS) in the Timeline tab's &quot;rotations ending at&quot; box and sets Start/End to N nucleus rotations ending there (at least 1 day). It only proposes the range: commit it in the Comet tab, or use Recommit in the Timeline tab." />
                                   <Button Content="Use observatory site" Margin="0,0,6,4"
                                           Command="{Binding UseObservatorySiteCommand}"
                                           ToolTip.Tip="Put the Earth observer on the header's site (topocentric, latitude, longitude, elevation)." />
