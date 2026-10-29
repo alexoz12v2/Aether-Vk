@@ -362,7 +362,7 @@ public partial class FitsImageViewModel : ObservableObject
       skipped.Add("match");
     if (!RotateLikeTheSky(v))
       skipped.Add("rotate");
-    owner.Probe(); // the comet as the matched view draws it
+    await owner.ProbeSettledAsync(); // the comet as the matched view draws it, not the frame before
     if (!owner.CenterOnComet(_row.Id))
       skipped.Add("center");
     v.IsComparisonLocked = true;

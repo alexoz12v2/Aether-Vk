@@ -273,6 +273,27 @@ public partial class DesktopBillboardsViewModel : ObservableObject, IDisposable
       item.RefreshPilot();
   }
 
+  /// <summary>
+  /// Probes until the comet's place and the viewport scale hold still between two reads
+  /// <paramref name="intervalMs"/> apart (at most <paramref name="maxReads"/> reads): the probe
+  /// reports what the viewport last drew, so right after a seek or a field match it can still
+  /// report the view before them.
+  /// </summary>
+  internal async Task ProbeSettledAsync(int intervalMs = 150, int maxReads = 20)
+  {
+    Probe();
+    for (int i = 0; i < maxReads; i++)
+    {
+      var (comet, scale) = (CometDesktopPx, ViewportArcsecPerPx);
+      await Task.Delay(intervalMs);
+      Probe();
+      bool sameComet = comet is { } a && CometDesktopPx is { } b && Math.Abs(a.X - b.X) < 0.05 && Math.Abs(a.Y - b.Y) < 0.05;
+      bool sameScale = scale is { } s && ViewportArcsecPerPx is { } t && Math.Abs(s - t) <= 1e-6 * s;
+      if (sameComet && sameScale)
+        return;
+    }
+  }
+
   /// <summary>Moves the billboard so its nucleus pixel (the image's centre when unset) lies on the
   /// comet as the viewport draws it (<see cref="DesktopBillboardGeometry.CenterForNucleusAt"/>).</summary>
   internal bool CenterOnComet(Guid id) =>

@@ -21,6 +21,7 @@ public sealed record JetGrain(
   float SizeRange,
   float Afrho0Cm)
 {
-  /// <summary>67P-like defaults: 100 µm, 0.533 g/cm³, grey body, p 0.04, q 3.5, F 10, Afρ₀ 100 cm.</summary>
-  public static JetGrain Default { get; } = new(100f, 0.533f, 1.0f, 0.04f, 3.5f, 10f, 100f);
+  /// <summary>67P-like defaults: 100 µm, 0.8 g/cm³ (the GIADA dust bulk density, 785 kg/m³, Fulle et al.
+  /// 2017; 0.533 is the nucleus'), grey body, p 0.04, q 3.5, F 10, Afρ₀ 100 cm.</summary>
+  public static JetGrain Default { get; } = new(100f, 0.8f, 1.0f, 0.04f, 3.5f, 10f, 100f);
 }

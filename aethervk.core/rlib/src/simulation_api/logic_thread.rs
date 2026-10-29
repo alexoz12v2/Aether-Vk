@@ -4026,14 +4026,16 @@ mod utils {
     changes.sort_by_cached_key(|(ext_id, _, _)| depth(*ext_id));
   }
 
-  /// The observer sits on its WGS84 site: `|camera − earth| = |surface_bf_au|` (world, f64).
-  /// Checked here, on one scene snapshot: C# receives the camera and the Earth in separate callbacks
-  /// and could only compare a camera against the previous tick's Earth.
+  /// The observer sits on its WGS84 site (topocentric) or at the geocentre:
+  /// `|camera − earth| = |offset_bf_au|` (world, f64). Checked here, on one scene snapshot: C#
+  /// receives the camera and the Earth in separate callbacks and could only compare a camera
+  /// against the previous tick's Earth.
   fn check_earth_observer_invariant(
     scene: &crate::scene::Scene,
     obs: &crate::simulation_api::earth_observer::EarthObserverState,
   ) {
-    let radius_au = obs.surface_radius_au();
+    let o = obs.offset_bf_au();
+    let radius_au = (o[0] * o[0] + o[1] * o[1] + o[2] * o[2]).sqrt();
     let (Some(cam), Some(earth)) = (
       scene.global_transform_f64(obs.camera),
       scene.global_transform_f64(obs.earth),
