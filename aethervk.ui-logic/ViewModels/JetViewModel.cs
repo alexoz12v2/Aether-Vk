@@ -31,6 +31,14 @@ public sealed partial class JetViewModel : ObservableObject
   public ulong NativePsId { get; internal set; }
 
   /// <summary>
+  /// Why the jet is not in the simulation: set when the core refused its particle system on a
+  /// commit (the refusal is retried on the next commit or by the Retry button), null while it is
+  /// in the simulation or before any commit.
+  /// </summary>
+  [ObservableProperty]
+  private string? _nativeError;
+
+  /// <summary>
   /// PCG seed — generated once at construction. Shown as an advanced read-only field.
   /// </summary>
   public uint Seed { get; }

@@ -733,10 +733,11 @@ public class ModelTabViewModelTests
     s.Vm.AddJetCommand.Execute(null);
 
     var jet = s.Vm.Jets!.Single();
-    var expected = new AetherVk.Logic.Models.JetGrain(42f, 1.3f, 1.4f, 0.06f, 3.0f, 30f, 700f);
+    // q is per jet only: a new jet starts at 3.5 whatever the session holds (an older save's value)
+    var expected = new AetherVk.Logic.Models.JetGrain(42f, 1.3f, 1.4f, 0.06f, 3.5f, 30f, 700f);
     Assert.Equal(expected, jet.Grain);
-    Assert.Equal(expected, s.Session.DefaultGrain);
-    Assert.Equal(new ParticleSystemModel(42f, 1.3f, 1.4f, 0.06f, 3.0f, 30f, 700f, 2.5f, 15f, 100_000f), captured);
+    Assert.Equal(expected with { SizeQ = 3.0f }, s.Session.DefaultGrain);
+    Assert.Equal(new ParticleSystemModel(42f, 1.3f, 1.4f, 0.06f, 3.5f, 30f, 700f, 2.5f, 15f, 100_000f), captured);
 
     s.Session.DiametreUm = 7f;
     s.Session.Afrho0Cm = 9f;

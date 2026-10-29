@@ -236,6 +236,7 @@ public partial class ModelTabViewModel
           foreach (var jet in session.Jets)
           {
             jet.NativePsId = 0;
+            jet.NativeError = null;
           }
         }
         else
@@ -353,6 +354,18 @@ public partial class ModelTabViewModel
       _runtimeService.SetJetAngleVisibility(jet.NativePsId, true);
   }
 
+  /// <summary>
+  /// Asks the core again for every jet it refused (<see cref="JetViewModel.NativeError"/>); the
+  /// jets already in the simulation are left alone.
+  /// </summary>
+  [RelayCommand]
+  private void RetryNativeJets()
+  {
+    if (!IsCometCommitted || CurrentSession is not { } session) return;
+    JetNativeSync.EnsureNative(_runtimeService, session, EffectiveNucleusRadiusKm);
+    RefreshTotalActivityText();
+  }
+
   public void SetCursorPosition(int x, int y)
   {
       _platformWindowService.SetCursorPosition(x, y);
@@ -368,7 +381,9 @@ public partial class ModelTabViewModel
     var session = CurrentSession;
     if (session is null) return;
 
-    var jet = new JetViewModel(session.DefaultGrain);
+    // q is set per jet only (the model-wide box is gone): a new jet starts at the usual 3.5, whatever
+    // an older save left in the session (its jets without a q of their own still inherit it)
+    var jet = new JetViewModel(session.DefaultGrain with { SizeQ = Models.JetGrain.Default.SizeQ });
     jet.DisplayIndex = session.Jets.Count + 1;
     bool isFirst = session.Jets.Count == 0;
 
@@ -594,7 +609,7 @@ public partial class ModelTabViewModel
     if (CurrentSession is not { } s)
       return;
     AfrhoPlot = DustCurves.AfrhoPlot(s.Afrho0Cm, s.AfrhoPower, s.AfrhoCutoffAu, s.AfrhoMaxValueCm, CurrentRhAu);
-    SizeDistributionPlot = DustCurves.SizeDistributionPlot(s.DiametreUm, s.SizeRange, s.SizeQ);
+    SizeDistributionPlot = DustCurves.SizeDistributionPlot(s.DiametreUm, s.SizeRange, Models.JetGrain.Default.SizeQ);
     RefreshJetCurves();
     RefreshAfrhoNowText();
     RefreshTotalActivityText();

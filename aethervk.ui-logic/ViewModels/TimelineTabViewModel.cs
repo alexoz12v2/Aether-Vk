@@ -50,9 +50,27 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
   /// </summary>
   [ObservableProperty]
   [NotifyPropertyChangedFor(nameof(CanRestore))]
+  [NotifyPropertyChangedFor(nameof(IsRangeLocked))]
   private bool _isProposedDifferentFromCommitted;
 
   public bool CanRestore => HasCommittedState && IsProposedDifferentFromCommitted;
+
+  /// <summary>
+  /// The boxes were edited after a commit: the engine keeps the committed range (reviewer report
+  /// 2026-10-29, "it picks other dates") until the comet is committed again with the new one.
+  /// </summary>
+  public bool IsRangeLocked => HasCommittedState && IsProposedDifferentFromCommitted;
+
+  public const string RangeLockedText =
+    "Range locked while the comet is committed: the simulation keeps the committed range. Decommit to change it, or recommit with this range.";
+
+  /// <summary>Commits the comet again with the boxes' range (the Comet tab's Download &amp; Commit).</summary>
+  [RelayCommand]
+  private void RecommitWithRange()
+  {
+    if (IsRangeLocked && !HasError)
+      _timelineService.RequestRecommit();
+  }
 
   [ObservableProperty]
   private bool _hasError;
@@ -145,6 +163,7 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
   /// </summary>
   [ObservableProperty]
   [NotifyPropertyChangedFor(nameof(CanRestore))]
+  [NotifyPropertyChangedFor(nameof(IsRangeLocked))]
   private bool _hasCommittedState;
   
   [ObservableProperty]
@@ -213,7 +232,7 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
     _runtimeService = runtimeService;
     Icon = "⏱"; // stopwatch — U+23F1
 
-    RestoreCommand = new RelayCommand(Restore);
+    RestoreCommand = new RelayCommand(RestoreCommitted);
     PlayPauseCommand = new RelayCommand(() => IsPlaying = !IsPlaying, CanPlayPause);
     ResetCommand = new RelayCommand(() =>
     {
@@ -540,6 +559,18 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
     base.Dispose();
   }
 
+  /// <summary>The Restore button: the boxes back to the committed range (else the saved proposal).</summary>
+  private void RestoreCommitted()
+  {
+    if (CurrentSession is { } s && HasCommittedState)
+    {
+      StartEpoch = s.CommittedStartEpoch;
+      EndEpoch = s.CommittedEndEpoch;
+      return;
+    }
+    Restore();
+  }
+
   private void Restore()
   {
     if (CurrentSession == null || _timelineSessionService == null) return;
@@ -720,13 +751,24 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
   {
     if (CurrentSession == null) return;
 
+    // the range the comet was committed with, not the boxes (a save opens with a later proposal
+    // in them); texts that name the same instant are kept as typed
+    string start = StartEpoch, end = EndEpoch;
+    if (message.Range is { } r)
+    {
+      start = TimeUtils.EpochText(r.StartCenturies, r.StartNs, StartEpoch);
+      end = TimeUtils.EpochText(r.EndCenturies, r.EndNs, EndEpoch);
+    }
     _timelineSessionService.UpdateSession(SessionId, s =>
     {
-      s.CommittedStartEpoch = StartEpoch;
-      s.CommittedEndEpoch   = EndEpoch;
+      s.CommittedStartEpoch = start;
+      s.CommittedEndEpoch   = end;
     });
 
     RefreshCommittedState();
+    // the boxes show what runs
+    StartEpoch = start;
+    EndEpoch = end;
     CheckProposedVsCommitted();
     CurrentEpochError = string.Empty;
     PollSimulationClock();

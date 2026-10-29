@@ -40,6 +40,7 @@ public sealed class TimelineService : IDisposable
   private readonly Subject<System.Reactive.Unit> _snapshotRestoreSubject = new();
   private readonly Subject<System.Reactive.Unit> _seekedSubject = new();
   private readonly Subject<DateTimeOffset> _modelRangeRequestSubject = new();
+  private readonly Subject<System.Reactive.Unit> _recommitRequestSubject = new();
   private readonly IDisposable _listenerToken;
 
 
@@ -186,6 +187,15 @@ public sealed class TimelineService : IDisposable
 
   public void RequestModelRange(DateTimeOffset endUtc) => _modelRangeRequestSubject.OnNext(endUtc);
 
+  /// <summary>
+  /// "Recommit with this range" (the Timeline, while the range is locked): the Comet tab runs its
+  /// Download &amp; Commit with the proposed range (it decommits first, so the lock does not apply).
+  /// </summary>
+  public IObservable<System.Reactive.Unit> RecommitRequests =>
+    _recommitRequestSubject.ObserveOn(_schedulerProvider.MainThread);
+
+  public void RequestRecommit() => _recommitRequestSubject.OnNext(System.Reactive.Unit.Default);
+
   public bool SnapshotRestore()
   {
       bool ok = _runtimeService.RestoreSnapshotSync();
@@ -220,5 +230,6 @@ public sealed class TimelineService : IDisposable
     _snapshotRestoreSubject.Dispose();
     _seekedSubject.Dispose();
     _modelRangeRequestSubject.Dispose();
+    _recommitRequestSubject.Dispose();
   }
 }
