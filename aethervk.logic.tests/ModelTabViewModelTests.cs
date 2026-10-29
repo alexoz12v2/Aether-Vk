@@ -533,7 +533,7 @@ public class ModelTabViewModelTests
   {
     var session = new ModelSession();
     Assert.Equal(100f, session.DiametreUm);
-    Assert.Equal(0.533f, session.DensityGCm3, 3);
+    Assert.Equal(0.8f, session.DensityGCm3, 3);
     Assert.Equal(1.0f, session.ScatteringEfficiency);
     Assert.Equal(0.04f, session.GeometricAlbedo);
     Assert.Equal(3.5f, session.SizeQ);
