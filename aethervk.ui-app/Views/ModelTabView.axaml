@@ -387,8 +387,18 @@
                           <Run Text="λ " /><Run Text="{Binding LongitudeDeg, StringFormat='{}{0:F1}°'}" />
                         </TextBlock>
                         <TextBlock FontSize="11" Foreground="{DynamicResource Text.Tertiary}">
-                          <Run Text="∠ " /><Run Text="{Binding ApertureDeg, StringFormat='{}{0:F0}°'}" />
+                          <Run Text="∠ " /><Run Text="{Binding ApertureDeg, StringFormat='{}{0:0.##}°'}" />
                         </TextBlock>
+                      </StackPanel>
+                      <!-- the core refused this jet: say so (it is not in the simulation) and offer a retry -->
+                      <StackPanel Orientation="Horizontal" Spacing="6"
+                                  IsVisible="{Binding NativeError, Converter={x:Static ObjectConverters.IsNotNull}}">
+                        <TextBlock FontSize="11" Foreground="{DynamicResource Sem.Warning}"
+                                   Text="⚠ Not in the simulation" VerticalAlignment="Center"
+                                   ToolTip.Tip="{Binding NativeError}" />
+                        <Button Content="Retry" Padding="6,0" FontSize="11"
+                                Command="{Binding #JetListBox.((vm:IModelTabViewModel)DataContext).RetryNativeJetsCommand}"
+                                ToolTip.Tip="Ask the core again for every refused jet" />
                       </StackPanel>
                     </StackPanel>
 
@@ -821,21 +831,14 @@
                   <TextBlock Text="Advanced: grain size distribution" />
                   <controls:PropertyHelpButton AutomationProperties.AutomationId="SizeDistributionAdvancedHelp"
                                                HelpHeader="Grain size distribution"
-                                               HelpContent="The size law new jets start from (each jet has its own, in its Grain panel).&#x0A;&#x0A;Grain radii follow n(s) ∝ s^−q from s₀/F to s₀·F, s₀ = diameter/2 (q = 3.5, F = 10, 100 µm → radii 5–500 µm).&#x0A;&#x0A;By number, small grains dominate; by cross-section (what sets brightness) the law is s^(2−q), so brightness favours small grains only slowly.&#x0A;&#x0A;The continuous dust rendering is built for q = 3.5; changing q only affects the individual bright specks." />
+                                               HelpContent="The size range new jets start from. The exponent q is set per jet, in each jet's Grain panel (new jets start at q = 3.5).&#x0A;&#x0A;Grain radii follow n(s) ∝ s^−q from s₀/F to s₀·F, s₀ = diameter/2 (q = 3.5, F = 10, 100 µm → radii 5–500 µm).&#x0A;&#x0A;By number, small grains dominate; by cross-section (what sets brightness) the law is s^(2−q), so brightness favours small grains only slowly.&#x0A;&#x0A;The continuous dust rendering is built for q = 3.5; changing q only affects the individual bright specks." />
                 </StackPanel>
               </Expander.Header>
               <StackPanel Spacing="8">
-                <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto,8,Auto">
-                  <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding StrSizeQ}" />
-                  <TextBox Grid.Row="0" Grid.Column="2" AutomationProperties.AutomationId="SizeQBox"
-                    ToolTip.Tip="Default exponent q of the grain size law n(s) ∝ s⁻ᵠ for new jets (2 to 5; 3.5 is the usual value). Larger q means more small grains. It only changes the individual bright specks; the continuous dust assumes 3.5.">
-                    <i:Interaction.Behaviors>
-                      <b:NumericTextBoxBehavior Value="{Binding CurrentSession.SizeQ}" Minimum="2" Maximum="5" />
-                    </i:Interaction.Behaviors>
-                  </TextBox>
-
-                  <TextBlock Grid.Row="2" Grid.Column="0" Text="{Binding StrSizeRange}" />
-                  <TextBox Grid.Row="2" Grid.Column="2" AutomationProperties.AutomationId="SizeRangeBox"
+                <!-- q is per jet only (jet Grain panel; reviewer 2026-10-29): new jets start at 3.5 -->
+                <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto">
+                  <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding StrSizeRange}" />
+                  <TextBox Grid.Row="0" Grid.Column="2" AutomationProperties.AutomationId="SizeRangeBox"
                     ToolTip.Tip="Default range factor F for new jets (1 to 1000): grain radii span from s₀/F to s₀·F, where s₀ is half the reference diameter. Larger F means a wider spread of grain sizes.">
                     <i:Interaction.Behaviors>
                       <b:NumericTextBoxBehavior Value="{Binding CurrentSession.SizeRange}" Minimum="1" Maximum="1000" />

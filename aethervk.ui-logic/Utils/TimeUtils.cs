@@ -51,6 +51,19 @@ public static class TimeUtils
   }
 
   /// <summary>
+  /// The text for the epoch (<paramref name="centuries"/>, <paramref name="nanoseconds"/>):
+  /// <paramref name="sameInstant"/> when it names the same instant (to 1 ms; keeps what the user
+  /// typed), else ISO-8601 with a Z.
+  /// </summary>
+  public static string EpochText(short centuries, ulong nanoseconds, string sameInstant)
+  {
+    var at = FromTaiParts(centuries, nanoseconds);
+    if (TryParseIso8601(sameInstant, out var p) && Math.Abs((p - at).TotalMilliseconds) < 1)
+      return sameInstant;
+    return at.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
+  }
+
+  /// <summary>
   /// Formats TAI parts as a UTC display string.
   /// </summary>
   public static string FormatTaiEpoch(short centuries, ulong nanoseconds)
