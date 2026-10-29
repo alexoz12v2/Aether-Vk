@@ -4,6 +4,9 @@
 
 #[cfg(feature = "std")]
 extern crate std;
+// std is linked on every desktop target anyway (see `the_panic`); only its panic hook is used
+#[cfg(all(not(feature = "std"), not(target_arch = "wasm32")))]
+extern crate std;
 
 use aethervk_core_rlib as r#impl;
 
@@ -106,10 +109,37 @@ unsafe fn load() {
   SYSTEM_INFO.call_once(|| AvkSystemInfo::new());
 
   let _ = log::set_logger(&LOGGER);
+  #[cfg(not(target_arch = "wasm32"))]
+  install_panic_hook();
   #[cfg(debug_assertions)]
   log::set_max_level(log::LevelFilter::Trace);
   #[cfg(not(debug_assertions))]
   log::set_max_level(log::LevelFilter::Debug);
+}
+
+/// Prefix of the log line a panic sends through the logger callback. The cdylib aborts on panic, so
+/// that line is the host's only chance to write a crash report (the .NET app writes it
+/// synchronously when it sees this prefix; a Release build on Windows has no console for stderr).
+pub const PANIC_LOG_PREFIX: &str = "[PANIC]";
+
+/// The panic message, the thread and a backtrace go through the logger callback, then the default
+/// hook (stderr) runs.
+#[cfg(not(target_arch = "wasm32"))]
+fn install_panic_hook() {
+  use alloc::boxed::Box;
+  let previous = std::panic::take_hook();
+  std::panic::set_hook(Box::new(move |info| {
+    let thread = std::thread::current();
+    let backtrace = std::backtrace::Backtrace::force_capture();
+    aethervk_oshal_rlib::log!(
+      "{} thread '{}' {}\nbacktrace:\n{}",
+      PANIC_LOG_PREFIX,
+      thread.name().unwrap_or("<unnamed>"),
+      info,
+      backtrace
+    );
+    previous(info);
+  }));
 }
 
 struct AvkLogger;
@@ -130,3 +160,61 @@ impl log::Log for AvkLogger {
 }
 
 static LOGGER: AvkLogger = AvkLogger;
+
+#[cfg(test)]
+mod panic_hook_tests {
+  use std::{ffi::CStr, io::Write, string::String};
+
+  const CHILD_ENV: &str = "AETHERVK_PANIC_HOOK_CHILD_LOG";
+
+  extern "C" fn to_file(msg: *const core::ffi::c_char) {
+    let path = std::env::var(CHILD_ENV).unwrap();
+    let text = unsafe { CStr::from_ptr(msg) }.to_string_lossy();
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path).unwrap();
+    let _ = f.write_all(text.as_bytes());
+  }
+
+  /// Run by [`a_panic_reaches_the_logger_callback`] in a child process.
+  #[test]
+  #[ignore = "child of a_panic_reaches_the_logger_callback"]
+  fn panic_hook_child() {
+    if std::env::var(CHILD_ENV).is_err() {
+      return;
+    }
+    crate::r#impl::simulation_api::SimulationContext::set_logger_callback(Some(to_file));
+    std::thread::Builder::new()
+      .name(String::from("logic"))
+      .spawn(|| panic!("boom at frame 42"))
+      .unwrap()
+      .join()
+      .ok();
+  }
+
+  /// The cdylib aborts on panic: the panic text (thread, message, location, backtrace) must reach
+  /// the host through the logger callback with [`crate::PANIC_LOG_PREFIX`], so the .NET app can
+  /// write its crash report before the process dies (reviewer report 2026-10-29: a crash after a few
+  /// minutes left nothing to send).
+  #[test]
+  fn a_panic_reaches_the_logger_callback() {
+    let dir = std::env::temp_dir().join(std::format!("avk_panic_hook_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let log = dir.join("child.log");
+    let _ = std::fs::remove_file(&log);
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+      .args(["--exact", "panic_hook_tests::panic_hook_child", "--ignored", "--nocapture"])
+      .env(CHILD_ENV, &log)
+      .output()
+      .unwrap();
+    let text = std::fs::read_to_string(&log).unwrap_or_default();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+      text.starts_with("[PANIC] thread 'logic' "),
+      "child stdout {}\nstderr {}\nlog {text}",
+      String::from_utf8_lossy(&out.stdout),
+      String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(text.contains("boom at frame 42"), "{text}");
+    assert!(text.contains("lib.rs"), "the location: {text}");
+    assert!(text.contains("backtrace:"), "{text}");
+  }
+}

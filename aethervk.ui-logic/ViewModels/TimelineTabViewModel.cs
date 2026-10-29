@@ -560,16 +560,7 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
   }
 
   /// <summary>The Restore button: the boxes back to the committed range (else the saved proposal).</summary>
-  private void RestoreCommitted()
-  {
-    if (CurrentSession is { } s && HasCommittedState)
-    {
-      StartEpoch = s.CommittedStartEpoch;
-      EndEpoch = s.CommittedEndEpoch;
-      return;
-    }
-    Restore();
-  }
+  private void RestoreCommitted() => Restore();
 
   private void Restore()
   {
@@ -589,8 +580,11 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
       });
     }
 
-    StartEpoch = CurrentSession.ProposedStartEpoch;
-    EndEpoch   = CurrentSession.ProposedEndEpoch;
+    // committed: the boxes show what runs (a save keeps a later, uncommitted proposal: reviewer
+    // report 2026-10-29); the proposal then follows them
+    RefreshCommittedState();
+    StartEpoch = HasCommittedState ? CurrentSession.CommittedStartEpoch : CurrentSession.ProposedStartEpoch;
+    EndEpoch   = HasCommittedState ? CurrentSession.CommittedEndEpoch : CurrentSession.ProposedEndEpoch;
 
     if (TimeUtils.TryParseIso8601(StartEpoch, out var startDt)
         && TimeUtils.TryParseIso8601(EndEpoch,   out var endDt))
@@ -601,6 +595,9 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
         new TimeRange(startTai.centuries, startTai.nanoseconds,
                       endTai.centuries,   endTai.nanoseconds));
     }
+
+    // the saved lead time (none: the default)
+    DustLeadDays = CurrentSession.DustLeadDays ?? TimelineService.MaxDustLeadDays;
 
     // the saved speed (a savefile open); none saved keeps the current selection
     if (CurrentSession.Speed is int speed && Enum.IsDefined(typeof(SimulationSpeed), speed))
@@ -668,6 +665,26 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
     var ci = System.Globalization.CultureInfo.InvariantCulture;
     StartEpoch = r.Start.UtcDateTime.ToString(Fmt, ci);
     EndEpoch = r.End.UtcDateTime.ToString(Fmt, ci);
+  }
+
+  /// <summary>
+  /// Days the jets ignite before the committed start (0 to <see cref="TimelineService.MaxDustLeadDays"/>):
+  /// the tail is already formed when play starts. Used by the next commit.
+  /// </summary>
+  [ObservableProperty]
+  private double _dustLeadDays = TimelineService.MaxDustLeadDays;
+
+  partial void OnDustLeadDaysChanged(double value)
+  {
+    _timelineService.DustLeadDays = value;
+    double applied = _timelineService.DustLeadDays;
+    if (applied != value)
+    {
+      DustLeadDays = applied; // clamped
+      return;
+    }
+    if (CurrentSession is not null)
+      _timelineSessionService.UpdateSession(SessionId, s => s.DustLeadDays = applied);
   }
 
   /// <summary>The shortest range the timeline accepts, days.</summary>

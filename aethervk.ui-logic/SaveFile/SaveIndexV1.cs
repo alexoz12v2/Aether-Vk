@@ -55,6 +55,9 @@ public sealed class TimelineDto
   /// <summary>The selected playback speed (<c>TimelineTabViewModel.SimulationSpeed</c> as int);
   /// absent in older saves and before one was chosen.</summary>
   public int? Speed { get; set; }
+  /// <summary>Days the jets ignite before the committed start; absent in older saves (the default,
+  /// one TTL: their jets ignited at the start, which left no tail until the end was reached).</summary>
+  public double? DustLeadDays { get; set; }
 }
 
 public sealed class SpkDto

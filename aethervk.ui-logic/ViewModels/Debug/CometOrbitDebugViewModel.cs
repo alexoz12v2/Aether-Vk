@@ -8,7 +8,7 @@ namespace AetherVk.Logic.ViewModels.Debug;
 /// Debug telemetry for CometOrbiting mode, shown in the overlay panel.
 /// Shown only when <see cref="IsVisible"/> is true (i.e. camera is in CometOrbiting mode).
 /// </summary>
-public sealed partial class CometOrbitDebugViewModel : ObservableObject
+public sealed partial class CometOrbitDebugViewModel : ObservableObject, System.IDisposable
 {
     private readonly PreferencesService? _preferences;
 
@@ -16,7 +16,24 @@ public sealed partial class CometOrbitDebugViewModel : ObservableObject
     {
         _preferences = preferences;
         _isExpanded = preferences?.HudOrbitExpanded ?? true;
+        _diagnosticsShown = preferences?.ShowDiagnosticPanels ?? true;
+        if (preferences is not null)
+            preferences.ShowDiagnosticPanelsChanged += OnDiagnosticsChanged;
     }
+
+    private void OnDiagnosticsChanged(bool shown) => DiagnosticsShown = shown;
+
+    public void Dispose()
+    {
+        if (_preferences is not null)
+            _preferences.ShowDiagnosticPanelsChanged -= OnDiagnosticsChanged;
+    }
+
+    /// <summary><see cref="PreferencesService.ShowDiagnosticPanels"/> (shown without preferences).
+    /// Set on the thread that changed the preference: the Settings tab, the UI thread.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsShown))]
+    private bool _diagnosticsShown = true;
 
     /// <summary>In CometOrbiting mode (set by the overlay).</summary>
     [ObservableProperty]
@@ -29,8 +46,9 @@ public sealed partial class CometOrbitDebugViewModel : ObservableObject
 
     partial void OnIsExpandedChanged(bool value) => _preferences?.SetHudOrbitExpanded(value);
 
-    /// <summary>What the panel binds: in CometOrbiting (expanded or collapsed).</summary>
-    public bool IsShown => IsVisible;
+    /// <summary>What the panel binds: in CometOrbiting (expanded or collapsed) with the diagnostic
+    /// panels on.</summary>
+    public bool IsShown => IsVisible && DiagnosticsShown;
 
     [RelayCommand]
     private void ToggleExpanded() => IsExpanded = !IsExpanded;
