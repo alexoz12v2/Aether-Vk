@@ -41,7 +41,7 @@ public class FileMenuViewTests
 
     var file = window.GetLogicalDescendants().OfType<MenuItem>().Single(m => Equals(m.Header, "File"));
     var headers = file.Items.OfType<MenuItem>().Select(m => m.Header as string).ToList();
-    Assert.Equal(["New", "Open...", "Open Recent", "Save", "Save As..."], headers);
+    Assert.Equal(["New", "Open...", "Open Recent", "Save", "Save As...", "Save As Folder..."], headers);
 
     // an edit marks the title, and closing asks (headless: Cancel) instead of closing
     var before = model.DiametreUm;

@@ -97,7 +97,8 @@ public sealed class ThesisScenarioTests(ITestOutputHelper output)
       s.App.SaveScreenshot(Path.Combine(artifacts, "main-window.png"));
 
       Step("save as");
-      s.Menu("File", "Save As...");
+      // the folder layout, so the checks below can read the index (Save As… writes an .avk)
+      s.Menu("File", "Save As Folder...");
       s.AnswerFileDialog(saveDir);
       Ui.WaitUntil(() => s.WindowTitle.Contains(sc.Id) && !s.WindowTitle.EndsWith('*'),
         TimeSpan.FromSeconds(60), "the save to finish");

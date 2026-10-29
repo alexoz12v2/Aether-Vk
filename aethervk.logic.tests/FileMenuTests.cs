@@ -32,7 +32,7 @@ public sealed class FileMenuTests : IDisposable
     Directory.CreateDirectory(_root);
     _host = new FakeSaveFileHost(_root);
     _prefs = new PreferencesService(Path.Combine(_root, "preferences.json"), new InputRegistry());
-    _saves = new SaveFileService(_host, new SystemClock(), _prefs);
+    _saves = new SaveFileService(_host, new SystemClock(), _prefs, archiveWorkRoot: Path.Combine(_root, "open"));
     var dispatcher = new Mock<IUiThreadDispatcher>();
     dispatcher.Setup(d => d.Dispatch(It.IsAny<Action>())).Callback<Action>(a => a());
     _vm = new MainWindowViewModel(new Mock<INativeRuntimeService>().Object, new BreadcrumbService(), _dialogs.Object,
@@ -52,18 +52,18 @@ public sealed class FileMenuTests : IDisposable
   [Fact]
   public void FileMenu_HasTheEntries_AndShortcuts()
   {
-    Assert.Equal(["New", "Open...", "Open Recent", null, "Save", "Save As..."], File.Items.Select(i => i.Header));
+    Assert.Equal(["New", "Open...", "Open Recent", null, "Save", "Save As...", "Save As Folder..."], File.Items.Select(i => i.Header));
     Assert.Equal("Ctrl+S", Item("Save").Gesture);
     Assert.Equal("Ctrl+Shift+S", Item("Save As...").Gesture);
     Assert.Equal("AetherVk — Untitled", _vm.WindowTitle);
   }
 
   [Fact]
-  public async Task Save_AsksForAFolder_TheFirstTime_ThenSavesInPlace()
+  public async Task SaveAsFolder_ThenSaveInPlace()
   {
     var dir = Path.Combine(_root, "mysave");
     _dialogs.Setup(d => d.PickFolderAsync(It.IsAny<string>())).ReturnsAsync(dir);
-    await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item("Save").Command!).ExecuteAsync(null);
+    await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item("Save As Folder...").Command!).ExecuteAsync(null);
     Assert.True(System.IO.File.Exists(SaveIndexIo.IndexPath(dir)));
     Assert.Equal("AetherVk — mysave", _vm.WindowTitle);
 
@@ -87,13 +87,36 @@ public sealed class FileMenuTests : IDisposable
   {
     var dir = Path.Combine(_root, "s");
     _dialogs.Setup(d => d.PickFolderAsync(It.IsAny<string>())).ReturnsAsync(dir);
+    // Save on an unsaved session asks for an .avk; this one answers with a folder save's index path
+    _dialogs.Setup(d => d.ShowSaveFileDialogAsync(It.IsAny<string>(), "avk", It.IsAny<string[]>()))
+      .ReturnsAsync(Path.Combine(_root, "s.avk"));
     _host.Model.DiametreUm = 500;
     _prompt.Setup(p => p.AskAsync("Untitled")).ReturnsAsync(choice);
 
     await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item("New").Command!).ExecuteAsync(null);
     _prompt.Verify(p => p.AskAsync("Untitled"), Times.Once);
     Assert.Equal(resets, _host.Calls.Contains("reset"));
-    Assert.Equal(saves, System.IO.File.Exists(SaveIndexIo.IndexPath(dir)));
+    Assert.Equal(saves, System.IO.File.Exists(Path.Combine(_root, "s.avk")));
+  }
+
+  [Fact]
+  public async Task Save_AsksForAnAvk_TheFirstTime_ThenRepacksItInPlace()
+  {
+    var avk = Path.Combine(_root, "mysave.avk");
+    _dialogs.Setup(d => d.ShowSaveFileDialogAsync(It.IsAny<string>(), "avk", It.IsAny<string[]>()))
+      .ReturnsAsync(Path.Combine(_root, "mysave")); // no extension typed: .avk is added
+    await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item("Save").Command!).ExecuteAsync(null);
+    Assert.True(System.IO.File.Exists(avk));
+    Assert.Equal("AetherVk — mysave", _vm.WindowTitle);
+    Assert.Equal(Path.GetFullPath(avk), _prefs.RecentSaves[0]);
+
+    _host.Model.DiametreUm = 777;
+    await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item("Save").Command!).ExecuteAsync(null);
+    _dialogs.Verify(d => d.ShowSaveFileDialogAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string[]>()), Times.Once);
+    Assert.Equal(Path.GetFullPath(avk), _saves.CurrentSavePath);
+    using var zip = System.IO.Compression.ZipFile.OpenRead(avk);
+    using var reader = new StreamReader(zip.GetEntry(SaveIndex.FileName)!.Open());
+    Assert.Contains("777", reader.ReadToEnd());
   }
 
   [Fact]
