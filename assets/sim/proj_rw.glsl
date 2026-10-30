@@ -1,4 +1,4 @@
-// ── dust_project_packet on the rows (perf9_O step P): the candidate's words read at each use (QF,
+// ── dust_project_packet on the rows : the candidate's words read at each use (QF,
 // its AoS record), the screen packet's fields written to its slot as they are computed (PSET) and
 // read back from it (PF); the slot's later words hold the phase intermediates until their final
 // value (17-22 jx, jy until kx, ky; 10 deepK until depthAu; 9 detG until det). The same

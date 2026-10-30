@@ -48,14 +48,14 @@ pub const DUST_CADENCE_SHELL_MARGIN: f32 = 2.0;
 /// dropped (the resampling's resolution)
 pub const DUST_CADENCE_ORTHO_ZOOM_MAX: f32 = 1.25;
 /// the near point of the rate moves this many `σ_max` towards the eye from the nearest edge: 0
-/// (round 3: the 3σ shift explained none of the rate-rule test's outlier, 1.87 against 1.95, and
+/// (a 3σ shift explained none of the rate-rule test's outlier, 1.87 against 1.95, and
 /// lowered its median ratio 0.969 → 0.953; `cadence_rate_near(.., 3)` stays the test's control)
 pub const DUST_CADENCE_NEAR_SIGMAS: f32 = 0.0;
 /// the age floor (s) of the growth terms `Δt / age`
 pub const DUST_CADENCE_AGE_MIN_S: f32 = 1.0;
 /// the light tolerance τ ([`CadenceConfig::light_tol`]): a class image may show a cluster only
 /// while the cluster's relative light change over the image's oldest display age stays within τ.
-/// 0.004 (round 7c, perf7m, 16 px, 1 km still): the image equals retention's frame for frame
+/// 0.004 (16 px, 1 km still): the image equals retention's frame for frame
 /// (L1 0.06–0.09 %, light 1.0005 / 1.0049 against the full draw) at 48.6 ms against retention's
 /// 60.3 (0.002: L1 0.00 % at 49.0 ms; 0: a 0.22 % sawtooth at 52.4); its earlier 2.63 % defect was
 /// the EWA estimate (`dust::full_frame_estimate`'s cap), not the cadence
@@ -178,7 +178,7 @@ pub struct CadenceConfig {
   pub eps_px: f32,
   /// the class images' border margin, a fraction of the viewport per side ([`Self::margin_px`]);
   /// 0 = no margin: an image holds only clusters wholly inside its frozen frame (the footprint
-  /// rule, D3)
+  /// rule)
   pub margin_frac: f32,
   /// retention: a classify re-takes a member of its class whose rate admits a slower admitted
   /// class instead of letting it go ([`DustCadenceState::finish`] F2b). Without it the member
@@ -280,7 +280,7 @@ impl CadenceConfig {
   /// gate level) and [`reproject_add`] reads only the frame's levels: with one level more
   /// (480 × 300 → 736 × 428, 11 levels against 10) the volume bias took the eye-inside clouds to
   /// the image's level 10, which nothing read, and the lab path lost ~96 % of the shown images'
-  /// light (Σ ratio 0.9854 at frame 47; round 15, `cadence_image_keeps_the_frame_levels`).
+  /// light (Σ ratio 0.9854 at frame 47, `cadence_image_keeps_the_frame_levels`).
   pub fn image_geom(&self, w: u32, h: u32) -> ImageGeom {
     let margin = self.margin_px(w, h);
     let levels = PyramidLayout::new(w, h).level_count();
@@ -762,7 +762,7 @@ pub fn cadence_rate(
 }
 
 /// [`cadence_rate`] with the near point moved `near_sigmas · σ_max` towards the eye (0: the
-/// nearest edge itself, the round-1 rule; the rate-rule test prints both)
+/// nearest edge itself, the production rule; the rate-rule test prints both)
 #[allow(clippy::too_many_arguments)]
 pub fn cadence_rate_near(
   m: &DustMoments,
@@ -855,7 +855,7 @@ pub fn cadence_rate_near(
   if enclosing {
     // a cloud around the eye changes by its relative shift, not by a parallax: its sensitivity is
     // frame_px / σ_min with σ_min its own smallest axis (the geometric Jacobian of a near edge
-    // just in front of the eye plane is meaningless here, 8e8 px/m in round 6); a cloud with no
+    // just in front of the eye plane is meaningless here, e.g. 8e8 px/m); a cloud with no
     // measurable smallest axis cannot be bounded and stays fresh
     if !(lam_lo > DUST_CADENCE_SIGMA_MIN_M * DUST_CADENCE_SIGMA_MIN_M) {
       return fresh;
@@ -1303,7 +1303,7 @@ pub struct CadenceDrawn {
 }
 
 /// The coverage of one (class, phase) at its cycle start: the build that just ended (now shown) —
-/// its entries D3 rejected and drew — and the share of the frame's light the shown images hold:
+/// its entries the footprint rule rejected and drew — and the share of the frame's light the shown images hold:
 /// the light they reproject into this frame over the frame's (the images' margin band, outside
 /// the viewport, does not count).
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -1329,7 +1329,7 @@ pub struct CadenceReport {
   pub classified: alloc::vec::Vec<(usize, usize, u32)>,
   /// the admissible-class histogram of the classifies (0 = fresh, k + 1)
   pub class_hist: [u32; DUST_CADENCE_MAX_CLASSES + 1],
-  /// build entries refused by the footprint rule (D3: not wholly inside the frozen frame)
+  /// build entries refused by the footprint rule (not wholly inside the frozen frame)
   pub d3_rejected: u32,
   /// classify candidates refused by the speck-shell rule (summed over the frame's classifies)
   pub shell_forced: u32,
@@ -1346,10 +1346,10 @@ pub struct CadenceReport {
   pub admitted: alloc::vec::Vec<bool>,
   /// this frame's simulated step (s; the time reset's input, telemetry)
   pub dt_s: f64,
-  /// per class, this frame's first build entry D3 rejected and first it accepted:
+  /// per class, this frame's first build entry the footprint rule rejected and first it accepted:
   /// `(k, accepted, footprint_report)`
   pub d3_samples: alloc::vec::Vec<(usize, bool, alloc::string::String)>,
-  /// classify candidates refused by the classify-time footprint rule (D3 at the current view)
+  /// classify candidates refused by the classify-time footprint rule (at the current view)
   pub d3_at_classify: u32,
   /// stale classify candidates whose stamp the anchor history no longer holds (classified at
   /// their stale local position)
@@ -1503,7 +1503,7 @@ pub struct ClassImage {
   /// the nucleus at the freeze
   pub shown_nucleus: [f64; 3],
   pub build_nucleus: [f64; 3],
-  /// the build's entries the footprint rule (D3) rejected and those it drew this cycle (the
+  /// the build's entries the footprint rule rejected and those it drew this cycle (the
   /// coverage report at the swap)
   pub build_d3: u32,
   pub build_drawn: u32,
@@ -1701,7 +1701,7 @@ fn jacobian_px_per_m(mvp: &[f32; 16], p: [f32; 3], width: u32, height: u32) -> f
   <f32 as FloatLike>::sqrt(dot3(jx, jx) + dot3(jy, jy))
 }
 
-/// The footprint rule (D3): cluster `m` (with its predecessor's mean, the time segment's end) is
+/// The footprint rule: cluster `m` (with its predecessor's mean, the time segment's end) is
 /// wholly inside the frame of `mvp`: its mean, its 17 edges and the predecessor's mean project in
 /// front of the eye, each with a margin of `3 σ_max · g` px (`σ_max = √λ_max(Σ)`, the larger of
 /// the two clusters' for the predecessor's point; `g` the Jacobian's norm there) inside
@@ -2430,7 +2430,7 @@ impl DustCadenceState {
 
   /// The frame's draw (F2b–F7), after the propagate of the plan's list: the classifies of the
   /// pairs whose cycle started (`frame`'s header gives the speck shell), the build chunks into
-  /// their images at the frozen views (D3, the mask lane cleared, the header counters routed
+  /// their images at the frozen views (the footprint rule, the mask lane cleared, the header counters routed
   /// through the frame's), the reprojection of every shown image into `frame` (cleared, header
   /// written), the speck pass (n_eye over every live cluster, walks only where not SHOWN), the
   /// fresh splat. `tiers` in the order of [`Self::begin`]'s.
@@ -2562,7 +2562,7 @@ impl DustCadenceState {
             };
             let r = cadence_rate(m, pred, &td.pc.mvp, eye, w, h, &classes, &inputs);
             rep.class_hist[(r.class as usize).min(DUST_CADENCE_MAX_CLASSES)] += 1;
-            // the classify-time footprint rule (D3 at the current view): an entry the build would
+            // the classify-time footprint rule (at the current view): an entry the build would
             // reject stays fresh instead of filling the list
             // the class it goes to: the largest admitted by the motion budget among those the rate
             // admits (a class of N admits every smaller class's bound: δ_k' · 2N_k' ≤ δ_k · 2N_k)
@@ -2646,7 +2646,7 @@ impl DustCadenceState {
           // the continuum whole: an owned cluster is never walked for specks
           td.moments[o as usize].edges[15][3] = 0.0;
           let pred = streak_pred(td.render, o as usize).map(|q| &td.moments[q]);
-          // the footprint rule (D3) only without a margin; with one, every entry is drawn,
+          // the footprint rule only without a margin; with one, every entry is drawn,
           // clipped at the image's own bounds
           let inside = !footprint_rule || footprint_inside(&td.moments[o as usize], pred, &mvp_s, w, h);
           if footprint_rule && !rep.d3_samples.iter().any(|x| x.0 == k && x.1 == inside) {

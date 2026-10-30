@@ -201,7 +201,7 @@ void main() {
 
     // COUNT and SCATTER: block gl_WorkGroupID.x, offsets base + PER lane .. + PER - 1. The tier's words
     // (R, nc, np, rb, cap, nb, inc0) go to s_geo once (lane 0, a barrier) and every use reads them
-    // from there: nothing tier-wide is live in registers across the scan (perf9_O).
+    // from there: nothing tier-wide is live in registers across the scan.
     if (lane == 0u) {
         s_geo[0] = R; s_geo[1] = nc; s_geo[2] = np; s_geo[3] = rb; s_geo[4] = cap; s_geo[5] = nb;
         s_geo[6] = dust_cad_inc0(R, nc, np);
