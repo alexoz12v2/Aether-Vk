@@ -1,6 +1,6 @@
 // @assets/sim/dust_leaf_mono.glsl
 //
-// perf9_K (the split path knob, AETHERVK_DUST_SPLIT_STAGED=0): the pre-split-family leaf path, the
+// The split path knob (AETHERVK_DUST_SPLIT_STAGED=0): the pre-split-family leaf path, the
 // old dust_leaf.glsl verbatim, included only by dust_split_mono.comp. The one adaptation: its
 // projection is dust_project_packet_mono (defined in dust_split_mono.comp: the old dust_common.glsl
 // dust_project_packet, expression for expression; the split family re-wrote the current one to call
@@ -294,8 +294,8 @@ void dust_project_split_scatter_one(vec3 mean, float S[6], vec3 d, float flux, f
     // the in-frame gate (dust::split_packet_with): once a split of this thread finds the frame's
     // children past DUST_FRAME_HARD_FACTOR budgets, its packets split no further (depth 0)
     uint dMax = depthMax;
-    // Each item's split tree walked depth first without a stack (track 9D, option (b); the stack
-    // was the splitter's local memory): the node in registers; a split goes on with its first
+    // Each item's split tree walked depth first without a stack (a stack would
+    // be the splitter's local memory): the node in registers; a split goes on with its first
     // child a, and its second child b is recomputed when its turn comes, from the item's root
     // along the path code (bit L: the child taken at the split from level L, 1 = b). The turn
     // order is the stack's: a node done, the next is the b of the deepest split on the path whose
@@ -339,7 +339,7 @@ void dust_project_split_scatter_one(vec3 mean, float S[6], vec3 d, float flux, f
             DUST_PROF_BEGIN(split)
             bool first = !replay && !forced;
             DUST_PROF_COUNT(nodes, first ? 1u : 0u)
-            // (step C1: q becomes the child the walk takes — the second on a replay whose path
+            // (q becomes the child the walk takes — the second on a replay whose path
             // bit is set — on a clip or a split, and stays itself otherwise)
             int step = dust_split_step_one(q, clipped, level, first ? dMax : DUST_SPLIT_DEPTH_MAX, pc.eyeLocal.xyz, fwd, perspective, !first, forced,
                                            replay && ((path >> level) & 1u) != 0u);
@@ -437,7 +437,7 @@ void dust_project_split_scatter(vec3 mean, float S[6], vec3 d, float flux, float
                                 float shellDMax, uint volumeAxis) {
     uint n = (pc.pyramid.v[DUST_PYR_SPLIT_DEPTH] >> 24u) & 0xFu;
     vec3 h = 0.5 * segT;
-    // one call site of dust_project_split_scatter_one (track 9D): the driver inlines every call
+    // one call site of dust_project_split_scatter_one: the driver inlines every call
     // site with its own copy of the function's locals, and two sites held two split stacks; the
     // whole leaf (n <= 1) is the loop's single pass with its arguments passed unchanged
     bool whole = n <= 1u || !(dot(h, h) > 0.0);

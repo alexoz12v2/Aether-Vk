@@ -1,6 +1,6 @@
 // @assets/sim/dust_splat_mono.comp
 //
-// The monolithic enumerator (round 9 knob, perf9_K): the pre-step-O dust_splat.comp kept as it
+// The monolithic enumerator (a device knob): the single-dispatch dust_splat.comp kept as it
 // was, one dispatch at DUST_SPLAT_LANES lanes per cluster, for the devices whose default is not
 // the stage chain (Device::dust_splat_staged; AETHERVK_DUST_SPLAT_STAGED). The byte-identical
 // reference of the old blob: expression for expression the old monolith; the only adaptation is
@@ -36,7 +36,7 @@
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
-// (perf9_K) the haze probe as the old dust_common.glsl had it, word for word
+// the haze probe as the old dust_common.glsl had it, word for word
 bool dust_haze_probe_mono(uint mi, vec3 seg, float ratio, uint nT, vec3 eye, vec3 fwd, bool perspective, uint depthMax, uint k) {
     uint nj0 = dust_bin_subbins(0u);
     if (k >= 2u * (nj0 + DUST_SIZE_BINS - 1u)) return true;
@@ -194,7 +194,7 @@ void dust_splat_subpacket(uint i, uint sub) {
     float lodBinDepth = cp.lodBinDepth, lodNear = cp.lodNear;
     bool lodDepth = cp.lodDepth;
     uint depthMin = cp.depthMin;
-    // the haze detail (round 8 step G, round 9 steps A/A2; dust_haze_*): at the top level, fewer
+    // the haze detail (dust_haze_*): at the top level, fewer
     // sub-packets for a haze cluster (dust_haze_volumetric, judged once per cluster by main's
     // pre-pass: dust_haze_cluster); the default pays nothing
     uint hazeDetail = dust_haze_detail_of(pc.flags, levels, pc.pyramid);
@@ -224,7 +224,7 @@ void dust_splat_subpacket(uint i, uint sub) {
     bool merged = dust_polyline_merged(mi, pc.mvp, W, H) && predMerged
                && (pred < 0 || dust_time_shallow(mi, pi, pc.mvp))
                && dust_specks_mask(mi) == 0u;
-    // haze detail 1 (round 9 step A2): the cluster is its pooled packet, the one
+    // haze detail 1: the cluster is its pooled packet, the one
     // dust_haze_volumetric judged, whole to the exact ray integral (never a walked cluster)
     if (hazeDetail == 1u && dust_specks_mask(mi) == 0u) merged = true;
     dust_rec_walked = false;
@@ -504,7 +504,7 @@ void main() {
         if ((pc.flags & DUST_VIEW_DEBUG_STREAM) != 0u && (slot & ((1u << shift) - 1u)) != v) live = false;
         if ((pc.flags & DUST_VIEW_DEBUG_SAMPLE) != 0u && ((slot >> shift) % max(v, 1u)) != 0u) live = false;
     }
-    // the haze predicate once per cluster (round 9 step A2; dust_haze_volumetric's probes spread
+    // the haze predicate once per cluster (dust_haze_volumetric's probes spread
     // over the lanes: lane sub takes probes sub and sub + 32, lane 0 the pooled packet; a shared
     // word collects a refusal), only with the knob engaged (uniform: the default skips it)
     bool hazeOn = dust_haze_detail_of(pc.flags, pc.pyramid.v[DUST_PYR_LEVELS], pc.pyramid) < DUST_SIZE_BINS;

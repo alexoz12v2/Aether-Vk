@@ -191,7 +191,7 @@ pub fn volume_detail_from_flags(flags: u32) -> u32 {
   (DUST_VOLUME_DETAIL_MAX >> ((flags >> DUST_FLAGS_VOLUME_DETAIL_SHIFT) & 7)).max(DUST_VOLUME_DETAIL_MIN)
 }
 
-/// Default "haze detail" (Settings › Particle rendering; round 8 step G): at a frame whose volume
+/// Default "haze detail" (Settings › Particle rendering): at a frame whose volume
 /// bias puts every volumetric piece on the 1 × 1 top level, a cluster is drawn with at most ~this
 /// many sub-packets (chord groups no smaller than `16 / detail` bins, time pieces no more than
 /// `detail`; the level of detail's depth rule kept: `splat::haze_group`, `splat::haze_time_pieces`).
@@ -242,7 +242,7 @@ pub fn haze_detail_from_flags(flags: u32) -> u32 {
 /// propagate solves exactly (a Kepler solve each), 17 = every edge ([`SIZE_EDGES`], today's
 /// image). 9 and 5 solve every second / fourth edge and place the others linearly between their
 /// solved neighbours ([`propagate_edge_stride`]): 21 → 13 → 9 solves per live cluster, the
-/// polyline straighter between the solved edges. Visual only; round 8 step D.
+/// polyline straighter between the solved edges. Visual only.
 pub const DUST_PROPAGATE_DETAIL_DEFAULT: u32 = SIZE_EDGES;
 /// The accepted trajectory details: 17, 9, 5 (the strides 1, 2, 4 of [`SIZE_BINS`])
 pub const DUST_PROPAGATE_DETAIL_STEPS: [u32; 3] = [SIZE_EDGES, SIZE_BINS / 2 + 1, SIZE_BINS / 4 + 1];
@@ -275,7 +275,7 @@ pub fn propagate_stride_from_skip(skip0: u32) -> u32 {
 /// Default "temporal reuse tolerance" (Settings › Particle rendering), in px: 0 = off, every
 /// frame drawn fresh. A value ε > 0 runs the cadence (`dust::cadence`): clusters whose on-screen
 /// motion over their class's window stays within ε px are reused from a class image instead of
-/// drawn again. Faster, with reuse errors up to ε px. On by default at 16 px since round 9 step R
+/// drawn again. Faster, with reuse errors up to ε px. On by default at 16 px
 /// (2026-10-24: exact at 1 d/s, 4–6× faster paused / at 1 min/s near the nucleus, tile L1 ≤ 2e-4).
 pub const DUST_REUSE_PX_DEFAULT: u32 = 16;
 /// Largest accepted temporal reuse tolerance (px); the steps are 0 and the powers of two up to it
@@ -1243,7 +1243,7 @@ pub struct DustPropagatePushConstants {
   pub moments: u64,
   pub first_slot: u32,
   pub live_count: u32,
-  /// the solve rows' address, low word (round 9 step O: a chunk of [`DUST_PROP_ROW_WORDS`]-word
+  /// the solve rows' address, low word (a chunk of [`DUST_PROP_ROW_WORDS`]-word
   /// rows, one per lane, `Device::propagate`); the ring mask the shader rebuilds from `skip[0]`
   /// bits 3–7 (log2 of the ring capacity)
   pub rows_lo: u32,
@@ -1258,7 +1258,7 @@ pub struct DustPropagatePushConstants {
   pub frame: DustFrame,
 }
 const _: () = assert!(core::mem::size_of::<DustPropagatePushConstants>() == 128);
-/// `dust_propagate.comp` (round 9 step O): clusters per 64-lane workgroup (21 lanes each: the
+/// `dust_propagate.comp`: clusters per 64-lane workgroup (21 lanes each: the
 /// mean, 3 secants, 17 size edges), the solve row of a lane (40 words of the rows buffer) and
 /// the df64 Kepler iterations (`DUST_KEPLER_ITERS_DF` of dust_common.glsl: the staged solve
 /// records passes 2 and 3 that many times)

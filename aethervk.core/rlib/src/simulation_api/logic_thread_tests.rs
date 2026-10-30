@@ -1895,7 +1895,7 @@ fn test_set_dust_volume_detail_clamps_and_stores() {
 }
 
 /// The dust "haze detail" is per scene, clamped to a power of two in [1, 16], and read by the
-/// render thread (round 8 step G).
+/// render thread.
 #[test]
 fn test_set_dust_haze_detail_clamps_and_stores() {
   let mut ctx = startup_with_planets();
