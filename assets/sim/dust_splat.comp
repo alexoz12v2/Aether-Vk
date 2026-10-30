@@ -24,7 +24,7 @@
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
 #endif
-// rotate_cov in scalars (dust_common.glsl: the same products and sums, in the same order; perf9_O)
+// rotate_cov in scalars (dust_common.glsl: the same products and sums, in the same order)
 #ifndef DUST_ROT_LOOP
 #define DUST_ROT_SCALAR 1
 #endif
@@ -56,7 +56,7 @@ layout(push_constant, std430) uniform PushConstants {
     vec4  eyeLocal;             // 112: eye in local metres; w = the system's TTL (s), the hue clock
 } pc;                           // 128 bytes
 
-// No helper takes a buffer reference (perf9_O round 11): the Adreno 619 compiler keeps every
+// No helper takes a buffer reference: the Adreno 619 compiler keeps every
 // DustUintBuffer / DustRenderBuffer argument in private memory (48-96 B a fiber on the stages). The
 // helpers below are pointer-free copies of dust_common.glsl's, dust_scatter.glsl's and
 // dust_profile.glsl's (the same statements): they take the address (uvec2(pc.pyramid),
@@ -149,7 +149,7 @@ void dust_spa_prof_flush_splat(uvec2 pyr, uint base, bool ran) {
 }
 #endif
 
-// perf9_O: the enumerator as a chain of stage dispatches (the flags' bits 3-7, host-internal: the
+// The enumerator as a chain of stage dispatches (the flags' bits 3-7, host-internal: the
 // stage), a barrier between, each a lean program (one function per stage and per lane group, main
 // an if/else chain over them, values re-read from the plan row, the records and the moments where
 // they are used). Per cluster of the chunk, its plan row (DUST_SPR_*) is built by
@@ -524,7 +524,7 @@ void dust_sp_lod_n(uint P) {
     DUST_SPU(DUST_SPR_NTLOD) = nT;
 }
 
-// HAZE (round 9 step A2; only with the knob engaged): dust_haze_volumetric's probes, a lane each —
+// HAZE (only with the knob engaged): dust_haze_volumetric's probes, a lane each —
 // HAZE_A builds probe k's packet (k < dust_haze_probes(); the pooled packet at k = DUST_SP_PROBES - 1)
 // into the record region, HAZE_B judges it (dust_split_kind); a refusal into the row. As main's
 // pre-pass did: before the split word is read, so dust_bin_subbins sees the global's initial 0.
@@ -636,7 +636,7 @@ void dust_sp_shape(uint c) {
     uint levels = pc.pyramid.v[DUST_PYR_LEVELS];
     float W = float(pc.pyramid.v[DUST_PYR_WIDTH]);
     float H = float(pc.pyramid.v[DUST_PYR_HEIGHT]);
-    // the haze detail (round 8 step G, round 9 steps A/A2; dust_haze_*): at the top level, fewer
+    // the haze detail (dust_haze_*): at the top level, fewer
     // sub-packets for a haze cluster (dust_haze_volumetric, judged by HAZE_A/B: no refusal with
     // the knob engaged); the default pays nothing
     uint hazeDetail = dust_spa_haze_detail_of(pc.flags, levels, uvec2(pc.pyramid));
@@ -651,7 +651,7 @@ void dust_sp_shape(uint c) {
     bool merged = dust_polyline_merged(mi, pc.mvp, W, H) && predMerged
                && (pred < 0 || dust_time_shallow(mi, pi, pc.mvp))
                && dust_specks_mask(mi) == 0u;
-    // haze detail 1 (round 9 step A2): the cluster is its pooled packet, the one
+    // haze detail 1: the cluster is its pooled packet, the one
     // dust_haze_volumetric judged, whole to the exact ray integral (never a walked cluster)
     if (hazeDetail == 1u && dust_specks_mask(mi) == 0u) merged = true;
     uint g = 1u;
@@ -682,7 +682,7 @@ bool dust_sp_bin_of(uint P, uint sub, out uint b, out uint j, out uint nj) {
     // min/max or with 16 / detail (detail = 16 >> k, at least 1: dust_haze_detail_of). Each step keeps
     // a power of two, so m * g == m << findLSB(g) for every g SP_G can hold. A new producer of the
     // chord group must keep this invariant. The shift form is the Adreno 619 fix: the product, data dependent on
-    // the sub-bin path, fails to compile in SUBW (perf9_O round 5).
+    // the sub-bin path, fails to compile in SUBW.
     b = sub < nj0 ? 0u : (sub - nj0 + 1u) << uint(findLSB(g));
     j = sub < nj0 ? sub : 0u;
     nj = 1u;
@@ -690,7 +690,7 @@ bool dust_sp_bin_of(uint P, uint sub, out uint b, out uint j, out uint nj) {
     // nj = g > 1 ? 1 : dust_bin_subbins(b), with b == 0 written as sub < nj0. On g == 1, b is 0 when
     // sub < nj0 and sub - nj0 + 1 >= 1 otherwise, so b == 0 <=> sub < nj0. On g > 1, nj is 1 either
     // way. Integer-identical. The Adreno 619 compiler fails (-13) on SUBW when that test reads b, which
-    // is data dependent on g (perf9_O round 8).
+    // is data dependent on g.
     nj = g > 1u ? 1u : ((sub < nj0 && !dust_legacy_kernel()) ? DUST_END_SUBBINS : 1u);
     return true;
 }
@@ -767,10 +767,10 @@ void dust_sp_subw(uint gid) {
     // the level of detail's pixels per segment, a header load with no arithmetic. Only dust_time_sweep
     // (the chord branch below) reads dust_lod_px, so writing it here, on every lane, gives that call the
     // same value. The Qualcomm Adreno 619 compiler rejects SUBW (-13) with the write at its original
-    // place in the chord branch (perf9_O round 10). The word is read through atomicOr(word, 0u): the
+    // place in the chord branch. The word is read through atomicOr(word, 0u): the
     // value is the plain load's, bit for bit (an or with 0 writes the word back unchanged), and the
     // test is dust_lod_px_of's. The Adreno 619 rejects SUBW (-13) with every pointer-free plain-load
-    // form of this read and with the atomic anywhere but here (perf9_O round 14).
+    // form of this read and with the atomic anywhere but here.
     {
         float v = uintBitsToFloat(atomicOr(pc.pyramid.v[DUST_PYR_LOD], 0u));
         dust_lod_px = (!isnan(v) && !isinf(v) && v > 0.0) ? v : 0.0;
@@ -1199,7 +1199,7 @@ void dust_ra_tracer(uint P) {
     if (stamped) atomicOr(pc.pyramid.v[DUST_PYR_LEVEL_MASK], 1u);
 }
 #if defined(DUST_SP_REC_MONO)
-// perf9_X gate variant: the whole record in one lane, the old per-cluster thread's EMIT body
+// A gate variant: the whole record in one lane, the old per-cluster thread's EMIT body
 // (dust_splat_subpacket) per kind, its words in DUST_SQUEUE_PUT's layout (word 33, the identity,
 // is COUNT's)
 #define DUST_RM_PUT(mean_, S_, d_, flux_, exposure_, openStart_, openEnd_, rho_, segT_, color_, support_, hasO_, origin_, sun_, rh_, i_, walked_) { \
@@ -1362,7 +1362,7 @@ void dust_rm_record(uint a_, uint P, uint sub, uint t, uint kind) {
 }
 #endif
 #if defined(DUST_SP_COV6)
-// perf9_X gate variant: the six covariance words of a record in one lane (the cov functions'
+// A gate variant: the six covariance words of a record in one lane (the cov functions'
 // bodies, every word stored)
 #define DUST_SQW6(St_) DUST_SQW(3u, (St_)[0]) DUST_SQW(4u, (St_)[1]) DUST_SQW(5u, (St_)[2]) DUST_SQW(6u, (St_)[3]) DUST_SQW(7u, (St_)[4]) DUST_SQW(8u, (St_)[5])
 void dust_c6_merged(uint a_, uint P, uint t) {

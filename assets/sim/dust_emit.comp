@@ -2,7 +2,7 @@
 //
 // Dust v3 emission: one thread per cluster of the batch. Writes immutable `DustCluster` records
 // into the ring at slot (first_index + j) & ring_mask. Mirror of `dust::emit_cluster`.
-// Round 9 step O: the comet's Kepler solve (dust_kepler_coef from the batch's r0, v0 over the
+// The comet's Kepler solve (dust_kepler_coef from the batch's r0, v0 over the
 // cluster's dt_in, mu = GM_sun) through dust_kepler_coef_lr (dust_kepler_lr.glsl): its df64 state
 // in the cluster's own fresh record (24 words: the stash in words 0..21, dt in 22..23) instead of
 // registers; then the coefficients applied component by component, the record's fields made again
@@ -202,7 +202,7 @@ void emit_put_v(uint k, bool moving) {
     kp_put(8u + k, v.x); kp_put(12u + k, v.y);
 }
 
-// DUST_EMIT_PASS (round 9 step O, Adreno 619: the emission in passes over the cluster's record,
+// DUST_EMIT_PASS (Adreno 619: the emission in passes over the cluster's record,
 // each at most 13 full vec4 registers): 1 dt_in and kp_solve_prep; 2 a df iteration's Stumpff
 // values; 3 its residual and Laguerre step; 6 the final Stumpff values; 4 the rest of
 // kp_solve_final; 5 r, v and the words of stages 1, 3, in two blobs (EMIT_P5_PART 1 r, 2 v); 7 the

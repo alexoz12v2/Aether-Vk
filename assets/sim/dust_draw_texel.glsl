@@ -1,6 +1,6 @@
 // @assets/sim/dust_draw_texel.glsl
 //
-// perf9_O (the tight occupancy budget: <= 32 registers a lane, <= 2 KB shared a 64-lane
+// Under the tight occupancy budget (<= 32 registers a lane, <= 2 KB shared a 64-lane
 // workgroup): the texel-lane drawing of the workgroup consumers. Include after dust_scatter.glsl.
 //
 // A row segment of DUST_SEGMENT_TEXELS texels (dust_scatter_segment) is drawn by 16 lanes in three
@@ -332,7 +332,7 @@ bool dust_queue_rows_texel(uvec2 pyr, uint at, uint lane) {
 #endif
         {
             uint sg = lane / DUST_SEGMENT_TEXELS;
-            // (perf9_O fix) a lane of a segment not taken (dust_t_n[sg] == 0: its key is stale or never
+            // a lane of a segment not taken (dust_t_n[sg] == 0: its key is stale or never
             // written) holds 0, no deposit (the walk visits taken segments only); past a taken
             // segment's end NaN, which the walk skips
             float tau = uintBitsToFloat(dust_t_n[sg] != 0u ? 0x7FC00000u : 0u);

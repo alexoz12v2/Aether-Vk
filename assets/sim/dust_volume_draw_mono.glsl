@@ -1,6 +1,6 @@
 // @assets/sim/dust_volume_draw_mono.glsl
 //
-// (perf9_K) the pre-perf9_O volumetric draw, kept for the mono draw family (AETHERVK_DUST_DRAW_STAGED=0,
+// the monolithic volumetric draw, kept for the mono draw family (AETHERVK_DUST_DRAW_STAGED=0,
 // the GTX 1070 default): dust_volume_draw.glsl as it was before the staged consumer, adapted only
 // in the edge record layout (dust_small_edge_put_mono below).
 //
@@ -14,7 +14,7 @@
 
 #include "dust_frame_gates.glsl"
 
-// (perf9_K, the mono draw family) the edge records' pre-perf9_O layout: structure-of-arrays at the
+// (the mono draw family) the edge records' old layout: structure-of-arrays at the
 // capacity's stride (word w of record i at the region's records + w * cap + i), the edge pass's
 // indirect x in workgroups of 64 pieces (dust_vqueue_append). The shared dust_scatter.glsl's
 // dust_small_edge_* now use the staged family's array-of-structures layout, so the mono consumer
@@ -77,7 +77,7 @@ uint dust_volume_texels(DustVolumePiece q, uint level, uint lw, uint lh) {
     q_ = dust_volume_piece(k_, p.flux, p.rho, exposure, axMean, axS, segA, nA, cvarA, segB, nB, cvarB, \
                            hasB, W, H, r0, r1, r3, tv, eye, fPx, levels, true);
 
-// Pass B's state out of registers (step 9C, track 9 item C). The consumer is latency-bound at the
+// Pass B's state out of registers. The consumer is latency-bound at the
 // 128-register cap: everything live across pass B's texel loops counts against the warps an SM
 // holds, and most of it is only read when a piece is built. So each lane keeps the state its
 // piece loop reads once a piece in its own slots of workgroup memory (word c of lane l at
@@ -152,7 +152,7 @@ uint dust_unpack_code(uint k) {
 uint dust_volume_texels_at(DustVolumePiece q, uint lev) {
     return dust_volume_texels(q, lev, pc.pyramid.v[DUST_PYR_TABLE + 3u * lev + 1u], pc.pyramid.v[DUST_PYR_TABLE + 3u * lev + 2u]);
 }
-// a piece's level (dust::volume_piece_level, steps F8 / F10): its own lp plus the bias (the cap's
+// a piece's level (dust::volume_piece_level): its own lp plus the bias (the cap's
 // uniform extra included), at most the last level
 uint dust_volume_piece_level(DustVolumePiece q, uint bias, uint levels) {
     return min(q.lp + bias, levels - 1u);
@@ -225,7 +225,7 @@ uvec2 dust_volume_class_k(DustVolumePiece q, uvec2 ck, uint K, uint kb) {
 // the frame's top-level regime (frame-uniform, from the pyramid header): the bias puts every piece
 // on the last level and that level is 1 x 1 (topOnly); known to every path unless the reference
 // mode DUST_FRAME_TOP_PASS_A asks for pass A in full (topKnown; dust_draw_volume.comp main sets the
-// accumulate mode from it: round 8 step F2)
+// accumulate mode from it)
 bool dust_volume_top_only(uint levels, uint bias) {
     uint topW = pc.pyramid.v[DUST_PYR_TABLE + 3u * (levels - 1u) + 1u];
     uint topH = pc.pyramid.v[DUST_PYR_TABLE + 3u * (levels - 1u) + 2u];
@@ -256,15 +256,15 @@ void dust_volume_draw(DustPacket p, uint ra, uint rc, float exposure, uint level
     uint nA = pl.nA, nB = pl.nB;
     float cvarA = pl.cvarA, cvarB = pl.cvarB;
     float fPx = pl.fPx;
-    // (step 9C: the bound into the lane's slots at once, the axis mode for pass B's rebuild: as
+    // (the bound into the lane's slots at once, the axis mode for pass B's rebuild: as
     // dust_volume_plan_axes chose it)
     dust_vs_put_bound(pl.bound);
     uint mode = (axis != DUST_VOLUME_AXIS_CHORD && dot(p.segT, p.segT) > 0.0) ? axis : DUST_VOLUME_AXIS_CHORD;
-    // pass A (steps F8 / F10): every piece at its own level with the frame's bias — the texels, the
+    // pass A: every piece at its own level with the frame's bias — the texels, the
     // evaluations at the sub-ray limits, the pieces' classes, orders and levels packed
     uint evals, e2, e3, e4;
     bool anyOn, allTop;
-    // (PARTICLES_PERF round 2) the top-level path: the bias puts every piece on the last level
+    // the top-level path: the bias puts every piece on the last level
     // (min(lp + bias, levels - 1), lp >= 0) and that level is 1 x 1, so a piece covers at most one
     // texel: the evaluations are at most 16 pieces x 16 (DUST_VOLUME_MAX_EVALS), the cap loops
     // never act and K is 4. Pass A then only asks whether any piece is on screen (the first one
@@ -362,7 +362,7 @@ void dust_volume_draw(DustPacket p, uint ra, uint rc, float exposure, uint level
     p.S[3] = dust_vrec(ra, rc, 6u); p.S[4] = dust_vrec(ra, rc, 7u); p.S[5] = dust_vrec(ra, rc, 8u);
     float renorm = dust_has_support(dust_phot_support)
         ? 1.0 / max(dust_support_mass(p, dust_phot_support), DUST_SUPPORT_MASS_MIN) : 1.0;
-    // pass B's state into the lane's slots (step 9C): the pieces' covariance at the final nA, nB
+    // pass B's state into the lane's slots: the pieces' covariance at the final nA, nB
     // (after the cap loops), fPx, the loop's constants
     {
         float Lk[6];
@@ -380,7 +380,7 @@ void dust_volume_draw(DustPacket p, uint ra, uint rc, float exposure, uint level
     // pass B: each piece rebuilt and drawn at its own level, its row segments one at a time; the
     // class and level from pass A's codes (the piece rebuilt without its own level), or, past the
     // gate, computed again at the gated level. Live across the pieces: k, n, the record's address,
-    // depthBits, renorm, W, H and the accumulators; the rest is re-read at each piece (step 9C)
+    // depthBits, renorm, W, H and the accumulators; the rest is re-read at each piece
     float peak = 0.0;
     uint maskBits = 0u;
     for (uint k = 0u; k < n; ++k) {
@@ -446,7 +446,7 @@ void dust_volume_draw(DustPacket p, uint ra, uint rc, float exposure, uint level
             ck = dust_volume_class(q, lev, levelsk);
             kb = dust_volume_order_bound(q, lev, ck.x, levelsk);
         } else {
-            // the piece without its own level (its class packed by pass A: step D3)
+            // the piece without its own level (its class packed by pass A)
             q = dust_volume_piece_at(k, flux, rho, expo, axMeanK, Lk, skd, segAK, nAk, segBK, nBk, hasBk, W, H, r0, r1,
                                      r3, tv, eye, fPxK, levelsk, false);
             // (a level past the pyramid would read an empty table row and run the range loop away; the
@@ -503,7 +503,7 @@ void dust_volume_draw(DustPacket p, uint ra, uint rc, float exposure, uint level
             DUST_PROF_BEGIN(vsmallpts)
             bool edge = dust_volume_small_points(q, eye, r0, r1, r3, tv, W, H, meanRef, renorm, s0, s1, s2, s3, s4, ed);
             DUST_PROF_END(vsmallpts)
-            // track 9A (t9a2d): an edge piece is drawn by the edge pass (dust_draw_small_edge.comp)
+            // an edge piece is drawn by the edge pass (dust_draw_small_edge.comp)
             // from its record: its inputs, range, level, colour, depth bits and seed
             if (edge) {
                 dust_small_edge_put_mono(pc.pyramid, (pc.flags & DUST_VIEW_EDGE_ODD) != 0u, ed, r, lev, color, depthBits,
@@ -527,7 +527,7 @@ void dust_volume_draw(DustPacket p, uint ra, uint rc, float exposure, uint level
         if (any_) maskBits |= 1u << lev;
     }
     if (dust_vacc) {
-        // (round 8 step F2) the end words to the subgroup flush; dust_vacc = topKnown = ctl bit 25
+        // the end words to the subgroup flush; dust_vacc = topKnown = ctl bit 25
         dust_vacc_peak = peak;
         dust_vacc_mask = maskBits;
         dust_vacc_evals = dust_pk[0];

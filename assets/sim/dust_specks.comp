@@ -22,8 +22,8 @@
 #include "dust_scatter.glsl"
 
 // The gate pass (the plain blob, a thread per (cluster, bin): the density at the eye, the walk
-// gate, the cluster's walk mask) and, compiled with -DDUST_SPECKS_WALK=1, the walk (round 9 step O:
-// breadth first, in passes of at most 32 live registers a lane on Mali-G52, no private arrays):
+// gate, the cluster's walk mask) and, compiled with -DDUST_SPECKS_WALK=1, the walk
+// (breadth first, in passes of at most 32 live registers a lane on Mali-G52, no private arrays):
 //   -DDUST_SPECKS_SETUP=1   a thread per marked (cluster, bin): the walk record (the walk's region
 //                           of the pyramid buffer, after the spill header's word 9), pass 2's args
 //   -DDUST_SPECKS_SETUP=2..5 a thread per record: the map, the leaf start, M^-1, the bin's corners and
@@ -479,7 +479,7 @@ float dust_specks_coord(float w, uint k, float kappa, vec2 rho) {
 }
 
 
-// the walk record (Round 9 step O; words): the map's columns, column norms, kappa, rho, the eye
+// the walk record (words): the map's columns, column norms, kappa, rho, the eye
 // offsets (df64 pairs), the eye in coordinates, sigmaLo, the row norms, keep, the speed factors,
 // fade, colour, Sun, r_h, exposure, the start count, M^-1 by rows, the root's count and hash,
 // the start nodes
@@ -810,7 +810,7 @@ uint dust_specks_start_nodes(SpeckNode root, vec3 mi0, vec3 mi1, vec3 mi2, vec3 
 
 
 #if !defined(DUST_SPECKS_WALK) || defined(DUST_SPECKS_SETUP)
-// Round 9 step O: the gate pass in phases (the count, the density at the eye, the walk gate), each
+// The gate pass in phases (the count, the density at the eye, the walk gate), each
 // from the thread's index again: its ring slot, the bin's time segment and leaf made again (the same
 // expressions: dust_specks_leaf), behind a reload fence so that no compiler merges a phase's leaf
 // with an earlier one. One pass kept the leaf (mean, S, seg, rho) live across the eye offsets and
@@ -928,7 +928,7 @@ void main() {
     // the walk is the walk pass's (a workgroup per bin with the bit set)
 }
 #else
-// ─── Round 9 step O: the walk in three passes ───────────────────────────────
+// ─── The walk in three passes ───────────────────────────────────────────────
 // SETUP (-DDUST_SPECKS_WALK=1 -DDUST_SPECKS_SETUP=1): a thread per (cluster, bin) whose mask bit the
 // gate set: the bin's walk constants (the walk prologue's values: the map, the eye offsets, the
 // preimage bound, the photometry) and its start nodes into a walk record, in phases from the

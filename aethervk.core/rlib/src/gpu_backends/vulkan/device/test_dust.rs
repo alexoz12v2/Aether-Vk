@@ -184,7 +184,7 @@ fn with_dust_device(id: u64, f: impl FnOnce(&Device, u32, vk::Buffer, vk::Buffer
 #[test]
 fn gpu_dust_emit_matches_reference() {
   with_dust_device(9001, |device, capacity, clusters, _| {
-    // (perf9_K) in both propagate / emit families: the pre-package monoliths, then the package
+    // in both propagate / emit families: the monoliths, then the package
     for prop in [false, true] {
     device.dust_set_prop_staged(Some(prop));
     std::println!("[dust prop family] staged {prop}");
@@ -305,7 +305,7 @@ fn gpu_dust_emit_matches_reference() {
 #[test]
 fn gpu_dust_propagate_matches_reference() {
   with_dust_device(9002, |device, capacity, _, render| {
-    // (perf9_K) in both propagate / emit families: the pre-package monoliths, then the package
+    // in both propagate / emit families: the monoliths, then the package
     for prop in [false, true] {
     device.dust_set_prop_staged(Some(prop));
     std::println!("[dust prop family] staged {prop}");
@@ -377,7 +377,7 @@ fn gpu_dust_df64_keeps_zero_beta_cluster_on_comet() {
   // 5.5 AU (8e11 m) is pure round-off of the GPU df64 path: f32 would give ~1e5 m, df64 < 1 m.
   // Fails if the driver contracts the error-free transformations into FMAs.
   with_dust_device(9003, |device, capacity, _, render| {
-    // (perf9_K) in both propagate / emit families: the pre-package monoliths, then the package
+    // in both propagate / emit families: the monoliths, then the package
     for prop in [false, true] {
     device.dust_set_prop_staged(Some(prop));
     std::println!("[dust prop family] staged {prop}");
@@ -424,7 +424,7 @@ fn gpu_dust_emit_lit_time_matches_reference() {
   let n0 = unit([1.0, -0.3, 0.1]);
   let dur = 2.5 * P_ROT;
   with_dust_device(9004, |device, capacity, clusters, _| {
-    // (perf9_K) in both propagate / emit families: the pre-package monoliths, then the package
+    // in both propagate / emit families: the monoliths, then the package
     for prop in [false, true] {
     device.dust_set_prop_staged(Some(prop));
     std::println!("[dust prop family] staged {prop}");
@@ -1152,7 +1152,7 @@ fn moments_buffer(device: &Device, id: u64) -> vk::Buffer {
 #[test]
 fn gpu_dust_moments_match_reference() {
   with_dust_device(9007, |device, capacity, _, _| {
-    // (perf9_K) in both propagate / emit families: the pre-package monoliths, then the package
+    // in both propagate / emit families: the monoliths, then the package
     for prop in [false, true] {
     device.dust_set_prop_staged(Some(prop));
     std::println!("[dust prop family] staged {prop}");
@@ -1166,7 +1166,7 @@ fn gpu_dust_moments_match_reference() {
       0.801_783_73,
       2.0 * core::f64::consts::PI / 44_640.0,
     ];
-    // round 8 step D: the parity at every trajectory detail (edge stride 1, 2, 4), the mirror at
+    // the parity at every trajectory detail (edge stride 1, 2, 4), the mirror at
     // the same stride; a changed detail bumps the generation; at a stride > 1 a skipped edge is
     // the blend of its solved neighbours on the GPU too (the knob reached the shader)
     let mut last_generation = 0u32;
@@ -1312,7 +1312,7 @@ fn gpu_dust_moments_match_reference() {
 #[test]
 fn gpu_dust_propagate_stamp_skips_at_the_same_time() {
   with_dust_device(9040, |device, capacity, _, _| {
-    // (perf9_K) in both propagate / emit families: the pre-package monoliths, then the package
+    // in both propagate / emit families: the monoliths, then the package
     for prop in [false, true] {
     device.dust_set_prop_staged(Some(prop));
     std::println!("[dust prop family] staged {prop}");
@@ -1413,7 +1413,7 @@ fn stamp_skips_at_the_same_time(device: &Device, capacity: u32, detail: u32) {
 /// ±`half` m around the anchor (or through `camera`: an mvp and the eye in local metres, for
 /// the perspective case of the split), against the CPU splat of the GPU's own moments.
 #[allow(clippy::too_many_arguments)]
-/// perf9_K: every splat parity case on both paths, the monolithic enumerator first, then the
+/// every splat parity case on both paths, the monolithic enumerator first, then the
 /// stage chain (`Device::dust_set_splat_staged`; a device without the monolith runs the chain only)
 #[allow(clippy::too_many_arguments)]
 fn splat_parity(
@@ -1430,7 +1430,7 @@ fn splat_parity(
   lod: Option<f32>,
 ) {
   for staged in [false, true] {
-    // (perf9_K) and both split families: the pre-split splitter, then the staged leaf path
+    // and both split families: the pre-split splitter, then the staged leaf path
     for split in [false, true] {
       splat_parity_in(staged, split, id, batch_of, frame, half, exposure, expect_spiral, albedo, camera, shell, legacy, lod);
     }
@@ -1454,14 +1454,14 @@ fn splat_parity_in(
   lod: Option<f32>,
 ) {
   with_dust_device(id, |device, capacity, _, _| {
-    // perf9_K: the splat path of this run
+    // the splat path of this run
     device.dust_set_splat_staged(staged);
     if device.dust_splat_staged() != staged {
       std::println!("[dust gpu] splat parity case {id}: the monolith is not built on this device, mono run skipped");
       return;
     }
     std::println!("[dust gpu] splat parity case {id}: path {}", if staged { "chain" } else { "mono" });
-    // perf9_K: the split family of this run
+    // the split family of this run
     device.dust_set_split_staged(Some(split));
     std::println!("[dust gpu] splat parity case {id}: split family {}", if split { "staged" } else { "mono" });
     let batch = batch_of(capacity);
@@ -1540,7 +1540,7 @@ fn splat_parity_in(
     assert_eq!(layout, dust::PyramidLayout::new(w, h));
     // every volumetric record the GPU emitted was drawn (the CPU draws them all; a record the
     // volume spill refused would be a mismatch that is not the drawing's)
-    // the splitter family (perf9 steps Z / O): every candidate run granted (a refused one loses its
+    // the splitter family: every candidate run granted (a refused one loses its
     // cluster's leaves, volumetric ones included), no leaf lost
     {
       let leaves = device.dust_leaf_counts(pe).unwrap();
@@ -1679,9 +1679,9 @@ fn splat_parity_in(
     let small_paths = dust::take_volume_small_paths();
     let small_margins = dust::take_volume_small_margins();
     let split_adds = dust::take_volume_split_adds();
-    // track 9A: the small pieces' paths on both mirrors at the count level, from the profiler's
+    // the small pieces' paths on both mirrors at the count level, from the profiler's
     // words when the `.prof` shaders drew this frame (`gpu_dust_small_paths_match_reference`): a
-    // decision on a float boundary (D3's 3σ within 1e-3 σ of the frame's edge, the predictor
+    // decision on a float boundary (the edge decision's 3σ within 1e-3 σ of the frame's edge, the predictor
     // within 1e-3 ε of ε) moves one piece between the paths, so each count agrees within the
     // reference's pieces at those margins
     if let Ok(p) = device.dust_profile_counters(pe) {
@@ -1709,10 +1709,10 @@ fn splat_parity_in(
       }
     }
     let gpu_split_adds = device.dust_volume_split_adds(pe).unwrap_or(u32::MAX);
-    // track 9A (t9a2d): the edge pass drew every small edge piece the consumer deferred (none
-    // refused by a full region), and the path counts above saw them; t9a2e: it demoted as many as
+    // the edge pass drew every small edge piece the consumer deferred (none
+    // refused by a full region), and the path counts above saw them; it demoted as many as
     // the reference (its own count, DUST_VEDGE_DEMOTED, in every build), within the pieces at a
-    // decision's margin (D3's 3σ edge, the predictor's ε or the gate: as the path counts)
+    // decision's margin (the edge decision's 3σ edge, the predictor's ε or the gate: as the path counts)
     if let Ok((edge_drawn, edge_lost, edge_demoted)) = device.dust_vedge_counts(pe) {
       let margin = small_margins[1] + small_margins[2];
       std::println!(
@@ -2182,7 +2182,7 @@ std::thread_local! {
 /// `u32::MAX`: none). Process-wide, not thread-local: the device closure of `with_dust_device`
 /// may run on the render frontend's thread
 static PARITY_VOLUME_BIAS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(u32::MAX);
-/// extra flag bits of the next [`splat_parity`]'s push constants (the haze detail's, round 8 step G)
+/// extra flag bits of the next [`splat_parity`]'s push constants (the haze detail's)
 static PARITY_EXTRA_FLAGS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 /// the volumetric pieces the reference drew per class in the last [`splat_parity`] of a case id
 /// (centre, small, sub-rays, lines: `dust::take_volume_class_counts`, counted on the closure's thread)
@@ -2317,7 +2317,7 @@ fn gpu_dust_splat_matches_reference_spinning_site_perspective() {
   splat_parity(9016, &batch_of, frame, 5.0e3, 1.0e-6, true, 0.0, Some((mvp, [0.0, 0.0, d])), None, false, None);
 }
 
-/// K1c, the texel's integral, on both mirrors: the cloud of the perspective case (a one-hour
+/// The texel's integral on both mirrors: the cloud of the perspective case (a one-hour
 /// window five days old, the radiance weight on) seen with the volumetric level bias fixed at
 /// `bias` from (0, 0, `d`) looking at the anchor. Returns the reference's pieces per class.
 fn volume_texel_integral_parity(id: u64, bias: u32, d: f32) -> [u64; 4] {
@@ -2339,8 +2339,8 @@ fn volume_texel_integral_parity_fov(id: u64, bias: u32, d: f32, half_deg: f32) -
 }
 
 /// [`splat_parity`] of `batch_of` at `frame` through the perspective `mvp` from `eye` (local
-/// metres) with the volumetric level bias fixed at `bias` (exposure 1, albedo 0.04, as the K1c
-/// cases). Returns the reference's pieces per class.
+/// metres) with the volumetric level bias fixed at `bias` (exposure 1, albedo 0.04, as the texel
+/// integral cases). Returns the reference's pieces per class.
 fn volume_parity_at(
   id: u64,
   bias: u32,
@@ -2369,7 +2369,7 @@ fn volume_parity_at(
     .expect("the parity recorded its class counts")
 }
 
-/// K1c's classes on both mirrors, word for word within `splat_parity`'s rules, in two scenes that
+/// The texel integral's classes on both mirrors, word for word within `splat_parity`'s rules, in two scenes that
 /// use many levels (a bias that puts everything on the 1 × 1 and 2 × 1 levels leaves `splat_parity`
 /// a handful of texels): inside the cloud 200 m from the anchor at bias 1 (the full pieces of an
 /// eye inside: centre rays and sub-rays) and 2 000 km out at bias 6 (the far volumetric pieces that
@@ -2388,7 +2388,7 @@ fn gpu_dust_splat_matches_reference_volume_texel_integral() {
   assert!(all[2] > 0, "no sub-ray piece drawn: {all:?}");
 }
 
-/// The haze detail on both mirrors word for word (round 8 step G): the inside-the-cloud scene of
+/// The haze detail on both mirrors word for word: the inside-the-cloud scene of
 /// the texel integral case (200 m, perspective: the level of detail's depth rule caps the groups
 /// and time pieces on both sides) at the forced top bias, at haze detail 1 and 4 (the chord
 /// groups of 16 and 4 bins, the time pieces 1 and 4). The top bias leaves the parity few texels
@@ -2415,7 +2415,7 @@ fn gpu_dust_splat_matches_reference_haze() {
   }
 }
 
-/// The haze detail (`dust::haze_detail_flag_bits`, the draw's flags bits 11–13; round 8 step G):
+/// The haze detail (`dust::haze_detail_flag_bits`, the draw's flags bits 11–13):
 /// at a bias that puts every volumetric piece on the 1 × 1 last level, detail 16 draws the same
 /// pyramid word for word as flags without the bits, and lower details make fewer sub-packet
 /// records (the enumerator's queue, `dust_squeue_counts`; strictly fewer somewhere) and no more
@@ -2429,7 +2429,7 @@ fn gpu_dust_haze_detail_trades_subpackets_on_the_top_level() {
     let batch = test_batch(1024, 2.0 * 86400.0, 3, capacity);
     emit(device, id, &batch);
     let first_slot = batch.first_index & batch.ring_mask;
-    // (perf9_K) in both draw families: mono (the pre-perf9_O blobs), then staged
+    // in both draw families: mono (the monolithic blobs), then staged
     for staged in [false, true] {
     device.dust_set_draw_staged(Some(staged));
     std::println!("[dust draw family] staged {staged}");
@@ -2562,7 +2562,7 @@ fn gpu_dust_haze_detail_trades_subpackets_on_the_top_level() {
   });
 }
 
-/// The volume feedback with the haze engaged (round 9 step B): the haze detail test's
+/// The volume feedback with the haze engaged: the haze detail test's
 /// inside-the-cloud frame (a 2-day batch at 2 days, the eye 200 m up, perspective) at haze
 /// detail 1. The scene is under the budget at bias 0 (61 M evaluations), so the plateau is pinned
 /// first (`dust_set_volume_bias(Some(levels − 1))`, 12 frames: the haze engages, ~0.1 M
@@ -2668,7 +2668,7 @@ fn gpu_dust_haze_feedback_settles_on_the_top_level() {
 static PARITY_SMALL_PATHS_COMPARED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 /// the pieces the reference demoted in the [`splat_parity`] frames whose path counts were compared
 static PARITY_SMALL_DEMOTED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-/// t9a2e: the pieces the GPU's edge pass demoted in the [`splat_parity`] frames (its
+/// the pieces the GPU's edge pass demoted in the [`splat_parity`] frames (its
 /// `DUST_VEDGE_DEMOTED` words, compared with the reference's count in each frame)
 static PARITY_SMALL_DEMOTED_GPU: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 /// the fewest non-zero texels a [`splat_parity`] frame must draw (against a vacuous comparison):
@@ -2677,7 +2677,7 @@ static PARITY_SMALL_DEMOTED_GPU: core::sync::atomic::AtomicU64 = core::sync::ato
 /// vacuous by the demoted count instead (≥ 200 pieces, GPU = CPU)
 static PARITY_MIN_NONZERO: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(300);
 
-/// Track 9A: the small pieces' paths (one projection a slice — interior and demoted edge pieces —
+/// The small pieces' paths (one projection a slice — interior and demoted edge pieces —
 /// and 4 sigma points a slice) on both mirrors at the count level, in the 2 000 km bias-6 scene of
 /// `gpu_dust_splat_matches_reference_volume_texel_integral` (its small class): the `.prof` shaders
 /// draw the parity frames (their pyramid is the production one word for word,
@@ -2703,7 +2703,7 @@ fn gpu_dust_small_paths_match_reference() {
   );
 }
 
-/// Track 9A (t9a2e): the demotion's scene. A volumetric piece is the packet of a leaf the eye is
+/// The demotion's scene. A volumetric piece is the packet of a leaf the eye is
 /// near (`is_volumetric`: `tr Σ > 0.2² dist²`, or still deep at the split's depth limit), so seen
 /// from outside the cloud (9053–9055) its σ over its distance is ≳ 0.1, its sigma points' relative
 /// depth spread `κ` ≳ 0.1 sin θ and its predicted change ≳ 10⁻² of its mass at the frame's edge:
@@ -2827,7 +2827,7 @@ fn tail_demotion_survey() -> alloc::vec::Vec<(f64, f32, [u64; 4])> {
     .collect()
 }
 
-/// Track 9A (t9a2e), CPU only: the tail poses ([`tail_demotion_scene`]) demote hundreds of small
+/// CPU only: the tail poses ([`tail_demotion_scene`]) demote hundreds of small
 /// edge pieces at the production ε on the reference: at least one pose demotes ≥ 200 (the scene
 /// `gpu_dust_small_demotion_matches_reference` draws on both mirrors). Prints every pose.
 #[test]
@@ -2839,11 +2839,11 @@ fn small_demotion_tail_survey() {
   }
 }
 
-/// Track 9A: the demoted path on both mirrors at the production ε. t9a2b's cases 9054 / 9055 (the
+/// The demoted path on both mirrors at the production ε. Cases 9054 / 9055 (the
 /// 2 000 km cloud of case 9053 through 10° and 3° fields at the same metres per px) demote
 /// nothing: their volumetric pieces' σ/d is ≳ 0.1 (they are volumetric because the eye is near
 /// them, [`tail_demotion_scene`]), and 9055's field leaves no volumetric packet at all; both are
-/// kept as image and path parity cases. t9a2e: the tail poses demote: the reference's survey
+/// kept as image and path parity cases. The tail poses demote: the reference's survey
 /// ([`tail_demotion_survey`], CPU moments) picks up to two poses that demote most among those that
 /// demote ≥ 200 each (the 200-day / 1.5° pose's 28 pieces land on 1 texel: a vacuous image), and
 /// [`splat_parity`] draws each on both mirrors (the `.prof` shaders) — the images within its rules,
@@ -3049,11 +3049,11 @@ fn gpu_dust_queue_draws_the_same_pyramid() {
     let batch = test_batch(1024, 3600.0, 3, capacity);
     emit(device, id, &batch);
     let first_slot = batch.first_index & batch.ring_mask;
-    // (perf9_K) in both draw families: mono (the pre-perf9_O blobs), then staged
+    // in both draw families: mono (the monolithic blobs), then staged
     for staged in [false, true] {
     device.dust_set_draw_staged(Some(staged));
     std::println!("[dust draw family] staged {staged}");
-    // (perf9_K) in both split families: mono (the pre-split splitter: the EWA queue fed), then staged
+    // in both split families: mono (the pre-split splitter: the EWA queue fed), then staged
     // (the leaf queue)
     for split in [false, true] {
     device.dust_set_split_staged(Some(split));
@@ -3183,7 +3183,7 @@ fn gpu_dust_queue_draws_the_same_pyramid() {
       );
       assert!(off.iter().any(|&v| v != 0), "{name}: the frame drew nothing");
       assert_eq!(off_counts.1, 0, "{name}: the queue was used while off");
-      // the splitter family (perf9 steps Z / O, Z DESIGN §5): the EWA queue is unfed, the leaf
+      // the splitter family: the EWA queue is unfed, the leaf
       // queue routes the leaves (large: the workgroup blob's list; DUST_FRAME_QUEUE_OFF none,
       // _ALL every one)
       std::println!(
@@ -3203,7 +3203,7 @@ fn gpu_dust_queue_draws_the_same_pyramid() {
           assert!(overflow_leaf.2 >= overflow_leaf.0 - 5 * overflow_chunks, "{name}: the capped leaf queue did not spill");
         }
       } else {
-        // (perf9_K) the pre-split splitter: the EWA queue routes the large leaves, the leaf queue
+        // the pre-split splitter: the EWA queue routes the large leaves, the leaf queue
         // stays unfed; the perspective view inside the cloud draws volumetric packets only (never
         // queued)
         for (what, c) in [("default", default_leaf), ("off", off_leaf), ("all", all_leaf), ("capacity 5", overflow_leaf)] {
@@ -3246,7 +3246,7 @@ fn gpu_dust_volume_queue_draws_the_same_pyramid() {
     let batch = test_batch(1024, 3600.0, 3, capacity);
     emit(device, id, &batch);
     let first_slot = batch.first_index & batch.ring_mask;
-    // (perf9_K) in both draw families: mono (the pre-perf9_O blobs), then staged
+    // in both draw families: mono (the monolithic blobs), then staged
     for staged in [false, true] {
     device.dust_set_draw_staged(Some(staged));
     std::println!("[dust draw family] staged {staged}");
@@ -3412,12 +3412,12 @@ fn gpu_dust_volume_queue_draws_the_same_pyramid() {
   });
 }
 
-/// The volume consumer's top-level path (PARTICLES_PERF round 2, `dust::DUST_FRAME_TOP_PASS_A`):
+/// The volume consumer's top-level path (`dust::DUST_FRAME_TOP_PASS_A`):
 /// with the frame's bias putting every volumetric piece on the 1 × 1 last level, pass A only looks
 /// for a piece on screen and pass B classifies each piece there; the pyramid and the evaluations
 /// counted (`PYR_VOLUME_EVALS`, the host feedback's input) are the same word for word as with pass
 /// A in full (the hook). At bias 0 the path is never taken (both frames the same too). The
-/// perspective view inside the cloud draws volumetric packets only. (Round 8 step F2) the path
+/// perspective view inside the cloud draws volumetric packets only. The path
 /// pre-reduces its deposits over the subgroup: at exposure 1 the 1 024 clusters drive the top
 /// texel's words past 2^32 (inside a lane and over the subgroup), and they must saturate to
 /// 0xFFFFFFFF as the per-deposit saturating adds do; the third case, at exposure 10^-4, must
@@ -3544,8 +3544,8 @@ fn gpu_dust_top_level_path_draws_the_same_pyramid() {
   });
 }
 
-/// The volume detail (`dust::volume_detail_flag_bits`, the draw's flags bits 8–10; PARTICLES_PERF
-/// round 2): at a bias that puts every volumetric piece on the 1 × 1 last level, detail 16 draws
+/// The volume detail (`dust::volume_detail_flag_bits`, the draw's flags bits 8–10):
+/// at a bias that puts every volumetric piece on the 1 × 1 last level, detail 16 draws
 /// the same pyramid word for word as flags without the bits, and lower details make fewer
 /// evaluations (detail 1 strictly, in the young view at the end of the emission) with the top texel's
 /// light within 5 % (10 % at detail 1: the phase weights at fewer depth nodes); at bias 0 every detail draws the same pyramid. The top-level path's reference
@@ -3558,7 +3558,7 @@ fn gpu_dust_volume_detail_trades_pieces_on_the_top_level() {
     let batch = test_batch(1024, 2.0 * 86400.0, 3, capacity);
     emit(device, id, &batch);
     let first_slot = batch.first_index & batch.ring_mask;
-    // (perf9_K) in both draw families: mono (the pre-perf9_O blobs), then staged
+    // in both draw families: mono (the monolithic blobs), then staged
     for staged in [false, true] {
     device.dust_set_draw_staged(Some(staged));
     std::println!("[dust draw family] staged {staged}");
@@ -3667,7 +3667,7 @@ fn gpu_dust_volume_detail_trades_pieces_on_the_top_level() {
               "[dust volume detail] lod {lod:?}, {days} d, {d} m, bias {bias}, detail {detail}: evaluations {} (16: {}), top texel {} (16: {}, {rel:.2e})",
               cut[ev], plain[ev], cut[top_off], plain[top_off]
             );
-            // (perf9_O fix2) where the top-level path and its reference differ
+            // where the top-level path and its reference differ
             if cut[hw..] != cut_ref[hw..] {
               let tw = dust::PYRAMID_TEXEL_WORDS as usize;
               let nlen = cut.len().min(cut_ref.len());

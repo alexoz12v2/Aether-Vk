@@ -52,7 +52,7 @@ const uint DUST_CADM_CHUNK = 4u;
 const uint DUST_CADM_CLEAR = 5u;
 const uint DUST_CADM_DEBUG = 6u;
 const uint DUST_CAD_DEBUG_WORDS = 8u;
-// perf9_O: the slot's evaluation in stage dispatches (dust_cadence.glsl's DUST_CADR_* rows), in
+// The slot's evaluation in stage dispatches (dust_cadence.glsl's DUST_CADR_* rows), in
 // this order, a barrier between: PREP (CLASSIFY) or PREP_DEBUG (DEBUG), LAM, SHELL, EXTENT, NEAR,
 // JAC, STEP, RATE, FOOT; then CLASSIFY or DEBUG reads the row. CHUNK_FOOT before CHUNK: the
 // footprint rule of the chunk's entries into their draw-list words
@@ -91,7 +91,7 @@ shared uint s_hist0, s_hist1, s_hist2, s_hist3, s_shell, s_d3, s_unshifted;
 // the telemetry's fresh and SHOWN counts (MARK_FRESH)
 shared uint s_fresh, s_shown0, s_shown1, s_shown2, s_shown3, s_shown4, s_shown5;
 
-// perf9_O: the tier's words, read where a mode uses them (nothing uniform is live across the modes:
+// The tier's words, read where a mode uses them (nothing uniform is live across the modes:
 // GCN's register counts are the whole program's maximum), and one function per mode, main an
 // if/else chain over them, so a mode's early returns end its own function (lowered returns nest
 // no later mode under their exec masks)
@@ -258,7 +258,7 @@ void dust_cls_step(uint gid) {
     if (dust_cls_stage_fl(gid, DUST_CADR_F_RATE) == 0u) return;
     dust_cadr_step((pc.firstSlot + gid) & pc.ringMask, uvec2(pc.sys), dust_cls_rw(gid), pc.mvp, prm);
 }
-// RATE: the class, and the class the candidate goes to (round 14's fold): the largest the motion
+// RATE: the class, and the class the candidate goes to: the largest the motion
 // budget admits among those the rate admits (class index < r)
 void dust_cls_rate(uint gid) {
     if (dust_cls_stage_fl(gid, DUST_CADR_F_RATE) == 0u) return;
@@ -417,7 +417,7 @@ void dust_cls_mark_chunk(uint gid, uint t, uint pairCode) {
     int pred = dust_cad_streak_pred(uvec2(pc.render), s, pc.firstSlot, pc.liveCount);
     if (pred >= 0) dust_cad_mark(uvec2(pc.sys), R, rb + uint(pred));
 }
-// CHUNK_FOOT (perf9_O, before CHUNK, a barrier between): the footprint rule of a valid, live, lit
+// CHUNK_FOOT (before CHUNK, a barrier between): the footprint rule of a valid, live, lit
 // entry into its draw-list word (1 inside, 0 not; CHUNK reads it and writes the word's final value).
 // D3 only without a margin, at the frozen view's mvp (the push constant's), the predecessor
 // unfiltered, the positions as propagated (cadence::finish F3)

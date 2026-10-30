@@ -142,7 +142,7 @@ uint dust_cad_blocks(uint R, uint nc, uint np, uint rb, uint t, uint nb, uint l)
 // the incoming bytes (the handover; dust_cadence::CadenceSysLayout::incoming0): after the blocks
 uint dust_cad_inc0(uint R, uint nc, uint np) { return dust_cad_blocks0(R, nc) + 6u * nc * np * (R / 1024u + DUST_CAD_MAX_TIERS); }
 
-// dust_streak_pred with the render buffer's address (perf9_O round 11: no helper takes a buffer
+// dust_streak_pred with the render buffer's address (no helper takes a buffer
 // reference; the Adreno 619 compiler keeps such an argument in private memory). The same statements.
 int dust_cad_streak_pred(uvec2 render, uint slot, uint firstSlot, uint liveCount) {
     vec2 yz = DustRenderBuffer(render).c[slot].age_id_dbeta_flux.yz;
@@ -421,7 +421,7 @@ uint dust_cad_rate(uint mi, vec3 sh, int pred, vec3 shP, mat4 mvp, vec3 eye, uve
 }
 
 
-// ── perf9_O: the classify's per-slot evaluation in stages (dust_classify.comp modes 7-14) ──
+// ── The classify's per-slot evaluation in stages (dust_classify.comp modes 7-14) ───────────
 // cadence::cadence_rate, shell_capable and footprint_inside as before, expression for expression;
 // what changes is where values live. Each stage is its own dispatch (a mode of dust_classify.comp,
 // a barrier between): it reads its inputs from the slot's row in the system's cadence buffer (and
