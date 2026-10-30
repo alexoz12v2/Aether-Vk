@@ -57,9 +57,10 @@ public static class JetNativeSync
   /// over the committed range (<see cref="INativeRuntimeService.GetJetLitFraction"/>): set when
   /// the site is never lit, cleared when it is lit, not in the simulation, or the core has no
   /// answer (no committed comet). <paramref name="format"/>: the localized text, else
-  /// <see cref="NeverLitFormat"/>. Not per frame: the core steps the ephemeris for it.
+  /// <see cref="NeverLitFormat"/>; the dates in <paramref name="timeScale"/>'s scale (null: TDB).
+  /// Not per frame: the core steps the ephemeris for it.
   /// </summary>
-  public static void RefreshLitWarning(INativeRuntimeService runtime, JetViewModel jet, string? format = null)
+  public static void RefreshLitWarning(INativeRuntimeService runtime, JetViewModel jet, string? format = null, TimeScaleService? timeScale = null)
   {
     if (jet.NativePsId == 0
         || !runtime.GetJetLitFraction(jet.NativePsId, out double litFraction, out var range)
@@ -70,15 +71,21 @@ public static class JetNativeSync
     }
     string f = string.IsNullOrEmpty(format) ? NeverLitFormat : format!;
     jet.LitWarning = string.Format(CultureInfo.InvariantCulture, f,
-      TimelineTabViewModel.FormatEpoch(range.StartCenturies, range.StartNs),
-      TimelineTabViewModel.FormatEpoch(range.EndCenturies, range.EndNs));
+      LitWarningEpoch(range.StartCenturies, range.StartNs, timeScale),
+      LitWarningEpoch(range.EndCenturies, range.EndNs, timeScale));
   }
 
+  /// <summary>A range end of the lit warning: "yyyy-MM-dd HH:mm:ss (UTC)" in the chosen scale.</summary>
+  private static string LitWarningEpoch(short c, ulong ns, TimeScaleService? timeScale) =>
+    timeScale is null
+      ? TimelineTabViewModel.FormatEpoch(c, ns)
+      : timeScale.Format(c, ns, TimelineTabViewModel.EpochBoxFormat) + " (" + timeScale.ScaleName + ")";
+
   /// <summary><see cref="RefreshLitWarning"/> on every jet of <paramref name="session"/>.</summary>
-  public static void RefreshLitWarnings(INativeRuntimeService runtime, ModelSession session, string? format = null)
+  public static void RefreshLitWarnings(INativeRuntimeService runtime, ModelSession session, string? format = null, TimeScaleService? timeScale = null)
   {
     foreach (var jet in session.Jets)
-      RefreshLitWarning(runtime, jet, format);
+      RefreshLitWarning(runtime, jet, format, timeScale);
   }
 
   /// <summary>
@@ -89,7 +96,7 @@ public static class JetNativeSync
   /// Every jet's <see cref="JetViewModel.LitWarning"/> is refreshed (the committed range may be new).
   /// </summary>
   public static int EnsureNative(INativeRuntimeService runtime, ModelSession session, float nucleusRadiusKm,
-    long emissionStartUs = long.MaxValue, string? litWarningFormat = null)
+    long emissionStartUs = long.MaxValue, string? litWarningFormat = null, TimeScaleService? timeScale = null)
   {
     bool any = false;
     foreach (var jet in session.Jets)
@@ -102,7 +109,7 @@ public static class JetNativeSync
       any |= jet.NativePsId != 0;
       if (jet.NativePsId == 0) refused++;
     }
-    RefreshLitWarnings(runtime, session, litWarningFormat);
+    RefreshLitWarnings(runtime, session, litWarningFormat, timeScale);
     return refused;
   }
 
@@ -114,7 +121,7 @@ public static class JetNativeSync
   /// system) is not silent: it sets <see cref="JetViewModel.NativeError"/>, which a success clears.
   /// </summary>
   public static void AddNative(INativeRuntimeService runtime, ParticleSystemModel model,
-    ParticleSystemJet psJet, JetViewModel jet, bool isFirst, string? litWarningFormat = null)
+    ParticleSystemJet psJet, JetViewModel jet, bool isFirst, string? litWarningFormat = null, TimeScaleService? timeScale = null)
   {
     if (isFirst)
     {
@@ -126,7 +133,7 @@ public static class JetNativeSync
         jet.Beta = computed.Beta;
         jet.DustProductionRateAt1AuKgs = computed.DustProductionRateAt1AuKgs;
       }
-      RefreshLitWarning(runtime, jet, litWarningFormat);
+      RefreshLitWarning(runtime, jet, litWarningFormat, timeScale);
       return;
     }
     bool ok = runtime.AddParticleSystem(model, psJet, out ulong id);

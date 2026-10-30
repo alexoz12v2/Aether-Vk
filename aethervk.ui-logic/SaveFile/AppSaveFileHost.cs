@@ -36,6 +36,7 @@ public sealed class AppSaveFileHost : ISaveFileHost
   private readonly ICameraServiceRegistry _cameras;
   private readonly ICometMessenger _messenger;
   private readonly BreadcrumbService _breadcrumbs;
+  private readonly TimeScaleService _timeScale;
   // asset ids are never reused: their content hashes are fetched once
   private readonly ConcurrentDictionary<ulong, ulong> _hashes = new();
 
@@ -51,9 +52,11 @@ public sealed class AppSaveFileHost : ISaveFileHost
     ICameraServiceRegistry cameras,
     ICometMessenger messenger,
     BreadcrumbService breadcrumbs,
-    ISchedulerProvider schedulers)
+    ISchedulerProvider schedulers,
+    TimeScaleService? timeScale = null)
   {
     _runtime = runtime;
+    _timeScale = timeScale ?? TimeScaleService.TdbOnly();
     _cometSessions = cometSessions;
     _timelineSessions = timelineSessions;
     _modelSessions = modelSessions;
@@ -100,6 +103,7 @@ public sealed class AppSaveFileHost : ISaveFileHost
     {
       ProposedStart = NullIfEmpty(timeline.ProposedStartEpoch),
       ProposedEnd = NullIfEmpty(timeline.ProposedEndEpoch),
+      ProposedScale = TimeScaleService.KeyOf(_timeScale.ScaleOf(timeline)),
       Speed = timeline.Speed,
       DustLeadDays = timeline.DustLeadDays,
     };
@@ -294,30 +298,30 @@ public sealed class AppSaveFileHost : ISaveFileHost
     var session = Timeline;
     if (timeline.ProposedStart is { } ps) session.ProposedStartEpoch = ps;
     if (timeline.ProposedEnd is { } pe) session.ProposedEndEpoch = pe;
+    // the texts' scale: absent in older saves, which typed TDB (the engine's scale)
+    var scale = TimeScaleService.Parse(timeline.ProposedScale, TimeScale.Tdb);
+    session.ProposedScale = TimeScaleService.KeyOf(scale);
     if (timeline.Speed is { } speed) session.Speed = speed;
     session.DustLeadDays = timeline.DustLeadDays;
     _timeline.DustLeadDays = timeline.DustLeadDays ?? TimelineService.MaxDustLeadDays;
     if (committed && timeline.CommittedStart is { } cs && timeline.CommittedEnd is { } ce)
     {
-      session.CommittedStartEpoch = EpochText(cs, session.ProposedStartEpoch);
-      session.CommittedEndEpoch = EpochText(ce, session.ProposedEndEpoch);
+      session.CommittedStartEpoch = EpochText(cs, session.ProposedStartEpoch, scale);
+      session.CommittedEndEpoch = EpochText(ce, session.ProposedEndEpoch, scale);
     }
-    if (TimeUtils.TryParseIso8601(session.ProposedStartEpoch, out var s)
-        && TimeUtils.TryParseIso8601(session.ProposedEndEpoch, out var e))
-    {
-      var a = TimeUtils.ToTaiParts(s);
-      var b = TimeUtils.ToTaiParts(e);
-      _timeline.ProposeEpochRange(new TimeRange(a.centuries, a.nanoseconds, b.centuries, b.nanoseconds));
-    }
+    if (_timeScale.TryParse(session.ProposedStartEpoch, scale, out short sc, out ulong sn, out _)
+        && _timeScale.TryParse(session.ProposedEndEpoch, scale, out short ec, out ulong en, out _))
+      _timeline.ProposeEpochRange(new TimeRange(sc, sn, ec, en));
+    // the tabs show the chosen scale: their Restore rewrites the texts (TimeScaleService.ApplyTo)
     session.NotifyRestored();
   }
 
   /// <summary>
   /// The session's text for a committed epoch: the proposed text when it names the same instant
-  /// (the usual case: the tab compares the two strings), else ISO-8601 UTC.
+  /// in <paramref name="scale"/> (the usual case: the tab compares the two strings), else ISO-8601.
   /// </summary>
-  internal static string EpochText(EpochParts epoch, string proposed) =>
-    TimeUtils.EpochText(epoch.Centuries, epoch.Nanoseconds, proposed);
+  internal string EpochText(EpochParts epoch, string proposed, TimeScale scale) =>
+    _timeScale.EpochText(epoch.Centuries, epoch.Nanoseconds, proposed, scale);
 
   public async Task<bool> CommitCometAsync(string spkPath, SpkDto spk, TimeRange range)
   {

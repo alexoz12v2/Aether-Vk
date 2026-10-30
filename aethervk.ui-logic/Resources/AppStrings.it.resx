@@ -647,4 +647,13 @@
   <data name="Ephemeris_Debug" xml:space="preserve">
     <value>Debug (posizione camera)</value>
   </data>
+  <data name="Tabs_Settings_TimeScale" xml:space="preserve">
+    <value>Scala dei tempi per le date</value>
+  </data>
+  <data name="Tabs_Settings_TimeScaleUtc" xml:space="preserve">
+    <value>UTC (tempo civile: immagini del telescopio)</value>
+  </data>
+  <data name="Tabs_Settings_TimeScaleTdb" xml:space="preserve">
+    <value>TDB (tempo dinamico: il motore)</value>
+  </data>
 </root>

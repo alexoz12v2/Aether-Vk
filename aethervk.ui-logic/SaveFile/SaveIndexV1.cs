@@ -48,6 +48,9 @@ public sealed class TimelineDto
   public EpochParts? CommittedEnd { get; set; }
   public string? ProposedStart { get; set; }
   public string? ProposedEnd { get; set; }
+  /// <summary>The scale <see cref="ProposedStart"/> / <see cref="ProposedEnd"/> are typed in:
+  /// "utc" or "tdb"; absent in older saves, which typed TDB. The committed parts are always TDB.</summary>
+  public string? ProposedScale { get; set; }
   public EpochParts? CurrentEpoch { get; set; }
   /// <summary>Whether the clock is past the committed start. Informative: Open always restores
   /// paused at <see cref="CurrentEpoch"/>.</summary>

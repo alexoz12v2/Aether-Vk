@@ -44,8 +44,8 @@ public class TimelineTabViewModelRunToEndTests
             .Callback<SessionId, Action<TimelineSession>>((id, action) => action(session));
 
         Assert.True(TimeUtils.TryParseIso8601(session.CommittedEndEpoch, out var endDt));
-        var end = TimeUtils.ToTaiParts(endDt);
-        var past = TimeUtils.ToTaiParts(endDt.AddDays(1));
+        var end = TimeUtils.ToTdbParts(endDt);
+        var past = TimeUtils.ToTdbParts(endDt.AddDays(1));
 
         // the seek blocks until released: the spinner flag must be up meanwhile
         using var release = new ManualResetEventSlim(false);
@@ -79,15 +79,15 @@ public class TimelineTabViewModelRunToEndTests
         Assert.False(session.IsRunningToEnd);
         Assert.False(vm.IsPlaying);
         Assert.Equal(100.0, vm.Progress);
-        Assert.Equal(endDt.ToString("yyyy-MM-dd HH:mm"), session.CurrentEpochString);
+        Assert.Equal(endDt.ToString("yyyy-MM-dd HH:mm") + " (TDB)", session.CurrentEpochString);
     }
 
     [Fact]
     public void RunToEndTarget_PrefersTheEngineConfirmedEnd_OverTheCommittedText()
     {
         Assert.True(TimeUtils.TryParseIso8601("2021-12-28T00:00:00Z", out var userEnd));
-        var end = TimeUtils.ToTaiParts(userEnd);
-        var start = TimeUtils.ToTaiParts(userEnd.AddDays(-13));
+        var end = TimeUtils.ToTdbParts(userEnd);
+        var start = TimeUtils.ToTdbParts(userEnd.AddDays(-13));
         var confirmed = new TimeRange(start.centuries, start.nanoseconds, end.centuries, end.nanoseconds);
 
         // the text may say something else (an unsaved edit): the engine's end wins
