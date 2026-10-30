@@ -81,7 +81,8 @@ public class AppStringsParityTests
     foreach (var (name, value) in Entries("AppStrings.resx"))
     {
       var enValue = rm.GetString(name, en);
-      if (fileRefs.Contains(name) ? string.IsNullOrWhiteSpace(enValue) : enValue != value) bad.Add($"{name} (en)");
+      // a Windows checkout keeps CRLF in the compiled value, the XML reader gives LF
+      if (fileRefs.Contains(name) ? string.IsNullOrWhiteSpace(enValue) : enValue?.ReplaceLineEndings("\n") != value.ReplaceLineEndings("\n")) bad.Add($"{name} (en)");
       var itValue = rm.GetResourceSet(it, createIfNotExists: true, tryParents: false)?.GetString(name);
       if (string.IsNullOrWhiteSpace(itValue)) bad.Add($"{name} (it)");
     }

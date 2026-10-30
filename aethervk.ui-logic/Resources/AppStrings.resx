@@ -1239,4 +1239,34 @@ Type an epoch inside the committed range and press Enter, or Go, to jump there; 
   <data name="Tabs_Settings_HelpObserverScale" xml:space="preserve">
     <value>The angle one screen pixel covers and the field of view; at the comet's distance also the kilometres per pixel and the half-width and half-height of the view.</value>
   </data>
+  <data name="Tabs_Settings_PlayPreview" xml:space="preserve">
+    <value>Playback preview quality</value>
+  </data>
+  <data name="Tabs_Settings_PlayPreviewHint" xml:space="preserve">
+    <value>How the dust is drawn while playing and for 2 s after a pause or a seek: coarser and fresh every frame, with moving flow marks. The full render follows.</value>
+  </data>
+  <data name="Tabs_Settings_PlayPreviewOff" xml:space="preserve">
+    <value>Off (full render)</value>
+  </data>
+  <data name="Tabs_Settings_PlayPreviewSmooth" xml:space="preserve">
+    <value>Smooth</value>
+  </data>
+  <data name="Tabs_Settings_PlayPreviewBalanced" xml:space="preserve">
+    <value>Balanced</value>
+  </data>
+  <data name="Tabs_Settings_PlayPreviewQuality" xml:space="preserve">
+    <value>Quality</value>
+  </data>
+  <data name="Tabs_Settings_HelpPlayPreview" xml:space="preserve">
+    <value>While the simulation plays, and for 2 s after a pause or a seek, the dust is drawn as a preview: coarser, redrawn every frame (no temporal reuse), with the flow marks moving out of the nucleus. The flow marks are a visual aid: they travel along the real velocity field, faster than the dust at slow speeds; the particles stay where the physics puts them.&#10;&#10;Smooth is the fastest, Quality the finest; Off draws the full render while playing too.&#10;&#10;When the preview ends the full render starts and refines. "Render full" on the viewport starts it at once. Saved for the next start.</value>
+  </data>
+  <data name="Overlay_DustPreview" xml:space="preserve">
+    <value>Preview · flow marks (visual aid)</value>
+  </data>
+  <data name="Overlay_RenderFull" xml:space="preserve">
+    <value>Render full</value>
+  </data>
+  <data name="Overlay_DustRendering" xml:space="preserve">
+    <value>Rendering the full image…</value>
+  </data>
 </root>

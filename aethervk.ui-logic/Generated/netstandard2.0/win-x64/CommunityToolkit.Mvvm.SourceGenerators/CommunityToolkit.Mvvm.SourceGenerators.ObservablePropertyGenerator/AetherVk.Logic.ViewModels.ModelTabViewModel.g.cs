@@ -28,28 +28,6 @@ namespace AetherVk.Logic.ViewModels
             }
         }
 
-        /// <inheritdoc cref="_manualNucleusRadiusKm"/>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-        public float ManualNucleusRadiusKm
-        {
-            get => _manualNucleusRadiusKm;
-            set
-            {
-                if (!global::System.Collections.Generic.EqualityComparer<float>.Default.Equals(_manualNucleusRadiusKm, value))
-                {
-                    OnManualNucleusRadiusKmChanging(value);
-                    OnManualNucleusRadiusKmChanging(default, value);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.ManualNucleusRadiusKm);
-                    _manualNucleusRadiusKm = value;
-                    OnManualNucleusRadiusKmChanged(value);
-                    OnManualNucleusRadiusKmChanged(default, value);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.ManualNucleusRadiusKm);
-                    AddJetCommand.NotifyCanExecuteChanged();
-                }
-            }
-        }
-
         /// <inheritdoc cref="_isCometCommitted"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
@@ -495,28 +473,6 @@ namespace AetherVk.Logic.ViewModels
         /// <remarks>This method is invoked right after the value of <see cref="SelectedJet"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnSelectedJetChanged(global::AetherVk.Logic.ViewModels.JetViewModel? oldValue, global::AetherVk.Logic.ViewModels.JetViewModel? newValue);
-        /// <summary>Executes the logic for when <see cref="ManualNucleusRadiusKm"/> is changing.</summary>
-        /// <param name="value">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="ManualNucleusRadiusKm"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnManualNucleusRadiusKmChanging(float value);
-        /// <summary>Executes the logic for when <see cref="ManualNucleusRadiusKm"/> is changing.</summary>
-        /// <param name="oldValue">The previous property value that is being replaced.</param>
-        /// <param name="newValue">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="ManualNucleusRadiusKm"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnManualNucleusRadiusKmChanging(float oldValue, float newValue);
-        /// <summary>Executes the logic for when <see cref="ManualNucleusRadiusKm"/> just changed.</summary>
-        /// <param name="value">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="ManualNucleusRadiusKm"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnManualNucleusRadiusKmChanged(float value);
-        /// <summary>Executes the logic for when <see cref="ManualNucleusRadiusKm"/> just changed.</summary>
-        /// <param name="oldValue">The previous property value that was replaced.</param>
-        /// <param name="newValue">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="ManualNucleusRadiusKm"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnManualNucleusRadiusKmChanged(float oldValue, float newValue);
         /// <summary>Executes the logic for when <see cref="IsCometCommitted"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="IsCometCommitted"/> is changed.</remarks>

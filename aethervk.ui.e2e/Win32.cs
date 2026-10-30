@@ -27,6 +27,21 @@ internal static partial class Win32
   public static extern bool SetForegroundWindow(IntPtr hWnd);
 
   [DllImport("user32.dll")]
+  public static extern IntPtr GetForegroundWindow();
+
+  [DllImport("user32.dll")]
+  public static extern bool IsWindow(IntPtr hWnd);
+
+  /// <summary>An Alt press and release: Windows then lets this process set the foreground window.</summary>
+  public static void TapAlt()
+  {
+    const byte VK_MENU = 0x12;
+    const uint KEYEVENTF_KEYUP = 0x0002;
+    keybd_event(VK_MENU, 0, 0, UIntPtr.Zero);
+    keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+  }
+
+  [DllImport("user32.dll")]
   private static extern bool SetCursorPos(int x, int y);
 
   [DllImport("user32.dll")]
@@ -104,31 +119,20 @@ internal static partial class Win32
   [DllImport("user32.dll")]
   private static extern int ReleaseDC(IntPtr hWnd, IntPtr hdc);
 
-  [DllImport("gdi32.dll")]
-  private static extern uint GetPixel(IntPtr hdc, int x, int y);
-
   /// <summary>
   /// Luminance (0..1, Rec. 709) of an n × n grid of screen pixels over a rectangle, row by row:
-  /// what is on screen (overlays included), without an image library.
+  /// what is on screen (overlays included), without an image library. The cell centres of one
+  /// <see cref="CaptureLuminance"/>: a few ms, where a GetPixel per cell stalled on a busy GPU
+  /// (~30 s for 32 × 32 while the dust played).
   /// </summary>
   public static double[] SampleLuminance(int left, int top, int width, int height, int n)
   {
-    var dc = GetDC(IntPtr.Zero);
-    try
-    {
-      var lum = new double[n * n];
-      for (int j = 0; j < n; j++)
-        for (int i = 0; i < n; i++)
-        {
-          uint c = GetPixel(dc, left + (2 * i + 1) * width / (2 * n), top + (2 * j + 1) * height / (2 * n));
-          lum[j * n + i] = (0.2126 * (c & 0xFF) + 0.7152 * ((c >> 8) & 0xFF) + 0.0722 * ((c >> 16) & 0xFF)) / 255.0;
-        }
-      return lum;
-    }
-    finally
-    {
-      ReleaseDC(IntPtr.Zero, dc);
-    }
+    var full = CaptureLuminance(left, top, width, height);
+    var lum = new double[n * n];
+    for (int j = 0; j < n; j++)
+      for (int i = 0; i < n; i++)
+        lum[j * n + i] = full[(2 * j + 1) * height / (2 * n) * width + (2 * i + 1) * width / (2 * n)];
+    return lum;
   }
 
   [DllImport("gdi32.dll")]
@@ -171,6 +175,62 @@ internal static partial class Win32
   /// </summary>
   public static double[] CaptureLuminance(int left, int top, int width, int height)
   {
+    var bits = CaptureBgra(left, top, width, height);
+    var lum = new double[width * height];
+    for (int k = 0; k < lum.Length; k++)
+      lum[k] = (0.0722 * bits[4 * k] + 0.7152 * bits[4 * k + 1] + 0.2126 * bits[4 * k + 2]) / 255.0;
+    return lum;
+  }
+
+  /// <summary>
+  /// A screen rectangle saved as a PNG (one BitBlt, overlays included): milliseconds, where a
+  /// WinAppDriver desktop screenshot takes seconds.
+  /// </summary>
+  public static void SavePng(string path, int left, int top, int width, int height)
+  {
+    var bgra = CaptureBgra(left, top, width, height);
+    // RGB rows, each behind filter byte 0
+    var raw = new byte[height * (1 + width * 3)];
+    for (int y = 0, o = 0; y < height; y++)
+    {
+      raw[o++] = 0;
+      for (int x = 0; x < width; x++, o += 3)
+      {
+        int k = 4 * (y * width + x);
+        (raw[o], raw[o + 1], raw[o + 2]) = (bgra[k + 2], bgra[k + 1], bgra[k]);
+      }
+    }
+    using var z = new MemoryStream();
+    using (var zs = new System.IO.Compression.ZLibStream(z, System.IO.Compression.CompressionLevel.Fastest, leaveOpen: true))
+      zs.Write(raw);
+    var header = new byte[13];
+    System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(header, width);
+    System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(header.AsSpan(4), height);
+    header[8] = 8; // bit depth
+    header[9] = 2; // colour type RGB
+    using var f = File.Create(path);
+    f.Write([0x89, (byte)'P', (byte)'N', (byte)'G', 0x0D, 0x0A, 0x1A, 0x0A]);
+    WriteChunk(f, "IHDR", header);
+    WriteChunk(f, "IDAT", z.ToArray());
+    WriteChunk(f, "IEND", []);
+  }
+
+  private static void WriteChunk(Stream f, string type, byte[] data)
+  {
+    var be = new byte[4];
+    System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(be, data.Length);
+    f.Write(be);
+    var typed = new byte[4 + data.Length];
+    System.Text.Encoding.ASCII.GetBytes(type).CopyTo(typed, 0);
+    data.CopyTo(typed, 4);
+    f.Write(typed);
+    System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(be, System.IO.Hashing.Crc32.HashToUInt32(typed));
+    f.Write(be);
+  }
+
+  /// <summary>The BGRA bytes of a screen rectangle, rows from the top.</summary>
+  private static byte[] CaptureBgra(int left, int top, int width, int height)
+  {
     const uint SRCCOPY = 0x00CC0020;
     var screen = GetDC(IntPtr.Zero);
     var mem = CreateCompatibleDC(screen);
@@ -188,10 +248,7 @@ internal static partial class Win32
       var bits = new byte[width * height * 4];
       if (GetDIBits(mem, bmp, 0, (uint)height, bits, ref info, 0) != height)
         throw new InvalidOperationException("GetDIBits failed");
-      var lum = new double[width * height];
-      for (int k = 0; k < lum.Length; k++)
-        lum[k] = (0.0722 * bits[4 * k] + 0.7152 * bits[4 * k + 1] + 0.2126 * bits[4 * k + 2]) / 255.0;
-      return lum;
+      return bits;
     }
     finally
     {

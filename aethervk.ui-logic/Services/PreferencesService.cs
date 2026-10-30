@@ -34,6 +34,10 @@ public sealed class PreferencesFile
   /// 4, 8 or 16; missing = 16.</summary>
   [JsonPropertyName("dust_reuse_px")]
   public int? DustReuseTolerance { get; set; }
+  /// <summary>Playback preview quality (Settings › Particle rendering): 0 off, 1 smooth, 2 balanced,
+  /// 3 quality; missing = 2. Not part of the quality presets.</summary>
+  [JsonPropertyName("dust_play_preview")]
+  public int? DustPlayPreview { get; set; }
   /// <summary>Particle quality preset (Settings › Particle rendering): 1 (lowest) … 5 (ultra), 0 =
   /// custom (the four dust values above as edited); missing = 1, the app starts on the lowest.</summary>
   [JsonPropertyName("particle_quality")]
@@ -134,6 +138,11 @@ public sealed class PreferencesService
   public int DustReuseTolerance => Preset?.ReuseTolerance ??
     ParticleRenderingViewModel.ClampReuseTolerance(_file.DustReuseTolerance ?? ParticleRenderingViewModel.ReuseToleranceDefault);
 
+  /// <summary>The playback preview quality (<see cref="ParticleRenderingViewModel.ClampPlayPreview"/>;
+  /// balanced when the file has none).</summary>
+  public int DustPlayPreview =>
+    ParticleRenderingViewModel.ClampPlayPreview(_file.DustPlayPreview ?? ParticleRenderingViewModel.PlayPreviewDefault);
+
   public bool HudCameraExpanded => _file.HudCameraExpanded ?? true;
 
   public bool HudOrbitExpanded => _file.HudOrbitExpanded ?? true;
@@ -225,6 +234,12 @@ public sealed class PreferencesService
   public void SetDustReuseTolerance(int px)
   {
     _file.DustReuseTolerance = ParticleRenderingViewModel.ClampReuseTolerance(px);
+    Save();
+  }
+
+  public void SetDustPlayPreview(int level)
+  {
+    _file.DustPlayPreview = ParticleRenderingViewModel.ClampPlayPreview(level);
     Save();
   }
 

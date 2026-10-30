@@ -125,6 +125,9 @@ pub struct DustGpuTimings {
   /// the frame kept the previous frame's image ([`Device::cmd_dust_frame_begin_reusable`]): its
   /// spans are the measure and readback only
   pub reused: bool,
+  /// the preview's cluster stride the frame was drawn with (1: every cluster;
+  /// [`Device::dust_update_play_stride`])
+  pub stride: u32,
 }
 
 /// `ticks` × `period_ns` in ms, `NaN` when either end is missing or out of order
@@ -206,6 +209,7 @@ impl DustGpuTimings {
       width: 0,
       height: 0,
       reused: false,
+      stride: 1,
     }
   }
 }
@@ -471,6 +475,8 @@ pub struct DustViewHost {
   ts_written: [u32; DUST_READBACK_SLOTS],
   /// per readback slot: its frame number when recorded
   ts_frame: [u64; DUST_READBACK_SLOTS],
+  /// per readback slot: the preview stride it was drawn with
+  ts_stride: [u32; DUST_READBACK_SLOTS],
   /// the slot this frame's timestamps go to, `None` before a frame begin reset it
   ts_slot: Option<usize>,
   /// the last measured frame's GPU timings ([`DustGpuTimings`])
@@ -559,6 +565,8 @@ pub struct DustViewHost {
   /// the scene's dust feedback generation this host's feedback was measured under
   /// (`SceneContext::dust_feedback_gen`, [`Device::dust_sync_feedback_gen`])
   pub feedback_gen: u32,
+  /// the preview's cluster stride ([`Device::dust_update_play_stride`]; 1 outside the preview)
+  pub play_stride: dust::play_quality::PlayStride,
 }
 
 /// The paused feedback state the play pin saves ([`DustViewHost::play_pin_enter`]) and restores
@@ -1173,6 +1181,7 @@ impl Default for DustViewHost {
       fb_memory: FeedbackSet::default(),
       ts_written: [0; DUST_READBACK_SLOTS],
       ts_frame: [0; DUST_READBACK_SLOTS],
+      ts_stride: [1; DUST_READBACK_SLOTS],
       ts_slot: None,
       timings: None,
       timings_drawn: None,
@@ -1215,6 +1224,7 @@ impl Default for DustViewHost {
       targets: None,
       restored: 0,
       feedback_gen: 0,
+      play_stride: Default::default(),
     }
   }
 }
@@ -1528,6 +1538,41 @@ pub struct DustView {
   /// what the GPU splat passes drew (diagnostics, [`Device::download_dust_snapshot`]): the
   /// frame being recorded and the last fully recorded one, `(frame, records)` each
   splat_records: spin::Mutex<[(u64, alloc::vec::Vec<DustSplatRecord>); 2]>,
+  /// the preview's strided slot lists ([`Device::cmd_dust_splat`]), made on the first strided frame
+  stride_list: spin::Mutex<Option<StrideList>>,
+}
+
+/// Words of one frame's region of [`StrideList`]: every tier's list of a frame (3 tiers of
+/// 2^18 clusters at stride 2 fit)
+const STRIDE_LIST_REGION_WORDS: u32 = 1 << 19;
+
+/// The preview's slot lists, host written: [`DUST_READBACK_SLOTS`] regions (a frame's lists stay
+/// untouched while it may be in flight), filled tier after tier through the frame
+struct StrideList {
+  buf: DustBuffer,
+  mapped: *mut u8,
+  /// the frame whose region is being filled and the words used in it
+  frame: u64,
+  used: u32,
+}
+// the mapping is only written under the view's `stride_list` lock
+unsafe impl Send for StrideList {}
+
+/// The ring slots of a tier's live range (`first_slot`, `live` clusters, a power-of-two
+/// sub-ring of `capacity`) that are multiples of `stride`, in range order (the preview's strided
+/// splat, [`dust::play_quality::PlayStride`])
+fn strided_slots(first_slot: u32, live: u32, capacity: u32, stride: u32, out: &mut alloc::vec::Vec<u32>) {
+  let (cap, s) = (capacity.max(1), stride.max(1));
+  let live = live.min(cap);
+  let first = first_slot & (cap - 1);
+  let head = live.min(cap - first);
+  for (a, n) in [(first, head), (0, live - head)] {
+    let mut slot = a.div_ceil(s) * s;
+    while slot < a + n {
+      out.push(slot);
+      slot += s;
+    }
+  }
 }
 
 /// `bytes` as a vector of `T` (an aligned copy; trailing bytes of a partial element dropped)
@@ -1679,7 +1724,8 @@ impl DustManager {
   }
 
   fn destroy_view(allocator: &vk_mem::AllocatorView, mut view: DustView) {
-    let extra = core::mem::take(&mut view.cpu_pyramids).into_iter().map(|(b, _)| b);
+    let extra = core::mem::take(&mut view.cpu_pyramids).into_iter().map(|(b, _)| b)
+      .chain(view.stride_list.get_mut().take().map(|l| l.buf));
     for b in [view.pyramid.take(), view.readback.take()].into_iter().flatten().chain(extra) {
       let mut a = b.alloc;
       unsafe { allocator.destroy_buffer(b.buffer, &mut a) };
@@ -1955,7 +2001,8 @@ impl Device {
     };
     mgr.release_query_pool(view.ts_pool);
     let allocator = res.allocator.allocator.as_allocator_view();
-    let extra = core::mem::take(&mut view.cpu_pyramids).into_iter().map(|(b, _)| b);
+    let extra = core::mem::take(&mut view.cpu_pyramids).into_iter().map(|(b, _)| b)
+      .chain(view.stride_list.get_mut().take().map(|l| l.buf));
     for b in [view.pyramid.take(), view.readback.take()].into_iter().flatten().chain(extra) {
       res.discard_pool.discard_buffer(
         allocator.as_allocator_view(),
@@ -2472,7 +2519,8 @@ impl Device {
       let timeline = res.timeline_manager.get_next_submit_value();
       if let Some((_, mut view)) = mgr.views.remove(&pe) {
         mgr.release_query_pool(view.ts_pool);
-        let extra = core::mem::take(&mut view.cpu_pyramids).into_iter().map(|(b, _)| b);
+        let extra = core::mem::take(&mut view.cpu_pyramids).into_iter().map(|(b, _)| b)
+      .chain(view.stride_list.get_mut().take().map(|l| l.buf));
         for b in [view.pyramid.take(), view.readback.take()].into_iter().flatten().chain(extra) {
           res.discard_pool.discard_buffer(
             allocator.as_allocator_view(),
@@ -2611,6 +2659,7 @@ impl Device {
             (u64::MAX, alloc::vec::Vec::new()),
             (u64::MAX, alloc::vec::Vec::new()),
           ]),
+          stride_list: spin::Mutex::new(None),
         },
       );
     }
@@ -2843,6 +2892,7 @@ impl Device {
           if !t.total_ms.is_nan() {
             t.frame = host.ts_frame[slot];
             t.reused = host.ts_reused[slot];
+            t.stride = host.ts_stride[slot];
             t.width = view.layout.width;
             t.height = view.layout.height;
             if let Some(prev) = host.timings.filter(|p| !p.total_ema_ms.is_nan()) {
@@ -2888,6 +2938,7 @@ impl Device {
       }
       host.ts_written[slot] = 1 << DUST_TS_BEGIN;
       host.ts_frame[slot] = host.frame;
+      host.ts_stride[slot] = host.play_stride.stride();
       host.ts_slot = Some(slot);
     }
     // this frame's regime until `Device::dust_budget_frame_kind` says otherwise: cadenced with the
@@ -3647,7 +3698,105 @@ impl Device {
     moments: u64,
     pc: DustSplatPushConstants,
   ) -> GpuResult<()> {
+    // the preview's stride (`PlayStride`): every S-th slot, S times brighter
+    if let Some((list, n, s)) = self.dust_stride_list(pe, id, first_slot, capacity, pc.live_count)? {
+      let pc = DustSplatPushConstants { exposure: pc.exposure * s as f32, ..pc };
+      return self.dust_splat_impl(cmd, pe, id, ring_base, first_slot, capacity, render, moments, pc, None, list, n, None);
+    }
     self.dust_splat_impl(cmd, pe, id, ring_base, first_slot, capacity, render, moments, pc, None, 0, 0, None)
+  }
+
+  /// The strided slot list of a tier of system `id` for this frame of `pe` (`(address, entries,
+  /// stride)`), or `None` to draw the whole range: stride 1, CPU mode, or no room left in the
+  /// frame's region
+  fn dust_stride_list(
+    &self,
+    pe: gpu::PresentationEngineHandle,
+    id: u64,
+    first_slot: u32,
+    capacity: u32,
+    live_count: u32,
+  ) -> GpuResult<Option<(u64, u32, u32)>> {
+    let res = self.res.read();
+    let Some(mgr) = res.dust_manager.as_ref() else {
+      return Ok(None);
+    };
+    let (Some(view), Some(sys)) = (mgr.views.get(&pe), mgr.systems.get(&id)) else {
+      return Ok(None);
+    };
+    let (stride, frame) = {
+      let host = view.host.lock();
+      (host.play_stride.stride(), host.frame)
+    };
+    if stride <= 1 || sys.cpu_ring.is_some() {
+      return Ok(None);
+    }
+    let mut slots = alloc::vec::Vec::with_capacity((live_count / stride + 2) as usize);
+    strided_slots(first_slot, live_count, capacity, stride, &mut slots);
+    if slots.is_empty() {
+      return Ok(None);
+    }
+    let allocator = res.allocator.allocator.as_allocator_view();
+    let mut guard = view.stride_list.lock();
+    if guard.is_none() {
+      let (buf, mapped) = self.dust_create_buffer(
+        &allocator,
+        DUST_READBACK_SLOTS as u64 * STRIDE_LIST_REGION_WORDS as u64 * 4,
+        DustMem::HostWrite,
+        false,
+        vk::BufferUsageFlags::empty(),
+        &alloc::format!("DustStrideList_{}", pe.0),
+      )?;
+      *guard = Some(StrideList { buf, mapped, frame: u64::MAX, used: 0 });
+    }
+    let l = guard.as_mut().expect("made above");
+    if l.frame != frame {
+      l.frame = frame;
+      l.used = 0;
+    }
+    let n = slots.len() as u32;
+    if l.used + n > STRIDE_LIST_REGION_WORDS {
+      return Ok(None);
+    }
+    let word = (frame % DUST_READBACK_SLOTS as u64) as u32 * STRIDE_LIST_REGION_WORDS + l.used;
+    unsafe {
+      core::ptr::copy_nonoverlapping(slots.as_ptr().cast::<u8>(), l.mapped.add(word as usize * 4), n as usize * 4);
+    }
+    allocator.flush_allocation(&l.buf.alloc, word as u64 * 4, n as u64 * 4)?;
+    l.used += n;
+    Ok(Some((l.buf.address + word as u64 * 4, n, stride)))
+  }
+
+  /// The preview's cluster stride of `pe` for the frame about to be recorded: fed with the last
+  /// GPU timing readback ([`dust::play_quality::PlayStride::absorb`]) while `budget` is some (the
+  /// preview), back to 1 otherwise. Logs each change.
+  pub fn dust_update_play_stride(
+    &self,
+    pe: gpu::PresentationEngineHandle,
+    budget: Option<dust::play_quality::StrideBudget>,
+  ) -> u32 {
+    let res = self.res.read();
+    let Some(view) = res.dust_manager.as_ref().and_then(|m| m.views.get(&pe)) else {
+      return 1;
+    };
+    let mut host = view.host.lock();
+    let Some(b) = budget else {
+      if host.play_stride.stride() > 1 {
+        aethervk_oshal_rlib::log!("[Dust] view {}: preview stride off (every cluster drawn)", pe.0);
+      }
+      host.play_stride.reset();
+      return 1;
+    };
+    let now = host.frame;
+    if let Some(t) = host.timings.filter(|t| !t.reused)
+      && let Some(s) = host.play_stride.absorb(t.frame, t.total_ms, now, b)
+    {
+      aethervk_oshal_rlib::log!(
+        "[Dust] view {}: preview stride {} (frame {} took {:.1} ms, budget {} ms)",
+        pe.0, s, t.frame, t.total_ms, b.budget_ms
+      );
+    }
+    host.play_stride.stride()
   }
 
   /// [`Self::cmd_dust_splat`] with the cadence's options: `target` a class image's address in the
@@ -5815,6 +5964,25 @@ impl Device {
 mod play_pin_tests {
   use super::*;
   use dust::play_quality::{PinnedFeedback, PlayFeedback};
+
+  #[test]
+  fn strided_slots_cover_a_wrapped_range_in_order() {
+    let mut v = alloc::vec::Vec::new();
+    // range 12..16 then 0..5 of a 16-slot ring, stride 4
+    strided_slots(12, 9, 16, 4, &mut v);
+    assert_eq!(v, [12, 0, 4]);
+    v.clear();
+    // not wrapped, the first multiple after an unaligned start
+    strided_slots(3, 10, 64, 4, &mut v);
+    assert_eq!(v, [4, 8, 12]);
+    v.clear();
+    // stride 1 is the whole range; live clamped to the ring
+    strided_slots(6, 100, 8, 1, &mut v);
+    assert_eq!(v, [6, 7, 0, 1, 2, 3, 4, 5]);
+    v.clear();
+    strided_slots(0, 0, 8, 2, &mut v);
+    assert!(v.is_empty());
+  }
 
   fn taught_host() -> DustViewHost {
     // a view whose feedback learned a paused state (both regimes, a memory, the warm-up over)

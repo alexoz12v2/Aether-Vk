@@ -46,7 +46,7 @@ namespace AetherVk.Logic.SaveFile
 
         private static global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[] TimelineDtoPropInit(global::System.Text.Json.JsonSerializerOptions options)
         {
-            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[8];
+            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[9];
 
             var info0 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<global::AetherVk.Logic.SaveFile.EpochParts>
             {
@@ -128,7 +128,27 @@ namespace AetherVk.Logic.SaveFile
             
             properties[3] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<string>(options, info3);
 
-            var info4 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<global::AetherVk.Logic.SaveFile.EpochParts>
+            var info4 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<string>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.TimelineDto),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.TimelineDto)obj).ProposedScale,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.TimelineDto)obj).ProposedScale = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "ProposedScale",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.TimelineDto).GetProperty("ProposedScale", InstanceMemberBindingFlags, null, typeof(string), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[4] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<string>(options, info4);
+
+            var info5 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<global::AetherVk.Logic.SaveFile.EpochParts>
             {
                 IsProperty = true,
                 IsPublic = true,
@@ -146,9 +166,9 @@ namespace AetherVk.Logic.SaveFile
                 AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.TimelineDto).GetProperty("CurrentEpoch", InstanceMemberBindingFlags, null, typeof(global::AetherVk.Logic.SaveFile.EpochParts), global::System.Array.Empty<global::System.Type>(), null),
             };
             
-            properties[4] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<global::AetherVk.Logic.SaveFile.EpochParts>(options, info4);
+            properties[5] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<global::AetherVk.Logic.SaveFile.EpochParts>(options, info5);
 
-            var info5 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<bool>
+            var info6 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<bool>
             {
                 IsProperty = true,
                 IsPublic = true,
@@ -166,9 +186,9 @@ namespace AetherVk.Logic.SaveFile
                 AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.TimelineDto).GetProperty("StartPaused", InstanceMemberBindingFlags, null, typeof(bool), global::System.Array.Empty<global::System.Type>(), null),
             };
             
-            properties[5] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<bool>(options, info5);
+            properties[6] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<bool>(options, info6);
 
-            var info6 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<int?>
+            var info7 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<int?>
             {
                 IsProperty = true,
                 IsPublic = true,
@@ -186,9 +206,9 @@ namespace AetherVk.Logic.SaveFile
                 AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.TimelineDto).GetProperty("Speed", InstanceMemberBindingFlags, null, typeof(int?), global::System.Array.Empty<global::System.Type>(), null),
             };
             
-            properties[6] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<int?>(options, info6);
+            properties[7] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<int?>(options, info7);
 
-            var info7 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<double?>
+            var info8 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<double?>
             {
                 IsProperty = true,
                 IsPublic = true,
@@ -206,7 +226,7 @@ namespace AetherVk.Logic.SaveFile
                 AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.TimelineDto).GetProperty("DustLeadDays", InstanceMemberBindingFlags, null, typeof(double?), global::System.Array.Empty<global::System.Type>(), null),
             };
             
-            properties[7] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<double?>(options, info7);
+            properties[8] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<double?>(options, info8);
 
             return properties;
         }
@@ -229,6 +249,7 @@ namespace AetherVk.Logic.SaveFile
             EpochPartsSerializeHandler(writer, ((global::AetherVk.Logic.SaveFile.TimelineDto)value).CommittedEnd);
             writer.WriteString(PropName_proposed_start, ((global::AetherVk.Logic.SaveFile.TimelineDto)value).ProposedStart);
             writer.WriteString(PropName_proposed_end, ((global::AetherVk.Logic.SaveFile.TimelineDto)value).ProposedEnd);
+            writer.WriteString(PropName_proposed_scale, ((global::AetherVk.Logic.SaveFile.TimelineDto)value).ProposedScale);
             writer.WritePropertyName(PropName_current_epoch);
             EpochPartsSerializeHandler(writer, ((global::AetherVk.Logic.SaveFile.TimelineDto)value).CurrentEpoch);
             writer.WriteBoolean(PropName_start_paused, ((global::AetherVk.Logic.SaveFile.TimelineDto)value).StartPaused);

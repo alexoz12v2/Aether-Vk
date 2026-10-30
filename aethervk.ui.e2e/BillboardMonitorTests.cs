@@ -171,6 +171,7 @@ public sealed class BillboardMonitorTests(ITestOutputHelper output)
     var (first, second) = (monitors[0], monitors[1]);
     double k = Win32.ScalingOf(second) / Win32.ScalingOf(first);
     output.WriteLine($"monitors: {first} at {Win32.ScalingOf(first):P0}; {second} at {Win32.ScalingOf(second):P0}");
+    Skip.If(Math.Abs(k - 1) < 0.01, $"both monitors at {Win32.ScalingOf(first):P0}: no change of scaling to exercise");
 
     var artifacts = Path.Combine(AppSession.RepoRoot(), "TestResults", "e2e", "billboard-scaling");
     if (Directory.Exists(artifacts))

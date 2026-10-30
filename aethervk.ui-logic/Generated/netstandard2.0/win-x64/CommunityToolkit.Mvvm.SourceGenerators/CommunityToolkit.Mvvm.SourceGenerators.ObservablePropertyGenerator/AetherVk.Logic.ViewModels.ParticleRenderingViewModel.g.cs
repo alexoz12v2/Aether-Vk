@@ -6,6 +6,48 @@ namespace AetherVk.Logic.ViewModels
     /// <inheritdoc/>
     partial class ParticleRenderingViewModel
     {
+        /// <inheritdoc cref="_playPreview"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public int PlayPreview
+        {
+            get => _playPreview;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<int>.Default.Equals(_playPreview, value))
+                {
+                    OnPlayPreviewChanging(value);
+                    OnPlayPreviewChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.PlayPreview);
+                    _playPreview = value;
+                    OnPlayPreviewChanged(value);
+                    OnPlayPreviewChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.PlayPreview);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_playPreviewOptions"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public global::System.Collections.Generic.IReadOnlyList<string> PlayPreviewOptions
+        {
+            get => _playPreviewOptions;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<global::System.Collections.Generic.IReadOnlyList<string>>.Default.Equals(_playPreviewOptions, value))
+                {
+                    OnPlayPreviewOptionsChanging(value);
+                    OnPlayPreviewOptionsChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.PlayPreviewOptions);
+                    _playPreviewOptions = value;
+                    OnPlayPreviewOptionsChanged(value);
+                    OnPlayPreviewOptionsChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.PlayPreviewOptions);
+                }
+            }
+        }
+
         /// <inheritdoc cref="_quality"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
@@ -148,6 +190,50 @@ namespace AetherVk.Logic.ViewModels
             }
         }
 
+        /// <summary>Executes the logic for when <see cref="PlayPreview"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="PlayPreview"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnPlayPreviewChanging(int value);
+        /// <summary>Executes the logic for when <see cref="PlayPreview"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="PlayPreview"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnPlayPreviewChanging(int oldValue, int newValue);
+        /// <summary>Executes the logic for when <see cref="PlayPreview"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="PlayPreview"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnPlayPreviewChanged(int value);
+        /// <summary>Executes the logic for when <see cref="PlayPreview"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="PlayPreview"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnPlayPreviewChanged(int oldValue, int newValue);
+        /// <summary>Executes the logic for when <see cref="PlayPreviewOptions"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="PlayPreviewOptions"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnPlayPreviewOptionsChanging(global::System.Collections.Generic.IReadOnlyList<string> value);
+        /// <summary>Executes the logic for when <see cref="PlayPreviewOptions"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="PlayPreviewOptions"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnPlayPreviewOptionsChanging(global::System.Collections.Generic.IReadOnlyList<string>? oldValue, global::System.Collections.Generic.IReadOnlyList<string> newValue);
+        /// <summary>Executes the logic for when <see cref="PlayPreviewOptions"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="PlayPreviewOptions"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnPlayPreviewOptionsChanged(global::System.Collections.Generic.IReadOnlyList<string> value);
+        /// <summary>Executes the logic for when <see cref="PlayPreviewOptions"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="PlayPreviewOptions"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnPlayPreviewOptionsChanged(global::System.Collections.Generic.IReadOnlyList<string>? oldValue, global::System.Collections.Generic.IReadOnlyList<string> newValue);
         /// <summary>Executes the logic for when <see cref="Quality"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="Quality"/> is changed.</remarks>

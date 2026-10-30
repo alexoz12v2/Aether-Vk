@@ -40,6 +40,10 @@ public static partial class Ui
         if (probe() is { } value)
           return value;
       }
+      catch (WebDriverException e) when (AppGone(e))
+      {
+        throw new AppGoneException($"the app window closed while waiting for {what ?? "condition"}: {e.Message}");
+      }
       catch (WebDriverException e)
       {
         last = e;
@@ -48,6 +52,11 @@ public static partial class Ui
     }
     throw new TimeoutException($"timed out waiting for {what ?? "condition"}", last);
   }
+
+  /// <summary>WinAppDriver's answers once the session's window is gone: waiting longer cannot help.</summary>
+  private static bool AppGone(WebDriverException e) =>
+    e.Message.Contains("window has been closed", StringComparison.OrdinalIgnoreCase)
+    || e.Message.Contains("Cannot find active window", StringComparison.OrdinalIgnoreCase);
 
   public static void WaitUntil(Func<bool> condition, TimeSpan? timeout = null, string? what = null) =>
     WaitFor(() => condition() ? "ok" : null, timeout, what);
@@ -59,10 +68,13 @@ public static partial class Ui
     WaitFor(() => s.TryFind(automationId), timeout, $"element '{automationId}'");
 
   /// <summary>Wheel-scrolls the panel under the element until it is inside the main window.</summary>
+  /// <remarks>The top band clears the menu, the pane tab strip and the "Session" label (~120 px):
+  /// with 80 the wheel for an element above landed on the pane header, not its scroll viewer, and
+  /// nothing scrolled (ReviewerPlay: the Billboards row above the FITS section, 2026-10-30).</remarks>
   public static T ScrollIntoView<T>(this AppSession s, T element) where T : AppiumWebElement
   {
     var win = s.App.Manage().Window;
-    int top = win.Position.Y + 80, bottom = win.Position.Y + win.Size.Height - 40;
+    int top = win.Position.Y + 140, bottom = win.Position.Y + win.Size.Height - 40;
     for (int i = 0; i < 60; i++)
     {
       var (p, size) = (element.Location, element.Size);
@@ -76,6 +88,27 @@ public static partial class Ui
 
   public static void Click(this AppSession s, string automationId) =>
     s.ScrollIntoView(s.Find(automationId)).RealClick();
+
+  /// <summary>
+  /// <see cref="Click(AppSession, string)"/> once the element is enabled and its place held still
+  /// for 0.5 s: a pane whose content still loads (the FITS header table under a just expanded
+  /// section) moves the element between the read of its place and the click.
+  /// </summary>
+  public static void ClickWhenSettled(this AppSession s, string automationId)
+  {
+    var e = s.ScrollIntoView(s.Find(automationId));
+    WaitUntil(() => e.Enabled, what: $"'{automationId}' to be enabled");
+    var last = e.Location;
+    WaitUntil(() =>
+    {
+      Thread.Sleep(500);
+      var now = s.ScrollIntoView(e).Location;
+      bool same = now == last;
+      last = now;
+      return same;
+    }, what: $"'{automationId}' to hold still");
+    e.RealClick();
+  }
 
   /// <summary>A mouse click at the element's centre (see <see cref="Win32.ClickAt"/>).</summary>
   public static void RealClick(this AppiumWebElement e)
@@ -130,18 +163,40 @@ public static partial class Ui
   /// </summary>
   public static void Expand(this AppSession s, string expanderId, string childId)
   {
-    if (s.TryFind(childId) is not null)
+    // Displayed is true below the fold of a scroll viewer too: scroll before a click
+    if (s.TryFind(childId) is { } present)
+    {
+      s.ScrollIntoView(present);
       return;
+    }
     var expander = s.ScrollIntoView(s.Find(expanderId));
-    if (expander.GetAttribute("ExpandCollapse.ExpandCollapseState") != "Expanded")
-      expander.RealClick();
+    for (int attempt = 0; attempt < 2 && !IsExpanded(expander); attempt++)
+    {
+      ToggleExpander(expander);
+      Thread.Sleep(300);
+    }
     s.ScrollIntoView(WaitFor(() => s.App.FindElementsByAccessibilityId(childId).FirstOrDefault(),
       what: $"element '{childId}' in {expanderId}"));
     s.Find(childId);
   }
 
+  private static bool IsExpanded(AppiumWebElement expander) =>
+    expander.GetAttribute("ExpandCollapse.ExpandCollapseState") == "Expanded";
+
+  /// <summary>
+  /// Clicks the expander's header at its chevron, 14 px from the left: the header's centre can hold
+  /// a <c>?</c> help button (e.g. JetActivityHelp), which opens its flyout instead.
+  /// </summary>
+  public static void ToggleExpander(AppiumWebElement expander)
+  {
+    var header = expander.FindElementsByClassName("ToggleButton").FirstOrDefault(e => e.Displayed);
+    var (p, size) = header is not null ? (header.Location, header.Size) : (expander.Location, new System.Drawing.Size(28, 28));
+    Win32.ClickAt(p.X + 14, p.Y + size.Height / 2);
+  }
+
   public static void TypeInto(this AppSession s, AppiumWebElement box, string text, bool enter = true)
   {
+    s.Foreground();
     s.ScrollIntoView(box).RealClick();
     Thread.Sleep(150);
     s.App.Keyboard.SendKeys(Keys.Control + "a" + Keys.Control);

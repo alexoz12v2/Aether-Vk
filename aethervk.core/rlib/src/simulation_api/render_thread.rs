@@ -374,13 +374,14 @@ fn process_command(
                   },
                 )?;
 
-              // Narrow the scene read-lock scope: extract only what we need, then drop
-              // the guard before build_render_scene.  Holding it across the full frame
-              // (build + render pass + submit) blocked the logic thread's
-              // upgradable→write upgrade inside self_sync_do_if_done, causing
-              // SnapshotScene / RestoreSnapshot to time out.
-              // build_render_scene is an extension method on Arc<Scene> and reads no
-              // other SceneContext fields, so releasing the guard here is safe.
+              // The scene read lock spans the CPU extraction (build_render_scene) and nothing
+              // after it. The logic thread commits a tick's transforms (sim time, frames, body,
+              // spin-compensated camera, Earth observer) under the write lock, so the extraction
+              // sees one tick: read without it, a frame mixed two ticks and the comet with its
+              // dust jumped off the track (a frame shift, a spin step of a child camera).
+              // Holding it across the full frame (+ render pass + submit) blocked the logic
+              // thread's upgradable→write upgrade inside self_sync_do_if_done, causing
+              // SnapshotScene / RestoreSnapshot to time out: it is dropped before the GPU work.
               let mut dust_softening = crate::scene::dust::DUST_SOFTENING_DEFAULT;
               let mut dust_volume_detail = crate::scene::dust::DUST_VOLUME_DETAIL_DEFAULT;
               let mut dust_propagate_detail = crate::scene::dust::DUST_PROPAGATE_DETAIL_DEFAULT;
@@ -389,9 +390,12 @@ fn process_command(
               let mut dust_feedback_gen = 0u32;
               let mut dust_sim_speed = 0.0f64;
               let mut dust_play = false;
+              let mut dust_stride_budget = None;
               let mut dust_view_flags = 0u32;
               let mut dust_exposure_ev = 0.0f32;
               let mut dust_flow = crate::scene::dust::DustFlowClock::default();
+              let mut dust_full_draw_us = None;
+              let scene_context_read = render_frame.scene.read();
               let (
                 scene_arc,
                 unscaled_time_us,
@@ -400,7 +404,6 @@ fn process_command(
                 scaled_time_delta_us,
                 debug_name,
               ) = {
-                let scene_context_read = render_frame.scene.read();
                 let (
                   unscaled_time_us,
                   unscaled_time_delta_us,
@@ -428,6 +431,12 @@ fn process_command(
                 {
                   let (k, play) = scene_context_read.dust_render_knobs();
                   dust_play = play;
+                  if play {
+                    dust_stride_budget = crate::scene::dust::play_quality::PlayPreview::from_level(
+                      scene_context_read.dust_play_preview.load(core::sync::atomic::Ordering::Relaxed),
+                    )
+                    .stride_budget();
+                  }
                   dust_volume_detail = k.volume_detail;
                   dust_propagate_detail = k.propagate_detail;
                   dust_haze_detail = k.haze_detail;
@@ -436,14 +445,22 @@ fn process_command(
                 dust_feedback_gen =
                   scene_context_read.dust_feedback_gen.load(core::sync::atomic::Ordering::Relaxed);
                 dust_sim_speed = scene_context_read.time_state.read().speed.scale_factor();
-                // flow: advances while the sim runs, held on pause (identical paused frames)
+                // flow: advances while the sim runs, held on pause (identical paused frames). In
+                // preview the flow marks are on and paced by the play speed (a visual aid: at
+                // 10 s/s nothing physical moves on screen), the user's flags and K come back with
+                // the full render
                 {
+                  let preview_k = dust_play.then(|| crate::scene::dust::preview_flow_speed(dust_sim_speed));
                   let mut clock = scene_context_read.dust_flow_clock.lock();
-                  clock.sync(unscaled_time_us, scaled_time_us);
+                  clock.sync_at(unscaled_time_us, scaled_time_us, preview_k);
                   dust_flow = *clock;
+                  if let Some(k) = preview_k {
+                    dust_flow.speed = k;
+                    dust_view_flags |= crate::scene::dust::DUST_VIEW_FLOW;
+                  }
                 }
+                dust_full_draw_us = Some(alloc::sync::Arc::clone(&scene_context_read.dust_full_draw_us));
                 let scene_arc = alloc::sync::Arc::clone(&scene_context_read.scene);
-                // scene_context_read guard dropped here — before any GPU work
                 (
                   scene_arc,
                   unscaled_time_us,
@@ -454,7 +471,7 @@ fn process_command(
                 )
               };
 
-              let mut render_scene = scene_arc
+              let render_scene = scene_arc
                 .build_render_scene(
                   &vulkan_device,
                   pe_handle,
@@ -475,7 +492,10 @@ fn process_command(
                 .map_err(|e| {
                   aethervk_oshal_rlib::log!("[render tasklet] build_render_scene failed: {:?}", e);
                   e
-                })?;
+                });
+              // the scene_context_read guard dropped here — before any GPU work
+              drop(scene_context_read);
+              let mut render_scene = render_scene?;
               render_scene.dust_softening = dust_softening;
               render_scene.set_dust_volume_detail(dust_volume_detail);
               render_scene.set_dust_propagate_detail(dust_propagate_detail);
@@ -484,6 +504,7 @@ fn process_command(
               render_scene.dust_feedback_gen = dust_feedback_gen;
               render_scene.dust_sim_speed = dust_sim_speed;
               render_scene.dust_play = dust_play;
+              render_scene.dust_stride_budget = dust_stride_budget;
               render_scene.dust_view_flags = dust_view_flags;
               render_scene.dust_exposure_ev = dust_exposure_ev;
               render_scene.dust_flow = dust_flow;
@@ -496,6 +517,10 @@ fn process_command(
                     aethervk_oshal_rlib::log!("[render tasklet] prepare_dust failed: {:?}", e);
                     0
                   });
+              // a paused full frame drew: the full render is in progress (the viewport's badge)
+              if render_scene.dust_drew && !dust_play && let Some(at) = &dust_full_draw_us {
+                at.store(aethervk_oshal_rlib::os::time::get_monotonic_time(), core::sync::atomic::Ordering::Relaxed);
+              }
               // HUD sky image: upload on this command buffer when the scene's image changed
               gpu::sky_image_draw::prepare_sky_image(
                 vulkan_device,

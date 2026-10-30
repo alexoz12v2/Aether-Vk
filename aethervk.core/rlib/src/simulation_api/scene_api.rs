@@ -747,6 +747,40 @@ impl SimulationContext {
     Some(g.wrapping_add(1))
   }
 
+  /// Sets the "Playback preview quality" (0 Off, 1 Smooth, 2 Balanced, 3 Quality,
+  /// `dust::play_quality::PlayPreview`; out of range → Balanced). Returns the level applied, or
+  /// `None` without the scene. Visual only: picked up by the next rendered frame.
+  pub fn set_dust_play_preview(&self, scene_id: u64, level: u32) -> Option<u32> {
+    let scene_arc = self.scenes.read().get_scene(scene_id)?;
+    let l = if level <= 3 { level } else { crate::scene::dust::play_quality::PLAY_PREVIEW_DEFAULT };
+    scene_arc.read().dust_play_preview.store(l, core::sync::atomic::Ordering::Relaxed);
+    Some(l)
+  }
+
+  /// Ends the dust preview hold of a paused scene now ("Render full"): the next frame is the
+  /// full render. `None` without the scene.
+  pub fn dust_render_full(&self, scene_id: u64) -> Option<()> {
+    let scene_arc = self.scenes.read().get_scene(scene_id)?;
+    scene_arc.read().release_dust_preview();
+    Some(())
+  }
+
+  /// What the scene's dust view is doing now (`SceneContext::dust_render_phase`). `None` without
+  /// the scene.
+  pub fn dust_render_phase(&self, scene_id: u64) -> Option<crate::scene::dust::play_quality::DustRenderPhase> {
+    let scene_arc = self.scenes.read().get_scene(scene_id)?;
+    let phase = scene_arc.read().dust_render_phase();
+    Some(phase)
+  }
+
+  /// Whether the scene's dust is drawn in preview now (playing, or inside the hold after a pause
+  /// or a seek). `None` without the scene.
+  pub fn dust_in_preview(&self, scene_id: u64) -> Option<bool> {
+    let scene_arc = self.scenes.read().get_scene(scene_id)?;
+    let in_preview = scene_arc.read().dust_in_preview();
+    Some(in_preview)
+  }
+
   /// Sets the dust temporal reuse tolerance in px ("Temporal reuse tolerance": 0 = off, every
   /// frame drawn fresh, the default; ε > 0 reuses clusters whose on-screen motion stays within ε
   /// px), clamped by `dust::clamp_reuse_px`. Returns the value applied, or `None` without the

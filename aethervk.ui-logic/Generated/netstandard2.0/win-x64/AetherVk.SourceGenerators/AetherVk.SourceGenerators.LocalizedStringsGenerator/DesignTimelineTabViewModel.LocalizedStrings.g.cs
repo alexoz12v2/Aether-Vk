@@ -18,5 +18,19 @@ public partial class DesignTimelineTabViewModel : ITimelineTabViewModel
     public string StrSpeed3h { get; set; } = "3 h/s";
     public string StrSpeed1d { get; set; } = "1 day/s";
     public string StrSelectSpeed { get; set; } = "Select speed";
+    public string StrHelpHeaderEpochRange { get; set; } = "Simulated period";
+    public string StrHelpEpochRange { get; set; } = "Start and End of the simulated period: the committed one (before a commit, the range proposed in the Comet tab), in the time scale shown in the labels (Settings › Time scale for dates).\n\nRead-only here: change it in the Comet tab (step 3), then Download & Commit there.";
+    public string StrHelpHeaderCommittedRange { get; set; } = "Committed range";
+    public string StrHelpCommittedRange { get; set; } = "The range the simulation runs: the comet's ephemeris covers it, and Play, Reset, Run to End and Go stay inside it.";
+    public string StrHelpHeaderSpeed { get; set; } = "Playback speed";
+    public string StrHelpSpeed { get; set; } = "How fast simulated time runs while playing, as simulated time per real second (for example 1 h/s: one simulated hour per second).";
+    public string StrHelpHeaderPlayback { get; set; } = "Playback";
+    public string StrHelpPlayback { get; set; } = "Reset: back to the start epoch of the committed range; the dust is rebuilt there.\n\nPlay / Pause: simulated time runs at the chosen speed and the dust is computed frame by frame, so the tail evolves while you watch. Pause keeps the current epoch.\n\nRun to End: jumps to the end epoch without animating. The dust there is rebuilt at once, so it can look complete sooner than while playing.";
+    public string StrTipReset { get; set; } = "Reset";
+    public string StrTipPlayPause { get; set; } = "Play / Pause";
+    public string StrTipRunToEnd { get; set; } = "Run to End";
+    public string StrTipGo { get; set; } = "Go to epoch";
+    public string StrHelpHeaderCurrentEpoch { get; set; } = "Current epoch";
+    public string StrHelpCurrentEpoch { get; set; } = "The simulation's current epoch, in the time scale shown in the label.\n\nType an epoch inside the committed range and press Enter, or Go, to jump there; the dust is rebuilt at that epoch.";
 }
 #endif

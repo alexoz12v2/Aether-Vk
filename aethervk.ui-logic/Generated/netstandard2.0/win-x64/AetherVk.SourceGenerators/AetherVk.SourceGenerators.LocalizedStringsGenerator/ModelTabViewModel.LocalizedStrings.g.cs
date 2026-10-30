@@ -414,6 +414,703 @@ partial class ModelTabViewModel
         }
     }
 
+    private string _strHelpHeaderGizmo = string.Empty;
+    public string StrHelpHeaderGizmo
+    {
+        get => _strHelpHeaderGizmo;
+        set
+        {
+            if (_strHelpHeaderGizmo == value) return;
+            _strHelpHeaderGizmo = value;
+            OnPropertyChanged(nameof(StrHelpHeaderGizmo));
+        }
+    }
+
+    private string _strHelpHeaderJetAngles = string.Empty;
+    public string StrHelpHeaderJetAngles
+    {
+        get => _strHelpHeaderJetAngles;
+        set
+        {
+            if (_strHelpHeaderJetAngles == value) return;
+            _strHelpHeaderJetAngles = value;
+            OnPropertyChanged(nameof(StrHelpHeaderJetAngles));
+        }
+    }
+
+    private string _strHelpHeaderStreamColor = string.Empty;
+    public string StrHelpHeaderStreamColor
+    {
+        get => _strHelpHeaderStreamColor;
+        set
+        {
+            if (_strHelpHeaderStreamColor == value) return;
+            _strHelpHeaderStreamColor = value;
+            OnPropertyChanged(nameof(StrHelpHeaderStreamColor));
+        }
+    }
+
+    private string _strHelpHeaderJetBeta = string.Empty;
+    public string StrHelpHeaderJetBeta
+    {
+        get => _strHelpHeaderJetBeta;
+        set
+        {
+            if (_strHelpHeaderJetBeta == value) return;
+            _strHelpHeaderJetBeta = value;
+            OnPropertyChanged(nameof(StrHelpHeaderJetBeta));
+        }
+    }
+
+    private string _strHelpHeaderJetQDust = string.Empty;
+    public string StrHelpHeaderJetQDust
+    {
+        get => _strHelpHeaderJetQDust;
+        set
+        {
+            if (_strHelpHeaderJetQDust == value) return;
+            _strHelpHeaderJetQDust = value;
+            OnPropertyChanged(nameof(StrHelpHeaderJetQDust));
+        }
+    }
+
+    private string _strHelpHeaderJetDiameter = string.Empty;
+    public string StrHelpHeaderJetDiameter
+    {
+        get => _strHelpHeaderJetDiameter;
+        set
+        {
+            if (_strHelpHeaderJetDiameter == value) return;
+            _strHelpHeaderJetDiameter = value;
+            OnPropertyChanged(nameof(StrHelpHeaderJetDiameter));
+        }
+    }
+
+    private string _strHelpHeaderQpr = string.Empty;
+    public string StrHelpHeaderQpr
+    {
+        get => _strHelpHeaderQpr;
+        set
+        {
+            if (_strHelpHeaderQpr == value) return;
+            _strHelpHeaderQpr = value;
+            OnPropertyChanged(nameof(StrHelpHeaderQpr));
+        }
+    }
+
+    private string _strHelpHeaderSizeLawQ = string.Empty;
+    public string StrHelpHeaderSizeLawQ
+    {
+        get => _strHelpHeaderSizeLawQ;
+        set
+        {
+            if (_strHelpHeaderSizeLawQ == value) return;
+            _strHelpHeaderSizeLawQ = value;
+            OnPropertyChanged(nameof(StrHelpHeaderSizeLawQ));
+        }
+    }
+
+    private string _strHelpHeaderSizeRangeF = string.Empty;
+    public string StrHelpHeaderSizeRangeF
+    {
+        get => _strHelpHeaderSizeRangeF;
+        set
+        {
+            if (_strHelpHeaderSizeRangeF == value) return;
+            _strHelpHeaderSizeRangeF = value;
+            OnPropertyChanged(nameof(StrHelpHeaderSizeRangeF));
+        }
+    }
+
+    private string _strHelpHeaderJetGrain = string.Empty;
+    public string StrHelpHeaderJetGrain
+    {
+        get => _strHelpHeaderJetGrain;
+        set
+        {
+            if (_strHelpHeaderJetGrain == value) return;
+            _strHelpHeaderJetGrain = value;
+            OnPropertyChanged(nameof(StrHelpHeaderJetGrain));
+        }
+    }
+
+    private string _strHelpHeaderJetActivity = string.Empty;
+    public string StrHelpHeaderJetActivity
+    {
+        get => _strHelpHeaderJetActivity;
+        set
+        {
+            if (_strHelpHeaderJetActivity == value) return;
+            _strHelpHeaderJetActivity = value;
+            OnPropertyChanged(nameof(StrHelpHeaderJetActivity));
+        }
+    }
+
+    private string _strHelpHeaderQd1Au = string.Empty;
+    public string StrHelpHeaderQd1Au
+    {
+        get => _strHelpHeaderQd1Au;
+        set
+        {
+            if (_strHelpHeaderQd1Au == value) return;
+            _strHelpHeaderQd1Au = value;
+            OnPropertyChanged(nameof(StrHelpHeaderQd1Au));
+        }
+    }
+
+    private string _strHelpHeaderCopyGrain = string.Empty;
+    public string StrHelpHeaderCopyGrain
+    {
+        get => _strHelpHeaderCopyGrain;
+        set
+        {
+            if (_strHelpHeaderCopyGrain == value) return;
+            _strHelpHeaderCopyGrain = value;
+            OnPropertyChanged(nameof(StrHelpHeaderCopyGrain));
+        }
+    }
+
+    private string _strHelpHeaderJetDefaults = string.Empty;
+    public string StrHelpHeaderJetDefaults
+    {
+        get => _strHelpHeaderJetDefaults;
+        set
+        {
+            if (_strHelpHeaderJetDefaults == value) return;
+            _strHelpHeaderJetDefaults = value;
+            OnPropertyChanged(nameof(StrHelpHeaderJetDefaults));
+        }
+    }
+
+    private string _strHelpHeaderActivity = string.Empty;
+    public string StrHelpHeaderActivity
+    {
+        get => _strHelpHeaderActivity;
+        set
+        {
+            if (_strHelpHeaderActivity == value) return;
+            _strHelpHeaderActivity = value;
+            OnPropertyChanged(nameof(StrHelpHeaderActivity));
+        }
+    }
+
+    private string _strHelpHeaderQdExponent = string.Empty;
+    public string StrHelpHeaderQdExponent
+    {
+        get => _strHelpHeaderQdExponent;
+        set
+        {
+            if (_strHelpHeaderQdExponent == value) return;
+            _strHelpHeaderQdExponent = value;
+            OnPropertyChanged(nameof(StrHelpHeaderQdExponent));
+        }
+    }
+
+    private string _strHelpHeaderQdCutoff = string.Empty;
+    public string StrHelpHeaderQdCutoff
+    {
+        get => _strHelpHeaderQdCutoff;
+        set
+        {
+            if (_strHelpHeaderQdCutoff == value) return;
+            _strHelpHeaderQdCutoff = value;
+            OnPropertyChanged(nameof(StrHelpHeaderQdCutoff));
+        }
+    }
+
+    private string _strHelpHeaderQdMax = string.Empty;
+    public string StrHelpHeaderQdMax
+    {
+        get => _strHelpHeaderQdMax;
+        set
+        {
+            if (_strHelpHeaderQdMax == value) return;
+            _strHelpHeaderQdMax = value;
+            OnPropertyChanged(nameof(StrHelpHeaderQdMax));
+        }
+    }
+
+    private string _strHelpHeaderSizeDistribution = string.Empty;
+    public string StrHelpHeaderSizeDistribution
+    {
+        get => _strHelpHeaderSizeDistribution;
+        set
+        {
+            if (_strHelpHeaderSizeDistribution == value) return;
+            _strHelpHeaderSizeDistribution = value;
+            OnPropertyChanged(nameof(StrHelpHeaderSizeDistribution));
+        }
+    }
+
+    private string _strHelpSun = string.Empty;
+    public string StrHelpSun
+    {
+        get => _strHelpSun;
+        set
+        {
+            if (_strHelpSun == value) return;
+            _strHelpSun = value;
+            OnPropertyChanged(nameof(StrHelpSun));
+        }
+    }
+
+    private string _strHelpShowReferenceError = string.Empty;
+    public string StrHelpShowReferenceError
+    {
+        get => _strHelpShowReferenceError;
+        set
+        {
+            if (_strHelpShowReferenceError == value) return;
+            _strHelpShowReferenceError = value;
+            OnPropertyChanged(nameof(StrHelpShowReferenceError));
+        }
+    }
+
+    private string _strHelpDustVisibility = string.Empty;
+    public string StrHelpDustVisibility
+    {
+        get => _strHelpDustVisibility;
+        set
+        {
+            if (_strHelpDustVisibility == value) return;
+            _strHelpDustVisibility = value;
+            OnPropertyChanged(nameof(StrHelpDustVisibility));
+        }
+    }
+
+    private string _strHelpDustFlow = string.Empty;
+    public string StrHelpDustFlow
+    {
+        get => _strHelpDustFlow;
+        set
+        {
+            if (_strHelpDustFlow == value) return;
+            _strHelpDustFlow = value;
+            OnPropertyChanged(nameof(StrHelpDustFlow));
+        }
+    }
+
+    private string _strHelpDustRhoNorm = string.Empty;
+    public string StrHelpDustRhoNorm
+    {
+        get => _strHelpDustRhoNorm;
+        set
+        {
+            if (_strHelpDustRhoNorm == value) return;
+            _strHelpDustRhoNorm = value;
+            OnPropertyChanged(nameof(StrHelpDustRhoNorm));
+        }
+    }
+
+    private string _strHelpDustTrajectories = string.Empty;
+    public string StrHelpDustTrajectories
+    {
+        get => _strHelpDustTrajectories;
+        set
+        {
+            if (_strHelpDustTrajectories == value) return;
+            _strHelpDustTrajectories = value;
+            OnPropertyChanged(nameof(StrHelpDustTrajectories));
+        }
+    }
+
+    private string _strHelpDustExposure = string.Empty;
+    public string StrHelpDustExposure
+    {
+        get => _strHelpDustExposure;
+        set
+        {
+            if (_strHelpDustExposure == value) return;
+            _strHelpDustExposure = value;
+            OnPropertyChanged(nameof(StrHelpDustExposure));
+        }
+    }
+
+    private string _strHelpDustTracers = string.Empty;
+    public string StrHelpDustTracers
+    {
+        get => _strHelpDustTracers;
+        set
+        {
+            if (_strHelpDustTracers == value) return;
+            _strHelpDustTracers = value;
+            OnPropertyChanged(nameof(StrHelpDustTracers));
+        }
+    }
+
+    private string _strHelpDustFlowSpeed = string.Empty;
+    public string StrHelpDustFlowSpeed
+    {
+        get => _strHelpDustFlowSpeed;
+        set
+        {
+            if (_strHelpDustFlowSpeed == value) return;
+            _strHelpDustFlowSpeed = value;
+            OnPropertyChanged(nameof(StrHelpDustFlowSpeed));
+        }
+    }
+
+    private string _strHelpGizmo = string.Empty;
+    public string StrHelpGizmo
+    {
+        get => _strHelpGizmo;
+        set
+        {
+            if (_strHelpGizmo == value) return;
+            _strHelpGizmo = value;
+            OnPropertyChanged(nameof(StrHelpGizmo));
+        }
+    }
+
+    private string _strHelpJetAngles = string.Empty;
+    public string StrHelpJetAngles
+    {
+        get => _strHelpJetAngles;
+        set
+        {
+            if (_strHelpJetAngles == value) return;
+            _strHelpJetAngles = value;
+            OnPropertyChanged(nameof(StrHelpJetAngles));
+        }
+    }
+
+    private string _strHelpJetLatitude = string.Empty;
+    public string StrHelpJetLatitude
+    {
+        get => _strHelpJetLatitude;
+        set
+        {
+            if (_strHelpJetLatitude == value) return;
+            _strHelpJetLatitude = value;
+            OnPropertyChanged(nameof(StrHelpJetLatitude));
+        }
+    }
+
+    private string _strHelpJetLongitude = string.Empty;
+    public string StrHelpJetLongitude
+    {
+        get => _strHelpJetLongitude;
+        set
+        {
+            if (_strHelpJetLongitude == value) return;
+            _strHelpJetLongitude = value;
+            OnPropertyChanged(nameof(StrHelpJetLongitude));
+        }
+    }
+
+    private string _strHelpJetStreamColor = string.Empty;
+    public string StrHelpJetStreamColor
+    {
+        get => _strHelpJetStreamColor;
+        set
+        {
+            if (_strHelpJetStreamColor == value) return;
+            _strHelpJetStreamColor = value;
+            OnPropertyChanged(nameof(StrHelpJetStreamColor));
+        }
+    }
+
+    private string _strHelpJetBeta = string.Empty;
+    public string StrHelpJetBeta
+    {
+        get => _strHelpJetBeta;
+        set
+        {
+            if (_strHelpJetBeta == value) return;
+            _strHelpJetBeta = value;
+            OnPropertyChanged(nameof(StrHelpJetBeta));
+        }
+    }
+
+    private string _strHelpJetQDust = string.Empty;
+    public string StrHelpJetQDust
+    {
+        get => _strHelpJetQDust;
+        set
+        {
+            if (_strHelpJetQDust == value) return;
+            _strHelpJetQDust = value;
+            OnPropertyChanged(nameof(StrHelpJetQDust));
+        }
+    }
+
+    private string _strHelpJetDiameter = string.Empty;
+    public string StrHelpJetDiameter
+    {
+        get => _strHelpJetDiameter;
+        set
+        {
+            if (_strHelpJetDiameter == value) return;
+            _strHelpJetDiameter = value;
+            OnPropertyChanged(nameof(StrHelpJetDiameter));
+        }
+    }
+
+    private string _strHelpJetDensity = string.Empty;
+    public string StrHelpJetDensity
+    {
+        get => _strHelpJetDensity;
+        set
+        {
+            if (_strHelpJetDensity == value) return;
+            _strHelpJetDensity = value;
+            OnPropertyChanged(nameof(StrHelpJetDensity));
+        }
+    }
+
+    private string _strHelpJetQpr = string.Empty;
+    public string StrHelpJetQpr
+    {
+        get => _strHelpJetQpr;
+        set
+        {
+            if (_strHelpJetQpr == value) return;
+            _strHelpJetQpr = value;
+            OnPropertyChanged(nameof(StrHelpJetQpr));
+        }
+    }
+
+    private string _strHelpJetAlbedo = string.Empty;
+    public string StrHelpJetAlbedo
+    {
+        get => _strHelpJetAlbedo;
+        set
+        {
+            if (_strHelpJetAlbedo == value) return;
+            _strHelpJetAlbedo = value;
+            OnPropertyChanged(nameof(StrHelpJetAlbedo));
+        }
+    }
+
+    private string _strHelpJetSizeQ = string.Empty;
+    public string StrHelpJetSizeQ
+    {
+        get => _strHelpJetSizeQ;
+        set
+        {
+            if (_strHelpJetSizeQ == value) return;
+            _strHelpJetSizeQ = value;
+            OnPropertyChanged(nameof(StrHelpJetSizeQ));
+        }
+    }
+
+    private string _strHelpJetSizeRange = string.Empty;
+    public string StrHelpJetSizeRange
+    {
+        get => _strHelpJetSizeRange;
+        set
+        {
+            if (_strHelpJetSizeRange == value) return;
+            _strHelpJetSizeRange = value;
+            OnPropertyChanged(nameof(StrHelpJetSizeRange));
+        }
+    }
+
+    private string _strHelpJetGrain = string.Empty;
+    public string StrHelpJetGrain
+    {
+        get => _strHelpJetGrain;
+        set
+        {
+            if (_strHelpJetGrain == value) return;
+            _strHelpJetGrain = value;
+            OnPropertyChanged(nameof(StrHelpJetGrain));
+        }
+    }
+
+    private string _strHelpJetActivity = string.Empty;
+    public string StrHelpJetActivity
+    {
+        get => _strHelpJetActivity;
+        set
+        {
+            if (_strHelpJetActivity == value) return;
+            _strHelpJetActivity = value;
+            OnPropertyChanged(nameof(StrHelpJetActivity));
+        }
+    }
+
+    private string _strHelpJetDustRate0 = string.Empty;
+    public string StrHelpJetDustRate0
+    {
+        get => _strHelpJetDustRate0;
+        set
+        {
+            if (_strHelpJetDustRate0 == value) return;
+            _strHelpJetDustRate0 = value;
+            OnPropertyChanged(nameof(StrHelpJetDustRate0));
+        }
+    }
+
+    private string _strHelpCopyGrain = string.Empty;
+    public string StrHelpCopyGrain
+    {
+        get => _strHelpCopyGrain;
+        set
+        {
+            if (_strHelpCopyGrain == value) return;
+            _strHelpCopyGrain = value;
+            OnPropertyChanged(nameof(StrHelpCopyGrain));
+        }
+    }
+
+    private string _strHelpJetDefaults = string.Empty;
+    public string StrHelpJetDefaults
+    {
+        get => _strHelpJetDefaults;
+        set
+        {
+            if (_strHelpJetDefaults == value) return;
+            _strHelpJetDefaults = value;
+            OnPropertyChanged(nameof(StrHelpJetDefaults));
+        }
+    }
+
+    private string _strHelpDustDensity = string.Empty;
+    public string StrHelpDustDensity
+    {
+        get => _strHelpDustDensity;
+        set
+        {
+            if (_strHelpDustDensity == value) return;
+            _strHelpDustDensity = value;
+            OnPropertyChanged(nameof(StrHelpDustDensity));
+        }
+    }
+
+    private string _strHelpDustDiameter = string.Empty;
+    public string StrHelpDustDiameter
+    {
+        get => _strHelpDustDiameter;
+        set
+        {
+            if (_strHelpDustDiameter == value) return;
+            _strHelpDustDiameter = value;
+            OnPropertyChanged(nameof(StrHelpDustDiameter));
+        }
+    }
+
+    private string _strHelpScatteringEfficiency = string.Empty;
+    public string StrHelpScatteringEfficiency
+    {
+        get => _strHelpScatteringEfficiency;
+        set
+        {
+            if (_strHelpScatteringEfficiency == value) return;
+            _strHelpScatteringEfficiency = value;
+            OnPropertyChanged(nameof(StrHelpScatteringEfficiency));
+        }
+    }
+
+    private string _strHelpDustAlbedo = string.Empty;
+    public string StrHelpDustAlbedo
+    {
+        get => _strHelpDustAlbedo;
+        set
+        {
+            if (_strHelpDustAlbedo == value) return;
+            _strHelpDustAlbedo = value;
+            OnPropertyChanged(nameof(StrHelpDustAlbedo));
+        }
+    }
+
+    private string _strHelpActivity = string.Empty;
+    public string StrHelpActivity
+    {
+        get => _strHelpActivity;
+        set
+        {
+            if (_strHelpActivity == value) return;
+            _strHelpActivity = value;
+            OnPropertyChanged(nameof(StrHelpActivity));
+        }
+    }
+
+    private string _strHelpDustRate0 = string.Empty;
+    public string StrHelpDustRate0
+    {
+        get => _strHelpDustRate0;
+        set
+        {
+            if (_strHelpDustRate0 == value) return;
+            _strHelpDustRate0 = value;
+            OnPropertyChanged(nameof(StrHelpDustRate0));
+        }
+    }
+
+    private string _strHelpDustRatePower = string.Empty;
+    public string StrHelpDustRatePower
+    {
+        get => _strHelpDustRatePower;
+        set
+        {
+            if (_strHelpDustRatePower == value) return;
+            _strHelpDustRatePower = value;
+            OnPropertyChanged(nameof(StrHelpDustRatePower));
+        }
+    }
+
+    private string _strHelpDustRateCutoff = string.Empty;
+    public string StrHelpDustRateCutoff
+    {
+        get => _strHelpDustRateCutoff;
+        set
+        {
+            if (_strHelpDustRateCutoff == value) return;
+            _strHelpDustRateCutoff = value;
+            OnPropertyChanged(nameof(StrHelpDustRateCutoff));
+        }
+    }
+
+    private string _strHelpDustRateMax = string.Empty;
+    public string StrHelpDustRateMax
+    {
+        get => _strHelpDustRateMax;
+        set
+        {
+            if (_strHelpDustRateMax == value) return;
+            _strHelpDustRateMax = value;
+            OnPropertyChanged(nameof(StrHelpDustRateMax));
+        }
+    }
+
+    private string _strHelpSizeDistribution = string.Empty;
+    public string StrHelpSizeDistribution
+    {
+        get => _strHelpSizeDistribution;
+        set
+        {
+            if (_strHelpSizeDistribution == value) return;
+            _strHelpSizeDistribution = value;
+            OnPropertyChanged(nameof(StrHelpSizeDistribution));
+        }
+    }
+
+    private string _strHelpSizeRange = string.Empty;
+    public string StrHelpSizeRange
+    {
+        get => _strHelpSizeRange;
+        set
+        {
+            if (_strHelpSizeRange == value) return;
+            _strHelpSizeRange = value;
+            OnPropertyChanged(nameof(StrHelpSizeRange));
+        }
+    }
+
+    // ── formatted strings (implement the partial methods below) ─────────────
+    private string _strJetNeverLit = string.Empty;
+    public string StrJetNeverLit
+    {
+        get => _strJetNeverLit;
+        set
+        {
+            if (_strJetNeverLit == value) return;
+            _strJetNeverLit = value;
+            OnPropertyChanged(nameof(StrJetNeverLit));
+        }
+    }
+
     /// <summary>Called once on construction and on every culture change.</summary>
     private void RefreshStrings()
     {
@@ -451,5 +1148,66 @@ partial class ModelTabViewModel
         StrLongitude = _translationService.GetString("Tabs_Model_Longitude");
         StrDensity = _translationService.GetString("Tabs_Model_Density");
         StrColor = _translationService.GetString("Tabs_Model_Color");
+        StrHelpHeaderGizmo = _translationService.GetString("Tabs_Model_HelpHeaderGizmo");
+        StrHelpHeaderJetAngles = _translationService.GetString("Tabs_Model_HelpHeaderJetAngles");
+        StrHelpHeaderStreamColor = _translationService.GetString("Tabs_Model_HelpHeaderStreamColor");
+        StrHelpHeaderJetBeta = _translationService.GetString("Tabs_Model_HelpHeaderJetBeta");
+        StrHelpHeaderJetQDust = _translationService.GetString("Tabs_Model_HelpHeaderJetQDust");
+        StrHelpHeaderJetDiameter = _translationService.GetString("Tabs_Model_HelpHeaderJetDiameter");
+        StrHelpHeaderQpr = _translationService.GetString("Tabs_Model_HelpHeaderQpr");
+        StrHelpHeaderSizeLawQ = _translationService.GetString("Tabs_Model_HelpHeaderSizeLawQ");
+        StrHelpHeaderSizeRangeF = _translationService.GetString("Tabs_Model_HelpHeaderSizeRangeF");
+        StrHelpHeaderJetGrain = _translationService.GetString("Tabs_Model_HelpHeaderJetGrain");
+        StrHelpHeaderJetActivity = _translationService.GetString("Tabs_Model_HelpHeaderJetActivity");
+        StrHelpHeaderQd1Au = _translationService.GetString("Tabs_Model_HelpHeaderQd1Au");
+        StrHelpHeaderCopyGrain = _translationService.GetString("Tabs_Model_HelpHeaderCopyGrain");
+        StrHelpHeaderJetDefaults = _translationService.GetString("Tabs_Model_HelpHeaderJetDefaults");
+        StrHelpHeaderActivity = _translationService.GetString("Tabs_Model_HelpHeaderActivity");
+        StrHelpHeaderQdExponent = _translationService.GetString("Tabs_Model_HelpHeaderQdExponent");
+        StrHelpHeaderQdCutoff = _translationService.GetString("Tabs_Model_HelpHeaderQdCutoff");
+        StrHelpHeaderQdMax = _translationService.GetString("Tabs_Model_HelpHeaderQdMax");
+        StrHelpHeaderSizeDistribution = _translationService.GetString("Tabs_Model_HelpHeaderSizeDistribution");
+        StrHelpSun = _translationService.GetString("Tabs_Model_HelpSun");
+        StrHelpShowReferenceError = _translationService.GetString("Tabs_Model_HelpShowReferenceError");
+        StrHelpDustVisibility = _translationService.GetString("Tabs_Model_HelpDustVisibility");
+        StrHelpDustFlow = _translationService.GetString("Tabs_Model_HelpDustFlow");
+        StrHelpDustRhoNorm = _translationService.GetString("Tabs_Model_HelpDustRhoNorm");
+        StrHelpDustTrajectories = _translationService.GetString("Tabs_Model_HelpDustTrajectories");
+        StrHelpDustExposure = _translationService.GetString("Tabs_Model_HelpDustExposure");
+        StrHelpDustTracers = _translationService.GetString("Tabs_Model_HelpDustTracers");
+        StrHelpDustFlowSpeed = _translationService.GetString("Tabs_Model_HelpDustFlowSpeed");
+        StrHelpGizmo = _translationService.GetString("Tabs_Model_HelpGizmo");
+        StrHelpJetAngles = _translationService.GetString("Tabs_Model_HelpJetAngles");
+        StrHelpJetLatitude = _translationService.GetString("Tabs_Model_HelpJetLatitude");
+        StrHelpJetLongitude = _translationService.GetString("Tabs_Model_HelpJetLongitude");
+        StrHelpJetStreamColor = _translationService.GetString("Tabs_Model_HelpJetStreamColor");
+        StrHelpJetBeta = _translationService.GetString("Tabs_Model_HelpJetBeta");
+        StrHelpJetQDust = _translationService.GetString("Tabs_Model_HelpJetQDust");
+        StrHelpJetDiameter = _translationService.GetString("Tabs_Model_HelpJetDiameter");
+        StrHelpJetDensity = _translationService.GetString("Tabs_Model_HelpJetDensity");
+        StrHelpJetQpr = _translationService.GetString("Tabs_Model_HelpJetQpr");
+        StrHelpJetAlbedo = _translationService.GetString("Tabs_Model_HelpJetAlbedo");
+        StrHelpJetSizeQ = _translationService.GetString("Tabs_Model_HelpJetSizeQ");
+        StrHelpJetSizeRange = _translationService.GetString("Tabs_Model_HelpJetSizeRange");
+        StrHelpJetGrain = _translationService.GetString("Tabs_Model_HelpJetGrain");
+        StrHelpJetActivity = _translationService.GetString("Tabs_Model_HelpJetActivity");
+        StrHelpJetDustRate0 = _translationService.GetString("Tabs_Model_HelpJetDustRate0");
+        StrHelpCopyGrain = _translationService.GetString("Tabs_Model_HelpCopyGrain");
+        StrHelpJetDefaults = _translationService.GetString("Tabs_Model_HelpJetDefaults");
+        StrHelpDustDensity = _translationService.GetString("Tabs_Model_HelpDustDensity");
+        StrHelpDustDiameter = _translationService.GetString("Tabs_Model_HelpDustDiameter");
+        StrHelpScatteringEfficiency = _translationService.GetString("Tabs_Model_HelpScatteringEfficiency");
+        StrHelpDustAlbedo = _translationService.GetString("Tabs_Model_HelpDustAlbedo");
+        StrHelpActivity = _translationService.GetString("Tabs_Model_HelpActivity");
+        StrHelpDustRate0 = _translationService.GetString("Tabs_Model_HelpDustRate0");
+        StrHelpDustRatePower = _translationService.GetString("Tabs_Model_HelpDustRatePower");
+        StrHelpDustRateCutoff = _translationService.GetString("Tabs_Model_HelpDustRateCutoff");
+        StrHelpDustRateMax = _translationService.GetString("Tabs_Model_HelpDustRateMax");
+        StrHelpSizeDistribution = _translationService.GetString("Tabs_Model_HelpSizeDistribution");
+        StrHelpSizeRange = _translationService.GetString("Tabs_Model_HelpSizeRange");
+        { var r = string.Empty; FormatStr_JetNeverLit(ref r); StrJetNeverLit = r; }
     }
+
+    // ── Implement these in your hand-written partial class ───────────────────
+    partial void FormatStr_JetNeverLit(ref string result);
 }

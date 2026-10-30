@@ -6,111 +6,23 @@ namespace AetherVk.Logic.ViewModels
     /// <inheritdoc/>
     partial class TimelineTabViewModel
     {
-        /// <inheritdoc cref="_startEpoch"/>
+        /// <inheritdoc cref="_hasPendingRangeEdit"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-        public string StartEpoch
+        public bool HasPendingRangeEdit
         {
-            get => _startEpoch;
+            get => _hasPendingRangeEdit;
             set
             {
-                if (!global::System.Collections.Generic.EqualityComparer<string>.Default.Equals(_startEpoch, value))
+                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_hasPendingRangeEdit, value))
                 {
-                    OnStartEpochChanging(value);
-                    OnStartEpochChanging(default, value);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.StartEpoch);
-                    _startEpoch = value;
-                    OnStartEpochChanged(value);
-                    OnStartEpochChanged(default, value);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.StartEpoch);
-                }
-            }
-        }
-
-        /// <inheritdoc cref="_endEpoch"/>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-        public string EndEpoch
-        {
-            get => _endEpoch;
-            set
-            {
-                if (!global::System.Collections.Generic.EqualityComparer<string>.Default.Equals(_endEpoch, value))
-                {
-                    OnEndEpochChanging(value);
-                    OnEndEpochChanging(default, value);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.EndEpoch);
-                    _endEpoch = value;
-                    OnEndEpochChanged(value);
-                    OnEndEpochChanged(default, value);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.EndEpoch);
-                }
-            }
-        }
-
-        /// <inheritdoc cref="_isProposedDifferentFromCommitted"/>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-        public bool IsProposedDifferentFromCommitted
-        {
-            get => _isProposedDifferentFromCommitted;
-            set
-            {
-                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_isProposedDifferentFromCommitted, value))
-                {
-                    OnIsProposedDifferentFromCommittedChanging(value);
-                    OnIsProposedDifferentFromCommittedChanging(default, value);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsProposedDifferentFromCommitted);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.CanRestore);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsRangeLocked);
-                    _isProposedDifferentFromCommitted = value;
-                    OnIsProposedDifferentFromCommittedChanged(value);
-                    OnIsProposedDifferentFromCommittedChanged(default, value);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsProposedDifferentFromCommitted);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.CanRestore);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsRangeLocked);
-                }
-            }
-        }
-
-        /// <inheritdoc cref="_hasError"/>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-        public bool HasError
-        {
-            get => _hasError;
-            set
-            {
-                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_hasError, value))
-                {
-                    OnHasErrorChanging(value);
-                    OnHasErrorChanging(default, value);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.HasError);
-                    _hasError = value;
-                    OnHasErrorChanged(value);
-                    OnHasErrorChanged(default, value);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.HasError);
-                }
-            }
-        }
-
-        /// <inheritdoc cref="_errorMessage"/>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-        public string ErrorMessage
-        {
-            get => _errorMessage;
-            set
-            {
-                if (!global::System.Collections.Generic.EqualityComparer<string>.Default.Equals(_errorMessage, value))
-                {
-                    OnErrorMessageChanging(value);
-                    OnErrorMessageChanging(default, value);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.ErrorMessage);
-                    _errorMessage = value;
-                    OnErrorMessageChanged(value);
-                    OnErrorMessageChanged(default, value);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.ErrorMessage);
+                    OnHasPendingRangeEditChanging(value);
+                    OnHasPendingRangeEditChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.HasPendingRangeEdit);
+                    _hasPendingRangeEdit = value;
+                    OnHasPendingRangeEditChanged(value);
+                    OnHasPendingRangeEditChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.HasPendingRangeEdit);
                 }
             }
         }
@@ -213,56 +125,10 @@ namespace AetherVk.Logic.ViewModels
                     OnHasCommittedStateChanging(value);
                     OnHasCommittedStateChanging(default, value);
                     OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.HasCommittedState);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.CanRestore);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsRangeLocked);
                     _hasCommittedState = value;
                     OnHasCommittedStateChanged(value);
                     OnHasCommittedStateChanged(default, value);
                     OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.HasCommittedState);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.CanRestore);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsRangeLocked);
-                }
-            }
-        }
-
-        /// <inheritdoc cref="_hasProposedState"/>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-        public bool HasProposedState
-        {
-            get => _hasProposedState;
-            set
-            {
-                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_hasProposedState, value))
-                {
-                    OnHasProposedStateChanging(value);
-                    OnHasProposedStateChanging(default, value);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.HasProposedState);
-                    _hasProposedState = value;
-                    OnHasProposedStateChanged(value);
-                    OnHasProposedStateChanged(default, value);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.HasProposedState);
-                }
-            }
-        }
-
-        /// <inheritdoc cref="_displayProposedRange"/>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-        public string DisplayProposedRange
-        {
-            get => _displayProposedRange;
-            set
-            {
-                if (!global::System.Collections.Generic.EqualityComparer<string>.Default.Equals(_displayProposedRange, value))
-                {
-                    OnDisplayProposedRangeChanging(value);
-                    OnDisplayProposedRangeChanging(default, value);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.DisplayProposedRange);
-                    _displayProposedRange = value;
-                    OnDisplayProposedRangeChanged(value);
-                    OnDisplayProposedRangeChanged(default, value);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.DisplayProposedRange);
                 }
             }
         }
@@ -332,179 +198,51 @@ namespace AetherVk.Logic.ViewModels
             }
         }
 
-        /// <inheritdoc cref="_modelEndEpoch"/>
+        /// <inheritdoc cref="_currentEpochTimeScaleWarningText"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-        public string ModelEndEpoch
+        public string? CurrentEpochTimeScaleWarningText
         {
-            get => _modelEndEpoch;
+            get => _currentEpochTimeScaleWarningText;
             set
             {
-                if (!global::System.Collections.Generic.EqualityComparer<string>.Default.Equals(_modelEndEpoch, value))
+                if (!global::System.Collections.Generic.EqualityComparer<string?>.Default.Equals(_currentEpochTimeScaleWarningText, value))
                 {
-                    OnModelEndEpochChanging(value);
-                    OnModelEndEpochChanging(default, value);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.ModelEndEpoch);
-                    _modelEndEpoch = value;
-                    OnModelEndEpochChanged(value);
-                    OnModelEndEpochChanged(default, value);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.ModelEndEpoch);
+                    OnCurrentEpochTimeScaleWarningTextChanging(value);
+                    OnCurrentEpochTimeScaleWarningTextChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.CurrentEpochTimeScaleWarningText);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.HasCurrentEpochTimeScaleWarning);
+                    _currentEpochTimeScaleWarningText = value;
+                    OnCurrentEpochTimeScaleWarningTextChanged(value);
+                    OnCurrentEpochTimeScaleWarningTextChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.CurrentEpochTimeScaleWarningText);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.HasCurrentEpochTimeScaleWarning);
                 }
             }
         }
 
-        /// <inheritdoc cref="_modelRotations"/>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-        public int ModelRotations
-        {
-            get => _modelRotations;
-            set
-            {
-                if (!global::System.Collections.Generic.EqualityComparer<int>.Default.Equals(_modelRotations, value))
-                {
-                    OnModelRotationsChanging(value);
-                    OnModelRotationsChanging(default, value);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.ModelRotations);
-                    _modelRotations = value;
-                    OnModelRotationsChanged(value);
-                    OnModelRotationsChanged(default, value);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.ModelRotations);
-                }
-            }
-        }
-
-        /// <inheritdoc cref="_dustLeadDays"/>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-        public double DustLeadDays
-        {
-            get => _dustLeadDays;
-            set
-            {
-                if (!global::System.Collections.Generic.EqualityComparer<double>.Default.Equals(_dustLeadDays, value))
-                {
-                    OnDustLeadDaysChanging(value);
-                    OnDustLeadDaysChanging(default, value);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.DustLeadDays);
-                    _dustLeadDays = value;
-                    OnDustLeadDaysChanged(value);
-                    OnDustLeadDaysChanged(default, value);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.DustLeadDays);
-                }
-            }
-        }
-
-        /// <summary>Executes the logic for when <see cref="StartEpoch"/> is changing.</summary>
+        /// <summary>Executes the logic for when <see cref="HasPendingRangeEdit"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="StartEpoch"/> is changed.</remarks>
+        /// <remarks>This method is invoked right before the value of <see cref="HasPendingRangeEdit"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnStartEpochChanging(string value);
-        /// <summary>Executes the logic for when <see cref="StartEpoch"/> is changing.</summary>
+        partial void OnHasPendingRangeEditChanging(bool value);
+        /// <summary>Executes the logic for when <see cref="HasPendingRangeEdit"/> is changing.</summary>
         /// <param name="oldValue">The previous property value that is being replaced.</param>
         /// <param name="newValue">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="StartEpoch"/> is changed.</remarks>
+        /// <remarks>This method is invoked right before the value of <see cref="HasPendingRangeEdit"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnStartEpochChanging(string? oldValue, string newValue);
-        /// <summary>Executes the logic for when <see cref="StartEpoch"/> just changed.</summary>
+        partial void OnHasPendingRangeEditChanging(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="HasPendingRangeEdit"/> just changed.</summary>
         /// <param name="value">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="StartEpoch"/> is changed.</remarks>
+        /// <remarks>This method is invoked right after the value of <see cref="HasPendingRangeEdit"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnStartEpochChanged(string value);
-        /// <summary>Executes the logic for when <see cref="StartEpoch"/> just changed.</summary>
+        partial void OnHasPendingRangeEditChanged(bool value);
+        /// <summary>Executes the logic for when <see cref="HasPendingRangeEdit"/> just changed.</summary>
         /// <param name="oldValue">The previous property value that was replaced.</param>
         /// <param name="newValue">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="StartEpoch"/> is changed.</remarks>
+        /// <remarks>This method is invoked right after the value of <see cref="HasPendingRangeEdit"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnStartEpochChanged(string? oldValue, string newValue);
-        /// <summary>Executes the logic for when <see cref="EndEpoch"/> is changing.</summary>
-        /// <param name="value">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="EndEpoch"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnEndEpochChanging(string value);
-        /// <summary>Executes the logic for when <see cref="EndEpoch"/> is changing.</summary>
-        /// <param name="oldValue">The previous property value that is being replaced.</param>
-        /// <param name="newValue">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="EndEpoch"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnEndEpochChanging(string? oldValue, string newValue);
-        /// <summary>Executes the logic for when <see cref="EndEpoch"/> just changed.</summary>
-        /// <param name="value">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="EndEpoch"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnEndEpochChanged(string value);
-        /// <summary>Executes the logic for when <see cref="EndEpoch"/> just changed.</summary>
-        /// <param name="oldValue">The previous property value that was replaced.</param>
-        /// <param name="newValue">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="EndEpoch"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnEndEpochChanged(string? oldValue, string newValue);
-        /// <summary>Executes the logic for when <see cref="IsProposedDifferentFromCommitted"/> is changing.</summary>
-        /// <param name="value">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="IsProposedDifferentFromCommitted"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnIsProposedDifferentFromCommittedChanging(bool value);
-        /// <summary>Executes the logic for when <see cref="IsProposedDifferentFromCommitted"/> is changing.</summary>
-        /// <param name="oldValue">The previous property value that is being replaced.</param>
-        /// <param name="newValue">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="IsProposedDifferentFromCommitted"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnIsProposedDifferentFromCommittedChanging(bool oldValue, bool newValue);
-        /// <summary>Executes the logic for when <see cref="IsProposedDifferentFromCommitted"/> just changed.</summary>
-        /// <param name="value">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="IsProposedDifferentFromCommitted"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnIsProposedDifferentFromCommittedChanged(bool value);
-        /// <summary>Executes the logic for when <see cref="IsProposedDifferentFromCommitted"/> just changed.</summary>
-        /// <param name="oldValue">The previous property value that was replaced.</param>
-        /// <param name="newValue">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="IsProposedDifferentFromCommitted"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnIsProposedDifferentFromCommittedChanged(bool oldValue, bool newValue);
-        /// <summary>Executes the logic for when <see cref="HasError"/> is changing.</summary>
-        /// <param name="value">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="HasError"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnHasErrorChanging(bool value);
-        /// <summary>Executes the logic for when <see cref="HasError"/> is changing.</summary>
-        /// <param name="oldValue">The previous property value that is being replaced.</param>
-        /// <param name="newValue">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="HasError"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnHasErrorChanging(bool oldValue, bool newValue);
-        /// <summary>Executes the logic for when <see cref="HasError"/> just changed.</summary>
-        /// <param name="value">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="HasError"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnHasErrorChanged(bool value);
-        /// <summary>Executes the logic for when <see cref="HasError"/> just changed.</summary>
-        /// <param name="oldValue">The previous property value that was replaced.</param>
-        /// <param name="newValue">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="HasError"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnHasErrorChanged(bool oldValue, bool newValue);
-        /// <summary>Executes the logic for when <see cref="ErrorMessage"/> is changing.</summary>
-        /// <param name="value">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="ErrorMessage"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnErrorMessageChanging(string value);
-        /// <summary>Executes the logic for when <see cref="ErrorMessage"/> is changing.</summary>
-        /// <param name="oldValue">The previous property value that is being replaced.</param>
-        /// <param name="newValue">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="ErrorMessage"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnErrorMessageChanging(string? oldValue, string newValue);
-        /// <summary>Executes the logic for when <see cref="ErrorMessage"/> just changed.</summary>
-        /// <param name="value">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="ErrorMessage"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnErrorMessageChanged(string value);
-        /// <summary>Executes the logic for when <see cref="ErrorMessage"/> just changed.</summary>
-        /// <param name="oldValue">The previous property value that was replaced.</param>
-        /// <param name="newValue">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="ErrorMessage"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnErrorMessageChanged(string? oldValue, string newValue);
+        partial void OnHasPendingRangeEditChanged(bool oldValue, bool newValue);
         /// <summary>Executes the logic for when <see cref="IsTimelineValid"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="IsTimelineValid"/> is changed.</remarks>
@@ -615,50 +353,6 @@ namespace AetherVk.Logic.ViewModels
         /// <remarks>This method is invoked right after the value of <see cref="HasCommittedState"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnHasCommittedStateChanged(bool oldValue, bool newValue);
-        /// <summary>Executes the logic for when <see cref="HasProposedState"/> is changing.</summary>
-        /// <param name="value">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="HasProposedState"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnHasProposedStateChanging(bool value);
-        /// <summary>Executes the logic for when <see cref="HasProposedState"/> is changing.</summary>
-        /// <param name="oldValue">The previous property value that is being replaced.</param>
-        /// <param name="newValue">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="HasProposedState"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnHasProposedStateChanging(bool oldValue, bool newValue);
-        /// <summary>Executes the logic for when <see cref="HasProposedState"/> just changed.</summary>
-        /// <param name="value">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="HasProposedState"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnHasProposedStateChanged(bool value);
-        /// <summary>Executes the logic for when <see cref="HasProposedState"/> just changed.</summary>
-        /// <param name="oldValue">The previous property value that was replaced.</param>
-        /// <param name="newValue">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="HasProposedState"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnHasProposedStateChanged(bool oldValue, bool newValue);
-        /// <summary>Executes the logic for when <see cref="DisplayProposedRange"/> is changing.</summary>
-        /// <param name="value">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="DisplayProposedRange"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnDisplayProposedRangeChanging(string value);
-        /// <summary>Executes the logic for when <see cref="DisplayProposedRange"/> is changing.</summary>
-        /// <param name="oldValue">The previous property value that is being replaced.</param>
-        /// <param name="newValue">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="DisplayProposedRange"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnDisplayProposedRangeChanging(string? oldValue, string newValue);
-        /// <summary>Executes the logic for when <see cref="DisplayProposedRange"/> just changed.</summary>
-        /// <param name="value">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="DisplayProposedRange"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnDisplayProposedRangeChanged(string value);
-        /// <summary>Executes the logic for when <see cref="DisplayProposedRange"/> just changed.</summary>
-        /// <param name="oldValue">The previous property value that was replaced.</param>
-        /// <param name="newValue">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="DisplayProposedRange"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnDisplayProposedRangeChanged(string? oldValue, string newValue);
         /// <summary>Executes the logic for when <see cref="DisplayCommittedRange"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="DisplayCommittedRange"/> is changed.</remarks>
@@ -725,71 +419,27 @@ namespace AetherVk.Logic.ViewModels
         /// <remarks>This method is invoked right after the value of <see cref="CurrentEpochError"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnCurrentEpochErrorChanged(string? oldValue, string newValue);
-        /// <summary>Executes the logic for when <see cref="ModelEndEpoch"/> is changing.</summary>
+        /// <summary>Executes the logic for when <see cref="CurrentEpochTimeScaleWarningText"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="ModelEndEpoch"/> is changed.</remarks>
+        /// <remarks>This method is invoked right before the value of <see cref="CurrentEpochTimeScaleWarningText"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnModelEndEpochChanging(string value);
-        /// <summary>Executes the logic for when <see cref="ModelEndEpoch"/> is changing.</summary>
+        partial void OnCurrentEpochTimeScaleWarningTextChanging(string? value);
+        /// <summary>Executes the logic for when <see cref="CurrentEpochTimeScaleWarningText"/> is changing.</summary>
         /// <param name="oldValue">The previous property value that is being replaced.</param>
         /// <param name="newValue">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="ModelEndEpoch"/> is changed.</remarks>
+        /// <remarks>This method is invoked right before the value of <see cref="CurrentEpochTimeScaleWarningText"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnModelEndEpochChanging(string? oldValue, string newValue);
-        /// <summary>Executes the logic for when <see cref="ModelEndEpoch"/> just changed.</summary>
+        partial void OnCurrentEpochTimeScaleWarningTextChanging(string? oldValue, string? newValue);
+        /// <summary>Executes the logic for when <see cref="CurrentEpochTimeScaleWarningText"/> just changed.</summary>
         /// <param name="value">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="ModelEndEpoch"/> is changed.</remarks>
+        /// <remarks>This method is invoked right after the value of <see cref="CurrentEpochTimeScaleWarningText"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnModelEndEpochChanged(string value);
-        /// <summary>Executes the logic for when <see cref="ModelEndEpoch"/> just changed.</summary>
+        partial void OnCurrentEpochTimeScaleWarningTextChanged(string? value);
+        /// <summary>Executes the logic for when <see cref="CurrentEpochTimeScaleWarningText"/> just changed.</summary>
         /// <param name="oldValue">The previous property value that was replaced.</param>
         /// <param name="newValue">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="ModelEndEpoch"/> is changed.</remarks>
+        /// <remarks>This method is invoked right after the value of <see cref="CurrentEpochTimeScaleWarningText"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnModelEndEpochChanged(string? oldValue, string newValue);
-        /// <summary>Executes the logic for when <see cref="ModelRotations"/> is changing.</summary>
-        /// <param name="value">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="ModelRotations"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnModelRotationsChanging(int value);
-        /// <summary>Executes the logic for when <see cref="ModelRotations"/> is changing.</summary>
-        /// <param name="oldValue">The previous property value that is being replaced.</param>
-        /// <param name="newValue">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="ModelRotations"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnModelRotationsChanging(int oldValue, int newValue);
-        /// <summary>Executes the logic for when <see cref="ModelRotations"/> just changed.</summary>
-        /// <param name="value">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="ModelRotations"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnModelRotationsChanged(int value);
-        /// <summary>Executes the logic for when <see cref="ModelRotations"/> just changed.</summary>
-        /// <param name="oldValue">The previous property value that was replaced.</param>
-        /// <param name="newValue">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="ModelRotations"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnModelRotationsChanged(int oldValue, int newValue);
-        /// <summary>Executes the logic for when <see cref="DustLeadDays"/> is changing.</summary>
-        /// <param name="value">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="DustLeadDays"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnDustLeadDaysChanging(double value);
-        /// <summary>Executes the logic for when <see cref="DustLeadDays"/> is changing.</summary>
-        /// <param name="oldValue">The previous property value that is being replaced.</param>
-        /// <param name="newValue">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="DustLeadDays"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnDustLeadDaysChanging(double oldValue, double newValue);
-        /// <summary>Executes the logic for when <see cref="DustLeadDays"/> just changed.</summary>
-        /// <param name="value">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="DustLeadDays"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnDustLeadDaysChanged(double value);
-        /// <summary>Executes the logic for when <see cref="DustLeadDays"/> just changed.</summary>
-        /// <param name="oldValue">The previous property value that was replaced.</param>
-        /// <param name="newValue">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="DustLeadDays"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnDustLeadDaysChanged(double oldValue, double newValue);
+        partial void OnCurrentEpochTimeScaleWarningTextChanged(string? oldValue, string? newValue);
     }
 }

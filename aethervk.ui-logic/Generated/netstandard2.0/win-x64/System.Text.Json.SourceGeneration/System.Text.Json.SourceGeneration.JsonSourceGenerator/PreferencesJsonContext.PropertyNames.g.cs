@@ -26,9 +26,11 @@ namespace AetherVk.Logic.Services
         private static readonly global::System.Text.Json.JsonEncodedText PropName_dust_propagate_detail = global::System.Text.Json.JsonEncodedText.Encode("dust_propagate_detail");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_dust_haze_detail = global::System.Text.Json.JsonEncodedText.Encode("dust_haze_detail");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_dust_reuse_px = global::System.Text.Json.JsonEncodedText.Encode("dust_reuse_px");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_dust_play_preview = global::System.Text.Json.JsonEncodedText.Encode("dust_play_preview");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_particle_quality = global::System.Text.Json.JsonEncodedText.Encode("particle_quality");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_hud_camera_expanded = global::System.Text.Json.JsonEncodedText.Encode("hud_camera_expanded");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_hud_orbit_expanded = global::System.Text.Json.JsonEncodedText.Encode("hud_orbit_expanded");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_show_diagnostic_panels = global::System.Text.Json.JsonEncodedText.Encode("show_diagnostic_panels");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_time_scale = global::System.Text.Json.JsonEncodedText.Encode("time_scale");
     }
 }

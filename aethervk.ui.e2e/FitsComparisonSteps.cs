@@ -252,11 +252,18 @@ public static partial class FitsComparisonSteps
   {
     var vp = s.Find("ViewportHost");
     // the HUD is in the overlay window, a separate top-level window: search the desktop
-    var hud = s.Desktop.FindElementsByAccessibilityId("EarthObserverStatus").FirstOrDefault()?.Text ?? string.Empty;
-    var m = ScreenRegex().Match(hud.Replace('−', '-'));
+    var hud = s.Desktop.FindElementsByAccessibilityId("EarthObserverStatus").FirstOrDefault();
+    return CometScreenPx(hud?.Text, vp.Location, vp.Size);
+  }
+
+  /// <summary><see cref="CometScreenPx(AppSession)"/> from a HUD text already read and the
+  /// viewport's place (a loop that cannot afford the desktop-wide search on every read).</summary>
+  public static (double X, double Y) CometScreenPx(string? hud, System.Drawing.Point vp, System.Drawing.Size size)
+  {
+    var m = ScreenRegex().Match((hud ?? string.Empty).Replace('−', '-'));
     if (m.Success)
-      return (vp.Location.X + Ui.ParseNum(m.Groups["x"].Value), vp.Location.Y + Ui.ParseNum(m.Groups["y"].Value));
-    return (vp.Location.X + vp.Size.Width / 2.0, vp.Location.Y + vp.Size.Height / 2.0);
+      return (vp.X + Ui.ParseNum(m.Groups["x"].Value), vp.Y + Ui.ParseNum(m.Groups["y"].Value));
+    return (vp.X + size.Width / 2.0, vp.Y + size.Height / 2.0);
   }
 
   // ── helpers ──
@@ -266,9 +273,23 @@ public static partial class FitsComparisonSteps
   {
     s.SelectTab("SettingsTab");
     s.Expand("BillboardsSection", "CreateBillboardButton");
-    var box = At(s, "BillboardVisible", row);
-    if (box.Selected != visible)
+    // the pane's layout may still move under the click (the FITS header table, the stretch panel
+    // after "Set up comparison"): scroll and click again, up to 3 times
+    for (int attempt = 0; attempt < 3; attempt++)
+    {
+      var box = At(s, "BillboardVisible", row);
+      if (box.Selected == visible)
+        break;
       box.RealClick();
+      try
+      {
+        Ui.WaitUntil(() => At(s, "BillboardVisible", row).Selected == visible, TimeSpan.FromSeconds(5));
+        break;
+      }
+      catch (TimeoutException)
+      {
+      }
+    }
     Ui.WaitUntil(() => At(s, "BillboardVisible", row).Selected == visible,
       what: $"billboard row {row} {(visible ? "shown" : "hidden")}");
   }

@@ -16,14 +16,31 @@ public static partial class ReviewSave
   public const string FixtureName = "review_67p_2021-12";
 
   /// <summary>SpeedPicker items, in <c>TimelineTabViewModel.AvailableSpeeds</c> order: 10 s/s, 1 min/s, 1 h/s, 3 h/s, 1 d/s.</summary>
+  public const int TenSecondsPerSecondIndex = 0;
+
   public const int OneHourPerSecondIndex = 2;
 
   /// <summary>The item after <see cref="OneHourPerSecondIndex"/>: 3 h/s.</summary>
   public const int ThreeHoursPerSecondIndex = 3;
 
+  public const int OneDayPerSecondIndex = 4;
+
   /// <summary>
-  /// Two epoch boxes agree within this: the committed range is shown as committed (in the save's
-  /// time scale), the clock in the chosen one, and TDB and UTC differ by 69.2 s.
+  /// The committed start, 2021-12-12 00:00 TDB, as the epoch boxes show it: in UTC through the
+  /// leap-second kernel (TDB − UTC = 69.184 s in 2021, plus the ≤ 1.7 ms periodic terms).
+  /// </summary>
+  public static readonly DateTime CommittedStartUtc = new DateTime(2021, 12, 12).AddSeconds(-69.184);
+
+  /// <summary>The committed end, 2021-12-28 00:00 TDB, in UTC.</summary>
+  public static readonly DateTime CommittedEndUtc = new DateTime(2021, 12, 28).AddSeconds(-69.184);
+
+  /// <summary>An epoch box shows <paramref name="expected"/> to the second (the boxes print whole seconds).</summary>
+  public static bool Shows(string text, DateTime expected) =>
+    (ParseEpoch(text) - expected).Duration() <= TimeSpan.FromSeconds(1);
+
+  /// <summary>
+  /// Two epoch boxes agree within this: a box may show its epoch in TDB or in UTC (the time scale
+  /// picker), and the two differ by 69.2 s.
   /// </summary>
   public static readonly TimeSpan EpochTolerance = TimeSpan.FromSeconds(70);
 
@@ -53,13 +70,16 @@ public static partial class ReviewSave
   }
 
   /// <summary>Low particle quality (a GTX 1070 class GPU). The slider writes the preferences.</summary>
-  public static void SetLowQuality(AppSession s)
+  public static void SetLowQuality(AppSession s) => SetQuality(s, 2, "Low");
+
+  /// <summary>The particle quality preset <paramref name="level"/> (1 Lowest … 5 Ultra), named <paramref name="label"/>.</summary>
+  public static void SetQuality(AppSession s, int level, string label)
   {
     s.SelectTab("SettingsTab");
     s.Expand("ParticleRenderingSection", "ParticleQualitySlider");
-    s.SetRange("ParticleQualitySlider", 2, step: 1, tolerance: 0);
-    Ui.WaitUntil(() => s.Find("ParticleQualityLabel").Text.Contains("Low", StringComparison.Ordinal),
-      TimeSpan.FromSeconds(10), "the Low preset");
+    s.SetRange("ParticleQualitySlider", level, step: 1, tolerance: 0);
+    Ui.WaitUntil(() => s.Find("ParticleQualityLabel").Text.Trim() == label,
+      TimeSpan.FromSeconds(10), $"the {label} preset");
   }
 
   /// <summary>Hides the save's FITS billboard: its window sits over the comet and would be measured instead of the dust.</summary>
@@ -176,6 +196,9 @@ public abstract class ReviewSaveFixture : IDisposable
 
   protected virtual bool LowQuality => false;
 
+  /// <summary>Launch with the app's once-a-second <c>[perf]</c> lines (<see cref="PerfLog"/>).</summary>
+  protected virtual bool PerfLog => false;
+
   public string Artifacts { get; private set; } = string.Empty;
 
   public string SaveDir { get; private set; } = string.Empty;
@@ -185,11 +208,15 @@ public abstract class ReviewSaveFixture : IDisposable
     if (_failure is not null)
       throw new InvalidOperationException("the shared session on the reviewer's save did not open", _failure);
     if (_session is not null)
+    {
+      // a session closed under an earlier test fails the rest at once, with the reason
+      _session.EnsureAlive("between the tests of the shared session");
       return _session;
+    }
     if (_launches == 0)
       (Artifacts, SaveDir) = ReviewSave.Prepare(ArtifactsName);
     _launches++;
-    var s = AppSession.Launch(Path.Combine(Artifacts, $"app-{_launches}.log"), diagnosticPanels: false);
+    var s = AppSession.Launch(Path.Combine(Artifacts, $"app-{_launches}.log"), diagnosticPanels: false, perfLog: PerfLog);
     try
     {
       output.WriteLine($"{DateTime.Now:HH:mm:ss} open the reviewer's save");

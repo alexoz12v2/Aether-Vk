@@ -32,6 +32,60 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
   [ObservableProperty]
   private bool _isRunningToEnd;
 
+  /// <summary>The dust is drawn in preview (playing, or 2 s after a pause or a seek): the badge
+  /// with "Render full".</summary>
+  [ObservableProperty]
+  private bool _isDustPreview;
+
+  [ObservableProperty]
+  private string _dustPreviewText = "Preview · flow marks (visual aid)";
+
+  [ObservableProperty]
+  private string _renderFullText = "Render full";
+
+  /// <summary>Paused or seeked, still in the preview: the filling circle beside "Render full"
+  /// shows when the full render starts.</summary>
+  [ObservableProperty]
+  private bool _isDustHold;
+
+  /// <summary>The hold's filling circle, in degrees (0 to 360: the full render starts at 360).</summary>
+  [ObservableProperty]
+  private double _dustHoldSweep;
+
+  /// <summary>The full render is drawing (frames of up to a second each): the spinning badge.</summary>
+  [ObservableProperty]
+  private bool _isDustRendering;
+
+  [ObservableProperty]
+  private string _dustRenderingText = "Rendering the full image…";
+
+  /// <summary>Ends the preview hold at once: the full render starts.</summary>
+  [RelayCommand]
+  private void RenderFull()
+  {
+    _runtimeService.DustRenderFull();
+    IsDustPreview = false;
+    IsDustHold = false;
+  }
+
+  /// <summary>The badge's state from the dust view's phase (null: no scene, nothing shown).</summary>
+  internal void ApplyDustRenderState((DustRenderPhase Phase, float HoldProgress)? state)
+  {
+    var phase = state?.Phase ?? DustRenderPhase.Settled;
+    bool preview = phase is DustRenderPhase.Playing or DustRenderPhase.Hold;
+    if (preview != IsDustPreview)
+      IsDustPreview = preview;
+    bool hold = phase == DustRenderPhase.Hold;
+    if (hold != IsDustHold)
+      IsDustHold = hold;
+    double sweep = hold ? 360.0 * Math.Max(0f, Math.Min(1f, state!.Value.HoldProgress)) : 0.0;
+    if (sweep != DustHoldSweep)
+      DustHoldSweep = sweep;
+    bool rendering = phase == DustRenderPhase.Rendering;
+    if (rendering != IsDustRendering)
+      IsDustRendering = rendering;
+  }
+
   [ObservableProperty]
   private string _jetPreviewSizeString = string.Empty;
 
@@ -183,6 +237,18 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
       () => (_cameraService.GetCometScreenPosition(), _cameraService.ViewportWidthPx, _cameraService.ViewportHeightPx),
       translationService);
     CometOrbitDebug   = new CometOrbitDebugViewModel(preferences);
+    if (translationService is not null)
+    {
+      translationService.GetStringObservable("Overlay_DustPreview")
+        .Subscribe(s => _dispatcher.Dispatch(() => DustPreviewText = s))
+        .AddDisposableTo(_disposables);
+      translationService.GetStringObservable("Overlay_RenderFull")
+        .Subscribe(s => _dispatcher.Dispatch(() => RenderFullText = s))
+        .AddDisposableTo(_disposables);
+      translationService.GetStringObservable("Overlay_DustRendering")
+        .Subscribe(s => _dispatcher.Dispatch(() => DustRenderingText = s))
+        .AddDisposableTo(_disposables);
+    }
     _disposables.Add(CameraMatrixDebug);
     _disposables.Add(CometOrbitDebug);
 
@@ -207,8 +273,11 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
       .Interval(TimeSpan.FromMilliseconds(100))
       .Subscribe(_ =>
       {
+        // on the timer's thread: the query takes the scene lock, which a frame build holds
+        var dustState = _runtimeService.DustRenderState();
         _dispatcher.Dispatch(() =>
         {
+          ApplyDustRenderState(dustState);
           var targetId = new SessionId(typeof(TimelineSession), _viewportVm.SessionId.Number);
           var session = _timelineSessionService.GetSession(targetId);
           if (session != null && session.CurrentEpochString != CurrentEpochString)

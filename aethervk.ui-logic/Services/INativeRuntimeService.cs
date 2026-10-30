@@ -326,6 +326,24 @@ public interface INativeRuntimeService : IDisposable
   /// Visual only.</summary>
   bool SetDustReuseTolerance(int px);
 
+  /// <summary>Dust "Playback preview quality": 0 Off (the full render while playing too), 1 Smooth,
+  /// 2 Balanced (the default), 3 Quality. While playing, and for 2 s after a pause or a seek, the
+  /// dust is drawn coarser, without temporal reuse and with the flow marks moving out of the
+  /// nucleus (a labelled visual aid); the full render then starts. Visual only.</summary>
+  bool SetDustPlayPreview(int level);
+
+  /// <summary>"Render full": ends the preview hold after a pause or a seek at once.</summary>
+  bool DustRenderFull();
+
+  /// <summary>Whether the dust is drawn in preview now (playing, or inside the hold after a pause
+  /// or a seek); null without a scene. Not from the UI thread: it takes the scene lock.</summary>
+  bool? DustInPreview();
+
+  /// <summary>What the dust view is doing now (the viewport's badge) and, in the hold after a
+  /// pause or a seek, the fraction of it elapsed (0 to 1; the full render starts at 1); null
+  /// without a scene. Not from the UI thread: it takes the scene lock.</summary>
+  (DustRenderPhase Phase, float HoldProgress)? DustRenderState();
+
   /// <summary>Restarts the adaptive dust quality feedback of every view cold from the next frame,
   /// so it is measured on the current, settled view. Called once a reopened save has applied its
   /// cameras: the feedback otherwise keeps what the restore's transient frames measured (coarse,
@@ -370,9 +388,9 @@ public interface INativeRuntimeService : IDisposable
   /// <summary>
   /// Queries the current exact epoch of the active simulation scene.
   /// </summary>
-  /// <param name="centuries">Output TAI centuries</param>
-  /// <param name="nanoseconds">Output TAI nanoseconds</param>
-  /// <returns>True if the simulation clock was successfully retrieved</returns>
+  /// <param name="centuries">Output TDB centuries past J2000 TDB</param>
+  /// <param name="nanoseconds">Output TDB nanoseconds</param>
+  /// <returns>True if the simulation clock was successfully retrieved (false without the scene)</returns>
   bool GetSimulationClock(out short centuries, out ulong nanoseconds);
 
   // ==========================================
@@ -610,6 +628,10 @@ public interface INativeRuntimeService : IDisposable
   /// What a view's dust frame cost on the GPU, per pass (ms, NaN = not measured), as measured a
   /// few frames ago: null before the first, without a view or without GPU timestamps.
   DustGpuTimings? DustGpuTimings(ulong presentationEngineId);
+
+  /// The timings of the last frame of a view that drew (not a reused image): what the settled view
+  /// cost when last drawn. Null before the first, without a view or without GPU timestamps.
+  DustGpuTimings? DustGpuTimingsDrawn(ulong presentationEngineId);
 
   /// Camera world position (AU) and rotation, for the overlay position tracker (all builds).
   bool DebugCameraState(
@@ -1228,6 +1250,14 @@ internal unsafe static class PInvokeAetherVkCore
   );
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.I1)]
+  public static extern bool avkSimulationContext_dustGpuTimingsDrawn(
+    nint ctx,
+    ulong peHandle,
+    CDustGpuTimingsDTO* outTimings
+  );
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   public static extern uint avkSimulationContext_dustStats(
     nint ctx,
     ulong sceneId,
@@ -1454,6 +1484,20 @@ internal unsafe static class PInvokeAetherVkCore
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   [return: MarshalAs(UnmanagedType.U1)]
   public static extern bool avkSimulationContext_setDustReuseTolerance(nint ctx, ulong sceneId, uint px);
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.U1)]
+  public static extern bool avkSimulationContext_setDustPlayPreview(nint ctx, ulong sceneId, uint level);
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.U1)]
+  public static extern bool avkSimulationContext_dustRenderFull(nint ctx, ulong sceneId);
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern int avkSimulationContext_dustInPreview(nint ctx, ulong sceneId);
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern int avkSimulationContext_dustRenderPhase(nint ctx, ulong sceneId, out float holdProgress);
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   [return: MarshalAs(UnmanagedType.U1)]
@@ -2632,6 +2676,32 @@ public sealed class NativeRuntimeService : INativeRuntimeService
   public bool SetDustReuseTolerance(int px) =>
     _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_setDustReuseTolerance(_ctx, _sceneId, (uint)Math.Max(px, 0));
 
+  public bool SetDustPlayPreview(int level) =>
+    _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_setDustPlayPreview(_ctx, _sceneId, (uint)Math.Max(level, 0));
+
+  public bool DustRenderFull() =>
+    _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_dustRenderFull(_ctx, _sceneId);
+
+  public bool? DustInPreview()
+  {
+    if (_ctx == 0)
+      return null;
+    return PInvokeAetherVkCore.avkSimulationContext_dustInPreview(_ctx, _sceneId) switch
+    {
+      1 => true,
+      0 => false,
+      _ => null,
+    };
+  }
+
+  public (DustRenderPhase Phase, float HoldProgress)? DustRenderState()
+  {
+    if (_ctx == 0)
+      return null;
+    int code = PInvokeAetherVkCore.avkSimulationContext_dustRenderPhase(_ctx, _sceneId, out var progress);
+    return code is >= 0 and <= 3 ? ((DustRenderPhase)code, progress) : null;
+  }
+
   public bool ResetDustViewFeedback() =>
     _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_resetDustViewFeedback(_ctx, _sceneId);
 
@@ -3202,9 +3272,22 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     CDustGpuTimingsDTO t;
     if (!PInvokeAetherVkCore.avkSimulationContext_dustGpuTimings(_ctx, presentationEngineId, &t))
       return null;
-    return new DustGpuTimings(
-      t.PropagateMs, t.SplatMs, t.MeasureMs, t.CompositeMs, t.TotalMs, t.TotalEmaMs, t.Frame, t.Width, t.Height);
+    return ToTimings(t);
   }
+
+  public unsafe DustGpuTimings? DustGpuTimingsDrawn(ulong presentationEngineId)
+  {
+    if (_ctx == 0)
+      return null;
+    CDustGpuTimingsDTO t;
+    if (!PInvokeAetherVkCore.avkSimulationContext_dustGpuTimingsDrawn(_ctx, presentationEngineId, &t))
+      return null;
+    return ToTimings(t);
+  }
+
+  private static DustGpuTimings ToTimings(in CDustGpuTimingsDTO t) => new(
+    t.PropagateMs, t.SplatMs, t.MeasureMs, t.CompositeMs, t.TotalMs, t.TotalEmaMs, t.Frame, t.Width, t.Height, t.Stride,
+    t.SpecksMs, t.SplatOnlyMs, t.QueueMs);
 
   public unsafe System.Collections.Generic.IReadOnlyList<DustTierStats> DustStats()
   {
@@ -3960,7 +4043,7 @@ public sealed record DustExposure(
   bool Fixed
 );
 
-/// <summary>Mirrors Rust <c>CDustGpuTimings</c> (ffi.rs), 64 bytes.</summary>
+/// <summary>Mirrors Rust <c>CDustGpuTimings</c> (ffi.rs), 96 bytes.</summary>
 [StructLayout(LayoutKind.Sequential)]
 internal readonly struct CDustGpuTimingsDTO
 {
@@ -3973,11 +4056,18 @@ internal readonly struct CDustGpuTimingsDTO
   public readonly ulong Frame;
   public readonly uint Width;
   public readonly uint Height;
+  public readonly uint Stride;
+  public readonly uint Reserved;
+  public readonly double SpecksMs;
+  public readonly double SplatOnlyMs;
+  public readonly double QueueMs;
 }
 
 /// <summary>A view's dust frame on the GPU, per pass (ms; NaN = that pass was not measured):
 /// the propagates, the splats and specks, the measurement and readback copy, the composite, their
-/// total and its exponential average; the dust frame number and the pyramid's size (pixels).</summary>
+/// total and its exponential average; the dust frame number, the pyramid's size (pixels), the
+/// preview's cluster stride the frame was drawn with (1: every cluster); of the splat pass the
+/// specks and the splats alone, and the packet queue's draw after them.</summary>
 public sealed record DustGpuTimings(
   double PropagateMs,
   double SplatMs,
@@ -3987,7 +4077,11 @@ public sealed record DustGpuTimings(
   double TotalEmaMs,
   ulong Frame,
   uint Width,
-  uint Height
+  uint Height,
+  uint Stride,
+  double SpecksMs = double.NaN,
+  double SplatOnlyMs = double.NaN,
+  double QueueMs = double.NaN
 );
 
 /// <summary>Mirrors Rust <c>CDustTierStats</c> (ffi.rs), 56 bytes.</summary>
@@ -4191,4 +4285,17 @@ public sealed record SkyImageInfo(
     c.CrvalRaDeg,
     c.CrvalDecDeg,
     c.Flags);
+}
+
+/// <summary>What the dust view is doing (<c>avkSimulationContext_dustRenderPhase</c>).</summary>
+public enum DustRenderPhase
+{
+  /// <summary>The full render is settled.</summary>
+  Settled = 0,
+  /// <summary>The simulation runs: the preview.</summary>
+  Playing = 1,
+  /// <summary>Paused or seeked, still in the preview: the full render starts when the hold ends.</summary>
+  Hold = 2,
+  /// <summary>The full render (and its refinement) is drawing.</summary>
+  Rendering = 3,
 }

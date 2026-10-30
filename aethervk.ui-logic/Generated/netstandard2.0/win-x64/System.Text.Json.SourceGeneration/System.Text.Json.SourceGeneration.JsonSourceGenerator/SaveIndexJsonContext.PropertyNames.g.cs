@@ -36,6 +36,9 @@ namespace AetherVk.Logic.SaveFile
         private static readonly global::System.Text.Json.JsonEncodedText PropName_fits_stretch = global::System.Text.Json.JsonEncodedText.Encode("fits_stretch");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_image_nucleus_x = global::System.Text.Json.JsonEncodedText.Encode("image_nucleus_x");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_image_nucleus_y = global::System.Text.Json.JsonEncodedText.Encode("image_nucleus_y");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_viewport_offset_x = global::System.Text.Json.JsonEncodedText.Encode("viewport_offset_x");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_viewport_offset_y = global::System.Text.Json.JsonEncodedText.Encode("viewport_offset_y");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_viewport_scaling = global::System.Text.Json.JsonEncodedText.Encode("viewport_scaling");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_transform = global::System.Text.Json.JsonEncodedText.Encode("transform");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_projection = global::System.Text.Json.JsonEncodedText.Encode("projection");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_mode = global::System.Text.Json.JsonEncodedText.Encode("mode");
@@ -159,6 +162,7 @@ namespace AetherVk.Logic.SaveFile
         private static readonly global::System.Text.Json.JsonEncodedText PropName_committed_end = global::System.Text.Json.JsonEncodedText.Encode("committed_end");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_proposed_start = global::System.Text.Json.JsonEncodedText.Encode("proposed_start");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_proposed_end = global::System.Text.Json.JsonEncodedText.Encode("proposed_end");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_proposed_scale = global::System.Text.Json.JsonEncodedText.Encode("proposed_scale");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_current_epoch = global::System.Text.Json.JsonEncodedText.Encode("current_epoch");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_start_paused = global::System.Text.Json.JsonEncodedText.Encode("start_paused");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_speed = global::System.Text.Json.JsonEncodedText.Encode("speed");

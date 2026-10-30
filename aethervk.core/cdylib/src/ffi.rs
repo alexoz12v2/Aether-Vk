@@ -1065,6 +1065,92 @@ pub unsafe extern "C" fn avkSimulationContext_setDustReuseTolerance(
   ctx_ref.set_dust_reuse_px(scene_id, px).is_some()
 }
 
+/// Sets the "Playback preview quality" of `scene_id` (0 Off, 1 Smooth, 2 Balanced, 3 Quality;
+/// out of range → Balanced, `SimulationContext::set_dust_play_preview`). Returns false without
+/// the scene.
+///
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setDustPlayPreview(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  level: u32,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  ctx_ref.set_dust_play_preview(scene_id, level).is_some()
+}
+
+/// "Render full": ends the dust preview hold of `scene_id` after a pause or a seek, so the next
+/// frame is the full render (`SimulationContext::dust_render_full`). False without the scene.
+///
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_dustRenderFull(ctx: *mut SimulationContext, scene_id: u64) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  ctx_ref.dust_render_full(scene_id).is_some()
+}
+
+/// Whether the dust of `scene_id` is drawn in preview now (playing, or inside the hold after a
+/// pause or a seek): 1 preview, 0 full render, -1 without the scene.
+///
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_dustInPreview(ctx: *mut SimulationContext, scene_id: u64) -> i32 {
+  if ctx.is_null() {
+    return -1;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  match ctx_ref.dust_in_preview(scene_id) {
+    Some(true) => 1,
+    Some(false) => 0,
+    None => -1,
+  }
+}
+
+/// What the dust view of `scene_id` is doing now (`SimulationContext::dust_render_phase`, the
+/// viewport's badge): 0 settled, 1 playing (the preview), 2 the hold after a pause or a seek
+/// (`*hold_progress` = the fraction elapsed, 0 to 1; the full render starts at 1), 3 the full
+/// render drawing; -1 without the scene. `hold_progress` may be null.
+///
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_dustRenderPhase(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  hold_progress: *mut f32,
+) -> i32 {
+  use aethervk_core_rlib::scene::dust::play_quality::DustRenderPhase;
+  if ctx.is_null() {
+    return -1;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let (code, progress) = match ctx_ref.dust_render_phase(scene_id) {
+    None => (-1, 0.0),
+    Some(DustRenderPhase::Settled) => (0, 0.0),
+    Some(DustRenderPhase::Playing) => (1, 0.0),
+    Some(DustRenderPhase::Hold(f)) => (2, f),
+    Some(DustRenderPhase::Rendering) => (3, 0.0),
+  };
+  if !hold_progress.is_null() {
+    unsafe { *hold_progress = progress };
+  }
+  code
+}
+
 /// Restarts the adaptive dust quality feedback of every view of `scene_id` cold from the next
 /// rendered frame (`SimulationContext::reset_dust_view_feedback`): for a view that settled after
 /// a discontinuity (a reopened save, once its cameras are applied). Returns false without the
@@ -1220,8 +1306,16 @@ pub struct CDustGpuTimings {
   /// the dust pyramid's size (the view's pixels)
   pub width: u32,
   pub height: u32,
+  /// the preview's cluster stride the frame was drawn with (1: every cluster)
+  pub stride: u32,
+  pub _reserved: u32,
+  /// of `splat_ms`: the speck passes and the splats alone
+  pub specks_ms: f64,
+  pub splat_only_ms: f64,
+  /// the packet queue's draw (after the splats; `NaN` when not recorded)
+  pub queue_ms: f64,
 }
-const _: () = assert!(core::mem::size_of::<CDustGpuTimings>() == 64);
+const _: () = assert!(core::mem::size_of::<CDustGpuTimings>() == 96);
 
 /// The last measured dust GPU timings of presentation engine `pe_id`; false before the first,
 /// without a view or without GPU timestamp support. Release builds too; cheap (no queue wait).
@@ -1241,8 +1335,35 @@ pub unsafe extern "C" fn avkSimulationContext_dustGpuTimings(
   let Some(t) = ctx_ref.dust_gpu_timings(gpu::PresentationEngineHandle(pe_id)) else {
     return false;
   };
-  unsafe {
-    *out = CDustGpuTimings {
+  unsafe { *out = CDustGpuTimings::from(t) };
+  true
+}
+
+/// The dust GPU timings of the last frame of `pe_id` that drew (not a reused image): what the
+/// settled view cost when last drawn. False before the first, without a view or timestamps.
+///
+/// # Safety
+/// FFI Contract: `out` points to a writable `CDustGpuTimings`
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn avkSimulationContext_dustGpuTimingsDrawn(
+  ctx: *mut SimulationContext,
+  pe_id: u64,
+  out: *mut CDustGpuTimings,
+) -> bool {
+  if ctx.is_null() || out.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let Some(t) = ctx_ref.dust_gpu_timings_drawn(gpu::PresentationEngineHandle(pe_id)) else {
+    return false;
+  };
+  unsafe { *out = CDustGpuTimings::from(t) };
+  true
+}
+
+impl From<aethervk_core_rlib::gpu_backends::vulkan::device::dust::DustGpuTimings> for CDustGpuTimings {
+  fn from(t: aethervk_core_rlib::gpu_backends::vulkan::device::dust::DustGpuTimings) -> Self {
+    Self {
       propagate_ms: t.propagate_ms,
       splat_ms: t.splat_ms,
       measure_ms: t.measure_ms,
@@ -1252,9 +1373,13 @@ pub unsafe extern "C" fn avkSimulationContext_dustGpuTimings(
       frame: t.frame,
       width: t.width,
       height: t.height,
-    };
+      stride: t.stride,
+      _reserved: 0,
+      specks_ms: t.specks_ms,
+      splat_only_ms: t.splat_only_ms,
+      queue_ms: t.queue_ms,
+    }
   }
-  true
 }
 
 /// Writes up to `max` dust tier summaries of `scene_id` into `out`; returns how many tiers exist.
@@ -2976,21 +3101,21 @@ pub unsafe extern "C" fn avkSimulationContext_removeScreenSpaceBillboard(
 pub unsafe extern "C" fn avkSimulationContext_setEpochRange(
   ctx: *mut SimulationContext,
   scene_id: u64,
-  tai: *const CTimeRange,
+  tdb: *const CTimeRange,
 ) -> bool {
   // null check
-  if ctx.is_null() || tai.is_null() {
+  if ctx.is_null() || tdb.is_null() {
     return false;
   }
   let ctx_ref = unsafe { &*ctx };
-  let tai_ref = unsafe { tai.as_ref().unwrap_unchecked() };
+  let tdb_ref = unsafe { tdb.as_ref().unwrap_unchecked() };
   let start = anise::time::Epoch::from_tdb_duration(anise::time::Duration::from_parts(
-    tai_ref.centuries[0],
-    tai_ref.nanoseconds[0],
+    tdb_ref.centuries[0],
+    tdb_ref.nanoseconds[0],
   ));
   let end = anise::time::Epoch::from_tdb_duration(anise::time::Duration::from_parts(
-    tai_ref.centuries[1],
-    tai_ref.nanoseconds[1],
+    tdb_ref.centuries[1],
+    tdb_ref.nanoseconds[1],
   ));
   // the only kind of error cdylib logs is the one from sending
   if let Err(e) = ctx_ref.threads.logic_thread.tx().try_send(LogicCommand::SetEpochRange {
@@ -3010,7 +3135,7 @@ pub unsafe extern "C" fn avkSimulationContext_setEpochRange(
 /// Check whether the loaded almanac SPK data covers the given epoch interval
 /// for Earth (399) and a specified comet NAIF ID.
 ///
-/// P/Invoke: `avkSimulationContext_checkAlmanacCoverage(IntPtr ctx, int cometSpkId, double startTai, double endTai)`
+/// P/Invoke: `avkSimulationContext_checkAlmanacCoverage(IntPtr ctx, int cometSpkId, double startTdb, double endTdb)`
 /// # Safety
 /// FFI Contract
 // TODO update C# side
@@ -3019,24 +3144,24 @@ pub unsafe extern "C" fn avkSimulationContext_setEpochRange(
 pub unsafe extern "C" fn avkSimulationContext_checkAlmanacCoverage(
   ctx: *mut SimulationContext,
   comet_spk_id: i32,
-  tai: *const CTimeRange,
+  tdb: *const CTimeRange,
 ) -> bool {
   // null check
-  if ctx.is_null() || tai.is_null() {
+  if ctx.is_null() || tdb.is_null() {
     return false;
   }
   let ctx_ref = unsafe { &*ctx };
   let logic_state = ctx_ref.logic_state.read();
   let almanac = &logic_state.almanac_data;
 
-  let tai_cov = unsafe { tai.as_ref().unwrap_unchecked() };
+  let tdb_cov = unsafe { tdb.as_ref().unwrap_unchecked() };
   let start = anise::time::Epoch::from_tdb_duration(anise::time::Duration::from_parts(
-    tai_cov.centuries[0],
-    tai_cov.nanoseconds[0],
+    tdb_cov.centuries[0],
+    tdb_cov.nanoseconds[0],
   ));
   let end = anise::time::Epoch::from_tdb_duration(anise::time::Duration::from_parts(
-    tai_cov.centuries[1],
-    tai_cov.nanoseconds[1],
+    tdb_cov.centuries[1],
+    tdb_cov.nanoseconds[1],
   ));
 
   // Check Earth coverage (required for orbit reference frame)
@@ -3053,7 +3178,7 @@ pub unsafe extern "C" fn avkSimulationContext_checkAlmanacCoverage(
 /// On success or partial success, writes the actual SPK domain and discovered
 /// NAIF ID (which may differ from spk_id) to the out pointers.
 ///
-/// P/Invoke: `avkSimulationContext_probeSpkFile(string path, int spkId, double startTai, double endTai, out double domainStart, out double domainEnd, out int discoveredNaifId)`
+/// P/Invoke: `avkSimulationContext_probeSpkFile(string path, int spkId, double startTdb, double endTdb, out double domainStart, out double domainEnd, out int discoveredNaifId)`
 /// # Safety
 /// FFI Contract
 // TODO update C# side
@@ -3062,40 +3187,40 @@ pub unsafe extern "C" fn avkSimulationContext_checkAlmanacCoverage(
 pub unsafe extern "C" fn avkProbeSpkFile(
   path: *const c_char,
   spk_id: i32,
-  tai_parts: *const CTimeRange,
-  out_domain_tai_parts: *mut CTimeRange,
+  tdb_parts: *const CTimeRange,
+  out_domain_tdb_parts: *mut CTimeRange,
   out_discovered_naif_id: *mut i32,
 ) -> bool {
   // Zero out all outputs upfront
-  if !out_domain_tai_parts.is_null() {
-    unsafe { *out_domain_tai_parts = CTimeRange::zeroed() };
+  if !out_domain_tdb_parts.is_null() {
+    unsafe { *out_domain_tdb_parts = CTimeRange::zeroed() };
   }
   if !out_discovered_naif_id.is_null() {
     unsafe { *out_discovered_naif_id = 0 };
   }
 
   // null check input
-  if path.is_null() || tai_parts.is_null() {
+  if path.is_null() || tdb_parts.is_null() {
     return false;
   }
 
   let path_str = unsafe { CStr::from_ptr(path).to_str().unwrap_or("") };
-  let tai = unsafe { tai_parts.as_ref().unwrap_unchecked() };
+  let tdb = unsafe { tdb_parts.as_ref().unwrap_unchecked() };
   let start_epoch = anise::time::Epoch::from_tdb_duration(anise::time::Duration::from_parts(
-    tai.centuries[0],
-    tai.nanoseconds[0],
+    tdb.centuries[0],
+    tdb.nanoseconds[0],
   ));
   let end_epoch = anise::time::Epoch::from_tdb_duration(anise::time::Duration::from_parts(
-    tai.centuries[1],
-    tai.nanoseconds[1],
+    tdb.centuries[1],
+    tdb.nanoseconds[1],
   ));
   let (covers, domain, discovered_id) =
     AlmanacPackedData::probe_spk_file_with_domain(path_str, spk_id, start_epoch, end_epoch);
 
   if let Some((ds, de)) = domain
-    && !out_domain_tai_parts.is_null()
+    && !out_domain_tdb_parts.is_null()
   {
-    unsafe { *out_domain_tai_parts = CTimeRange::new(ds, de) };
+    unsafe { *out_domain_tdb_parts = CTimeRange::new(ds, de) };
   }
   if !out_discovered_naif_id.is_null() {
     unsafe { *out_discovered_naif_id = discovered_id };
@@ -3615,7 +3740,9 @@ pub unsafe extern "C" fn avkSimulationContext_getSimulationClock(
   }
   let ctx_ref = unsafe { ctx.as_ref().unwrap() };
   let scenes = ctx_ref.scenes.read();
-  let time_mgr = unsafe { scenes.time_managers.get(&scene_id).unwrap_unchecked() };
+  let Some(time_mgr) = scenes.time_managers.get(&scene_id) else {
+    return false;
+  };
 
   // Duration is relative to J2000 TDB (checked by unit tests)
   let dur = time_mgr.current_epoch().to_tdb_duration();
@@ -3945,6 +4072,47 @@ mod tests {
       drop(alloc::boxed::Box::from_raw(ctx_ptr));
     }
     let _ = std::fs::remove_dir_all(&dir);
+  }
+
+  #[test]
+  fn utc_typed_in_the_ui_reaches_the_engine_as_tdb() {
+    // the shipped LSK, as at startup (ffi startup → init_from_asset_dir)
+    leap_seconds::init_from_asset_dir("../../assets");
+    // the wall clock, as at startup: the table's validity horizon (else 2021 reads as "beyond")
+    leap_seconds::set_now(&leap_seconds::UtcFields {
+      year: 2026,
+      month: 10,
+      day: 30,
+      hour: 0,
+      minute: 0,
+      second: 0,
+      nanos: 0,
+    })
+    .unwrap();
+    // the review save's start shown in UTC: 2021-12-11T23:58:50.816Z
+    let utc = CUtcFields {
+      year: 2021,
+      nanos: 816_000_000,
+      month: 12,
+      day: 11,
+      hour: 23,
+      minute: 58,
+      second: 50,
+      _padding: [0; 3],
+    };
+    let (mut c, mut ns) = (0i16, 0u64);
+    let status = unsafe { avkTime_utcToTdb(&utc, &mut c, &mut ns) };
+    assert_eq!(status, leap_seconds::UtcStatus::Ok as i32);
+    // what seekEpochSync / setEpochRange build from the parts C# passes on
+    let epoch = Epoch::from_tdb_duration(Duration::from_parts(c, ns));
+    assert_eq!(epoch.time_scale, anise::time::TimeScale::TDB);
+    let tdb = Epoch::from_gregorian(2021, 12, 12, 0, 0, 0, 0, anise::time::TimeScale::TDB);
+    let err_s = (epoch.to_tdb_duration() - tdb.to_tdb_duration()).to_seconds().abs();
+    assert!(err_s < 2e-3, "UTC 23:58:50.816Z → {epoch} ({err_s} s from 2021-12-12 00:00 TDB)");
+    // and the range handed back to C# is in TDB parts too, whatever the epochs' label
+    let range = CTimeRange::new(epoch.to_time_scale(anise::time::TimeScale::UTC), epoch);
+    assert_eq!((range.centuries[0], range.nanoseconds[0]), (c, ns));
+    assert_eq!((range.centuries[1], range.nanoseconds[1]), (c, ns));
   }
 
   #[test]

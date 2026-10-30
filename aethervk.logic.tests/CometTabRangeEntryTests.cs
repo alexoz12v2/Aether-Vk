@@ -44,8 +44,13 @@ public class CometTabRangeEntryTests
     public readonly CometTabViewModel Vm;
     public readonly TimelineTabViewModel Tl;
 
-    public Rig()
+    /// <summary>Texts in <c>scale</c> through the fake leap-second converter (TDB = UTC + 69.184 s),
+    /// as in the app: a FITS image's UTC mid-exposure is never read as TDB digits</summary>
+    public readonly TimeScaleService TimeScale = new(new FakeTimeScaleConverter());
+
+    public Rig(TimeScale scale = AetherVk.Logic.Services.TimeScale.Tdb)
     {
+      TimeScale.Scale = scale;
       var translation = new Mock<ITranslationService>();
       translation.Setup(t => t.CultureChanged).Returns(Observable.Empty<System.Globalization.CultureInfo>());
       translation.Setup(t => t.GetString(It.IsAny<string>())).Returns<string>(k => k);
@@ -74,9 +79,9 @@ public class CometTabRangeEntryTests
 
       Vm = new CometTabViewModel(translation.Object, Schedulers, cometSessions.Object, jpl, config, Timeline,
         breadcrumbs, storage.Object, Runtime.Object, new Mock<ITabStateService<ModelSession>>().Object,
-        Messenger, new Mock<ITabFactory>().Object, timelineSessions.Object);
+        Messenger, new Mock<ITabFactory>().Object, timelineSessions.Object, timeScale: TimeScale);
       Tl = new TimelineTabViewModel(translation.Object, Schedulers, timelineSessions.Object, cometSessions.Object,
-        Timeline, Runtime.Object, Messenger);
+        Timeline, Runtime.Object, Messenger, timeScale: TimeScale);
       Tl.CurrentSession = Session;
       Flush();
     }
@@ -235,7 +240,7 @@ public class CometTabRangeEntryTests
   [Fact]
   public void ModelRange_SetsStartToEndMinusNRotationPeriods()
   {
-    var rig = new Rig();
+    var rig = new Rig(TimeScale.Utc); // the box shows the image time as the app does by default
     rig.Vm.RotRateDegDay = 696.0; // 67P: P = 360 · 24 / 696 h ≈ 12.41 h
     double periodHours = 360.0 * 24.0 / 696.0;
     rig.Vm.Range.ModelRotations = 3;
@@ -278,7 +283,7 @@ public class CometTabRangeEntryTests
   [Fact]
   public void FitsModelRange_FillsTheCometTabModelEndBox_WithTheImageMidExposure()
   {
-    var rig = new Rig();
+    var rig = new Rig(TimeScale.Utc); // the box shows the image time as the app does by default
     const double rateDegDay = 696.2127316680096; // the reviewer's save: P ≈ 12.41 h
     rig.Vm.RotRateDegDay = rateDegDay;
     rig.Vm.Range.ModelRotations = 2;
@@ -359,7 +364,10 @@ public class CometTabRangeEntryTests
     var (s2, e2) = SpkRequest(proposal);
     Assert.True(s2 <= TimeUtils.FromTdbParts(proposal.StartCenturies, proposal.StartNs));
     Assert.True(e2 >= TimeUtils.FromTdbParts(proposal.EndCenturies, proposal.EndNs));
-    Assert.Equal(new DateTimeOffset(2021, 12, 27, 0, 14, 47, TimeSpan.Zero), TimeUtils.FromTdbParts(proposal.EndCenturies, proposal.EndNs));
+    // the image's UTC instant in TDB parts (69.184 s later on the TDB digits), to the whole
+    // second the model end box keeps
+    var tdbEnd = new DateTimeOffset(2021, 12, 27, 0, 14, 47, TimeSpan.Zero) + FakeTimeScaleConverter.Offset;
+    Assert.Equal(tdbEnd.AddTicks(-(tdbEnd.Ticks % TimeSpan.TicksPerSecond)), TimeUtils.FromTdbParts(proposal.EndCenturies, proposal.EndNs));
   }
 
   [Fact]

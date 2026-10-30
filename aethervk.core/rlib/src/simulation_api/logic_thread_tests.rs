@@ -2434,13 +2434,10 @@ fn test_device_loss_dumps_every_scene_without_the_gpu() {
   let _ = std::fs::remove_dir_all(&root);
 }
 
-/// A jet ignited at `start + 2 d` through the real seek path (`seek_epoch_sync` →
-/// `apply_seek` → `fill_dust_history`): at `start + 5 d` no tier holds dust older than 3 d (plus
-/// one emission window), at `start + 1 d` every tier is empty and caught up, and seeking forward
-/// again reproduces the same live counts (the history is a function of the parameters, the
-/// ignition and the epoch). Needs the 67P SPK (cache or Horizons) and a GPU.
-#[test]
-fn test_jet_ignition_bounds_dust_age_across_seeks() {
+/// The ignition tests' scene: the 67P comet (12.4 h spin, pole +Z) over 30 d from 2025-10-02
+/// and one jet ignited at `start + ignite_days` (negative: before the start, the dust lead).
+/// `None` without the SPK (Horizons unreachable) or a GPU.
+fn ignition_scene(ignite_days: f64) -> Option<(Box<SimulationContext>, u64, Epoch)> {
   use crate::scene::{
     BodyRotationalModel, StaticMeshComponent, TransformComponent,
     particles::{
@@ -2454,12 +2451,12 @@ fn test_jet_ignition_bounds_dust_age_across_seeks() {
   };
   let Some(spk_path) = fetch_67p_spk("1000012_ignition.bsp") else {
     println!("Skipping: Horizons unreachable");
-    return;
+    return None;
   };
   let mut ctx = SimulationContext::startup(None).expect("Failed to create SimulationContext");
   let Some(render_frontend) = ctx.render_frontend() else {
     println!("Skipping: no GPU");
-    return;
+    return None;
   };
   let (tx, rx) = mpsc::channel();
   *MOCK_SENDER.lock() = Some(tx);
@@ -2544,8 +2541,8 @@ fn test_jet_ignition_bounds_dust_age_across_seeks() {
     }
   }
 
-  // the jet (the `avkSimulationContext_addParticleSystem` recipe), ignited at start + 2 d
-  let t_on = start + Duration::from_days(2.0);
+  // the jet (the `avkSimulationContext_addParticleSystem` recipe), ignited at start + `ignite_days`
+  let t_on = start + Duration::from_days(ignite_days);
   {
     let scenes = ctx.scenes.read();
     let scene_arc = scenes.get_scene(scene_id).unwrap();
@@ -2620,6 +2617,19 @@ fn test_jet_ignition_bounds_dust_age_across_seeks() {
     .expect("ParticleSystemComponent::new");
     let _ = g.scene.add_component(jet, ps);
   }
+  Some((ctx, scene_id, start))
+}
+
+/// A jet ignited at `start + 2 d` through the real seek path (`seek_epoch_sync` →
+/// `apply_seek` → `fill_dust_history`): at `start + 5 d` no tier holds dust older than 3 d (plus
+/// one emission window), at `start + 1 d` every tier is empty and caught up, and seeking forward
+/// again reproduces the same live counts (the history is a function of the parameters, the
+/// ignition and the epoch). Needs the 67P SPK (cache or Horizons) and a GPU.
+#[test]
+fn test_jet_ignition_bounds_dust_age_across_seeks() {
+  let Some((ctx, scene_id, start)) = ignition_scene(2.0) else {
+    return;
+  };
 
   let wait_caught_up = |ctx: &SimulationContext| {
     let t0 = std::time::Instant::now();
@@ -2690,6 +2700,114 @@ fn test_jet_ignition_bounds_dust_age_across_seeks() {
       "tier {k}: oldest age differs"
     );
   }
+  ctx.threads.logic_thread.tx().try_send(LogicCommand::Shutdown).unwrap();
+}
+
+/// Mail R3: a Reset rebuilds the dust history at the start like a seek does. A jet ignited 0.5 d
+/// before the start (inside the SPK, which begins 1 d before): after a seek to start + 5 d and a
+/// Reset (paused), the start epoch holds the
+/// lead's dust (none older than the 0.5 d, plus one emission window), the same as a seek there.
+/// Forgetting the clusters alone left nothing at the start until Play. On the way (mail R8): the
+/// trajectory lines toggled while paused at start + 5 d appear and go through the logic loop.
+/// Needs the 67P SPK and a GPU.
+#[test]
+fn test_reset_rebuilds_the_dust_lead_at_the_start() {
+  let Some((ctx, scene_id, start)) = ignition_scene(-0.5) else {
+    return;
+  };
+  // before the start the jet state comes from the reference orbit (`jet_state_at`, t < 0): the
+  // elements re-osculated from the SPK at the start, as the app's comet trajectory build does
+  {
+    use crate::simulation::orbit_elements::{MU_SUN_KM3_S2, elements_from_state};
+    use aethervk_oshal_rlib::math::vector::Vector3;
+    let scene_arc = ctx.get_scene(scene_id).unwrap();
+    let planet = {
+      let g = scene_arc.read();
+      g.scene
+        .with_component(g.comet.unwrap().body, |p: &crate::scene::AlmanacPlanet| *p)
+        .expect("the comet's AlmanacPlanet")
+    };
+    let el = {
+      let logic_state = ctx.logic_state.read();
+      let (r, v, _) = planet
+        .step_with_velocity(start, &logic_state.almanac_data, None)
+        .expect("the SPK covers the start");
+      elements_from_state(
+        [r.x(), r.y(), r.z()],
+        [v.x(), v.y(), v.z()],
+        MU_SUN_KM3_S2,
+        start.to_jde_tdb_days(),
+      )
+    };
+    scene_arc.write().comet_reference_elements = Some(el);
+  }
+  let wait_caught_up = |ctx: &SimulationContext| {
+    let t0 = std::time::Instant::now();
+    loop {
+      let busy = ctx
+        .get_scene(scene_id)
+        .map(|s| s.read().active_physics_task.load(core::sync::atomic::Ordering::Acquire))
+        .unwrap_or(false);
+      let tiers = ctx.dust_stats(scene_id);
+      if !busy && !tiers.is_empty() && tiers.iter().all(|t| t.caught_up) {
+        return tiers;
+      }
+      assert!(t0.elapsed().as_secs_f64() < 120.0, "dust never caught up: {tiers:?}");
+      std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+  };
+  let window_s =
+    |t: &crate::scene::dust::DustTierStats| ((t.band_max_s - t.band_min_s) / 256.0).max(1.0);
+
+  assert!(ctx.seek_epoch_sync(scene_id, start), "seek to the start");
+  let seeked = wait_caught_up(&ctx);
+  println!("seek to the start: {seeked:?}");
+  assert!(seeked.iter().any(|t| t.live_clusters > 0), "no lead dust at the start: {seeked:?}");
+
+  assert!(ctx.seek_epoch_sync(scene_id, start + Duration::from_days(5.0)), "seek +5 d");
+  let at5 = wait_caught_up(&ctx);
+  println!("at start + 5 d: {at5:?}");
+  // mail R8: the trajectory lines toggled while paused appear through the logic thread's own
+  // loop (its fixed update, which refreshed them, runs only while playing), and go again
+  {
+    use crate::scene::trajectory::{DustTrajectoryLinesComponent, TrajectoryComponent};
+    let scene_arc = ctx.get_scene(scene_id).unwrap();
+    let control_points = || {
+      let g = scene_arc.read();
+      let mut n = 0usize;
+      g.scene.query1(|e, _: &DustTrajectoryLinesComponent| {
+        n += g.scene.with_component(e, |c: &TrajectoryComponent| c.control_points_f64.len()).unwrap_or(0);
+      });
+      n
+    };
+    let wait_for = |want: bool, what: &str| {
+      let t0 = std::time::Instant::now();
+      while (control_points() > 0) != want {
+        assert!(t0.elapsed().as_secs_f64() < 5.0, "{what}: {at5:?}");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+      }
+    };
+    let flags = |f: u32| scene_arc.read().dust_view_flags.store(f, core::sync::atomic::Ordering::Relaxed);
+    flags(crate::scene::dust::DUST_VIEW_TRAJECTORIES);
+    wait_for(true, "no trajectory lines while paused");
+    flags(0);
+    wait_for(false, "the trajectory lines stayed after the toggle off");
+  }
+  assert!(ctx.reset_simulation_sync(scene_id), "reset");
+  let reset = wait_caught_up(&ctx);
+  println!("after the reset: {reset:?}");
+  for (k, (a, b)) in seeked.iter().zip(reset.iter()).enumerate() {
+    assert_eq!(a.live_clusters, b.live_clusters, "tier {k}: the reset's dust differs from a seek to the start");
+    if b.live_clusters > 0 {
+      assert!(
+        b.oldest_age_s <= 0.5 * 86_400.0 + window_s(b),
+        "tier {k}: oldest {:.2} d > the 0.5 d lead",
+        b.oldest_age_s / 86_400.0
+      );
+    }
+  }
+  let sim_s = ctx.get_scene(scene_id).and_then(|s| s.read().scene.sim_time_s());
+  assert_eq!(sim_s, Some(0.0), "the reset's sim time is the start");
   ctx.threads.logic_thread.tx().try_send(LogicCommand::Shutdown).unwrap();
 }
 
@@ -3377,10 +3495,15 @@ fn test_play_quality_follows_start_pause() {
   assert_eq!(k1, PlayQuality::from_env().unwrap().apply(true, settings));
   assert_ne!(k1, settings, "running: coarser knobs");
 
+  // paused: the preview holds 2 s (PREVIEW_HOLD_US), "Render full" ends it at once
   assert!(ctx.pause_simulation_sync(scene_id));
   let (k2, on2) = knobs(&ctx);
-  assert!(!on2, "paused again: play quality off");
-  assert_eq!(k2, settings, "paused again: the scene's settings byte-identical");
+  assert!(on2, "just paused: still the preview (the hold)");
+  assert_eq!(k2, k1, "just paused: the preview's knobs");
+  assert!(ctx.dust_render_full(scene_id).is_some());
+  let (k3, on3) = knobs(&ctx);
+  assert!(!on3, "render full: play quality off");
+  assert_eq!(k3, settings, "render full: the scene's settings byte-identical");
 }
 
 /// Reviewer feedback #17, the "nucleus from Earth" view (`set_nucleus_view_from_earth`): the

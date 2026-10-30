@@ -15,6 +15,9 @@ public sealed class FakeTimeScaleConverter : ITimeScaleConverter
   /// <summary>The offset in ticks (100 ns): integer-exact, no double rounding (69.184 s × 10⁷ truncates to …9999).</summary>
   public static readonly TimeSpan Offset = TimeSpan.FromTicks(691_840_000);
 
+  /// <summary>TDB - UTC of this instance (<see cref="Offset"/> unless a test sets a sub-ms one).</summary>
+  public TimeSpan UtcOffset { get; set; } = Offset;
+
   public DateTime LastEntry { get; set; } = new(2017, 1, 1, 0, 0, 0, DateTimeKind.Utc);
   public DateTime Now { get; set; } = new(2026, 10, 30, 0, 0, 0, DateTimeKind.Utc);
   public string Path { get; set; } = "/assets/planets/naif0012.tls";
@@ -39,13 +42,13 @@ public sealed class FakeTimeScaleConverter : ITimeScaleConverter
     DateTimeOffset dt;
     try { dt = utc.ToDateTimeOffset(); }
     catch (ArgumentOutOfRangeException) { return UtcStatus.Malformed; }
-    (centuries, nanoseconds) = Parts(dt);
+    (centuries, nanoseconds) = TimeUtils.ToTdbParts(dt + UtcOffset);
     return StatusOf(dt);
   }
 
   public UtcStatus TdbPartsToUtc(short centuries, ulong nanoseconds, out UtcFields utc)
   {
-    var dt = TimeUtils.FromTdbParts(centuries, nanoseconds) - Offset;
+    var dt = TimeUtils.FromTdbParts(centuries, nanoseconds) - UtcOffset;
     utc = UtcFields.From(dt);
     return StatusOf(dt);
   }

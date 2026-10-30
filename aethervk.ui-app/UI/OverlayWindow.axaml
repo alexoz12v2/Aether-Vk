@@ -276,6 +276,69 @@
       </Template>
     </controls:DebugOnly>
 
+    <!-- Dust preview badge: playing, or 2 s after a pause / seek; "Render full" ends it. In the
+         hold the circle beside the button fills up to the full render's start -->
+    <Border IsVisible="{Binding IsDustPreview}"
+            AutomationProperties.AutomationId="DustPreviewBadge"
+            HorizontalAlignment="Center" VerticalAlignment="Bottom"
+            Margin="0,0,0,44" Padding="10,4"
+            CornerRadius="6" Opacity="0.9"
+            Background="{DynamicResource Bg.Surface}">
+      <StackPanel Orientation="Horizontal" Spacing="10">
+        <TextBlock Text="{Binding DustPreviewText}" VerticalAlignment="Center"
+                   Foreground="{DynamicResource Text.Primary}" />
+        <Button Content="{Binding RenderFullText}" Command="{Binding RenderFullCommand}"
+                AutomationProperties.AutomationId="DustRenderFullButton"
+                Padding="8,2" />
+        <Panel IsVisible="{Binding IsDustHold}" Width="20" Height="20" VerticalAlignment="Center"
+               AutomationProperties.AutomationId="DustHoldProgress">
+          <Ellipse Stroke="{DynamicResource Text.Primary}" StrokeThickness="3" Opacity="0.25" />
+          <Arc StartAngle="-90" SweepAngle="{Binding DustHoldSweep}"
+               Stroke="{DynamicResource Accent.Active}" StrokeThickness="3">
+            <Arc.Transitions>
+              <Transitions>
+                <DoubleTransition Property="SweepAngle" Duration="0:0:0.1" />
+              </Transitions>
+            </Arc.Transitions>
+          </Arc>
+        </Panel>
+      </StackPanel>
+    </Border>
+
+    <!-- The full render drawing (after the hold, a seek, "Render full"): frames of up to a second -->
+    <Border IsVisible="{Binding IsDustRendering}"
+            AutomationProperties.AutomationId="DustRenderingBadge"
+            HorizontalAlignment="Center" VerticalAlignment="Bottom"
+            Margin="0,0,0,44" Padding="10,4"
+            CornerRadius="6" Opacity="0.9"
+            Background="{DynamicResource Bg.Surface}">
+      <StackPanel Orientation="Horizontal" Spacing="10">
+        <Arc Width="16" Height="16" VerticalAlignment="Center"
+             StartAngle="0" SweepAngle="270"
+             Stroke="{DynamicResource Accent.Active}" StrokeThickness="3">
+          <Arc.RenderTransform>
+            <RotateTransform />
+          </Arc.RenderTransform>
+          <Arc.Styles>
+            <Style Selector="Arc">
+              <Style.Animations>
+                <Animation Duration="0:0:1" IterationCount="Infinite">
+                  <KeyFrame Cue="0%">
+                    <Setter Property="RotateTransform.Angle" Value="0" />
+                  </KeyFrame>
+                  <KeyFrame Cue="100%">
+                    <Setter Property="RotateTransform.Angle" Value="360" />
+                  </KeyFrame>
+                </Animation>
+              </Style.Animations>
+            </Style>
+          </Arc.Styles>
+        </Arc>
+        <TextBlock Text="{Binding DustRenderingText}" VerticalAlignment="Center"
+                   Foreground="{DynamicResource Text.Primary}" />
+      </StackPanel>
+    </Border>
+
     <!-- Run to End spinner -->
     <Arc IsVisible="{Binding IsRunningToEnd}"
          HorizontalAlignment="Center" VerticalAlignment="Center"

@@ -15,6 +15,7 @@ public partial interface IModelTabViewModel
     string StrShowReferenceError { get; set; }
     string StrSun { get; set; }
     string StrDistance { get; set; }
+    string StrJetNeverLit { get; set; }
     string StrSTO { get; set; }
     string StrSubsolarLatitude { get; set; }
     string StrSunPA { get; set; }
@@ -39,4 +40,61 @@ public partial interface IModelTabViewModel
     string StrLongitude { get; set; }
     string StrDensity { get; set; }
     string StrColor { get; set; }
+    string StrHelpHeaderGizmo { get; set; }
+    string StrHelpHeaderJetAngles { get; set; }
+    string StrHelpHeaderStreamColor { get; set; }
+    string StrHelpHeaderJetBeta { get; set; }
+    string StrHelpHeaderJetQDust { get; set; }
+    string StrHelpHeaderJetDiameter { get; set; }
+    string StrHelpHeaderQpr { get; set; }
+    string StrHelpHeaderSizeLawQ { get; set; }
+    string StrHelpHeaderSizeRangeF { get; set; }
+    string StrHelpHeaderJetGrain { get; set; }
+    string StrHelpHeaderJetActivity { get; set; }
+    string StrHelpHeaderQd1Au { get; set; }
+    string StrHelpHeaderCopyGrain { get; set; }
+    string StrHelpHeaderJetDefaults { get; set; }
+    string StrHelpHeaderActivity { get; set; }
+    string StrHelpHeaderQdExponent { get; set; }
+    string StrHelpHeaderQdCutoff { get; set; }
+    string StrHelpHeaderQdMax { get; set; }
+    string StrHelpHeaderSizeDistribution { get; set; }
+    string StrHelpSun { get; set; }
+    string StrHelpShowReferenceError { get; set; }
+    string StrHelpDustVisibility { get; set; }
+    string StrHelpDustFlow { get; set; }
+    string StrHelpDustRhoNorm { get; set; }
+    string StrHelpDustTrajectories { get; set; }
+    string StrHelpDustExposure { get; set; }
+    string StrHelpDustTracers { get; set; }
+    string StrHelpDustFlowSpeed { get; set; }
+    string StrHelpGizmo { get; set; }
+    string StrHelpJetAngles { get; set; }
+    string StrHelpJetLatitude { get; set; }
+    string StrHelpJetLongitude { get; set; }
+    string StrHelpJetStreamColor { get; set; }
+    string StrHelpJetBeta { get; set; }
+    string StrHelpJetQDust { get; set; }
+    string StrHelpJetDiameter { get; set; }
+    string StrHelpJetDensity { get; set; }
+    string StrHelpJetQpr { get; set; }
+    string StrHelpJetAlbedo { get; set; }
+    string StrHelpJetSizeQ { get; set; }
+    string StrHelpJetSizeRange { get; set; }
+    string StrHelpJetGrain { get; set; }
+    string StrHelpJetActivity { get; set; }
+    string StrHelpJetDustRate0 { get; set; }
+    string StrHelpCopyGrain { get; set; }
+    string StrHelpJetDefaults { get; set; }
+    string StrHelpDustDensity { get; set; }
+    string StrHelpDustDiameter { get; set; }
+    string StrHelpScatteringEfficiency { get; set; }
+    string StrHelpDustAlbedo { get; set; }
+    string StrHelpActivity { get; set; }
+    string StrHelpDustRate0 { get; set; }
+    string StrHelpDustRatePower { get; set; }
+    string StrHelpDustRateCutoff { get; set; }
+    string StrHelpDustRateMax { get; set; }
+    string StrHelpSizeDistribution { get; set; }
+    string StrHelpSizeRange { get; set; }
 }

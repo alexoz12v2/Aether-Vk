@@ -72,8 +72,7 @@ impl AlmanacPlanet {
     // - Resolve *Active* Rotation: Body-Fixed (BF) -> World (target frame)
     if let Some(model) = rotational_model {
       // calculate elapsed continuous TDB days since J2000 epoch
-      let j2000_epoch = anise::time::J2000_REF_EPOCH;
-      let d_j2000 = (epoch - j2000_epoch).to_seconds() / 86400.0;
+      let d_j2000 = tdb_days_since_j2000(epoch);
       let t_centuries = d_j2000 / 36525.0;
 
       let ra_deg = model.pole_ra + model.pole_ra_rate * t_centuries;
@@ -237,3 +236,11 @@ impl AlmanacPlanet {
 
 #[cfg(test)]
 mod test_almanac_planet;
+
+/// TDB days since J2000 TDB (2000-01-01 12:00 TDB, JDE 2451545.0), the IAU rotation models' `d`.
+/// Not `epoch - anise::time::J2000_REF_EPOCH`: in hifitime 4.2.6 that constant is 1 day and
+/// 32.184 s past J2000 TDB (a TAI epoch a century and 12 h past its 1900 origin), which put W a
+/// day early: about 23.5° of spin phase off for 67P (696°/day).
+pub(crate) fn tdb_days_since_j2000(epoch: anise::time::Epoch) -> f64 {
+  epoch.to_tdb_duration().to_seconds() / 86400.0
+}

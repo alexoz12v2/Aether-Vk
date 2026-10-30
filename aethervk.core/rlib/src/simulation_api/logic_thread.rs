@@ -393,6 +393,17 @@ pub fn start_logic_thread(
               None
             };
 
+            // paused, the fixed update above does not run, and with it its own paused refresh of
+            // the trajectory lines: a toggle while paused (mail R8) showed nothing until Play or a
+            // seek. Nothing is rebuilt at an unchanged sim time.
+            if phase1_res.is_none() && !is_running {
+              let now_s = {
+                let time_mgr = unsafe { scenes.time_managers.get(&scene_id).unwrap_unchecked() };
+                time_mgr.state.read().scaled_time as f64 * 1e-6
+              };
+              utils::update_dust_trajectories(&scene_arc.read(), now_s);
+            }
+
             // - Phase 2: Update
             let time_mgr = unsafe { scenes.time_managers.get(&scene_id).unwrap_unchecked() };
             execute_simulation_tick_update_phase(scene_arc.upgradable_read(), &time_mgr);
@@ -1315,6 +1326,7 @@ fn process_command_internal(
 
       let mut applied = false;
       let start = get_monotonic_time();
+      let mut applied_in_us = 0i64;
       while get_monotonic_time() - start <= 1_000_000_i64 {
         if let Some(_) = utils::self_sync_do_if_done(
           &scenes,
@@ -1326,6 +1338,7 @@ fn process_command_internal(
           elapsed,
           |vulkan_device, scene_write, _| {
             let logic_state = ctx.logic_state.read();
+            let apply_start = get_monotonic_time();
             utils::apply_seek(
               vulkan_device,
               scene_write,
@@ -1337,12 +1350,22 @@ fn process_command_internal(
               scaled_us,
             );
             utils::mark_all_serializable_as_changed(scene_write);
+            applied_in_us = get_monotonic_time() - apply_start;
           },
         ) {
           applied = true;
           break;
         }
       }
+      // where a seek's time goes: the wait for the GPU's last physics submit, then the rebuild
+      // (cache, dust history, trajectories); the dust's first frames are the render's
+      oshal::log!(
+        "[Seek] {}: {:.1} ms (GPU wait {:.1} ms, rebuild {:.1} ms)",
+        if applied { "applied" } else { "timed out" },
+        (get_monotonic_time() - start) as f64 * 1e-3,
+        (get_monotonic_time() - start - applied_in_us) as f64 * 1e-3,
+        applied_in_us as f64 * 1e-3
+      );
 
       succeeded.store(applied, core::sync::atomic::Ordering::Relaxed);
       done_flag.store(true, core::sync::atomic::Ordering::Release);
@@ -1456,6 +1479,20 @@ fn process_command_internal(
             // the Earth and the comet jumped back to the start: re-aim (a reset leaves it paused)
             let v = utils::observer_comet_velocity(scene_write, &logic_state.almanac_data, start_epoch);
             utils::repose_earth_observer(scene_write, v);
+
+            // then everything a seek to the start rebuilds: the sim time, the dust history of the
+            // jets' lead before the start (mail R3: forgetting the clusters alone left no dust at
+            // the start epoch until Play), the trajectory lines
+            utils::apply_seek(
+              vulkan_device,
+              scene_write,
+              scene_id,
+              &scenes.cartesian_state_cache,
+              &logic_state.almanac_data,
+              start_epoch,
+              start_epoch,
+              0,
+            );
 
             utils::mark_all_serializable_as_changed(scene_write);
           },
@@ -2975,9 +3012,21 @@ fn execute_simulation_tick_fixed_update_phase(
       while time_mgr.consume_fixed_step(scaled_fixed_dt_us) {
         // spiral of death resolution
         if steps_executed > MAX_PHYSICS_STEPS_PER_FRAME {
-          oshal::log!(
-            "Physics is falling behind! Dropping accumulated time to avoid spiral of death"
-          );
+          // the fixed steps do no work (dust is evaluated in closed form), and the sim clock
+          // (`scaled_time`) is not touched: only the step backlog goes. Logged once a minute.
+          static FALLING_BEHIND: core::sync::atomic::AtomicU64 =
+            core::sync::atomic::AtomicU64::new(0);
+          static FALLING_BEHIND_LOGGED_US: core::sync::atomic::AtomicI64 =
+            core::sync::atomic::AtomicI64::new(i64::MIN);
+          let n = FALLING_BEHIND.fetch_add(1, core::sync::atomic::Ordering::Relaxed) + 1;
+          let now_us = get_monotonic_time();
+          let last_us = FALLING_BEHIND_LOGGED_US.load(core::sync::atomic::Ordering::Relaxed);
+          if last_us == i64::MIN || now_us - last_us >= 60_000_000 {
+            FALLING_BEHIND_LOGGED_US.store(now_us, core::sync::atomic::Ordering::Relaxed);
+            oshal::log!(
+              "Physics step backlog dropped ({n} times so far; the sim clock is unaffected)"
+            );
+          }
           // Drop accumulated steps but maintain the remainder to avoid stutters
           let mut time_state = time_mgr.state.write();
           time_state.scaled_accumulator %= scaled_fixed_dt_us;

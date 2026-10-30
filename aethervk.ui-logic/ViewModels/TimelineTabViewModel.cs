@@ -115,9 +115,15 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
 
   private bool CanPlayPause() => SelectedSpeed.HasValue;
 
-  // the session keeps the speed for the savefile (TimelineDto.Speed)
-  partial void OnSelectedSpeedChanged(SimulationSpeed? value) =>
+  // the session keeps the speed for the savefile (TimelineDto.Speed); while playing the engine
+  // takes the new speed at once (a running simulation only takes one through a pause: the core
+  // refuses a start while the last physics sync is pending)
+  partial void OnSelectedSpeedChanged(SimulationSpeed? value)
+  {
     _timelineSessionService?.UpdateSession(SessionId, s => s.Speed = (int?)value);
+    if (IsPlaying && value.HasValue && _timelineService is not null)
+      _timelineService.ChangeSpeed((int)value.Value);
+  }
 
   partial void OnIsPlayingChanged(bool value)
   {
@@ -367,6 +373,9 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
     {
       _timelineSessionService.UpdateSession(SessionId, s => s.IsRunningToEnd = false);
     }
+    // a typed epoch is one jump, not a scrub: no next step to wait for, the full render starts
+    // at once instead of after the preview hold
+    if (ok) _runtimeService.DustRenderFull();
     PollSimulationClock(force: true);
     if (!ok) Console.WriteLine("[Timeline] epoch box: the seek did not confirm in time");
   }

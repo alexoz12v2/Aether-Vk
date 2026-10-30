@@ -46,7 +46,7 @@ namespace AetherVk.Logic.SaveFile
 
         private static global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[] BillboardDtoPropInit(global::System.Text.Json.JsonSerializerOptions options)
         {
-            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[17];
+            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[20];
 
             var info0 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<global::System.Guid>
             {
@@ -390,6 +390,66 @@ namespace AetherVk.Logic.SaveFile
             
             properties[16] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<double?>(options, info16);
 
+            var info17 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<double?>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.BillboardDto),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.BillboardDto)obj).ViewportOffsetX,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.BillboardDto)obj).ViewportOffsetX = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "ViewportOffsetX",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.BillboardDto).GetProperty("ViewportOffsetX", InstanceMemberBindingFlags, null, typeof(double?), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[17] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<double?>(options, info17);
+
+            var info18 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<double?>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.BillboardDto),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.BillboardDto)obj).ViewportOffsetY,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.BillboardDto)obj).ViewportOffsetY = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "ViewportOffsetY",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.BillboardDto).GetProperty("ViewportOffsetY", InstanceMemberBindingFlags, null, typeof(double?), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[18] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<double?>(options, info18);
+
+            var info19 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<double?>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.BillboardDto),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.BillboardDto)obj).ViewportScaling,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.BillboardDto)obj).ViewportScaling = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "ViewportScaling",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.BillboardDto).GetProperty("ViewportScaling", InstanceMemberBindingFlags, null, typeof(double?), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[19] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<double?>(options, info19);
+
             return properties;
         }
 
@@ -427,6 +487,12 @@ namespace AetherVk.Logic.SaveFile
             global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.SaveFile.BillboardDto)value).ImageNucleusX, NullableDouble);
             writer.WritePropertyName(PropName_image_nucleus_y);
             global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.SaveFile.BillboardDto)value).ImageNucleusY, NullableDouble);
+            writer.WritePropertyName(PropName_viewport_offset_x);
+            global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.SaveFile.BillboardDto)value).ViewportOffsetX, NullableDouble);
+            writer.WritePropertyName(PropName_viewport_offset_y);
+            global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.SaveFile.BillboardDto)value).ViewportOffsetY, NullableDouble);
+            writer.WritePropertyName(PropName_viewport_scaling);
+            global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.SaveFile.BillboardDto)value).ViewportScaling, NullableDouble);
 
             writer.WriteEndObject();
         }

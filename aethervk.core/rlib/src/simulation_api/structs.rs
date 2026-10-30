@@ -1392,6 +1392,16 @@ pub struct SceneContext {
   /// `SimulationContext::set_dust_reuse_px` ("Temporal reuse tolerance" setting,
   /// `AETHERVK_DUST_REUSE_PX` default override)
   pub dust_reuse_px: Arc<core::sync::atomic::AtomicU32>,
+  /// "Playback preview quality" (0 Off, 1 Smooth, 2 Balanced, 3 Quality,
+  /// `dust::play_quality::PlayPreview`), see `SimulationContext::set_dust_play_preview`
+  pub dust_play_preview: Arc<core::sync::atomic::AtomicU32>,
+  /// the monotonic time (µs) until which the dust stays in preview after a pause or a seek
+  /// (`i64::MIN`: no hold), see [`SceneContext::hold_dust_preview`]
+  pub dust_preview_hold_us: Arc<core::sync::atomic::AtomicI64>,
+  /// the monotonic time (µs) a paused full dust frame last drew (not reused; `i64::MIN` never),
+  /// stamped by the render thread: the full render in progress, see
+  /// [`SceneContext::dust_render_phase`]
+  pub dust_full_draw_us: Arc<core::sync::atomic::AtomicI64>,
   /// dust feedback generation: bumped on a discontinuity (a restored save, a seek, a settled
   /// restored camera, `SimulationContext::reset_dust_view_feedback`); every view's adaptive
   /// quality feedback restarts cold when it changes (`Device::dust_sync_feedback_gen`)
@@ -1423,6 +1433,47 @@ impl Drop for SceneContext {
 }
 
 impl SceneContext {
+  /// Keeps the dust in preview for `PREVIEW_HOLD_US` from now (a pause, a seek: the scrub's next
+  /// step comes before a full frame would finish)
+  pub fn hold_dust_preview(&self) {
+    let until = aethervk_oshal_rlib::os::time::get_monotonic_time()
+      + crate::scene::dust::play_quality::PREVIEW_HOLD_US;
+    self.dust_preview_hold_us.store(until, core::sync::atomic::Ordering::Relaxed);
+  }
+
+  /// Ends the preview hold now: the next paused frame is the full render ("Render full")
+  pub fn release_dust_preview(&self) {
+    self.dust_preview_hold_us.store(i64::MIN, core::sync::atomic::Ordering::Relaxed);
+  }
+
+  /// Whether the next frame draws the dust in preview: playing, or inside the hold after a
+  /// pause or a seek, with a preview level other than Off
+  pub fn dust_in_preview(&self) -> bool {
+    use core::sync::atomic::Ordering;
+    let level = self.dust_play_preview.load(Ordering::Relaxed);
+    if crate::scene::dust::play_quality::PlayPreview::from_level(level).quality().is_none() {
+      return false;
+    }
+    self.simulation_running.load(Ordering::Acquire)
+      || aethervk_oshal_rlib::os::time::get_monotonic_time()
+        < self.dust_preview_hold_us.load(Ordering::Relaxed)
+  }
+
+  /// What the dust view is doing now (the viewport's badge): playing, the hold after a pause or
+  /// a seek (with its progress), the full render drawing, or settled
+  pub fn dust_render_phase(&self) -> crate::scene::dust::play_quality::DustRenderPhase {
+    use core::sync::atomic::Ordering;
+    use crate::scene::dust::play_quality::PlayPreview;
+    let level = self.dust_play_preview.load(Ordering::Relaxed);
+    crate::scene::dust::play_quality::dust_render_phase(
+      aethervk_oshal_rlib::os::time::get_monotonic_time(),
+      self.simulation_running.load(Ordering::Acquire),
+      PlayPreview::from_level(level).quality().is_some(),
+      self.dust_preview_hold_us.load(Ordering::Relaxed),
+      self.dust_full_draw_us.load(Ordering::Relaxed),
+    )
+  }
+
   /// The dust quality knobs the render thread draws the next frame with
   /// (`scene::dust::play_quality`, handoff P3): the scene's settings, coarsened by
   /// [`crate::scene::dust::play_quality::PlayQuality`] while the simulation runs
@@ -1438,10 +1489,17 @@ impl SceneContext {
       propagate_detail: self.dust_propagate_detail.load(Ordering::Relaxed),
       reuse_px: self.dust_reuse_px.load(Ordering::Relaxed),
     };
-    let running = self.simulation_running.load(Ordering::Acquire);
-    let Some(pq) = PlayQuality::from_env() else {
+    use crate::scene::dust::play_quality::PlayPreview;
+    let preview = PlayPreview::from_level(self.dust_play_preview.load(Ordering::Relaxed));
+    let Some(pq) = preview.quality() else {
       return (knobs, false);
     };
+    // `AETHERVK_DUST_PLAY_QUALITY=v,h,p` still overrides the play values of the default level
+    let pq = match (preview, PlayQuality::from_env()) {
+      (PlayPreview::Balanced, Some(env)) => env,
+      _ => pq,
+    };
+    let running = self.dust_in_preview();
     // once per transition (0 = never logged, 1 = on, 2 = off)
     static LOGGED: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
     let state = if running { 1 } else { 2 };
@@ -1552,6 +1610,11 @@ impl SceneContext {
           .unwrap_or(crate::scene::dust::DUST_HAZE_DETAIL_DEFAULT),
       )),
       dust_reuse_px: Arc::new(core::sync::atomic::AtomicU32::new(crate::scene::dust::dust_reuse_px_default())),
+      dust_play_preview: Arc::new(core::sync::atomic::AtomicU32::new(
+        crate::scene::dust::play_quality::PlayPreview::default_level(),
+      )),
+      dust_preview_hold_us: Arc::new(core::sync::atomic::AtomicI64::new(i64::MIN)),
+      dust_full_draw_us: Arc::new(core::sync::atomic::AtomicI64::new(i64::MIN)),
       dust_feedback_gen: Arc::new(core::sync::atomic::AtomicU32::new(0)),
       dust_view_flags: Arc::new(core::sync::atomic::AtomicU32::new(
         crate::scene::dust::dust_view_flags_default(),

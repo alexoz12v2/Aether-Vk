@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net.Sockets;
 using OpenQA.Selenium;
@@ -25,13 +26,49 @@ public sealed class AppSession : IDisposable
   public WindowsDriver<WindowsElement> Desktop { get; }
   public IntPtr MainWindow { get; }
 
+  /// <summary>The app's stdout / stderr lines as they arrive (the newest ~20 000), when launched with a log.</summary>
+  public ConcurrentQueue<(DateTime At, string Line)> Lines { get; }
+
+  private const int MaxLines = 20_000;
+
   private AppSession(Process process, IntPtr mainWindow, WindowsDriver<WindowsElement> app,
-    WindowsDriver<WindowsElement> desktop)
+    WindowsDriver<WindowsElement> desktop, ConcurrentQueue<(DateTime, string)> lines)
   {
     Process = process;
     MainWindow = mainWindow;
     App = app;
     Desktop = desktop;
+    Lines = lines;
+  }
+
+  /// <summary>The process runs and its main window still exists.</summary>
+  public bool IsAlive => !Process.HasExited && Win32.IsWindow(MainWindow);
+
+  /// <summary>
+  /// Throws <see cref="AppGoneException"/> with the tail of the app's log when the app is gone, so
+  /// a test fails at once with the reason instead of timing out on every following lookup.
+  /// </summary>
+  public void EnsureAlive(string doing)
+  {
+    if (IsAlive)
+      return;
+    var code = Process.HasExited ? Process.ExitCode.ToString() : "window gone";
+    var tail = Lines.TakeLast(15).Select(l => l.Line).ToList();
+    var hint = tail.Any(l => l.Contains("Application is shutting down", StringComparison.Ordinal))
+      ? " — a host stop (a console Ctrl+C or close reached the app?)"
+      : string.Empty;
+    throw new AppGoneException($"AetherVk closed while {doing} (exit {code}){hint}; log tail:\n{string.Join('\n', tail)}");
+  }
+
+  /// <summary>Brings the main window to the front before keyboard input (typing must not land in another window).</summary>
+  public void Foreground()
+  {
+    for (int i = 0; i < 3 && Win32.GetForegroundWindow() != MainWindow; i++)
+    {
+      Win32.TapAlt(); // lets this process take the foreground
+      Win32.SetForegroundWindow(MainWindow);
+      Thread.Sleep(150);
+    }
   }
 
   /// <summary>Why the suite cannot run here (null when it can).</summary>
@@ -109,7 +146,8 @@ public sealed class AppSession : IDisposable
   /// Starts the app and waits past the splash for the main window. With <paramref name="logPath"/>
   /// its stdout / stderr (the C# console and the core's log callback) are written there.
   /// </summary>
-  public static AppSession Launch(string? logPath = null, TimeSpan? startupTimeout = null, bool diagnosticPanels = true)
+  public static AppSession Launch(string? logPath = null, TimeSpan? startupTimeout = null, bool diagnosticPanels = true,
+    bool perfLog = false)
   {
     EnsureDriver();
     var exe = AppPath();
@@ -119,21 +157,33 @@ public sealed class AppSession : IDisposable
       {
         WorkingDirectory = Path.GetDirectoryName(exe)!,
         UseShellExecute = false,
+        // a console of its own: a Ctrl+C (or typing) in the dotnet test console must not stop the app
+        CreateNoWindow = true,
         RedirectStandardOutput = logPath is not null,
         RedirectStandardError = logPath is not null,
         // the observer line lives in the diagnostic panel, hidden by default
       },
     };
+    var lines = new ConcurrentQueue<(DateTime, string)>();
     // marks the run as the suite's (its test-only switches, e.g. the crash trigger, need it)
     process.StartInfo.Environment["AETHERVK_E2E"] = "1";
     if (diagnosticPanels)
       process.StartInfo.Environment["AETHERVK_DIAGNOSTIC_PANELS"] = "1";
+    if (perfLog)
+      process.StartInfo.Environment["AETHERVK_PERF_LOG"] = "1";
     if (logPath is not null)
     {
       Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
       var log = TextWriter.Synchronized(new StreamWriter(logPath, append: false) { AutoFlush = true });
-      process.OutputDataReceived += (_, e) => { if (e.Data is not null) log.WriteLine(e.Data); };
-      process.ErrorDataReceived += (_, e) => { if (e.Data is not null) log.WriteLine("[stderr] " + e.Data); };
+      void Keep(string line)
+      {
+        log.WriteLine(line);
+        lines.Enqueue((DateTime.UtcNow, line));
+        while (lines.Count > MaxLines)
+          lines.TryDequeue(out _);
+      }
+      process.OutputDataReceived += (_, e) => { if (e.Data is not null) Keep(e.Data); };
+      process.ErrorDataReceived += (_, e) => { if (e.Data is not null) Keep("[stderr] " + e.Data); };
       process.Exited += (_, _) => log.Dispose();
       process.EnableRaisingEvents = true;
     }
@@ -158,7 +208,7 @@ public sealed class AppSession : IDisposable
       var desktop = new WindowsDriver<WindowsElement>(new Uri(DriverUrl), rootOptions, TimeSpan.FromMinutes(2));
 
       app.Manage().Window.Maximize();
-      return new AppSession(process, main, app, desktop);
+      return new AppSession(process, main, app, desktop, lines);
     }
     catch
     {
@@ -205,3 +255,6 @@ public sealed class AppSession : IDisposable
     Process.Dispose();
   }
 }
+
+/// <summary>The app closed (or lost its main window) under a running test.</summary>
+public sealed class AppGoneException(string message) : Exception(message);
