@@ -655,4 +655,588 @@
   <data name="Tabs_Settings_TimeScaleTdb" xml:space="preserve">
     <value>TDB (dynamical time: the engine)</value>
   </data>
+  <data name="Tabs_Comet_HelpHeaderSpkRecords" xml:space="preserve">
+    <value>Available SPK records</value>
+  </data>
+  <data name="Tabs_Comet_HelpSpkRecords" xml:space="preserve">
+    <value>Ephemeris (SPK) records of the selected comet: each is a separate fit of its orbit.
+
+Select one, then press Download &amp; Commit to attach it to the simulation.</value>
+  </data>
+  <data name="Tabs_Comet_HelpHeaderEpochRange" xml:space="preserve">
+    <value>Start and End</value>
+  </data>
+  <data name="Tabs_Comet_HelpEpochRange" xml:space="preserve">
+    <value>Start and End of the simulated period, as ISO 8601 dates (e.g. 2000-01-01T12:00:00Z), in the time scale shown in the labels (Settings › Time scale for dates; UTC by default).
+
+The period must be at least 1 day long: End at least 1 day after Start.
+
+Typing here only proposes a range; Download &amp; Commit (or Recommit) applies it.</value>
+  </data>
+  <data name="Tabs_Comet_HelpHeaderProposedRange" xml:space="preserve">
+    <value>Proposed range</value>
+  </data>
+  <data name="Tabs_Comet_HelpProposedRange" xml:space="preserve">
+    <value>The range in the Start/End boxes: what the next Download &amp; Commit or Recommit will use.
+
+It does not change the running simulation. Restore puts the committed range back in the boxes.</value>
+  </data>
+  <data name="Tabs_Comet_HelpHeaderRecommit" xml:space="preserve">
+    <value>Recommit with this range</value>
+  </data>
+  <data name="Tabs_Comet_HelpRecommit" xml:space="preserve">
+    <value>Commits the comet again (as Download &amp; Commit) with the range in the boxes. The dust restarts from the new start.
+
+Until then the simulation keeps the committed range.</value>
+  </data>
+  <data name="Tabs_Comet_HelpHeaderModelRange" xml:space="preserve">
+    <value>Model range</value>
+  </data>
+  <data name="Tabs_Comet_HelpModelRange" xml:space="preserve">
+    <value>A range for the comparison with a telescope image (the Model view): it ends at the image epoch and starts N full nucleus rotations earlier, so the simulated dust history covers N full spins before the image.
+
+Rotations: N, a whole number of at least 1. One rotation lasts the rotation period (Rotational Model: 360° divided by the rotation rate).
+
+Ending at: normally the epoch of your telescope image (the FITS "Model range" button fills it with the observation epoch). Leave it empty to use the End box.
+
+Set range: sets Start and End (N × period, never less than 1 day). It only proposes the range: Download &amp; Commit applies it.</value>
+  </data>
+  <data name="Tabs_Comet_HelpHeaderDustLead" xml:space="preserve">
+    <value>Dust lead time</value>
+  </data>
+  <data name="Tabs_Comet_HelpDustLead" xml:space="preserve">
+    <value>Days the jets start emitting before the start epoch, from 0 to 30 (30 = one dust lifetime, the default).
+
+With 30 the tail is already fully formed when the timeline starts; with 0 the jets switch on at the start and the tail grows from nothing.
+
+Used the next time the comet is committed.</value>
+  </data>
+  <data name="Tabs_Comet_HelpHeaderReferenceOrbit" xml:space="preserve">
+    <value>Reference orbit</value>
+  </data>
+  <data name="Tabs_Comet_HelpReferenceOrbit" xml:space="preserve">
+    <value>The red track is a two-body (Keplerian) reference orbit drawn next to the true SPK path.
+
+SBDB solution: the elements JPL publishes, osculating at the solution epoch, which can be years away from your window (67P: 2015-10-10, about 0.12 AU off its 2025 path because of Jupiter).
+
+Osculating at start epoch: elements recomputed from the SPK position and velocity at your start epoch. Exact there, and within about 10³ km over a month (planetary perturbations and outgassing forces).
+
+Required before the first commit; it cannot be changed while a comet is committed.</value>
+  </data>
+  <data name="Tabs_Comet_HelpNucleusRadius" xml:space="preserve">
+    <value>Bounding-sphere radius of the comet nucleus, in km (0.1 to 100); the jets start on this sphere.
+
+Auto-filled from Horizons when a comet is committed. Override it here if needed.
+
+An edit after Play returns the simulation to the snapshot taken at Play.</value>
+  </data>
+  <data name="Tabs_Comet_HelpHeaderPoleRa" xml:space="preserve">
+    <value>Pole RA</value>
+  </data>
+  <data name="Tabs_Comet_HelpPoleRa" xml:space="preserve">
+    <value>Right ascension of the spin axis (J2000), in degrees.
+
+With Pole Dec it sets where the spin axis points on the sky. These are not rotations: the nucleus rotates only about its own axis, and the axis stays fixed in space; RA/Dec only orient it.</value>
+  </data>
+  <data name="Tabs_Comet_HelpHeaderPoleDec" xml:space="preserve">
+    <value>Pole Dec</value>
+  </data>
+  <data name="Tabs_Comet_HelpPoleDec" xml:space="preserve">
+    <value>Declination of the spin axis (J2000), in degrees.
+
+With Pole RA it sets where the spin axis points on the sky. These are not rotations: the nucleus rotates only about its own axis, and the axis stays fixed in space; RA/Dec only orient it.</value>
+  </data>
+  <data name="Tabs_Comet_HelpHeaderPrimeMeridian" xml:space="preserve">
+    <value>Prime Meridian</value>
+  </data>
+  <data name="Tabs_Comet_HelpPrimeMeridian" xml:space="preserve">
+    <value>The nucleus' rotation angle at the reference date J2000, in degrees (where longitude 0 faces).
+
+It sets which side faces where at a given time, i.e. the timing of the jet spirals, not the outline of the fan.</value>
+  </data>
+  <data name="Tabs_Comet_HelpHeaderRotPeriod" xml:space="preserve">
+    <value>Rotation Period (h)</value>
+  </data>
+  <data name="Tabs_Comet_HelpRotPeriod" xml:space="preserve">
+    <value>Sidereal rotation period, in hours. It edits the rotation rate in the Advanced expander (°/day); the sign (prograde/retrograde) is kept. Example: 718 °/day = 12.03 h.
+
+It also sets the length of one rotation in Model range.</value>
+  </data>
+  <data name="Tabs_Comet_HelpHeaderRatesAdvanced" xml:space="preserve">
+    <value>Advanced: rates</value>
+  </data>
+  <data name="Tabs_Comet_HelpRatesAdvanced" xml:space="preserve">
+    <value>RA Rate and Dec Rate: slow drift of the spin axis right ascension and declination (precession), in degrees per Julian century. 0, the default, keeps the axis fixed.
+
+Rotation Rate: the nucleus spin in degrees per day (the IAU rotation rate W), the same spin as the period: period (h) = 360 × 24 / |rate|. The sign gives prograde (+) or retrograde (−) spin.</value>
+  </data>
+  <data name="Tabs_Comet_HelpHeaderBodyFixed" xml:space="preserve">
+    <value>Body-fixed camera orientation</value>
+  </data>
+  <data name="Tabs_Comet_HelpBodyFixed" xml:space="preserve">
+    <value>Yes: a camera attached to the nucleus turns with it, so the nucleus surface stays fixed in the view.
+
+No: the spin is compensated, so the view keeps its direction relative to the stars while the nucleus rotates.</value>
+  </data>
+  <data name="Tabs_Timeline_HelpHeaderEpochRange" xml:space="preserve">
+    <value>Simulated period</value>
+  </data>
+  <data name="Tabs_Timeline_HelpEpochRange" xml:space="preserve">
+    <value>Start and End of the simulated period: the committed one (before a commit, the range proposed in the Comet tab), in the time scale shown in the labels (Settings › Time scale for dates).
+
+Read-only here: change it in the Comet tab (step 3), then Download &amp; Commit there.</value>
+  </data>
+  <data name="Tabs_Timeline_HelpHeaderCommittedRange" xml:space="preserve">
+    <value>Committed range</value>
+  </data>
+  <data name="Tabs_Timeline_HelpCommittedRange" xml:space="preserve">
+    <value>The range the simulation runs: the comet's ephemeris covers it, and Play, Reset, Run to End and Go stay inside it.</value>
+  </data>
+  <data name="Tabs_Timeline_HelpHeaderSpeed" xml:space="preserve">
+    <value>Playback speed</value>
+  </data>
+  <data name="Tabs_Timeline_HelpSpeed" xml:space="preserve">
+    <value>How fast simulated time runs while playing, as simulated time per real second (for example 1 h/s: one simulated hour per second).</value>
+  </data>
+  <data name="Tabs_Timeline_HelpHeaderPlayback" xml:space="preserve">
+    <value>Playback</value>
+  </data>
+  <data name="Tabs_Timeline_HelpPlayback" xml:space="preserve">
+    <value>Reset: back to the start epoch of the committed range; the dust is rebuilt there.
+
+Play / Pause: simulated time runs at the chosen speed and the dust is computed frame by frame, so the tail evolves while you watch. Pause keeps the current epoch.
+
+Run to End: jumps to the end epoch without animating. The dust there is rebuilt at once, so it can look complete sooner than while playing.</value>
+  </data>
+  <data name="Tabs_Timeline_TipReset" xml:space="preserve">
+    <value>Reset</value>
+  </data>
+  <data name="Tabs_Timeline_TipPlayPause" xml:space="preserve">
+    <value>Play / Pause</value>
+  </data>
+  <data name="Tabs_Timeline_TipRunToEnd" xml:space="preserve">
+    <value>Run to End</value>
+  </data>
+  <data name="Tabs_Timeline_TipGo" xml:space="preserve">
+    <value>Go to epoch</value>
+  </data>
+  <data name="Tabs_Timeline_HelpHeaderCurrentEpoch" xml:space="preserve">
+    <value>Current epoch</value>
+  </data>
+  <data name="Tabs_Timeline_HelpCurrentEpoch" xml:space="preserve">
+    <value>The simulation's current epoch, in the time scale shown in the label.
+
+Type an epoch inside the committed range and press Enter, or Go, to jump there; the dust is rebuilt at that epoch.</value>
+  </data>
+  <data name="ModeBar_ModelShortTip" xml:space="preserve">
+    <value>Model: compare with image</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderGizmo" xml:space="preserve">
+    <value>Show sphere gizmo</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderJetAngles" xml:space="preserve">
+    <value>Show jet angles</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderStreamColor" xml:space="preserve">
+    <value>Stream Color</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderJetBeta" xml:space="preserve">
+    <value>β (beta)</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderJetQDust" xml:space="preserve">
+    <value>Q_dust @ 1 AU</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderJetDiameter" xml:space="preserve">
+    <value>Diameter</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderQpr" xml:space="preserve">
+    <value>Q_pr</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderSizeLawQ" xml:space="preserve">
+    <value>Size law q</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderSizeRangeF" xml:space="preserve">
+    <value>Size range F</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderJetGrain" xml:space="preserve">
+    <value>Grain (this jet)</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderJetActivity" xml:space="preserve">
+    <value>Activity (this jet)</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderQd1Au" xml:space="preserve">
+    <value>Q_d at 1 AU (kg/s)</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderCopyGrain" xml:space="preserve">
+    <value>Copy to all jets</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderJetDefaults" xml:space="preserve">
+    <value>Defaults for new jets</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderActivity" xml:space="preserve">
+    <value>Activity (Q_d)</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderQdExponent" xml:space="preserve">
+    <value>Q_d law exponent</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderQdCutoff" xml:space="preserve">
+    <value>Cutoff (AU)</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderQdMax" xml:space="preserve">
+    <value>Q_d max (kg/s)</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderSizeDistribution" xml:space="preserve">
+    <value>Grain size distribution</value>
+  </data>
+  <data name="Tabs_Model_HelpSun" xml:space="preserve">
+    <value>Sun–comet geometry: the comet's distance from the Sun (AU), the subsolar latitude, STO (the Sun–target–observer phase angle) and the Sun's position angle (PA), in degrees.&#10;&#10;Legacy panel, disabled: the engine now computes these from the JPL Horizons SPK ephemerides along the epoch timeline, so they need no manual input.</value>
+  </data>
+  <data name="Tabs_Model_HelpShowReferenceError" xml:space="preserve">
+    <value>Draws two lines from the comet to its reference orbit (the red track):&#10;• cross-track: to the closest point of the track;&#10;• same-epoch: to where the reference says the comet should be now.&#10;&#10;Each line is shown only while it is longer than 10 nucleus radii.</value>
+  </data>
+  <data name="Tabs_Model_HelpDustVisibility" xml:space="preserve">
+    <value>Display stretch of the dust: the softening of an asinh curve over the accumulated optical depth, relative to the brightest dust in view (it adapts to the view like an eye). From 0.00001 to 1, on a logarithmic scale.&#10;&#10;Smaller: the faint, old tail and trail (thousands of times fainter than the coma) become visible while the coma saturates.&#10;1: close to linear, physically proportional brightness.&#10;&#10;Visual only: the simulated dust is unchanged.</value>
+  </data>
+  <data name="Tabs_Model_HelpDustFlow" xml:space="preserve">
+    <value>Brightness marks riding the dust along synchrones (the dust of one emission instant), a motion cue near the nucleus: peak 4×, trough 0.15×, mean 1.&#10;&#10;Off by default: seen from 0.03 AU and beyond, the marks are the synchrone fan itself, hard rays through the nucleus that the physical optical depth does not show.&#10;&#10;Visual only. Their speed is set by the flow time-lapse.</value>
+  </data>
+  <data name="Tabs_Model_HelpDustRhoNorm" xml:space="preserve">
+    <value>Divides the dust brightness by the distance from the nucleus (ρ), so the bright inner coma and the faint outer jets share one exposure.&#10;&#10;Display only: the simulated dust is unchanged.</value>
+  </data>
+  <data name="Tabs_Model_HelpDustTrajectories" xml:space="preserve">
+    <value>Draws as lines the paths of about 200 grains since they left the nucleus, one colour per jet.</value>
+  </data>
+  <data name="Tabs_Model_HelpDustExposure" xml:space="preserve">
+    <value>Brightens (+) or darkens (−) the dust over the automatic exposure, in photographic stops (EV), from −6 to +6 in steps of 0.25. One stop doubles or halves the brightness.</value>
+  </data>
+  <data name="Tabs_Model_HelpDustTracers" xml:space="preserve">
+    <value>Draws one dust cluster in 256 as bright dots at the exact positions of its grain sizes, from the slow large grains to the fast small ones: the dots span the tail.&#10;&#10;The dust drifts at 2 to 150 m/s while a pixel of a wide view spans tens of km: at low simulation speed it moves far less than a pixel per second, and the dense dots blend into a still fog. Tracers are real particles to follow (raise the simulation speed to see them stream).&#10;&#10;Visual only.</value>
+  </data>
+  <data name="Tabs_Model_HelpDustFlowSpeed" xml:space="preserve">
+    <value>Speed of the brightness marks (flow pulses) that ride the dust while the simulation runs; they freeze on pause. From 1 to 10000, on a logarithmic scale.&#10;&#10;1: the marks move exactly with the dust (its real speed on screen, often far below a pixel per second in wide views).&#10;K: every mark moves K times faster than its dust, in its direction, so the whole swarm keeps its true velocity field at a readable pace. Changing it never jumps the marks.&#10;&#10;Visual only.</value>
+  </data>
+  <data name="Tabs_Model_HelpGizmo" xml:space="preserve">
+    <value>The wireframe sphere and axes around the nucleus. Saved with the file.&#10;&#10;The boxes below choose its parts:&#10;• Grid: the latitude / longitude wireframe;&#10;• Body X/Y: the body-fixed X (red) and Y (green) axes, rotating with the nucleus;&#10;• Spin axis: the rotation axis (body Z, blue);&#10;• Sun: the arrow towards the Sun;&#10;• Velocity: the comet's heliocentric velocity direction (magenta).</value>
+  </data>
+  <data name="Tabs_Model_HelpJetAngles" xml:space="preserve">
+    <value>Draws the selected jet's latitude and longitude in the viewport as arcs, with their values in degrees. Saved with the file.</value>
+  </data>
+  <data name="Tabs_Model_HelpJetLatitude" xml:space="preserve">
+    <value>Latitude of the jet source on the nucleus, in degrees in the body-fixed frame: +90 is the north spin pole, 0 the equator, −90 the south pole.</value>
+  </data>
+  <data name="Tabs_Model_HelpJetLongitude" xml:space="preserve">
+    <value>Longitude of the jet source on the nucleus, in degrees from the prime meridian (−180 to 180). The nucleus spin carries the jet around as it rotates.</value>
+  </data>
+  <data name="Tabs_Model_HelpJetStreamColor" xml:space="preserve">
+    <value>Colour used to draw this jet in the viewport (its dust and direction line).&#10;&#10;Display only: it does not change the physics.</value>
+  </data>
+  <data name="Tabs_Model_HelpJetBeta" xml:space="preserve">
+    <value>Computed, read-only. β is the ratio of the solar radiation-pressure force to solar gravity on the reference grain:&#10;β ≈ 0.57 · Q_pr / (ρ · s), with ρ the density in g/cm³ and s the grain radius in µm.&#10;&#10;Small, light grains have a larger β and curve away from the Sun faster.</value>
+  </data>
+  <data name="Tabs_Model_HelpJetQDust" xml:space="preserve">
+    <value>Computed, read-only. The dust mass production rate at 1 AU from the Sun, in kg/s, as the engine applies it: this jet's Q_d at 1 AU clamped to the model-wide max (Q_d max).</value>
+  </data>
+  <data name="Tabs_Model_HelpJetDiameter" xml:space="preserve">
+    <value>Reference grain diameter of this jet, in µm. With density and Q_pr it sets β, the radiation-pressure push: smaller or lighter grains curve away from the Sun faster.&#10;&#10;The size law spans radii from s₀/F to s₀·F around s₀, half the diameter.</value>
+  </data>
+  <data name="Tabs_Model_HelpJetDensity" xml:space="preserve">
+    <value>Bulk density of this jet's grains, in g/cm³ (cometary dust about 0.5 to 1). It enters β and the dust mass a given brightness needs.</value>
+  </data>
+  <data name="Tabs_Model_HelpJetQpr" xml:space="preserve">
+    <value>Radiation-pressure efficiency Q_pr of this jet's grains (0.5 to 2; 1 is a grey body). It scales β only, not the brightness.</value>
+  </data>
+  <data name="Tabs_Model_HelpJetAlbedo" xml:space="preserve">
+    <value>Geometric albedo of this jet's dust (0.01 to 0.5; cometary dust 0.03 to 0.06). It scales the brightness only; the amount of dust is the jet's production rate Q_d.</value>
+  </data>
+  <data name="Tabs_Model_HelpJetSizeQ" xml:space="preserve">
+    <value>Exponent q of this jet's grain size law n(s) ∝ s^−q (2 to 5; 3.5 is the usual value). A larger q means more small grains.&#10;&#10;Limitation: q only changes the individual bright specks; the continuous dust rendering assumes q = 3.5.</value>
+  </data>
+  <data name="Tabs_Model_HelpJetSizeRange" xml:space="preserve">
+    <value>Range factor F of this jet's grains (1 to 1000): radii span from s₀/F to s₀·F, where s₀ is half the diameter. A larger F means a wider spread of grain sizes.</value>
+  </data>
+  <data name="Tabs_Model_HelpJetGrain" xml:space="preserve">
+    <value>This jet's own dust grains: every jet has its own, and a new jet starts from the defaults further down.&#10;&#10;Grain radii follow n(s) ∝ s^−q from s₀/F to s₀·F, s₀ = diameter/2 (q = 3.5, F = 10, 100 µm → radii 5–500 µm).&#10;&#10;Diameter, density and Q_pr set β ∝ Q_pr/(ρ·s), how hard sunlight pushes the grains away from the Sun. The albedo sets how bright they are; the amount of dust is the jet's production rate Q_d (Advanced: activity).&#10;&#10;Each field has its own ? with its range.&#10;&#10;Limitation: q only changes the individual bright specks; the continuous dust rendering is built for q = 3.5 whatever q is.</value>
+  </data>
+  <data name="Tabs_Model_HelpJetActivity" xml:space="preserve">
+    <value>This jet's dust mass production rate Q_d at 1 AU from the Sun, in kg/s: how much dust it produces. The jets add up: the comet's total is the Σ read-out under Advanced: activity (Q_d) in the defaults.&#10;&#10;Q_d(r) = min(max, Q_d₀ · r^−k), zero beyond the cutoff; the exponent k, the cutoff and the max are shared by every jet (Advanced: activity (Q_d) under Defaults for new jets).&#10;&#10;Q_d does not depend on the grain (density, size, albedo) or the speed: those set the brightness and β only.&#10;&#10;Comets range from well under 1 kg/s to thousands of kg/s.</value>
+  </data>
+  <data name="Tabs_Model_HelpJetDustRate0" xml:space="preserve">
+    <value>This jet's dust mass production rate at 1 AU from the Sun, in kg/s. It scales as r_h^−k up to the max and stops beyond the cutoff (both shared by every jet).&#10;&#10;Comets range from well under 1 kg/s to thousands of kg/s.</value>
+  </data>
+  <data name="Tabs_Model_HelpCopyGrain" xml:space="preserve">
+    <value>Gives every other jet this jet's grain and activity: diameter, density, Q_pr, albedo, q, F and Q_d₀.&#10;&#10;Their sites, speeds and colours stay as they are.</value>
+  </data>
+  <data name="Tabs_Model_HelpJetDefaults" xml:space="preserve">
+    <value>Every jet has its own grain (diameter, density, Q_pr, albedo, q, F) and its own Q_d₀: edit them in the selected jet's Grain and Activity panels.&#10;&#10;The values here are what a newly added jet starts from; changing them does not change existing jets. Only the shape of the Q_d law (exponent, cutoff, max, under Advanced: activity) is shared by every jet.</value>
+  </data>
+  <data name="Tabs_Model_HelpDustDensity" xml:space="preserve">
+    <value>Bulk density of the grains of new jets, in g/cm³ (cometary dust about 0.5 to 1). It enters β and the dust mass a given brightness needs.&#10;&#10;Each jet then has its own (its Grain panel).</value>
+  </data>
+  <data name="Tabs_Model_HelpDustDiameter" xml:space="preserve">
+    <value>Reference grain diameter of new jets, in µm. With density and Q_pr it sets β, the radiation-pressure push: smaller or lighter grains curve away from the Sun faster.&#10;&#10;Each jet then has its own (its Grain panel).</value>
+  </data>
+  <data name="Tabs_Model_HelpScatteringEfficiency" xml:space="preserve">
+    <value>Radiation-pressure efficiency Q_pr of new jets' grains (0.5 to 2; 1 is a grey body). It scales β only, not the brightness.&#10;&#10;Each jet then has its own (its Grain panel).</value>
+  </data>
+  <data name="Tabs_Model_HelpDustAlbedo" xml:space="preserve">
+    <value>Geometric albedo of new jets' dust (0.01 to 0.5; cometary dust 0.03 to 0.06). It scales the brightness only, not the production rate Q_d.&#10;&#10;Each jet then has its own (its Grain panel).</value>
+  </data>
+  <data name="Tabs_Model_HelpActivity" xml:space="preserve">
+    <value>Q_d is the dust mass production rate: how much dust (kg/s) the comet produces at each distance from the Sun.&#10;&#10;Q_d(r) = min(max, Q_d₀ · r^−k), zero beyond the cutoff.&#10;• Q_d at 1 AU: the rate at 1 AU (kg/s), per jet; the value here is the default for new jets.&#10;• Exponent k: how fast the rate falls with solar distance (k = 2: twice as far → 4× less dust).&#10;• Cutoff: distance where the emission stops.&#10;• Max: cap on the rate close to the Sun.&#10;k, cutoff and max are shared by every jet.&#10;&#10;The Σ line at the top is the comet's total activity: the jets' rates Q_d add up. It is shown at 1 AU from the Sun and, with a committed comet, at its current distance.&#10;&#10;Q_d sets the amount of dust directly: it does not depend on the grain or the speed. Density, diameter and albedo set how bright that dust is and how hard radiation pressure pushes the grains (β ∝ 1/(ρ·s)), i.e. how much the coma curves away from the Sun.</value>
+  </data>
+  <data name="Tabs_Model_HelpDustRate0" xml:space="preserve">
+    <value>Default dust mass production rate at 1 AU from the Sun for new jets, in kg/s. It scales as r_h^−k up to the max and stops beyond the cutoff.&#10;&#10;Each jet then has its own (its Activity panel).</value>
+  </data>
+  <data name="Tabs_Model_HelpDustRatePower" xml:space="preserve">
+    <value>Exponent k of the production law Q_d(r) = Q_d₀ · r^−k, with r the distance from the Sun in AU (1 to 4). 2 is the classic value; a larger k means the rate drops faster as the comet recedes.&#10;&#10;Shared by every jet.</value>
+  </data>
+  <data name="Tabs_Model_HelpDustRateCutoff" xml:space="preserve">
+    <value>Distance from the Sun, in AU (3 to 100), beyond which the comet emits no dust.&#10;&#10;Shared by every jet.</value>
+  </data>
+  <data name="Tabs_Model_HelpDustRateMax" xml:space="preserve">
+    <value>Upper limit on each jet's dust production rate, in kg/s, so that the emission does not grow without bound close to the Sun.&#10;&#10;Shared by every jet.</value>
+  </data>
+  <data name="Tabs_Model_HelpSizeDistribution" xml:space="preserve">
+    <value>The size range new jets start from. The exponent q is set per jet, in each jet's Grain panel (new jets start at q = 3.5).&#10;&#10;Grain radii follow n(s) ∝ s^−q from s₀/F to s₀·F, s₀ = diameter/2 (q = 3.5, F = 10, 100 µm → radii 5–500 µm).&#10;&#10;By number, small grains dominate; by cross-section (what sets brightness) the law is s^(2−q), so brightness favours small grains only slowly.&#10;&#10;The continuous dust rendering is built for q = 3.5; changing q only affects the individual bright specks.</value>
+  </data>
+  <data name="Tabs_Model_HelpSizeRange" xml:space="preserve">
+    <value>Default range factor F for new jets (1 to 1000): grain radii span from s₀/F to s₀·F, where s₀ is half the reference diameter. A larger F means a wider spread of grain sizes.&#10;&#10;Each jet then has its own (its Grain panel).</value>
+  </data>
+  <data name="Tabs_Settings_HelpDisplayMode" xml:space="preserve">
+    <value>Default: draws the nucleus as a plain procedural sphere of the nucleus radius.&#10;&#10;Custom mesh: draws an imported 3D mesh with its textures, chosen below (import meshes in the Imports tab).&#10;&#10;Appearance only: the simulation is unaffected. The choice locks while the simulation plays.</value>
+  </data>
+  <data name="Tabs_Settings_HelpMesh" xml:space="preserve">
+    <value>Imported 3D mesh used to draw the nucleus. Import meshes in the Imports tab.&#10;&#10;Appearance only: the simulation is unaffected.</value>
+  </data>
+  <data name="Tabs_Settings_HelpChannelAlbedo" xml:space="preserve">
+    <value>Texture for the albedo channel: the base colour and reflectivity of the nucleus surface.&#10;&#10;Appearance only.</value>
+  </data>
+  <data name="Tabs_Settings_HelpChannelNormal" xml:space="preserve">
+    <value>Texture for the normal channel: fine surface relief (bumps and slopes) used for shading.&#10;&#10;Appearance only.</value>
+  </data>
+  <data name="Tabs_Settings_HelpChannelRoughness" xml:space="preserve">
+    <value>Texture for the roughness channel: how matte (rough) or glossy each point of the surface is.&#10;&#10;Appearance only.</value>
+  </data>
+  <data name="Tabs_Settings_HelpChannelAo" xml:space="preserve">
+    <value>Texture for the ambient occlusion channel: darkens crevices that receive less scattered light.&#10;&#10;Appearance only.</value>
+  </data>
+  <data name="Tabs_Settings_HelpBillboardTexture" xml:space="preserve">
+    <value>Imported texture to show in a new billboard window over the desktop; the button next to it opens the window. Import images in the Imports tab.</value>
+  </data>
+  <data name="Tabs_Settings_HelpBillboardAspectLock" xml:space="preserve">
+    <value>When on, changing the width or height also changes the other, keeping the image proportions.</value>
+  </data>
+  <data name="Tabs_Settings_HelpBillboardAlpha" xml:space="preserve">
+    <value>Opacity of the billboard, from 0 (fully transparent) to 1 (fully opaque).</value>
+  </data>
+  <data name="Tabs_Settings_HelpBillboardRotation" xml:space="preserve">
+    <value>Rotation of the billboard about its centre, in degrees (−180 to 180). The rotation handle on the billboard does the same.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderImageHeightKm" xml:space="preserve">
+    <value>Image height at the comet (km)</value>
+  </data>
+  <data name="Tabs_Settings_HelpImageHeightKm" xml:space="preserve">
+    <value>The image's vertical extent at the comet, in kilometres (dot decimals), for an image without a WCS (a JPEG, for example). When set, it wins over the plate scale.&#10;&#10;Empty: not set.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderPlateScale" xml:space="preserve">
+    <value>Plate scale (″/px)</value>
+  </data>
+  <data name="Tabs_Settings_HelpPlateScale" xml:space="preserve">
+    <value>The image's plate scale, in arcseconds per image pixel (dot decimals). A FITS image fills it from its WCS. The image height at the comet, when set, wins over it.&#10;&#10;Empty: not set.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderNucleusPixel" xml:space="preserve">
+    <value>Nucleus pixel (image px: x right, y down, pixel centres at whole numbers)</value>
+  </data>
+  <data name="Tabs_Settings_HelpNucleusPixel" xml:space="preserve">
+    <value>Where the comet's nucleus is in the image, in image pixels: x is the column from the left, y the row from the top; the centre of the first column and of the first row is 0. 'Center on comet' puts this point on the comet.&#10;&#10;Empty: the image centre.&#10;&#10;Detect finds the nucleus: the brightest 9 × 9 px spot in the central third of the image, refined to the brightness-weighted centre within 12 px (a FITS image is measured on its data, not on the stretch).</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderPhysicalSize" xml:space="preserve">
+    <value>Physical size</value>
+  </data>
+  <data name="Tabs_Settings_HelpPhysicalSize" xml:space="preserve">
+    <value>Sizes and places the billboard like the sky its image covers, for the Earth observer.&#10;&#10;Apply physical size: sizes the billboard to the sky its image covers at the Earth observer's current scale, and keeps it so on zoom and resize (a manual resize unbinds it).&#10;&#10;Center on comet: moves the billboard so its nucleus pixel (the image centre when unset) lies on the comet as the viewport draws it, keeping its size and rotation. Enabled while the comet is on screen.&#10;&#10;Match camera to image: aims the Earth observer at the comet and sets its field so the viewport's height shows the image's height (km, or plate scale × image height); the billboard fills the viewport's height, centred on the comet.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderFlipLon" xml:space="preserve">
+    <value>Flip longitude sign</value>
+  </data>
+  <data name="Tabs_Settings_HelpFlipLon" xml:space="preserve">
+    <value>Uses the opposite sign of the site longitude: some headers say 'west' for an east-positive value (the Liverpool Telescope's LONGITUD). The header's LST settles it when present.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderStretch" xml:space="preserve">
+    <value>Stretch</value>
+  </data>
+  <data name="Tabs_Settings_HelpStretch" xml:space="preserve">
+    <value>How the FITS data values map to black and white.&#10;&#10;Mode: ZScale is IRAF zscale (the import's default); Percentile puts black and white at two percentiles; Manual puts them at two values in data units.&#10;&#10;Curve: the transfer curve between black and white, linear, log or asinh (brings out faint dust).&#10;&#10;The two values (dot decimals): the low and high percentile in % in Percentile mode, the black and white points in data units in Manual mode.&#10;&#10;Apply stretch re-renders the image.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderPixelRatio" xml:space="preserve">
+    <value>Pixel ratio</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderCompare" xml:space="preserve">
+    <value>Compare with the simulation</value>
+  </data>
+  <data name="Tabs_Settings_HelpCompare" xml:space="preserve">
+    <value>Model range: puts this observation's epoch (mid-exposure, else DATE-OBS) in the Timeline tab's "rotations ending at" box and sets Start/End to N nucleus rotations ending there (at least 1 day). It only proposes the range: commit it in the Comet tab, or use Recommit in the Timeline tab.&#10;&#10;Orient to image (Earth observer only): looks at the image centre (WCS), turns the billboard like the sky in the view and moves it to the viewport centre.&#10;&#10;Match camera to image (Earth observer only): aims at the comet and fits the image's field (its WCS plate scale × height) to the viewport's height; the billboard fills it, centred on the comet.&#10;&#10;Set up comparison: enters the Earth observer, then seeks, uses the site, matches the field, orients, centres the billboard and locks the viewport for comparison.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderDustQuality" xml:space="preserve">
+    <value>Quality</value>
+  </data>
+  <data name="Tabs_Settings_HelpDustQuality" xml:space="preserve">
+    <value>Dust drawing quality, from 1 (lowest, fastest) to 5 (ultra). Each step draws the dust finer and costs more GPU time.&#10;&#10;Moving the slider presets the four detail settings below (volume, trajectory, haze and temporal reuse). Editing one of them by hand turns the quality to Custom.&#10;&#10;Saved for the next start.</value>
+  </data>
+  <data name="Tabs_Settings_HelpVolumeDetail" xml:space="preserve">
+    <value>Detail of the volumetric dust. Lower values are faster but draw it more coarsely; higher values are finer and cost more GPU time.&#10;&#10;Set by the Quality preset; saved for the next start.</value>
+  </data>
+  <data name="Tabs_Settings_HelpPropagateDetail" xml:space="preserve">
+    <value>Number of grain-size steps whose orbits are solved exactly each frame; the sizes in between are interpolated.&#10;&#10;Lower is faster, with dust tails a little straighter.&#10;&#10;Set by the Quality preset; saved for the next start.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHazeDetail" xml:space="preserve">
+    <value>Packets per dust cluster when the haze is drawn at its coarsest level.&#10;&#10;Lower is faster, with the light of the haze sampled more coarsely.&#10;&#10;Set by the Quality preset; saved for the next start.</value>
+  </data>
+  <data name="Tabs_Settings_HelpReuseTolerance" xml:space="preserve">
+    <value>Dust that moved less than this many screen pixels is reused instead of being drawn again (Off, or 1 to 16 px).&#10;&#10;Off redraws every frame fresh; higher values are faster but can smear moving dust.&#10;&#10;Set by the Quality preset; saved for the next start.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewDiagnostics" xml:space="preserve">
+    <value>Diagnostic panels</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewDiagnostics" xml:space="preserve">
+    <value>Shows the camera coordinates, dust history, observer line and orbit debug panels over the viewport, in all viewports at once.&#10;&#10;For checking the engine; hidden by default.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewComparisonLock" xml:space="preserve">
+    <value>Lock viewport for comparison</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewComparisonLock" xml:space="preserve">
+    <value>Refuses mouse orbit, pan and zoom and greys out the projection settings, so the view stays matched to a telescope image.&#10;&#10;Turn it off to move the camera again.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewProjectionType" xml:space="preserve">
+    <value>Projection type</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewProjectionType" xml:space="preserve">
+    <value>Perspective: distant objects look smaller, like a camera. The field of view sets the zoom.&#10;&#10;Orthographic: no perspective, the size of an object does not depend on its distance (like a map or a flat telescope image). The half-width and half-height set what is visible.&#10;&#10;The parameters of both are under Advanced: projection.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewProjectionAdvanced" xml:space="preserve">
+    <value>Advanced: projection</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewProjectionAdvanced" xml:space="preserve">
+    <value>The field of view (perspective) or the half-width and half-height (orthographic), the near and far clip planes and the units they are shown in.&#10;&#10;A billboard's Match camera to image sets the field from the image instead.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewFov" xml:space="preserve">
+    <value>Field of view</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewFov" xml:space="preserve">
+    <value>Vertical field of view of the perspective camera, in the unit chosen in Units below.&#10;&#10;Smaller values zoom in; telescope fields are measured in arcminutes.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewFovUnits" xml:space="preserve">
+    <value>Field of view units</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewFovUnits" xml:space="preserve">
+    <value>Unit of the field of view: degrees, arcminutes (1/60 degree) or arcseconds (1/3600 degree).&#10;&#10;Only changes the display: the field itself stays the same.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewNear" xml:space="preserve">
+    <value>Near clip plane</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewPerspNear" xml:space="preserve">
+    <value>Objects closer to the camera than this distance are not drawn.&#10;&#10;Shown in the distance units below.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewFar" xml:space="preserve">
+    <value>Far clip plane</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewPerspFar" xml:space="preserve">
+    <value>Objects farther from the camera than this distance are not drawn.&#10;&#10;Shown in the distance units below.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewDistanceUnits" xml:space="preserve">
+    <value>Distance units</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewDistanceUnits" xml:space="preserve">
+    <value>Unit used to show the clip-plane distances: AU, km or m.&#10;&#10;Only changes the display; the values are stored in AU.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewHalfWidth" xml:space="preserve">
+    <value>Half-width</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewHalfWidth" xml:space="preserve">
+    <value>Half of the visible width of the orthographic view, in the chosen units: the view spans plus or minus this value around its centre.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewHalfHeight" xml:space="preserve">
+    <value>Half-height</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewHalfHeight" xml:space="preserve">
+    <value>Half of the visible height of the orthographic view, in the chosen units: the view spans plus or minus this value around its centre.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewOrthoUnits" xml:space="preserve">
+    <value>Units</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewOrthoUnits" xml:space="preserve">
+    <value>Unit used to show the half-width, the half-height and the clip planes: AU, km or m.&#10;&#10;Only changes the display; the values are stored in AU.</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewOrthoNear" xml:space="preserve">
+    <value>Nearest distance along the view direction that is drawn, in the chosen units. Anything closer is not drawn.</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewOrthoFar" xml:space="preserve">
+    <value>Farthest distance along the view direction that is drawn, in the chosen units. Anything farther is not drawn.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewProportionsLock" xml:space="preserve">
+    <value>Keep proportions locked</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewProportionsLock" xml:space="preserve">
+    <value>Keeps the half-width to half-height ratio equal to the viewport's shape, also when the window is resized, so the image is never stretched.&#10;&#10;Restore Proportions recomputes the half-width from the half-height once.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewShowBehindCamera" xml:space="preserve">
+    <value>Show objects behind camera</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewShowBehindCamera" xml:space="preserve">
+    <value>Orthographic only: also draws the geometry behind the camera plane (within the far distance), as a telescope image does.&#10;&#10;Dust behind the camera is not drawn. A perspective view cannot show it.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewPhysicalLighting" xml:space="preserve">
+    <value>Physical lighting</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewPhysicalLighting" xml:space="preserve">
+    <value>Direct sunlight only, scaled with the comet's heliocentric distance r as (1 AU / r)², and exposed so that a white surface facing the Sun at 1 AU is drawn white. No ambient fill.&#10;&#10;The surface the Sun does not reach is drawn in dark indigo.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewNucleusFromEarth" xml:space="preserve">
+    <value>Nucleus from Earth</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewNucleusFromEarth" xml:space="preserve">
+    <value>Switches to the Earth observer tracking the comet, celestial north up, with a field a few nucleus diameters tall: the nucleus lit by the Sun as seen from Earth.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewNucleusExposure" xml:space="preserve">
+    <value>Nucleus exposure</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewNucleusExposure" xml:space="preserve">
+    <value>Brightness of the sunlit nucleus, in stops (EV): each whole step doubles or halves it; the slider moves in half stops.&#10;&#10;At 0 a white surface facing the Sun is drawn white.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderObserverTopocentric" xml:space="preserve">
+    <value>Observer on the Earth's surface</value>
+  </data>
+  <data name="Tabs_Settings_HelpObserverTopocentric" xml:space="preserve">
+    <value>On (topocentric): the observer stands at the telescope site on the Earth's surface (latitude and longitude below) and turns with the Earth. This shifts the apparent position of nearby objects by diurnal parallax and adds a horizon.&#10;&#10;Off (geocentric): the camera is at the Earth's centre and only follows its motion around the Sun.&#10;&#10;The view never rotates with the Earth. Saved with the file.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderObserverNorthUp" xml:space="preserve">
+    <value>North up</value>
+  </data>
+  <data name="Tabs_Settings_HelpObserverNorthUp" xml:space="preserve">
+    <value>On: the view is levelled to celestial north (J2000), north up and east left, like a telescope image.&#10;&#10;Off: levelled to the ecliptic pole (on the site's side of the equator).&#10;&#10;Saved with the file.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderObserverLatitude" xml:space="preserve">
+    <value>Latitude</value>
+  </data>
+  <data name="Tabs_Settings_HelpObserverLatitude" xml:space="preserve">
+    <value>Latitude of the observing site in degrees, positive north of the equator (−90 to 90). Used by the topocentric observer.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderObserverLongitude" xml:space="preserve">
+    <value>Longitude</value>
+  </data>
+  <data name="Tabs_Settings_HelpObserverLongitude" xml:space="preserve">
+    <value>Longitude of the observing site in degrees, positive east of Greenwich (−180 to 180). Used by the topocentric observer.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderObserverLookDirection" xml:space="preserve">
+    <value>Look direction</value>
+  </data>
+  <data name="Tabs_Settings_HelpObserverLookDirection" xml:space="preserve">
+    <value>Free look: drag to look around; the direction stays fixed among the stars.&#10;&#10;Comet tracking: keeps the comet exactly at the centre of the view.&#10;&#10;Sun tracking: keeps the Sun at the centre of the view.&#10;&#10;From the surface, while the tracked target is below the horizon, the view faces the horizon where it will rise.&#10;&#10;Restore preset projection re-applies the tracking projection where the target spans 10% of the view.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderObserverScale" xml:space="preserve">
+    <value>Telescope scale</value>
+  </data>
+  <data name="Tabs_Settings_HelpObserverScale" xml:space="preserve">
+    <value>The angle one screen pixel covers and the field of view; at the comet's distance also the kilometres per pixel and the half-width and half-height of the view.</value>
+  </data>
 </root>

@@ -3,17 +3,16 @@
              xmlns:vm="using:AetherVk.Logic.ViewModels"
              xmlns:models="using:AetherVk.Logic.Models"
              xmlns:utils="using:AetherVk.Utils"
+             xmlns:controls="using:AetherVk.Controls"
              x:DataType="vm:HorizonJplViewModel"
              x:Class="AetherVk.Views.HorizonJplView">
   <Grid>
-    <!-- Top Right Help Tooltip -->
-    <Button HorizontalAlignment="Right" VerticalAlignment="Top" Margin="10" Content="?" Width="30" Height="30"
-            CornerRadius="15" Background="Transparent" Foreground="{DynamicResource Text.Secondary}" ZIndex="100">
-      <ToolTip.Tip>
-        <TextBlock
-          Text="3-Step SPK Retrieval Process:&#x0a;1. Search for comets by designation.&#x0a;2. Select a comet to view available SPK records (filtered by simulation timeline).&#x0a;3. Download the full observation (SPK, EPA, Object constants)." />
-      </ToolTip.Tip>
-    </Button>
+    <!-- Top right help -->
+    <controls:PropertyHelpButton AutomationProperties.AutomationId="HorizonJplHelp"
+                                 HorizontalAlignment="Right" VerticalAlignment="Top" Margin="10" ZIndex="100"
+                                 FlyoutPlacement="BottomEdgeAlignedRight"
+                                 HelpHeader="3-step SPK retrieval"
+                                 HelpContent="1. Search for comets by designation.&#x0a;&#x0a;2. Select a comet to view its available SPK records (filtered by the simulation timeline).&#x0a;&#x0a;3. Download the full observation (SPK, EPA, object constants)." />
 
     <ScrollViewer Margin="0,40,0,0">
       <StackPanel Spacing="16" Margin="10">

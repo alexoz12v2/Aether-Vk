@@ -1,6 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:AetherVk.Logic.ViewModels"
+        xmlns:controls="using:AetherVk.Controls"
         x:Class="AetherVk.Views.SpawnMeshDialogWindow"
         x:DataType="vm:SpawnMeshViewModel"
         Title="Spawn Mesh Instance" Width="340" Height="330"
@@ -11,9 +12,13 @@
         <TextBox Text="{Binding EntityName}" />
         
         <!-- Kinematic Mode Toggle -->
-        <CheckBox Content="Kinematic (almanac-driven position)"
-                  IsChecked="{Binding IsKinematic}"
-                  ToolTip.Tip="When enabled, the entity position is driven by SPK ephemeris data instead of a manual position." />
+        <StackPanel Orientation="Horizontal" Spacing="4">
+            <CheckBox Content="Kinematic (almanac-driven position)"
+                      IsChecked="{Binding IsKinematic}" />
+            <controls:PropertyHelpButton AutomationProperties.AutomationId="KinematicModeHelp"
+                                         HelpHeader="Kinematic mode"
+                                         HelpContent="When enabled, the entity position is driven by SPK ephemeris data (the NAIF SPK ID below) instead of a manual starting position." />
+        </StackPanel>
 
         <!-- SPK ID (visible only in kinematic mode) -->
         <StackPanel Spacing="4" IsVisible="{Binding IsKinematic}">
