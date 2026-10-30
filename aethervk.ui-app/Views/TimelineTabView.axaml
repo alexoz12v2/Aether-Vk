@@ -42,23 +42,34 @@
         <StackPanel Grid.Column="0" Orientation="Vertical" VerticalAlignment="Center" Spacing="4">
           <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
             <!-- the texts are in the chosen time scale (Settings › Time scale for dates; UTC by default) -->
-            <TextBlock AutomationProperties.AutomationId="TimelineStartEpochLabel" Text="{Binding ScaleName, StringFormat='Start Epoch ({0}):'}"
-                       ToolTip.Tip="{Binding ScaleTip}" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" />
+            <!-- one ? for the Start/End pair -->
+            <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+              <TextBlock AutomationProperties.AutomationId="TimelineStartEpochLabel" Text="{Binding ScaleName, StringFormat='Start Epoch ({0}):'}"
+                         ToolTip.Tip="{Binding ScaleTip}" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" />
+              <controls:PropertyHelpButton AutomationProperties.AutomationId="TimelineEpochRangeHelp"
+                                           HelpHeader="{Binding StrHelpHeaderEpochRange}"
+                                           HelpContent="{Binding StrHelpEpochRange}" FlyoutMaxWidth="300" />
+            </StackPanel>
             <TextBox AutomationProperties.AutomationId="TimelineStartEpochBox" IsReadOnly="True"
-              ToolTip.Tip="Start of the simulated period: the committed one (before a commit, the range proposed in the Comet tab). Change it in the Comet tab." Text="{Binding StartEpoch, Mode=OneWay}" Width="180" />
+                     Text="{Binding StartEpoch, Mode=OneWay}" Width="180" />
 
             <TextBlock AutomationProperties.AutomationId="TimelineEndEpochLabel" Text="{Binding ScaleName, StringFormat='End Epoch ({0}):'}"
                        ToolTip.Tip="{Binding ScaleTip}" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" Margin="8,0,0,0"/>
             <TextBox AutomationProperties.AutomationId="TimelineEndEpochBox" IsReadOnly="True"
-              ToolTip.Tip="End of the simulated period: the committed one (before a commit, the range proposed in the Comet tab). Change it in the Comet tab." Text="{Binding EndEpoch, Mode=OneWay}" Width="180" />
+                     Text="{Binding EndEpoch, Mode=OneWay}" Width="180" />
           </StackPanel>
 
           <TextBlock Text="Set the range in the Comet tab (step 3), then Download &amp; Commit there." FontSize="11"
                      Foreground="{DynamicResource Text.Secondary}" IsVisible="{Binding !HasCommittedState}" />
 
           <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding HasCommittedState}">
-            <TextBlock Text="Committed Range:" FontWeight="SemiBold" FontSize="12" Foreground="{DynamicResource Text.Secondary}" />
-            <TextBlock AutomationProperties.AutomationId="CommittedRangeText" Text="{Binding DisplayCommittedRange}" ToolTip.Tip="The range the simulation runs: the comet's ephemeris covers it and Play, Reset, Run to End and Go stay inside it." FontSize="12" FontFamily="Cascadia Mono, Consolas, monospace" />
+            <StackPanel Orientation="Horizontal" Spacing="4">
+              <TextBlock Text="Committed Range:" FontWeight="SemiBold" FontSize="12" Foreground="{DynamicResource Text.Secondary}" />
+              <controls:PropertyHelpButton AutomationProperties.AutomationId="CommittedRangeTextHelp"
+                                           HelpHeader="{Binding StrHelpHeaderCommittedRange}"
+                                           HelpContent="{Binding StrHelpCommittedRange}" />
+            </StackPanel>
+            <TextBlock AutomationProperties.AutomationId="CommittedRangeText" Text="{Binding DisplayCommittedRange}" FontSize="12" FontFamily="Cascadia Mono, Consolas, monospace" />
           </StackPanel>
 
           <!-- an edit waits in the Comet tab: the engine keeps the committed range until a recommit there -->
@@ -72,29 +83,39 @@
           <!-- Playback Controls -->
           <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center" Margin="0,0,0,8">
             <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,0,16,0" VerticalAlignment="Center">
-              <TextBlock Text="{Binding StrSpeed}" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" />
+              <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                <TextBlock Text="{Binding StrSpeed}" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="SpeedPickerHelp"
+                                             HelpHeader="{Binding StrHelpHeaderSpeed}"
+                                             HelpContent="{Binding StrHelpSpeed}" />
+              </StackPanel>
               <ComboBox AutomationProperties.AutomationId="SpeedPicker"
-                ToolTip.Tip="How fast simulated time runs while playing, as simulated time per real second (for example 1 hour per second)." ItemsSource="{Binding SpeedOptions}"
+                        ItemsSource="{Binding SpeedOptions}"
                         DisplayMemberBinding="{Binding Label, x:DataType=vm:TimelineTabViewModel+SpeedOption}"
                         SelectedValueBinding="{Binding Speed, x:DataType=vm:TimelineTabViewModel+SpeedOption}"
                         SelectedValue="{Binding SelectedSpeed}"
                         Width="150" PlaceholderText="{Binding StrSelectSpeed}" />
             </StackPanel>
 
-            <Button AutomationProperties.AutomationId="ResetButton" Command="{Binding ResetCommand}" Classes="playback" IsVisible="{Binding !IsPlaying}" ToolTip.Tip="Reset: back to the start epoch of the committed range; the dust is rebuilt there." ToolTip.ShowDelay="1000">
+            <Button AutomationProperties.AutomationId="ResetButton" Command="{Binding ResetCommand}" Classes="playback" IsVisible="{Binding !IsPlaying}" ToolTip.Tip="{Binding StrTipReset}" ToolTip.ShowDelay="1000">
               <Path Data="M 16,6 L 8,12 L 16,18 Z M 24,6 L 16,12 L 24,18 Z" Fill="{DynamicResource Text.Primary}" Stretch="Uniform" Width="16" Height="12" />
             </Button>
 
-            <Button AutomationProperties.AutomationId="PlayPauseButton" Command="{Binding PlayPauseCommand}" Classes="playback" ToolTip.Tip="Play / Pause: simulated time runs at the chosen speed and the dust is computed frame by frame, so the tail evolves while you watch. Pause keeps the current epoch." ToolTip.ShowDelay="1000">
+            <Button AutomationProperties.AutomationId="PlayPauseButton" Command="{Binding PlayPauseCommand}" Classes="playback" ToolTip.Tip="{Binding StrTipPlayPause}" ToolTip.ShowDelay="1000">
               <Panel Width="14" Height="14">
                 <Path Data="M 6,4 L 18,11 L 6,18 Z" Fill="{DynamicResource Text.Primary}" Stretch="Uniform" IsVisible="{Binding !IsPlaying}" />
                 <Path Data="M 6,4 L 9,4 L 9,18 L 6,18 Z M 15,4 L 18,4 L 18,18 L 15,18 Z" Fill="{DynamicResource Text.Primary}" Stretch="Uniform" IsVisible="{Binding IsPlaying}" />
               </Panel>
             </Button>
 
-            <Button AutomationProperties.AutomationId="RunToEndButton" Command="{Binding RunToEndCommand}" Classes="playback" ToolTip.Tip="Run to End: jumps to the end epoch without animating. The dust there is rebuilt at once, so it can look complete sooner than while playing." ToolTip.ShowDelay="1000">
+            <Button AutomationProperties.AutomationId="RunToEndButton" Command="{Binding RunToEndCommand}" Classes="playback" ToolTip.Tip="{Binding StrTipRunToEnd}" ToolTip.ShowDelay="1000">
               <Path Data="M 8,6 L 8,18 L 11,18 L 11,6 Z M 13,6 L 21,12 L 13,18 Z" Fill="{DynamicResource Text.Primary}" Stretch="Uniform" Width="16" Height="12" />
             </Button>
+
+            <!-- one ? for the playback buttons (Reset, Play / Pause, Run to End) -->
+            <controls:PropertyHelpButton AutomationProperties.AutomationId="PlaybackHelp" VerticalAlignment="Center"
+                                         HelpHeader="{Binding StrHelpHeaderPlayback}"
+                                         HelpContent="{Binding StrHelpPlayback}" FlyoutMaxWidth="320" />
           </StackPanel>
 
           <!-- Progress Bar -->
@@ -102,20 +123,24 @@
 
           <!-- Current epoch: the engine clock (as the viewport shows it); type an epoch + Enter to seek -->
           <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center" Margin="0,8,0,0">
-            <TextBlock AutomationProperties.AutomationId="CurrentEpochLabel" Text="{Binding ScaleName, StringFormat='Epoch ({0})'}"
-                       ToolTip.Tip="{Binding ScaleTip}" VerticalAlignment="Center" FontSize="12" Foreground="{DynamicResource Text.Secondary}" />
+            <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+              <TextBlock AutomationProperties.AutomationId="CurrentEpochLabel" Text="{Binding ScaleName, StringFormat='Epoch ({0})'}"
+                         ToolTip.Tip="{Binding ScaleTip}" VerticalAlignment="Center" FontSize="12" Foreground="{DynamicResource Text.Secondary}" />
+              <!-- covers the box and Go -->
+              <controls:PropertyHelpButton AutomationProperties.AutomationId="CurrentEpochBoxHelp"
+                                           HelpHeader="{Binding StrHelpHeaderCurrentEpoch}"
+                                           HelpContent="{Binding StrHelpCurrentEpoch}" />
+            </StackPanel>
             <TextBox x:Name="CurrentEpochBox" AutomationProperties.AutomationId="CurrentEpochBox"
                      Text="{Binding CurrentEpochText}" Width="170"
                      FontFamily="Cascadia Mono, Consolas, monospace" FontSize="12"
-                     Watermark="yyyy-MM-dd HH:mm:ss"
-                     ToolTip.Tip="The simulation's current epoch. Type an epoch inside the committed range and press Enter to jump there."
-                     ToolTip.ShowDelay="1000">
+                     Watermark="yyyy-MM-dd HH:mm:ss">
               <TextBox.KeyBindings>
                 <KeyBinding Gesture="Enter" Command="{Binding SeekToEpochCommand}" />
               </TextBox.KeyBindings>
             </TextBox>
             <Button x:Name="SeekToEpochButton" AutomationProperties.AutomationId="SeekToEpochButton"
-                    Content="Go" Command="{Binding SeekToEpochCommand}" ToolTip.Tip="Go: jumps to the epoch in the box (inside the committed range); the dust is rebuilt there. Same as pressing Enter in the box." ToolTip.ShowDelay="1000" />
+                    Content="Go" Command="{Binding SeekToEpochCommand}" ToolTip.Tip="{Binding StrTipGo}" ToolTip.ShowDelay="1000" />
             <!-- a UTC epoch outside the leap-second table: converted all the same, may be off by a leap second -->
             <StackPanel Orientation="Horizontal" Spacing="2" VerticalAlignment="Center" IsVisible="{Binding HasCurrentEpochTimeScaleWarning}">
               <TextBlock AutomationProperties.AutomationId="CurrentEpochTimeScaleWarning" Text="⚠" Foreground="{DynamicResource Sem.Warning}"

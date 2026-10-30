@@ -141,31 +141,34 @@ public class ReviewFeedbackViewTests
 
   /// <summary>
   /// docx 10: the reference position error, the dust visibility and the flow time-lapse controls
-  /// each carry a tooltip saying what they do.
+  /// each carry a "?" saying what they do (it replaced their tooltips).
   /// </summary>
   [AvaloniaFact]
-  public void Review_docx_10_DustSettings_HaveTooltipsThatSayWhatTheyDo()
+  public void Review_docx_10_DustSettings_HaveHelpThatSaysWhatTheyDo()
   {
     var window = ShowModelTab(new DesignModelTabViewModel(), out var view, expandDust: true);
 
-    string Tip(string id)
+    string Help(string id)
     {
       var control = ById<Control>(view, id);
       Assert.True(control.IsEffectivelyVisible, id);
-      var tip = ToolTip.GetTip(control) as string;
-      Assert.False(string.IsNullOrWhiteSpace(tip), $"{id} has no tooltip");
-      return tip!;
+      Assert.Null(ToolTip.GetTip(control));
+      var help = ById<AetherVk.Controls.PropertyHelpButton>(view, id + "Help");
+      Assert.True(help.IsEffectivelyVisible, id + "Help");
+      Assert.False(string.IsNullOrWhiteSpace(help.HelpHeader), $"{id}Help has no header");
+      Assert.False(string.IsNullOrWhiteSpace(help.HelpContent), $"{id}Help has no content");
+      return help.HelpContent;
     }
 
-    var reference = Tip("ShowReferenceErrorToggle");
+    var reference = Help("ShowReferenceErrorToggle");
     Assert.Contains("reference orbit", reference);
     Assert.Contains("10 nucleus radii", reference);
 
-    var visibility = Tip("DustVisibilitySlider");
+    var visibility = Help("DustVisibilitySlider");
     Assert.Contains("asinh", visibility);
     Assert.Contains("Visual only", visibility);
 
-    var flow = Tip("DustFlowSpeedSlider");
+    var flow = Help("DustFlowSpeedSlider");
     Assert.Contains("K times faster than its dust", flow);
     Assert.Contains("Visual only", flow);
     window.Close();

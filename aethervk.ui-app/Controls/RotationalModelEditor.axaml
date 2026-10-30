@@ -6,8 +6,12 @@
   <Border BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
           BorderThickness="1" CornerRadius="4" Padding="8">
     <StackPanel Spacing="8">
-      <TextBlock Text="IAU Rotational Model" FontWeight="Bold" FontSize="13" 
-                 ToolTip.Tip="Parameters must strictly adhere to IAU standards and are defined relative to the J2000.0 epoch." />
+      <StackPanel Orientation="Horizontal" Spacing="4">
+        <TextBlock Text="IAU Rotational Model" FontWeight="Bold" FontSize="13" VerticalAlignment="Center" />
+        <controls:PropertyHelpButton AutomationProperties.AutomationId="RotationalModelEditorHelp"
+                                     HelpHeader="IAU Rotational Model"
+                                     HelpContent="The parameters follow the IAU rotational-model conventions (pole right ascension and declination, prime meridian and rotation rate).&#x0A;&#x0A;All of them are defined relative to the J2000.0 epoch." />
+      </StackPanel>
 
       <!-- Gizmo + IAU fields side by side -->
       <Grid ColumnDefinitions="*, Auto">
