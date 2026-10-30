@@ -739,7 +739,8 @@ mod tests {
   fn load_lsk_that_drops_or_changes_an_entry_is_rejected() {
     let _serial = ACTIVE_LOCK.lock();
     set_active_for_tests(shipped());
-    let text = std::fs::read_to_string(SHIPPED_LSK).unwrap();
+    // LF: a Windows checkout (core.autocrlf) has the kernel in CRLF, the patterns below are LF
+    let text = std::fs::read_to_string(SHIPPED_LSK).unwrap().replace("\r\n", "\n");
     // changed value of an old entry (and an extra entry, so it is "newer")
     let changed = newer_lsk_text().replace("33,   @2006-JAN-1", "33,   @2006-JUL-1");
     assert_eq!(load_text(&changed, "changed"), (LoadStatus::Inconsistent, 29));

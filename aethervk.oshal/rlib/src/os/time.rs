@@ -501,7 +501,7 @@ pub mod v2 {
       let total = (self.end_epoch - self.start_epoch).to_seconds().max(0.0);
       let target = (epoch - self.start_epoch).to_seconds().clamp(0.0, total);
       let mut state = self.state.write();
-      state.scaled_time = (target * 1e6) as timeus_t;
+      state.scaled_time = (target * 1e6 + 0.5) as timeus_t; // nearest µs (target >= 0)
       state.scaled_accumulator = 0;
       drop(state);
       self.current_epoch()

@@ -18,9 +18,581 @@ partial class CometTabViewModel
         }
     }
 
+    private string _strNucleus = string.Empty;
+    public string StrNucleus
+    {
+        get => _strNucleus;
+        set
+        {
+            if (_strNucleus == value) return;
+            _strNucleus = value;
+            OnPropertyChanged(nameof(StrNucleus));
+        }
+    }
+
+    private string _strNucleusRadius = string.Empty;
+    public string StrNucleusRadius
+    {
+        get => _strNucleusRadius;
+        set
+        {
+            if (_strNucleusRadius == value) return;
+            _strNucleusRadius = value;
+            OnPropertyChanged(nameof(StrNucleusRadius));
+        }
+    }
+
+    private string _strStep1 = string.Empty;
+    public string StrStep1
+    {
+        get => _strStep1;
+        set
+        {
+            if (_strStep1 == value) return;
+            _strStep1 = value;
+            OnPropertyChanged(nameof(StrStep1));
+        }
+    }
+
+    private string _strStep2 = string.Empty;
+    public string StrStep2
+    {
+        get => _strStep2;
+        set
+        {
+            if (_strStep2 == value) return;
+            _strStep2 = value;
+            OnPropertyChanged(nameof(StrStep2));
+        }
+    }
+
+    private string _strStep3 = string.Empty;
+    public string StrStep3
+    {
+        get => _strStep3;
+        set
+        {
+            if (_strStep3 == value) return;
+            _strStep3 = value;
+            OnPropertyChanged(nameof(StrStep3));
+        }
+    }
+
+    private string _strStep4 = string.Empty;
+    public string StrStep4
+    {
+        get => _strStep4;
+        set
+        {
+            if (_strStep4 == value) return;
+            _strStep4 = value;
+            OnPropertyChanged(nameof(StrStep4));
+        }
+    }
+
+    private string _strStep1Help = string.Empty;
+    public string StrStep1Help
+    {
+        get => _strStep1Help;
+        set
+        {
+            if (_strStep1Help == value) return;
+            _strStep1Help = value;
+            OnPropertyChanged(nameof(StrStep1Help));
+        }
+    }
+
+    private string _strStep2Help = string.Empty;
+    public string StrStep2Help
+    {
+        get => _strStep2Help;
+        set
+        {
+            if (_strStep2Help == value) return;
+            _strStep2Help = value;
+            OnPropertyChanged(nameof(StrStep2Help));
+        }
+    }
+
+    private string _strStep3Help = string.Empty;
+    public string StrStep3Help
+    {
+        get => _strStep3Help;
+        set
+        {
+            if (_strStep3Help == value) return;
+            _strStep3Help = value;
+            OnPropertyChanged(nameof(StrStep3Help));
+        }
+    }
+
+    private string _strStep4Help = string.Empty;
+    public string StrStep4Help
+    {
+        get => _strStep4Help;
+        set
+        {
+            if (_strStep4Help == value) return;
+            _strStep4Help = value;
+            OnPropertyChanged(nameof(StrStep4Help));
+        }
+    }
+
+    private string _strStepsDoneHelp = string.Empty;
+    public string StrStepsDoneHelp
+    {
+        get => _strStepsDoneHelp;
+        set
+        {
+            if (_strStepsDoneHelp == value) return;
+            _strStepsDoneHelp = value;
+            OnPropertyChanged(nameof(StrStepsDoneHelp));
+        }
+    }
+
+    private string _strSimulatedRange = string.Empty;
+    public string StrSimulatedRange
+    {
+        get => _strSimulatedRange;
+        set
+        {
+            if (_strSimulatedRange == value) return;
+            _strSimulatedRange = value;
+            OnPropertyChanged(nameof(StrSimulatedRange));
+        }
+    }
+
+    private string _strTipReferenceOrbit = string.Empty;
+    public string StrTipReferenceOrbit
+    {
+        get => _strTipReferenceOrbit;
+        set
+        {
+            if (_strTipReferenceOrbit == value) return;
+            _strTipReferenceOrbit = value;
+            OnPropertyChanged(nameof(StrTipReferenceOrbit));
+        }
+    }
+
+    private string _strTipPoleRa = string.Empty;
+    public string StrTipPoleRa
+    {
+        get => _strTipPoleRa;
+        set
+        {
+            if (_strTipPoleRa == value) return;
+            _strTipPoleRa = value;
+            OnPropertyChanged(nameof(StrTipPoleRa));
+        }
+    }
+
+    private string _strTipPoleDec = string.Empty;
+    public string StrTipPoleDec
+    {
+        get => _strTipPoleDec;
+        set
+        {
+            if (_strTipPoleDec == value) return;
+            _strTipPoleDec = value;
+            OnPropertyChanged(nameof(StrTipPoleDec));
+        }
+    }
+
+    private string _strTipPrimeMeridian = string.Empty;
+    public string StrTipPrimeMeridian
+    {
+        get => _strTipPrimeMeridian;
+        set
+        {
+            if (_strTipPrimeMeridian == value) return;
+            _strTipPrimeMeridian = value;
+            OnPropertyChanged(nameof(StrTipPrimeMeridian));
+        }
+    }
+
+    private string _strTipRotPeriod = string.Empty;
+    public string StrTipRotPeriod
+    {
+        get => _strTipRotPeriod;
+        set
+        {
+            if (_strTipRotPeriod == value) return;
+            _strTipRotPeriod = value;
+            OnPropertyChanged(nameof(StrTipRotPeriod));
+        }
+    }
+
+    private string _strHelpHeaderSpkRecords = string.Empty;
+    public string StrHelpHeaderSpkRecords
+    {
+        get => _strHelpHeaderSpkRecords;
+        set
+        {
+            if (_strHelpHeaderSpkRecords == value) return;
+            _strHelpHeaderSpkRecords = value;
+            OnPropertyChanged(nameof(StrHelpHeaderSpkRecords));
+        }
+    }
+
+    private string _strHelpSpkRecords = string.Empty;
+    public string StrHelpSpkRecords
+    {
+        get => _strHelpSpkRecords;
+        set
+        {
+            if (_strHelpSpkRecords == value) return;
+            _strHelpSpkRecords = value;
+            OnPropertyChanged(nameof(StrHelpSpkRecords));
+        }
+    }
+
+    private string _strHelpHeaderEpochRange = string.Empty;
+    public string StrHelpHeaderEpochRange
+    {
+        get => _strHelpHeaderEpochRange;
+        set
+        {
+            if (_strHelpHeaderEpochRange == value) return;
+            _strHelpHeaderEpochRange = value;
+            OnPropertyChanged(nameof(StrHelpHeaderEpochRange));
+        }
+    }
+
+    private string _strHelpEpochRange = string.Empty;
+    public string StrHelpEpochRange
+    {
+        get => _strHelpEpochRange;
+        set
+        {
+            if (_strHelpEpochRange == value) return;
+            _strHelpEpochRange = value;
+            OnPropertyChanged(nameof(StrHelpEpochRange));
+        }
+    }
+
+    private string _strHelpHeaderProposedRange = string.Empty;
+    public string StrHelpHeaderProposedRange
+    {
+        get => _strHelpHeaderProposedRange;
+        set
+        {
+            if (_strHelpHeaderProposedRange == value) return;
+            _strHelpHeaderProposedRange = value;
+            OnPropertyChanged(nameof(StrHelpHeaderProposedRange));
+        }
+    }
+
+    private string _strHelpProposedRange = string.Empty;
+    public string StrHelpProposedRange
+    {
+        get => _strHelpProposedRange;
+        set
+        {
+            if (_strHelpProposedRange == value) return;
+            _strHelpProposedRange = value;
+            OnPropertyChanged(nameof(StrHelpProposedRange));
+        }
+    }
+
+    private string _strHelpHeaderRecommit = string.Empty;
+    public string StrHelpHeaderRecommit
+    {
+        get => _strHelpHeaderRecommit;
+        set
+        {
+            if (_strHelpHeaderRecommit == value) return;
+            _strHelpHeaderRecommit = value;
+            OnPropertyChanged(nameof(StrHelpHeaderRecommit));
+        }
+    }
+
+    private string _strHelpRecommit = string.Empty;
+    public string StrHelpRecommit
+    {
+        get => _strHelpRecommit;
+        set
+        {
+            if (_strHelpRecommit == value) return;
+            _strHelpRecommit = value;
+            OnPropertyChanged(nameof(StrHelpRecommit));
+        }
+    }
+
+    private string _strHelpHeaderModelRange = string.Empty;
+    public string StrHelpHeaderModelRange
+    {
+        get => _strHelpHeaderModelRange;
+        set
+        {
+            if (_strHelpHeaderModelRange == value) return;
+            _strHelpHeaderModelRange = value;
+            OnPropertyChanged(nameof(StrHelpHeaderModelRange));
+        }
+    }
+
+    private string _strHelpModelRange = string.Empty;
+    public string StrHelpModelRange
+    {
+        get => _strHelpModelRange;
+        set
+        {
+            if (_strHelpModelRange == value) return;
+            _strHelpModelRange = value;
+            OnPropertyChanged(nameof(StrHelpModelRange));
+        }
+    }
+
+    private string _strHelpHeaderDustLead = string.Empty;
+    public string StrHelpHeaderDustLead
+    {
+        get => _strHelpHeaderDustLead;
+        set
+        {
+            if (_strHelpHeaderDustLead == value) return;
+            _strHelpHeaderDustLead = value;
+            OnPropertyChanged(nameof(StrHelpHeaderDustLead));
+        }
+    }
+
+    private string _strHelpDustLead = string.Empty;
+    public string StrHelpDustLead
+    {
+        get => _strHelpDustLead;
+        set
+        {
+            if (_strHelpDustLead == value) return;
+            _strHelpDustLead = value;
+            OnPropertyChanged(nameof(StrHelpDustLead));
+        }
+    }
+
+    private string _strHelpHeaderReferenceOrbit = string.Empty;
+    public string StrHelpHeaderReferenceOrbit
+    {
+        get => _strHelpHeaderReferenceOrbit;
+        set
+        {
+            if (_strHelpHeaderReferenceOrbit == value) return;
+            _strHelpHeaderReferenceOrbit = value;
+            OnPropertyChanged(nameof(StrHelpHeaderReferenceOrbit));
+        }
+    }
+
+    private string _strHelpReferenceOrbit = string.Empty;
+    public string StrHelpReferenceOrbit
+    {
+        get => _strHelpReferenceOrbit;
+        set
+        {
+            if (_strHelpReferenceOrbit == value) return;
+            _strHelpReferenceOrbit = value;
+            OnPropertyChanged(nameof(StrHelpReferenceOrbit));
+        }
+    }
+
+    private string _strHelpNucleusRadius = string.Empty;
+    public string StrHelpNucleusRadius
+    {
+        get => _strHelpNucleusRadius;
+        set
+        {
+            if (_strHelpNucleusRadius == value) return;
+            _strHelpNucleusRadius = value;
+            OnPropertyChanged(nameof(StrHelpNucleusRadius));
+        }
+    }
+
+    private string _strHelpHeaderPoleRa = string.Empty;
+    public string StrHelpHeaderPoleRa
+    {
+        get => _strHelpHeaderPoleRa;
+        set
+        {
+            if (_strHelpHeaderPoleRa == value) return;
+            _strHelpHeaderPoleRa = value;
+            OnPropertyChanged(nameof(StrHelpHeaderPoleRa));
+        }
+    }
+
+    private string _strHelpPoleRa = string.Empty;
+    public string StrHelpPoleRa
+    {
+        get => _strHelpPoleRa;
+        set
+        {
+            if (_strHelpPoleRa == value) return;
+            _strHelpPoleRa = value;
+            OnPropertyChanged(nameof(StrHelpPoleRa));
+        }
+    }
+
+    private string _strHelpHeaderPoleDec = string.Empty;
+    public string StrHelpHeaderPoleDec
+    {
+        get => _strHelpHeaderPoleDec;
+        set
+        {
+            if (_strHelpHeaderPoleDec == value) return;
+            _strHelpHeaderPoleDec = value;
+            OnPropertyChanged(nameof(StrHelpHeaderPoleDec));
+        }
+    }
+
+    private string _strHelpPoleDec = string.Empty;
+    public string StrHelpPoleDec
+    {
+        get => _strHelpPoleDec;
+        set
+        {
+            if (_strHelpPoleDec == value) return;
+            _strHelpPoleDec = value;
+            OnPropertyChanged(nameof(StrHelpPoleDec));
+        }
+    }
+
+    private string _strHelpHeaderPrimeMeridian = string.Empty;
+    public string StrHelpHeaderPrimeMeridian
+    {
+        get => _strHelpHeaderPrimeMeridian;
+        set
+        {
+            if (_strHelpHeaderPrimeMeridian == value) return;
+            _strHelpHeaderPrimeMeridian = value;
+            OnPropertyChanged(nameof(StrHelpHeaderPrimeMeridian));
+        }
+    }
+
+    private string _strHelpPrimeMeridian = string.Empty;
+    public string StrHelpPrimeMeridian
+    {
+        get => _strHelpPrimeMeridian;
+        set
+        {
+            if (_strHelpPrimeMeridian == value) return;
+            _strHelpPrimeMeridian = value;
+            OnPropertyChanged(nameof(StrHelpPrimeMeridian));
+        }
+    }
+
+    private string _strHelpHeaderRotPeriod = string.Empty;
+    public string StrHelpHeaderRotPeriod
+    {
+        get => _strHelpHeaderRotPeriod;
+        set
+        {
+            if (_strHelpHeaderRotPeriod == value) return;
+            _strHelpHeaderRotPeriod = value;
+            OnPropertyChanged(nameof(StrHelpHeaderRotPeriod));
+        }
+    }
+
+    private string _strHelpRotPeriod = string.Empty;
+    public string StrHelpRotPeriod
+    {
+        get => _strHelpRotPeriod;
+        set
+        {
+            if (_strHelpRotPeriod == value) return;
+            _strHelpRotPeriod = value;
+            OnPropertyChanged(nameof(StrHelpRotPeriod));
+        }
+    }
+
+    private string _strHelpHeaderRatesAdvanced = string.Empty;
+    public string StrHelpHeaderRatesAdvanced
+    {
+        get => _strHelpHeaderRatesAdvanced;
+        set
+        {
+            if (_strHelpHeaderRatesAdvanced == value) return;
+            _strHelpHeaderRatesAdvanced = value;
+            OnPropertyChanged(nameof(StrHelpHeaderRatesAdvanced));
+        }
+    }
+
+    private string _strHelpRatesAdvanced = string.Empty;
+    public string StrHelpRatesAdvanced
+    {
+        get => _strHelpRatesAdvanced;
+        set
+        {
+            if (_strHelpRatesAdvanced == value) return;
+            _strHelpRatesAdvanced = value;
+            OnPropertyChanged(nameof(StrHelpRatesAdvanced));
+        }
+    }
+
+    private string _strHelpHeaderBodyFixed = string.Empty;
+    public string StrHelpHeaderBodyFixed
+    {
+        get => _strHelpHeaderBodyFixed;
+        set
+        {
+            if (_strHelpHeaderBodyFixed == value) return;
+            _strHelpHeaderBodyFixed = value;
+            OnPropertyChanged(nameof(StrHelpHeaderBodyFixed));
+        }
+    }
+
+    private string _strHelpBodyFixed = string.Empty;
+    public string StrHelpBodyFixed
+    {
+        get => _strHelpBodyFixed;
+        set
+        {
+            if (_strHelpBodyFixed == value) return;
+            _strHelpBodyFixed = value;
+            OnPropertyChanged(nameof(StrHelpBodyFixed));
+        }
+    }
+
     /// <summary>Called once on construction and on every culture change.</summary>
     private void RefreshStrings()
     {
         StrTitle = _translationService.GetString("Tabs_Comet_Title");
+        StrNucleus = _translationService.GetString("Tabs_Comet_Nucleus");
+        StrNucleusRadius = _translationService.GetString("Tabs_Comet_NucleusRadius");
+        StrStep1 = _translationService.GetString("Tabs_Comet_Step1");
+        StrStep2 = _translationService.GetString("Tabs_Comet_Step2");
+        StrStep3 = _translationService.GetString("Tabs_Comet_Step3");
+        StrStep4 = _translationService.GetString("Tabs_Comet_Step4");
+        StrStep1Help = _translationService.GetString("Tabs_Comet_Step1Help");
+        StrStep2Help = _translationService.GetString("Tabs_Comet_Step2Help");
+        StrStep3Help = _translationService.GetString("Tabs_Comet_Step3Help");
+        StrStep4Help = _translationService.GetString("Tabs_Comet_Step4Help");
+        StrStepsDoneHelp = _translationService.GetString("Tabs_Comet_StepsDoneHelp");
+        StrSimulatedRange = _translationService.GetString("Tabs_Comet_SimulatedRange");
+        StrTipReferenceOrbit = _translationService.GetString("Tabs_Comet_TipReferenceOrbit");
+        StrTipPoleRa = _translationService.GetString("Tabs_Comet_TipPoleRa");
+        StrTipPoleDec = _translationService.GetString("Tabs_Comet_TipPoleDec");
+        StrTipPrimeMeridian = _translationService.GetString("Tabs_Comet_TipPrimeMeridian");
+        StrTipRotPeriod = _translationService.GetString("Tabs_Comet_TipRotPeriod");
+        StrHelpHeaderSpkRecords = _translationService.GetString("Tabs_Comet_HelpHeaderSpkRecords");
+        StrHelpSpkRecords = _translationService.GetString("Tabs_Comet_HelpSpkRecords");
+        StrHelpHeaderEpochRange = _translationService.GetString("Tabs_Comet_HelpHeaderEpochRange");
+        StrHelpEpochRange = _translationService.GetString("Tabs_Comet_HelpEpochRange");
+        StrHelpHeaderProposedRange = _translationService.GetString("Tabs_Comet_HelpHeaderProposedRange");
+        StrHelpProposedRange = _translationService.GetString("Tabs_Comet_HelpProposedRange");
+        StrHelpHeaderRecommit = _translationService.GetString("Tabs_Comet_HelpHeaderRecommit");
+        StrHelpRecommit = _translationService.GetString("Tabs_Comet_HelpRecommit");
+        StrHelpHeaderModelRange = _translationService.GetString("Tabs_Comet_HelpHeaderModelRange");
+        StrHelpModelRange = _translationService.GetString("Tabs_Comet_HelpModelRange");
+        StrHelpHeaderDustLead = _translationService.GetString("Tabs_Comet_HelpHeaderDustLead");
+        StrHelpDustLead = _translationService.GetString("Tabs_Comet_HelpDustLead");
+        StrHelpHeaderReferenceOrbit = _translationService.GetString("Tabs_Comet_HelpHeaderReferenceOrbit");
+        StrHelpReferenceOrbit = _translationService.GetString("Tabs_Comet_HelpReferenceOrbit");
+        StrHelpNucleusRadius = _translationService.GetString("Tabs_Comet_HelpNucleusRadius");
+        StrHelpHeaderPoleRa = _translationService.GetString("Tabs_Comet_HelpHeaderPoleRa");
+        StrHelpPoleRa = _translationService.GetString("Tabs_Comet_HelpPoleRa");
+        StrHelpHeaderPoleDec = _translationService.GetString("Tabs_Comet_HelpHeaderPoleDec");
+        StrHelpPoleDec = _translationService.GetString("Tabs_Comet_HelpPoleDec");
+        StrHelpHeaderPrimeMeridian = _translationService.GetString("Tabs_Comet_HelpHeaderPrimeMeridian");
+        StrHelpPrimeMeridian = _translationService.GetString("Tabs_Comet_HelpPrimeMeridian");
+        StrHelpHeaderRotPeriod = _translationService.GetString("Tabs_Comet_HelpHeaderRotPeriod");
+        StrHelpRotPeriod = _translationService.GetString("Tabs_Comet_HelpRotPeriod");
+        StrHelpHeaderRatesAdvanced = _translationService.GetString("Tabs_Comet_HelpHeaderRatesAdvanced");
+        StrHelpRatesAdvanced = _translationService.GetString("Tabs_Comet_HelpRatesAdvanced");
+        StrHelpHeaderBodyFixed = _translationService.GetString("Tabs_Comet_HelpHeaderBodyFixed");
+        StrHelpBodyFixed = _translationService.GetString("Tabs_Comet_HelpBodyFixed");
     }
 }

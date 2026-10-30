@@ -1049,6 +1049,52 @@ pub fn dust_frame_ledger(pe: PresentationEngineHandle, since_seq: u64) -> Vec<Du
 /// (`render_scene.dust_view`). Must be recorded before the render pass begins. Returns the
 /// compute timeline value the graphics submit must wait on (0 = none): the newest emission
 /// included in the drawn ranges.
+/// `AETHERVK_DUST_PROFILE=1` (diagnostics): the shader-clock counters of `pe`'s last drawn frame
+/// (`Device::dust_profile_counters`, a blocking download), logged at most once a second: what the
+/// splat appended to the packet queue and what the queue draw then cost, per preview stride
+fn log_dust_profile(
+  device: &crate::gpu_backends::vulkan::device::Device,
+  pe: crate::gpu::PresentationEngineHandle,
+  stride: u32,
+) {
+  use crate::scene::dust as d;
+  static LAST_US: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+  if !crate::gpu_backends::vulkan::physics::dust_profile_requested() {
+    return;
+  }
+  let now = aethervk_oshal_rlib::os::time::get_monotonic_time() as u64;
+  let last = LAST_US.load(core::sync::atomic::Ordering::Relaxed);
+  if now.saturating_sub(last) < 1_000_000 {
+    return;
+  }
+  LAST_US.store(now, core::sync::atomic::Ordering::Relaxed);
+  let Ok(p) = device.dust_profile_counters(pe) else {
+    return;
+  };
+  if !p.any() {
+    return;
+  }
+  let q: Vec<_> = (0..d::DUST_PROF_QSTAGE_NAMES.len())
+    .map(|k| alloc::format!("{} {:.2e}", d::DUST_PROF_QSTAGE_NAMES[k], p.qstage(k) as f64))
+    .collect();
+  aethervk_oshal_rlib::log!(
+    "[Dust profile] view {} frame {} stride {}: threads {} packets {} records {} (ewa texels {:.3e}, volume {} texels {:.3e}) | queue records {} texels {:.3e} max wg {} | {}",
+    pe.0,
+    p.frame,
+    stride,
+    p.word(d::DUST_PROF_THREADS),
+    p.word(d::DUST_PROF_PACKETS),
+    p.word(d::DUST_PROF_RECORDS),
+    p.u64_at(d::DUST_PROF_EWA_TEXELS) as f64,
+    p.word(d::DUST_PROF_VOLUME),
+    p.u64_at(d::DUST_PROF_VOLUME_TEXELS) as f64,
+    p.word(d::DUST_PROF_QRECORDS),
+    p.u64_at(d::DUST_PROF_QTEXELS) as f64,
+    p.word(d::DUST_PROF_QMAX_WG),
+    q.join(", ")
+  );
+}
+
 pub fn prepare_dust(
   device: &crate::gpu_backends::vulkan::device::Device,
   cmd: ash::vk::CommandBuffer,
@@ -1109,6 +1155,9 @@ pub fn prepare_dust(
     pe,
     if render_scene.dust_play { crate::scene::dust::play_quality::PlayFeedback::from_env() } else { None },
   );
+  // the preview's cluster stride, from the last GPU timing readback (1 outside the preview)
+  let stride = device.dust_update_play_stride(pe, render_scene.dust_stride_budget.filter(|_| render_scene.dust_play));
+  log_dust_profile(device, pe, stride);
   // an unchanged frame keeps the last frame's image (`cmd_dust_frame_begin_reusable`): no
   // propagate, splat or specks; a traced frame always draws
   let (view, reuse) = if dust_debug_skip("zero") {
@@ -1122,6 +1171,7 @@ pub fn prepare_dust(
     let inputs = dust_draw_inputs(render_scene, flags, &flow, specks_needed);
     device.cmd_dust_frame_begin_reusable(cmd, pe, render_scene.window_extent, flags, flow, inputs)?
   };
+  render_scene.dust_drew = !reuse;
   // the frame ledger (telemetry): what this frame is, for the observer's camera path
   {
     let first = render_scene.depth_layers.iter().flat_map(|l| l.dust_calls.iter()).next();
@@ -1913,6 +1963,11 @@ pub struct RenderScene {
   /// set (`play_quality::PlayFeedback`, `Device::dust_set_play_feedback`); false on every paused
   /// frame (the pin is left and the paused feedback state restored)
   pub dust_play: bool,
+  /// the preview's GPU budget of the cluster stride (`PlayPreview::stride_budget`; `None` outside
+  /// the preview or with the preview off), fed to `Device::dust_update_play_stride`
+  pub dust_stride_budget: Option<crate::scene::dust::play_quality::StrideBudget>,
+  /// set by `prepare_dust`: this frame draws the dust (not the last frame's image reused)
+  pub dust_drew: bool,
   /// dust trajectory detail of the scene (`SceneContext::dust_propagate_detail`: 17 / 9 / 5
   /// solved size-polyline edges), stamped on the device before the propagates (`prepare_dust`)
   pub dust_propagate_detail: u32,
@@ -1961,6 +2016,8 @@ impl RenderScene {
       dust_feedback_gen: 0,
       dust_sim_speed: 0.0,
       dust_play: false,
+      dust_stride_budget: None,
+      dust_drew: false,
       dust_propagate_detail: crate::scene::dust::DUST_PROPAGATE_DETAIL_DEFAULT,
       dust_view_flags: 0,
       dust_exposure_ev: 0.0,

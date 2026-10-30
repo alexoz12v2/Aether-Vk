@@ -204,5 +204,9 @@ public partial class SettingsTabViewModel
   {
     RefreshStrings();
     ParticleRendering.ReuseToleranceOffLabel = StrReuseToleranceOff;
+    // the picker keeps its index: a new list of the same length re-selects it
+    var level = ParticleRendering.PlayPreview;
+    ParticleRendering.PlayPreviewOptions = new[] { StrPlayPreviewOff, StrPlayPreviewSmooth, StrPlayPreviewBalanced, StrPlayPreviewQuality };
+    ParticleRendering.PlayPreview = level;
   }
 }

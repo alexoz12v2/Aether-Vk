@@ -6,4 +6,48 @@ namespace AetherVk.Logic.ViewModels;
 public partial interface ICometTabViewModel
 {
     string StrTitle { get; set; }
+    string StrNucleus { get; set; }
+    string StrNucleusRadius { get; set; }
+    string StrStep1 { get; set; }
+    string StrStep2 { get; set; }
+    string StrStep3 { get; set; }
+    string StrStep4 { get; set; }
+    string StrStep1Help { get; set; }
+    string StrStep2Help { get; set; }
+    string StrStep3Help { get; set; }
+    string StrStep4Help { get; set; }
+    string StrStepsDoneHelp { get; set; }
+    string StrSimulatedRange { get; set; }
+    string StrTipReferenceOrbit { get; set; }
+    string StrTipPoleRa { get; set; }
+    string StrTipPoleDec { get; set; }
+    string StrTipPrimeMeridian { get; set; }
+    string StrTipRotPeriod { get; set; }
+    string StrHelpHeaderSpkRecords { get; set; }
+    string StrHelpSpkRecords { get; set; }
+    string StrHelpHeaderEpochRange { get; set; }
+    string StrHelpEpochRange { get; set; }
+    string StrHelpHeaderProposedRange { get; set; }
+    string StrHelpProposedRange { get; set; }
+    string StrHelpHeaderRecommit { get; set; }
+    string StrHelpRecommit { get; set; }
+    string StrHelpHeaderModelRange { get; set; }
+    string StrHelpModelRange { get; set; }
+    string StrHelpHeaderDustLead { get; set; }
+    string StrHelpDustLead { get; set; }
+    string StrHelpHeaderReferenceOrbit { get; set; }
+    string StrHelpReferenceOrbit { get; set; }
+    string StrHelpNucleusRadius { get; set; }
+    string StrHelpHeaderPoleRa { get; set; }
+    string StrHelpPoleRa { get; set; }
+    string StrHelpHeaderPoleDec { get; set; }
+    string StrHelpPoleDec { get; set; }
+    string StrHelpHeaderPrimeMeridian { get; set; }
+    string StrHelpPrimeMeridian { get; set; }
+    string StrHelpHeaderRotPeriod { get; set; }
+    string StrHelpRotPeriod { get; set; }
+    string StrHelpHeaderRatesAdvanced { get; set; }
+    string StrHelpRatesAdvanced { get; set; }
+    string StrHelpHeaderBodyFixed { get; set; }
+    string StrHelpBodyFixed { get; set; }
 }

@@ -750,6 +750,1074 @@ partial class SettingsTabViewModel
         }
     }
 
+    private string _strTimeScale = string.Empty;
+    public string StrTimeScale
+    {
+        get => _strTimeScale;
+        set
+        {
+            if (_strTimeScale == value) return;
+            _strTimeScale = value;
+            OnPropertyChanged(nameof(StrTimeScale));
+        }
+    }
+
+    private string _strTimeScaleUtc = string.Empty;
+    public string StrTimeScaleUtc
+    {
+        get => _strTimeScaleUtc;
+        set
+        {
+            if (_strTimeScaleUtc == value) return;
+            _strTimeScaleUtc = value;
+            OnPropertyChanged(nameof(StrTimeScaleUtc));
+        }
+    }
+
+    private string _strTimeScaleTdb = string.Empty;
+    public string StrTimeScaleTdb
+    {
+        get => _strTimeScaleTdb;
+        set
+        {
+            if (_strTimeScaleTdb == value) return;
+            _strTimeScaleTdb = value;
+            OnPropertyChanged(nameof(StrTimeScaleTdb));
+        }
+    }
+
+    private string _strHelpDisplayMode = string.Empty;
+    public string StrHelpDisplayMode
+    {
+        get => _strHelpDisplayMode;
+        set
+        {
+            if (_strHelpDisplayMode == value) return;
+            _strHelpDisplayMode = value;
+            OnPropertyChanged(nameof(StrHelpDisplayMode));
+        }
+    }
+
+    private string _strHelpMesh = string.Empty;
+    public string StrHelpMesh
+    {
+        get => _strHelpMesh;
+        set
+        {
+            if (_strHelpMesh == value) return;
+            _strHelpMesh = value;
+            OnPropertyChanged(nameof(StrHelpMesh));
+        }
+    }
+
+    private string _strHelpChannelAlbedo = string.Empty;
+    public string StrHelpChannelAlbedo
+    {
+        get => _strHelpChannelAlbedo;
+        set
+        {
+            if (_strHelpChannelAlbedo == value) return;
+            _strHelpChannelAlbedo = value;
+            OnPropertyChanged(nameof(StrHelpChannelAlbedo));
+        }
+    }
+
+    private string _strHelpChannelNormal = string.Empty;
+    public string StrHelpChannelNormal
+    {
+        get => _strHelpChannelNormal;
+        set
+        {
+            if (_strHelpChannelNormal == value) return;
+            _strHelpChannelNormal = value;
+            OnPropertyChanged(nameof(StrHelpChannelNormal));
+        }
+    }
+
+    private string _strHelpChannelRoughness = string.Empty;
+    public string StrHelpChannelRoughness
+    {
+        get => _strHelpChannelRoughness;
+        set
+        {
+            if (_strHelpChannelRoughness == value) return;
+            _strHelpChannelRoughness = value;
+            OnPropertyChanged(nameof(StrHelpChannelRoughness));
+        }
+    }
+
+    private string _strHelpChannelAo = string.Empty;
+    public string StrHelpChannelAo
+    {
+        get => _strHelpChannelAo;
+        set
+        {
+            if (_strHelpChannelAo == value) return;
+            _strHelpChannelAo = value;
+            OnPropertyChanged(nameof(StrHelpChannelAo));
+        }
+    }
+
+    private string _strHelpBillboardTexture = string.Empty;
+    public string StrHelpBillboardTexture
+    {
+        get => _strHelpBillboardTexture;
+        set
+        {
+            if (_strHelpBillboardTexture == value) return;
+            _strHelpBillboardTexture = value;
+            OnPropertyChanged(nameof(StrHelpBillboardTexture));
+        }
+    }
+
+    private string _strHelpBillboardAspectLock = string.Empty;
+    public string StrHelpBillboardAspectLock
+    {
+        get => _strHelpBillboardAspectLock;
+        set
+        {
+            if (_strHelpBillboardAspectLock == value) return;
+            _strHelpBillboardAspectLock = value;
+            OnPropertyChanged(nameof(StrHelpBillboardAspectLock));
+        }
+    }
+
+    private string _strHelpBillboardAlpha = string.Empty;
+    public string StrHelpBillboardAlpha
+    {
+        get => _strHelpBillboardAlpha;
+        set
+        {
+            if (_strHelpBillboardAlpha == value) return;
+            _strHelpBillboardAlpha = value;
+            OnPropertyChanged(nameof(StrHelpBillboardAlpha));
+        }
+    }
+
+    private string _strHelpBillboardRotation = string.Empty;
+    public string StrHelpBillboardRotation
+    {
+        get => _strHelpBillboardRotation;
+        set
+        {
+            if (_strHelpBillboardRotation == value) return;
+            _strHelpBillboardRotation = value;
+            OnPropertyChanged(nameof(StrHelpBillboardRotation));
+        }
+    }
+
+    private string _strHelpHeaderImageHeightKm = string.Empty;
+    public string StrHelpHeaderImageHeightKm
+    {
+        get => _strHelpHeaderImageHeightKm;
+        set
+        {
+            if (_strHelpHeaderImageHeightKm == value) return;
+            _strHelpHeaderImageHeightKm = value;
+            OnPropertyChanged(nameof(StrHelpHeaderImageHeightKm));
+        }
+    }
+
+    private string _strHelpImageHeightKm = string.Empty;
+    public string StrHelpImageHeightKm
+    {
+        get => _strHelpImageHeightKm;
+        set
+        {
+            if (_strHelpImageHeightKm == value) return;
+            _strHelpImageHeightKm = value;
+            OnPropertyChanged(nameof(StrHelpImageHeightKm));
+        }
+    }
+
+    private string _strHelpHeaderPlateScale = string.Empty;
+    public string StrHelpHeaderPlateScale
+    {
+        get => _strHelpHeaderPlateScale;
+        set
+        {
+            if (_strHelpHeaderPlateScale == value) return;
+            _strHelpHeaderPlateScale = value;
+            OnPropertyChanged(nameof(StrHelpHeaderPlateScale));
+        }
+    }
+
+    private string _strHelpPlateScale = string.Empty;
+    public string StrHelpPlateScale
+    {
+        get => _strHelpPlateScale;
+        set
+        {
+            if (_strHelpPlateScale == value) return;
+            _strHelpPlateScale = value;
+            OnPropertyChanged(nameof(StrHelpPlateScale));
+        }
+    }
+
+    private string _strHelpHeaderNucleusPixel = string.Empty;
+    public string StrHelpHeaderNucleusPixel
+    {
+        get => _strHelpHeaderNucleusPixel;
+        set
+        {
+            if (_strHelpHeaderNucleusPixel == value) return;
+            _strHelpHeaderNucleusPixel = value;
+            OnPropertyChanged(nameof(StrHelpHeaderNucleusPixel));
+        }
+    }
+
+    private string _strHelpNucleusPixel = string.Empty;
+    public string StrHelpNucleusPixel
+    {
+        get => _strHelpNucleusPixel;
+        set
+        {
+            if (_strHelpNucleusPixel == value) return;
+            _strHelpNucleusPixel = value;
+            OnPropertyChanged(nameof(StrHelpNucleusPixel));
+        }
+    }
+
+    private string _strHelpHeaderPhysicalSize = string.Empty;
+    public string StrHelpHeaderPhysicalSize
+    {
+        get => _strHelpHeaderPhysicalSize;
+        set
+        {
+            if (_strHelpHeaderPhysicalSize == value) return;
+            _strHelpHeaderPhysicalSize = value;
+            OnPropertyChanged(nameof(StrHelpHeaderPhysicalSize));
+        }
+    }
+
+    private string _strHelpPhysicalSize = string.Empty;
+    public string StrHelpPhysicalSize
+    {
+        get => _strHelpPhysicalSize;
+        set
+        {
+            if (_strHelpPhysicalSize == value) return;
+            _strHelpPhysicalSize = value;
+            OnPropertyChanged(nameof(StrHelpPhysicalSize));
+        }
+    }
+
+    private string _strHelpHeaderFlipLon = string.Empty;
+    public string StrHelpHeaderFlipLon
+    {
+        get => _strHelpHeaderFlipLon;
+        set
+        {
+            if (_strHelpHeaderFlipLon == value) return;
+            _strHelpHeaderFlipLon = value;
+            OnPropertyChanged(nameof(StrHelpHeaderFlipLon));
+        }
+    }
+
+    private string _strHelpFlipLon = string.Empty;
+    public string StrHelpFlipLon
+    {
+        get => _strHelpFlipLon;
+        set
+        {
+            if (_strHelpFlipLon == value) return;
+            _strHelpFlipLon = value;
+            OnPropertyChanged(nameof(StrHelpFlipLon));
+        }
+    }
+
+    private string _strHelpHeaderStretch = string.Empty;
+    public string StrHelpHeaderStretch
+    {
+        get => _strHelpHeaderStretch;
+        set
+        {
+            if (_strHelpHeaderStretch == value) return;
+            _strHelpHeaderStretch = value;
+            OnPropertyChanged(nameof(StrHelpHeaderStretch));
+        }
+    }
+
+    private string _strHelpStretch = string.Empty;
+    public string StrHelpStretch
+    {
+        get => _strHelpStretch;
+        set
+        {
+            if (_strHelpStretch == value) return;
+            _strHelpStretch = value;
+            OnPropertyChanged(nameof(StrHelpStretch));
+        }
+    }
+
+    private string _strHelpHeaderPixelRatio = string.Empty;
+    public string StrHelpHeaderPixelRatio
+    {
+        get => _strHelpHeaderPixelRatio;
+        set
+        {
+            if (_strHelpHeaderPixelRatio == value) return;
+            _strHelpHeaderPixelRatio = value;
+            OnPropertyChanged(nameof(StrHelpHeaderPixelRatio));
+        }
+    }
+
+    private string _strHelpHeaderCompare = string.Empty;
+    public string StrHelpHeaderCompare
+    {
+        get => _strHelpHeaderCompare;
+        set
+        {
+            if (_strHelpHeaderCompare == value) return;
+            _strHelpHeaderCompare = value;
+            OnPropertyChanged(nameof(StrHelpHeaderCompare));
+        }
+    }
+
+    private string _strHelpCompare = string.Empty;
+    public string StrHelpCompare
+    {
+        get => _strHelpCompare;
+        set
+        {
+            if (_strHelpCompare == value) return;
+            _strHelpCompare = value;
+            OnPropertyChanged(nameof(StrHelpCompare));
+        }
+    }
+
+    private string _strHelpHeaderDustQuality = string.Empty;
+    public string StrHelpHeaderDustQuality
+    {
+        get => _strHelpHeaderDustQuality;
+        set
+        {
+            if (_strHelpHeaderDustQuality == value) return;
+            _strHelpHeaderDustQuality = value;
+            OnPropertyChanged(nameof(StrHelpHeaderDustQuality));
+        }
+    }
+
+    private string _strHelpDustQuality = string.Empty;
+    public string StrHelpDustQuality
+    {
+        get => _strHelpDustQuality;
+        set
+        {
+            if (_strHelpDustQuality == value) return;
+            _strHelpDustQuality = value;
+            OnPropertyChanged(nameof(StrHelpDustQuality));
+        }
+    }
+
+    private string _strHelpVolumeDetail = string.Empty;
+    public string StrHelpVolumeDetail
+    {
+        get => _strHelpVolumeDetail;
+        set
+        {
+            if (_strHelpVolumeDetail == value) return;
+            _strHelpVolumeDetail = value;
+            OnPropertyChanged(nameof(StrHelpVolumeDetail));
+        }
+    }
+
+    private string _strHelpPropagateDetail = string.Empty;
+    public string StrHelpPropagateDetail
+    {
+        get => _strHelpPropagateDetail;
+        set
+        {
+            if (_strHelpPropagateDetail == value) return;
+            _strHelpPropagateDetail = value;
+            OnPropertyChanged(nameof(StrHelpPropagateDetail));
+        }
+    }
+
+    private string _strHelpHazeDetail = string.Empty;
+    public string StrHelpHazeDetail
+    {
+        get => _strHelpHazeDetail;
+        set
+        {
+            if (_strHelpHazeDetail == value) return;
+            _strHelpHazeDetail = value;
+            OnPropertyChanged(nameof(StrHelpHazeDetail));
+        }
+    }
+
+    private string _strHelpReuseTolerance = string.Empty;
+    public string StrHelpReuseTolerance
+    {
+        get => _strHelpReuseTolerance;
+        set
+        {
+            if (_strHelpReuseTolerance == value) return;
+            _strHelpReuseTolerance = value;
+            OnPropertyChanged(nameof(StrHelpReuseTolerance));
+        }
+    }
+
+    private string _strHelpHeaderViewDiagnostics = string.Empty;
+    public string StrHelpHeaderViewDiagnostics
+    {
+        get => _strHelpHeaderViewDiagnostics;
+        set
+        {
+            if (_strHelpHeaderViewDiagnostics == value) return;
+            _strHelpHeaderViewDiagnostics = value;
+            OnPropertyChanged(nameof(StrHelpHeaderViewDiagnostics));
+        }
+    }
+
+    private string _strHelpViewDiagnostics = string.Empty;
+    public string StrHelpViewDiagnostics
+    {
+        get => _strHelpViewDiagnostics;
+        set
+        {
+            if (_strHelpViewDiagnostics == value) return;
+            _strHelpViewDiagnostics = value;
+            OnPropertyChanged(nameof(StrHelpViewDiagnostics));
+        }
+    }
+
+    private string _strHelpHeaderViewComparisonLock = string.Empty;
+    public string StrHelpHeaderViewComparisonLock
+    {
+        get => _strHelpHeaderViewComparisonLock;
+        set
+        {
+            if (_strHelpHeaderViewComparisonLock == value) return;
+            _strHelpHeaderViewComparisonLock = value;
+            OnPropertyChanged(nameof(StrHelpHeaderViewComparisonLock));
+        }
+    }
+
+    private string _strHelpViewComparisonLock = string.Empty;
+    public string StrHelpViewComparisonLock
+    {
+        get => _strHelpViewComparisonLock;
+        set
+        {
+            if (_strHelpViewComparisonLock == value) return;
+            _strHelpViewComparisonLock = value;
+            OnPropertyChanged(nameof(StrHelpViewComparisonLock));
+        }
+    }
+
+    private string _strHelpHeaderViewProjectionType = string.Empty;
+    public string StrHelpHeaderViewProjectionType
+    {
+        get => _strHelpHeaderViewProjectionType;
+        set
+        {
+            if (_strHelpHeaderViewProjectionType == value) return;
+            _strHelpHeaderViewProjectionType = value;
+            OnPropertyChanged(nameof(StrHelpHeaderViewProjectionType));
+        }
+    }
+
+    private string _strHelpViewProjectionType = string.Empty;
+    public string StrHelpViewProjectionType
+    {
+        get => _strHelpViewProjectionType;
+        set
+        {
+            if (_strHelpViewProjectionType == value) return;
+            _strHelpViewProjectionType = value;
+            OnPropertyChanged(nameof(StrHelpViewProjectionType));
+        }
+    }
+
+    private string _strHelpHeaderViewProjectionAdvanced = string.Empty;
+    public string StrHelpHeaderViewProjectionAdvanced
+    {
+        get => _strHelpHeaderViewProjectionAdvanced;
+        set
+        {
+            if (_strHelpHeaderViewProjectionAdvanced == value) return;
+            _strHelpHeaderViewProjectionAdvanced = value;
+            OnPropertyChanged(nameof(StrHelpHeaderViewProjectionAdvanced));
+        }
+    }
+
+    private string _strHelpViewProjectionAdvanced = string.Empty;
+    public string StrHelpViewProjectionAdvanced
+    {
+        get => _strHelpViewProjectionAdvanced;
+        set
+        {
+            if (_strHelpViewProjectionAdvanced == value) return;
+            _strHelpViewProjectionAdvanced = value;
+            OnPropertyChanged(nameof(StrHelpViewProjectionAdvanced));
+        }
+    }
+
+    private string _strHelpHeaderViewFov = string.Empty;
+    public string StrHelpHeaderViewFov
+    {
+        get => _strHelpHeaderViewFov;
+        set
+        {
+            if (_strHelpHeaderViewFov == value) return;
+            _strHelpHeaderViewFov = value;
+            OnPropertyChanged(nameof(StrHelpHeaderViewFov));
+        }
+    }
+
+    private string _strHelpViewFov = string.Empty;
+    public string StrHelpViewFov
+    {
+        get => _strHelpViewFov;
+        set
+        {
+            if (_strHelpViewFov == value) return;
+            _strHelpViewFov = value;
+            OnPropertyChanged(nameof(StrHelpViewFov));
+        }
+    }
+
+    private string _strHelpHeaderViewFovUnits = string.Empty;
+    public string StrHelpHeaderViewFovUnits
+    {
+        get => _strHelpHeaderViewFovUnits;
+        set
+        {
+            if (_strHelpHeaderViewFovUnits == value) return;
+            _strHelpHeaderViewFovUnits = value;
+            OnPropertyChanged(nameof(StrHelpHeaderViewFovUnits));
+        }
+    }
+
+    private string _strHelpViewFovUnits = string.Empty;
+    public string StrHelpViewFovUnits
+    {
+        get => _strHelpViewFovUnits;
+        set
+        {
+            if (_strHelpViewFovUnits == value) return;
+            _strHelpViewFovUnits = value;
+            OnPropertyChanged(nameof(StrHelpViewFovUnits));
+        }
+    }
+
+    private string _strHelpHeaderViewNear = string.Empty;
+    public string StrHelpHeaderViewNear
+    {
+        get => _strHelpHeaderViewNear;
+        set
+        {
+            if (_strHelpHeaderViewNear == value) return;
+            _strHelpHeaderViewNear = value;
+            OnPropertyChanged(nameof(StrHelpHeaderViewNear));
+        }
+    }
+
+    private string _strHelpViewPerspNear = string.Empty;
+    public string StrHelpViewPerspNear
+    {
+        get => _strHelpViewPerspNear;
+        set
+        {
+            if (_strHelpViewPerspNear == value) return;
+            _strHelpViewPerspNear = value;
+            OnPropertyChanged(nameof(StrHelpViewPerspNear));
+        }
+    }
+
+    private string _strHelpHeaderViewFar = string.Empty;
+    public string StrHelpHeaderViewFar
+    {
+        get => _strHelpHeaderViewFar;
+        set
+        {
+            if (_strHelpHeaderViewFar == value) return;
+            _strHelpHeaderViewFar = value;
+            OnPropertyChanged(nameof(StrHelpHeaderViewFar));
+        }
+    }
+
+    private string _strHelpViewPerspFar = string.Empty;
+    public string StrHelpViewPerspFar
+    {
+        get => _strHelpViewPerspFar;
+        set
+        {
+            if (_strHelpViewPerspFar == value) return;
+            _strHelpViewPerspFar = value;
+            OnPropertyChanged(nameof(StrHelpViewPerspFar));
+        }
+    }
+
+    private string _strHelpHeaderViewDistanceUnits = string.Empty;
+    public string StrHelpHeaderViewDistanceUnits
+    {
+        get => _strHelpHeaderViewDistanceUnits;
+        set
+        {
+            if (_strHelpHeaderViewDistanceUnits == value) return;
+            _strHelpHeaderViewDistanceUnits = value;
+            OnPropertyChanged(nameof(StrHelpHeaderViewDistanceUnits));
+        }
+    }
+
+    private string _strHelpViewDistanceUnits = string.Empty;
+    public string StrHelpViewDistanceUnits
+    {
+        get => _strHelpViewDistanceUnits;
+        set
+        {
+            if (_strHelpViewDistanceUnits == value) return;
+            _strHelpViewDistanceUnits = value;
+            OnPropertyChanged(nameof(StrHelpViewDistanceUnits));
+        }
+    }
+
+    private string _strHelpHeaderViewHalfWidth = string.Empty;
+    public string StrHelpHeaderViewHalfWidth
+    {
+        get => _strHelpHeaderViewHalfWidth;
+        set
+        {
+            if (_strHelpHeaderViewHalfWidth == value) return;
+            _strHelpHeaderViewHalfWidth = value;
+            OnPropertyChanged(nameof(StrHelpHeaderViewHalfWidth));
+        }
+    }
+
+    private string _strHelpViewHalfWidth = string.Empty;
+    public string StrHelpViewHalfWidth
+    {
+        get => _strHelpViewHalfWidth;
+        set
+        {
+            if (_strHelpViewHalfWidth == value) return;
+            _strHelpViewHalfWidth = value;
+            OnPropertyChanged(nameof(StrHelpViewHalfWidth));
+        }
+    }
+
+    private string _strHelpHeaderViewHalfHeight = string.Empty;
+    public string StrHelpHeaderViewHalfHeight
+    {
+        get => _strHelpHeaderViewHalfHeight;
+        set
+        {
+            if (_strHelpHeaderViewHalfHeight == value) return;
+            _strHelpHeaderViewHalfHeight = value;
+            OnPropertyChanged(nameof(StrHelpHeaderViewHalfHeight));
+        }
+    }
+
+    private string _strHelpViewHalfHeight = string.Empty;
+    public string StrHelpViewHalfHeight
+    {
+        get => _strHelpViewHalfHeight;
+        set
+        {
+            if (_strHelpViewHalfHeight == value) return;
+            _strHelpViewHalfHeight = value;
+            OnPropertyChanged(nameof(StrHelpViewHalfHeight));
+        }
+    }
+
+    private string _strHelpHeaderViewOrthoUnits = string.Empty;
+    public string StrHelpHeaderViewOrthoUnits
+    {
+        get => _strHelpHeaderViewOrthoUnits;
+        set
+        {
+            if (_strHelpHeaderViewOrthoUnits == value) return;
+            _strHelpHeaderViewOrthoUnits = value;
+            OnPropertyChanged(nameof(StrHelpHeaderViewOrthoUnits));
+        }
+    }
+
+    private string _strHelpViewOrthoUnits = string.Empty;
+    public string StrHelpViewOrthoUnits
+    {
+        get => _strHelpViewOrthoUnits;
+        set
+        {
+            if (_strHelpViewOrthoUnits == value) return;
+            _strHelpViewOrthoUnits = value;
+            OnPropertyChanged(nameof(StrHelpViewOrthoUnits));
+        }
+    }
+
+    private string _strHelpViewOrthoNear = string.Empty;
+    public string StrHelpViewOrthoNear
+    {
+        get => _strHelpViewOrthoNear;
+        set
+        {
+            if (_strHelpViewOrthoNear == value) return;
+            _strHelpViewOrthoNear = value;
+            OnPropertyChanged(nameof(StrHelpViewOrthoNear));
+        }
+    }
+
+    private string _strHelpViewOrthoFar = string.Empty;
+    public string StrHelpViewOrthoFar
+    {
+        get => _strHelpViewOrthoFar;
+        set
+        {
+            if (_strHelpViewOrthoFar == value) return;
+            _strHelpViewOrthoFar = value;
+            OnPropertyChanged(nameof(StrHelpViewOrthoFar));
+        }
+    }
+
+    private string _strHelpHeaderViewProportionsLock = string.Empty;
+    public string StrHelpHeaderViewProportionsLock
+    {
+        get => _strHelpHeaderViewProportionsLock;
+        set
+        {
+            if (_strHelpHeaderViewProportionsLock == value) return;
+            _strHelpHeaderViewProportionsLock = value;
+            OnPropertyChanged(nameof(StrHelpHeaderViewProportionsLock));
+        }
+    }
+
+    private string _strHelpViewProportionsLock = string.Empty;
+    public string StrHelpViewProportionsLock
+    {
+        get => _strHelpViewProportionsLock;
+        set
+        {
+            if (_strHelpViewProportionsLock == value) return;
+            _strHelpViewProportionsLock = value;
+            OnPropertyChanged(nameof(StrHelpViewProportionsLock));
+        }
+    }
+
+    private string _strHelpHeaderViewShowBehindCamera = string.Empty;
+    public string StrHelpHeaderViewShowBehindCamera
+    {
+        get => _strHelpHeaderViewShowBehindCamera;
+        set
+        {
+            if (_strHelpHeaderViewShowBehindCamera == value) return;
+            _strHelpHeaderViewShowBehindCamera = value;
+            OnPropertyChanged(nameof(StrHelpHeaderViewShowBehindCamera));
+        }
+    }
+
+    private string _strHelpViewShowBehindCamera = string.Empty;
+    public string StrHelpViewShowBehindCamera
+    {
+        get => _strHelpViewShowBehindCamera;
+        set
+        {
+            if (_strHelpViewShowBehindCamera == value) return;
+            _strHelpViewShowBehindCamera = value;
+            OnPropertyChanged(nameof(StrHelpViewShowBehindCamera));
+        }
+    }
+
+    private string _strHelpHeaderViewPhysicalLighting = string.Empty;
+    public string StrHelpHeaderViewPhysicalLighting
+    {
+        get => _strHelpHeaderViewPhysicalLighting;
+        set
+        {
+            if (_strHelpHeaderViewPhysicalLighting == value) return;
+            _strHelpHeaderViewPhysicalLighting = value;
+            OnPropertyChanged(nameof(StrHelpHeaderViewPhysicalLighting));
+        }
+    }
+
+    private string _strHelpViewPhysicalLighting = string.Empty;
+    public string StrHelpViewPhysicalLighting
+    {
+        get => _strHelpViewPhysicalLighting;
+        set
+        {
+            if (_strHelpViewPhysicalLighting == value) return;
+            _strHelpViewPhysicalLighting = value;
+            OnPropertyChanged(nameof(StrHelpViewPhysicalLighting));
+        }
+    }
+
+    private string _strHelpHeaderViewNucleusFromEarth = string.Empty;
+    public string StrHelpHeaderViewNucleusFromEarth
+    {
+        get => _strHelpHeaderViewNucleusFromEarth;
+        set
+        {
+            if (_strHelpHeaderViewNucleusFromEarth == value) return;
+            _strHelpHeaderViewNucleusFromEarth = value;
+            OnPropertyChanged(nameof(StrHelpHeaderViewNucleusFromEarth));
+        }
+    }
+
+    private string _strHelpViewNucleusFromEarth = string.Empty;
+    public string StrHelpViewNucleusFromEarth
+    {
+        get => _strHelpViewNucleusFromEarth;
+        set
+        {
+            if (_strHelpViewNucleusFromEarth == value) return;
+            _strHelpViewNucleusFromEarth = value;
+            OnPropertyChanged(nameof(StrHelpViewNucleusFromEarth));
+        }
+    }
+
+    private string _strHelpHeaderViewNucleusExposure = string.Empty;
+    public string StrHelpHeaderViewNucleusExposure
+    {
+        get => _strHelpHeaderViewNucleusExposure;
+        set
+        {
+            if (_strHelpHeaderViewNucleusExposure == value) return;
+            _strHelpHeaderViewNucleusExposure = value;
+            OnPropertyChanged(nameof(StrHelpHeaderViewNucleusExposure));
+        }
+    }
+
+    private string _strHelpViewNucleusExposure = string.Empty;
+    public string StrHelpViewNucleusExposure
+    {
+        get => _strHelpViewNucleusExposure;
+        set
+        {
+            if (_strHelpViewNucleusExposure == value) return;
+            _strHelpViewNucleusExposure = value;
+            OnPropertyChanged(nameof(StrHelpViewNucleusExposure));
+        }
+    }
+
+    private string _strHelpHeaderObserverTopocentric = string.Empty;
+    public string StrHelpHeaderObserverTopocentric
+    {
+        get => _strHelpHeaderObserverTopocentric;
+        set
+        {
+            if (_strHelpHeaderObserverTopocentric == value) return;
+            _strHelpHeaderObserverTopocentric = value;
+            OnPropertyChanged(nameof(StrHelpHeaderObserverTopocentric));
+        }
+    }
+
+    private string _strHelpObserverTopocentric = string.Empty;
+    public string StrHelpObserverTopocentric
+    {
+        get => _strHelpObserverTopocentric;
+        set
+        {
+            if (_strHelpObserverTopocentric == value) return;
+            _strHelpObserverTopocentric = value;
+            OnPropertyChanged(nameof(StrHelpObserverTopocentric));
+        }
+    }
+
+    private string _strHelpHeaderObserverNorthUp = string.Empty;
+    public string StrHelpHeaderObserverNorthUp
+    {
+        get => _strHelpHeaderObserverNorthUp;
+        set
+        {
+            if (_strHelpHeaderObserverNorthUp == value) return;
+            _strHelpHeaderObserverNorthUp = value;
+            OnPropertyChanged(nameof(StrHelpHeaderObserverNorthUp));
+        }
+    }
+
+    private string _strHelpObserverNorthUp = string.Empty;
+    public string StrHelpObserverNorthUp
+    {
+        get => _strHelpObserverNorthUp;
+        set
+        {
+            if (_strHelpObserverNorthUp == value) return;
+            _strHelpObserverNorthUp = value;
+            OnPropertyChanged(nameof(StrHelpObserverNorthUp));
+        }
+    }
+
+    private string _strHelpHeaderObserverLatitude = string.Empty;
+    public string StrHelpHeaderObserverLatitude
+    {
+        get => _strHelpHeaderObserverLatitude;
+        set
+        {
+            if (_strHelpHeaderObserverLatitude == value) return;
+            _strHelpHeaderObserverLatitude = value;
+            OnPropertyChanged(nameof(StrHelpHeaderObserverLatitude));
+        }
+    }
+
+    private string _strHelpObserverLatitude = string.Empty;
+    public string StrHelpObserverLatitude
+    {
+        get => _strHelpObserverLatitude;
+        set
+        {
+            if (_strHelpObserverLatitude == value) return;
+            _strHelpObserverLatitude = value;
+            OnPropertyChanged(nameof(StrHelpObserverLatitude));
+        }
+    }
+
+    private string _strHelpHeaderObserverLongitude = string.Empty;
+    public string StrHelpHeaderObserverLongitude
+    {
+        get => _strHelpHeaderObserverLongitude;
+        set
+        {
+            if (_strHelpHeaderObserverLongitude == value) return;
+            _strHelpHeaderObserverLongitude = value;
+            OnPropertyChanged(nameof(StrHelpHeaderObserverLongitude));
+        }
+    }
+
+    private string _strHelpObserverLongitude = string.Empty;
+    public string StrHelpObserverLongitude
+    {
+        get => _strHelpObserverLongitude;
+        set
+        {
+            if (_strHelpObserverLongitude == value) return;
+            _strHelpObserverLongitude = value;
+            OnPropertyChanged(nameof(StrHelpObserverLongitude));
+        }
+    }
+
+    private string _strHelpHeaderObserverLookDirection = string.Empty;
+    public string StrHelpHeaderObserverLookDirection
+    {
+        get => _strHelpHeaderObserverLookDirection;
+        set
+        {
+            if (_strHelpHeaderObserverLookDirection == value) return;
+            _strHelpHeaderObserverLookDirection = value;
+            OnPropertyChanged(nameof(StrHelpHeaderObserverLookDirection));
+        }
+    }
+
+    private string _strHelpObserverLookDirection = string.Empty;
+    public string StrHelpObserverLookDirection
+    {
+        get => _strHelpObserverLookDirection;
+        set
+        {
+            if (_strHelpObserverLookDirection == value) return;
+            _strHelpObserverLookDirection = value;
+            OnPropertyChanged(nameof(StrHelpObserverLookDirection));
+        }
+    }
+
+    private string _strHelpHeaderObserverScale = string.Empty;
+    public string StrHelpHeaderObserverScale
+    {
+        get => _strHelpHeaderObserverScale;
+        set
+        {
+            if (_strHelpHeaderObserverScale == value) return;
+            _strHelpHeaderObserverScale = value;
+            OnPropertyChanged(nameof(StrHelpHeaderObserverScale));
+        }
+    }
+
+    private string _strHelpObserverScale = string.Empty;
+    public string StrHelpObserverScale
+    {
+        get => _strHelpObserverScale;
+        set
+        {
+            if (_strHelpObserverScale == value) return;
+            _strHelpObserverScale = value;
+            OnPropertyChanged(nameof(StrHelpObserverScale));
+        }
+    }
+
+    private string _strPlayPreview = string.Empty;
+    public string StrPlayPreview
+    {
+        get => _strPlayPreview;
+        set
+        {
+            if (_strPlayPreview == value) return;
+            _strPlayPreview = value;
+            OnPropertyChanged(nameof(StrPlayPreview));
+        }
+    }
+
+    private string _strPlayPreviewHint = string.Empty;
+    public string StrPlayPreviewHint
+    {
+        get => _strPlayPreviewHint;
+        set
+        {
+            if (_strPlayPreviewHint == value) return;
+            _strPlayPreviewHint = value;
+            OnPropertyChanged(nameof(StrPlayPreviewHint));
+        }
+    }
+
+    private string _strPlayPreviewOff = string.Empty;
+    public string StrPlayPreviewOff
+    {
+        get => _strPlayPreviewOff;
+        set
+        {
+            if (_strPlayPreviewOff == value) return;
+            _strPlayPreviewOff = value;
+            OnPropertyChanged(nameof(StrPlayPreviewOff));
+        }
+    }
+
+    private string _strPlayPreviewSmooth = string.Empty;
+    public string StrPlayPreviewSmooth
+    {
+        get => _strPlayPreviewSmooth;
+        set
+        {
+            if (_strPlayPreviewSmooth == value) return;
+            _strPlayPreviewSmooth = value;
+            OnPropertyChanged(nameof(StrPlayPreviewSmooth));
+        }
+    }
+
+    private string _strPlayPreviewBalanced = string.Empty;
+    public string StrPlayPreviewBalanced
+    {
+        get => _strPlayPreviewBalanced;
+        set
+        {
+            if (_strPlayPreviewBalanced == value) return;
+            _strPlayPreviewBalanced = value;
+            OnPropertyChanged(nameof(StrPlayPreviewBalanced));
+        }
+    }
+
+    private string _strPlayPreviewQuality = string.Empty;
+    public string StrPlayPreviewQuality
+    {
+        get => _strPlayPreviewQuality;
+        set
+        {
+            if (_strPlayPreviewQuality == value) return;
+            _strPlayPreviewQuality = value;
+            OnPropertyChanged(nameof(StrPlayPreviewQuality));
+        }
+    }
+
+    private string _strHelpPlayPreview = string.Empty;
+    public string StrHelpPlayPreview
+    {
+        get => _strHelpPlayPreview;
+        set
+        {
+            if (_strHelpPlayPreview == value) return;
+            _strHelpPlayPreview = value;
+            OnPropertyChanged(nameof(StrHelpPlayPreview));
+        }
+    }
+
     /// <summary>Called once on construction and on every culture change.</summary>
     private void RefreshStrings()
     {
@@ -815,5 +1883,94 @@ partial class SettingsTabViewModel
         StrReuseTolerance = _translationService.GetString("Tabs_Settings_ReuseTolerance");
         StrReuseToleranceHint = _translationService.GetString("Tabs_Settings_ReuseToleranceHint");
         StrReuseToleranceOff = _translationService.GetString("Tabs_Settings_ReuseToleranceOff");
+        StrTimeScale = _translationService.GetString("Tabs_Settings_TimeScale");
+        StrTimeScaleUtc = _translationService.GetString("Tabs_Settings_TimeScaleUtc");
+        StrTimeScaleTdb = _translationService.GetString("Tabs_Settings_TimeScaleTdb");
+        StrHelpDisplayMode = _translationService.GetString("Tabs_Settings_HelpDisplayMode");
+        StrHelpMesh = _translationService.GetString("Tabs_Settings_HelpMesh");
+        StrHelpChannelAlbedo = _translationService.GetString("Tabs_Settings_HelpChannelAlbedo");
+        StrHelpChannelNormal = _translationService.GetString("Tabs_Settings_HelpChannelNormal");
+        StrHelpChannelRoughness = _translationService.GetString("Tabs_Settings_HelpChannelRoughness");
+        StrHelpChannelAo = _translationService.GetString("Tabs_Settings_HelpChannelAo");
+        StrHelpBillboardTexture = _translationService.GetString("Tabs_Settings_HelpBillboardTexture");
+        StrHelpBillboardAspectLock = _translationService.GetString("Tabs_Settings_HelpBillboardAspectLock");
+        StrHelpBillboardAlpha = _translationService.GetString("Tabs_Settings_HelpBillboardAlpha");
+        StrHelpBillboardRotation = _translationService.GetString("Tabs_Settings_HelpBillboardRotation");
+        StrHelpHeaderImageHeightKm = _translationService.GetString("Tabs_Settings_HelpHeaderImageHeightKm");
+        StrHelpImageHeightKm = _translationService.GetString("Tabs_Settings_HelpImageHeightKm");
+        StrHelpHeaderPlateScale = _translationService.GetString("Tabs_Settings_HelpHeaderPlateScale");
+        StrHelpPlateScale = _translationService.GetString("Tabs_Settings_HelpPlateScale");
+        StrHelpHeaderNucleusPixel = _translationService.GetString("Tabs_Settings_HelpHeaderNucleusPixel");
+        StrHelpNucleusPixel = _translationService.GetString("Tabs_Settings_HelpNucleusPixel");
+        StrHelpHeaderPhysicalSize = _translationService.GetString("Tabs_Settings_HelpHeaderPhysicalSize");
+        StrHelpPhysicalSize = _translationService.GetString("Tabs_Settings_HelpPhysicalSize");
+        StrHelpHeaderFlipLon = _translationService.GetString("Tabs_Settings_HelpHeaderFlipLon");
+        StrHelpFlipLon = _translationService.GetString("Tabs_Settings_HelpFlipLon");
+        StrHelpHeaderStretch = _translationService.GetString("Tabs_Settings_HelpHeaderStretch");
+        StrHelpStretch = _translationService.GetString("Tabs_Settings_HelpStretch");
+        StrHelpHeaderPixelRatio = _translationService.GetString("Tabs_Settings_HelpHeaderPixelRatio");
+        StrHelpHeaderCompare = _translationService.GetString("Tabs_Settings_HelpHeaderCompare");
+        StrHelpCompare = _translationService.GetString("Tabs_Settings_HelpCompare");
+        StrHelpHeaderDustQuality = _translationService.GetString("Tabs_Settings_HelpHeaderDustQuality");
+        StrHelpDustQuality = _translationService.GetString("Tabs_Settings_HelpDustQuality");
+        StrHelpVolumeDetail = _translationService.GetString("Tabs_Settings_HelpVolumeDetail");
+        StrHelpPropagateDetail = _translationService.GetString("Tabs_Settings_HelpPropagateDetail");
+        StrHelpHazeDetail = _translationService.GetString("Tabs_Settings_HelpHazeDetail");
+        StrHelpReuseTolerance = _translationService.GetString("Tabs_Settings_HelpReuseTolerance");
+        StrHelpHeaderViewDiagnostics = _translationService.GetString("Tabs_Settings_HelpHeaderViewDiagnostics");
+        StrHelpViewDiagnostics = _translationService.GetString("Tabs_Settings_HelpViewDiagnostics");
+        StrHelpHeaderViewComparisonLock = _translationService.GetString("Tabs_Settings_HelpHeaderViewComparisonLock");
+        StrHelpViewComparisonLock = _translationService.GetString("Tabs_Settings_HelpViewComparisonLock");
+        StrHelpHeaderViewProjectionType = _translationService.GetString("Tabs_Settings_HelpHeaderViewProjectionType");
+        StrHelpViewProjectionType = _translationService.GetString("Tabs_Settings_HelpViewProjectionType");
+        StrHelpHeaderViewProjectionAdvanced = _translationService.GetString("Tabs_Settings_HelpHeaderViewProjectionAdvanced");
+        StrHelpViewProjectionAdvanced = _translationService.GetString("Tabs_Settings_HelpViewProjectionAdvanced");
+        StrHelpHeaderViewFov = _translationService.GetString("Tabs_Settings_HelpHeaderViewFov");
+        StrHelpViewFov = _translationService.GetString("Tabs_Settings_HelpViewFov");
+        StrHelpHeaderViewFovUnits = _translationService.GetString("Tabs_Settings_HelpHeaderViewFovUnits");
+        StrHelpViewFovUnits = _translationService.GetString("Tabs_Settings_HelpViewFovUnits");
+        StrHelpHeaderViewNear = _translationService.GetString("Tabs_Settings_HelpHeaderViewNear");
+        StrHelpViewPerspNear = _translationService.GetString("Tabs_Settings_HelpViewPerspNear");
+        StrHelpHeaderViewFar = _translationService.GetString("Tabs_Settings_HelpHeaderViewFar");
+        StrHelpViewPerspFar = _translationService.GetString("Tabs_Settings_HelpViewPerspFar");
+        StrHelpHeaderViewDistanceUnits = _translationService.GetString("Tabs_Settings_HelpHeaderViewDistanceUnits");
+        StrHelpViewDistanceUnits = _translationService.GetString("Tabs_Settings_HelpViewDistanceUnits");
+        StrHelpHeaderViewHalfWidth = _translationService.GetString("Tabs_Settings_HelpHeaderViewHalfWidth");
+        StrHelpViewHalfWidth = _translationService.GetString("Tabs_Settings_HelpViewHalfWidth");
+        StrHelpHeaderViewHalfHeight = _translationService.GetString("Tabs_Settings_HelpHeaderViewHalfHeight");
+        StrHelpViewHalfHeight = _translationService.GetString("Tabs_Settings_HelpViewHalfHeight");
+        StrHelpHeaderViewOrthoUnits = _translationService.GetString("Tabs_Settings_HelpHeaderViewOrthoUnits");
+        StrHelpViewOrthoUnits = _translationService.GetString("Tabs_Settings_HelpViewOrthoUnits");
+        StrHelpViewOrthoNear = _translationService.GetString("Tabs_Settings_HelpViewOrthoNear");
+        StrHelpViewOrthoFar = _translationService.GetString("Tabs_Settings_HelpViewOrthoFar");
+        StrHelpHeaderViewProportionsLock = _translationService.GetString("Tabs_Settings_HelpHeaderViewProportionsLock");
+        StrHelpViewProportionsLock = _translationService.GetString("Tabs_Settings_HelpViewProportionsLock");
+        StrHelpHeaderViewShowBehindCamera = _translationService.GetString("Tabs_Settings_HelpHeaderViewShowBehindCamera");
+        StrHelpViewShowBehindCamera = _translationService.GetString("Tabs_Settings_HelpViewShowBehindCamera");
+        StrHelpHeaderViewPhysicalLighting = _translationService.GetString("Tabs_Settings_HelpHeaderViewPhysicalLighting");
+        StrHelpViewPhysicalLighting = _translationService.GetString("Tabs_Settings_HelpViewPhysicalLighting");
+        StrHelpHeaderViewNucleusFromEarth = _translationService.GetString("Tabs_Settings_HelpHeaderViewNucleusFromEarth");
+        StrHelpViewNucleusFromEarth = _translationService.GetString("Tabs_Settings_HelpViewNucleusFromEarth");
+        StrHelpHeaderViewNucleusExposure = _translationService.GetString("Tabs_Settings_HelpHeaderViewNucleusExposure");
+        StrHelpViewNucleusExposure = _translationService.GetString("Tabs_Settings_HelpViewNucleusExposure");
+        StrHelpHeaderObserverTopocentric = _translationService.GetString("Tabs_Settings_HelpHeaderObserverTopocentric");
+        StrHelpObserverTopocentric = _translationService.GetString("Tabs_Settings_HelpObserverTopocentric");
+        StrHelpHeaderObserverNorthUp = _translationService.GetString("Tabs_Settings_HelpHeaderObserverNorthUp");
+        StrHelpObserverNorthUp = _translationService.GetString("Tabs_Settings_HelpObserverNorthUp");
+        StrHelpHeaderObserverLatitude = _translationService.GetString("Tabs_Settings_HelpHeaderObserverLatitude");
+        StrHelpObserverLatitude = _translationService.GetString("Tabs_Settings_HelpObserverLatitude");
+        StrHelpHeaderObserverLongitude = _translationService.GetString("Tabs_Settings_HelpHeaderObserverLongitude");
+        StrHelpObserverLongitude = _translationService.GetString("Tabs_Settings_HelpObserverLongitude");
+        StrHelpHeaderObserverLookDirection = _translationService.GetString("Tabs_Settings_HelpHeaderObserverLookDirection");
+        StrHelpObserverLookDirection = _translationService.GetString("Tabs_Settings_HelpObserverLookDirection");
+        StrHelpHeaderObserverScale = _translationService.GetString("Tabs_Settings_HelpHeaderObserverScale");
+        StrHelpObserverScale = _translationService.GetString("Tabs_Settings_HelpObserverScale");
+        StrPlayPreview = _translationService.GetString("Tabs_Settings_PlayPreview");
+        StrPlayPreviewHint = _translationService.GetString("Tabs_Settings_PlayPreviewHint");
+        StrPlayPreviewOff = _translationService.GetString("Tabs_Settings_PlayPreviewOff");
+        StrPlayPreviewSmooth = _translationService.GetString("Tabs_Settings_PlayPreviewSmooth");
+        StrPlayPreviewBalanced = _translationService.GetString("Tabs_Settings_PlayPreviewBalanced");
+        StrPlayPreviewQuality = _translationService.GetString("Tabs_Settings_PlayPreviewQuality");
+        StrHelpPlayPreview = _translationService.GetString("Tabs_Settings_HelpPlayPreview");
     }
 }

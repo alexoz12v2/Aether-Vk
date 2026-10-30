@@ -85,6 +85,8 @@ public class TimelineTabViewModelEpochBoxTests
         var target = Parts(new DateTimeOffset(2020, 1, 15, 6, 30, 15, TimeSpan.Zero));
         rig.Runtime.Verify(r => r.SeekEpochSync(target.Item1, target.Item2), Times.Once);
         rig.Runtime.Verify(r => r.StartSimulation(It.IsAny<int>()), Times.Never);
+        // one jump, not a scrub: the full render starts at once (no preview hold)
+        rig.Runtime.Verify(r => r.DustRenderFull(), Times.Once);
         Assert.False(rig.Vm.IsPlaying);
         Assert.False(rig.Session.IsRunningToEnd);
         Assert.False(rig.Vm.HasCurrentEpochError);
@@ -103,6 +105,7 @@ public class TimelineTabViewModelEpochBoxTests
         rig.Vm.CurrentEpochText = text;
         await rig.Vm.SeekToEpochCommand.ExecuteAsync(null);
         rig.Runtime.Verify(r => r.SeekEpochSync(It.IsAny<short>(), It.IsAny<ulong>()), Times.Never);
+        rig.Runtime.Verify(r => r.DustRenderFull(), Times.Never);
         Assert.True(rig.Vm.HasCurrentEpochError);
         Assert.Contains("yyyy-MM-dd HH:mm:ss", rig.Vm.CurrentEpochError);
     }
@@ -133,6 +136,28 @@ public class TimelineTabViewModelEpochBoxTests
         rig.Runtime.Verify(r => r.SeekEpochSync(end.Item1, end.Item2), Times.Once);
         Assert.False(rig.Vm.HasCurrentEpochError);
         Assert.Equal(100.0, rig.Vm.Progress);
+    }
+
+    /// <summary>The 2026-10-30 e2e: a speed chosen while playing never reached the engine (the
+    /// clock kept the old rate). It restarts the playback at the new speed; paused, it only waits.</summary>
+    [Fact]
+    public void SpeedChosenWhilePlaying_ReachesTheEngine()
+    {
+        var rig = new Rig();
+        rig.Runtime.Setup(r => r.StartSimulation(It.IsAny<int>())).Returns(true);
+        rig.Vm.SelectedSpeed = TimelineTabViewModel.SimulationSpeed.OneHourPerSec;
+        rig.Runtime.Verify(r => r.StartSimulation(It.IsAny<int>()), Times.Never);
+
+        rig.Vm.IsPlaying = true;
+        rig.Runtime.Verify(r => r.StartSimulation((int)TimelineTabViewModel.SimulationSpeed.OneHourPerSec), Times.Once);
+        rig.Vm.SelectedSpeed = TimelineTabViewModel.SimulationSpeed.ThreeHoursPerSec;
+        rig.Runtime.Verify(r => r.PauseSimulationSync(), Times.Once);
+        rig.Runtime.Verify(r => r.StartSimulation((int)TimelineTabViewModel.SimulationSpeed.ThreeHoursPerSec), Times.Once);
+        // the running state as the UI thread sees it: no "stopped" in between ends the playback
+        rig.Schedulers.MainThread.AdvanceBy(1);
+        Assert.True(rig.Vm.IsPlaying);
+        rig.Runtime.Verify(r => r.PauseSimulationSync(), Times.Once);
+        Assert.Equal((int)TimelineTabViewModel.SimulationSpeed.ThreeHoursPerSec, rig.Session.Speed);
     }
 
     [Fact]

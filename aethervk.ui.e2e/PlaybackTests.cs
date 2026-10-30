@@ -10,6 +10,8 @@ public sealed class PlaybackFixture : ReviewSaveFixture
   protected override string ArtifactsName => "playback";
 
   protected override bool LowQuality => true;
+
+  protected override bool PerfLog => true;
 }
 
 /// <summary>
@@ -154,7 +156,7 @@ public sealed class PlaybackTests(PlaybackFixture fixture, ITestOutputHelper out
     try
     {
       var start = ReviewSave.StartEpoch(s);
-      Assert.StartsWith("2021-12-12", s.Find("TimelineStartEpochBox").Text);
+      Assert.True(ReviewSave.Shows(s.Find("TimelineStartEpochBox").Text, ReviewSave.CommittedStartUtc), s.Find("TimelineStartEpochBox").Text);
       ReviewSave.Play(s);
       Thread.Sleep(4000);
       ReviewSave.Pause(s);
@@ -206,6 +208,108 @@ public sealed class PlaybackTests(PlaybackFixture fixture, ITestOutputHelper out
       throw;
     }
   }
+
+  /// <summary>
+  /// After a pause the dust stays in preview for the 2 s hold, its circle filling beside "Render
+  /// full"; then the full render draws ("Rendering the full image…") and settles. The phases come
+  /// from the app's perf lines (once a second: a 2 s hold always shows), the circle from UIA.
+  /// </summary>
+  [SkippableFact]
+  public void Pause_ShowsTheHold_ThenTheFullRender_ThenSettles()
+  {
+    var s = Start();
+    try
+    {
+      s.Click("PlayPauseButton");
+      Thread.Sleep(3000);
+      var paused = DateTime.UtcNow;
+      s.Click("PlayPauseButton");
+      // best effort: a desktop-wide UIA search may take longer than the hold
+      object? circle = null;
+      try
+      {
+        circle = Ui.WaitFor(() => s.Desktop.FindElementsByAccessibilityId("DustHoldProgress").FirstOrDefault(e => e.Displayed),
+          TimeSpan.FromSeconds(2), "the hold circle");
+      }
+      catch (TimeoutException)
+      {
+      }
+      var phases = Phases(s, paused, TimeSpan.FromSeconds(60));
+      output.WriteLine($"after the pause: {Describe(phases)}; hold circle {(circle is null ? "not seen" : "seen")}");
+      int hold = phases.FindIndex(p => p.Phase == "hold");
+      int rendering = phases.FindIndex(p => p.Phase == "rendering");
+      Assert.True(hold >= 0, $"no hold after the pause: {Describe(phases)}");
+      Assert.InRange(phases[hold].Hold!.Value, 0.0, 1.0);
+      Assert.True(rendering > hold, $"no full render after the hold: {Describe(phases)}");
+      // on the app's clock (a UIA click lands seconds late): the pause instant from the first
+      // hold sample's progress, the full render at most a sample after the 2 s hold
+      double pausedMs = phases[hold].TMs - phases[hold].Hold!.Value * 2000.0;
+      double startMs = phases[rendering].TMs - pausedMs;
+      Assert.True(startMs <= 3100,
+        $"the full render started {startMs / 1000:0.0} s after the pause (hold 2 s): {Describe(phases)}");
+      Assert.Equal("settled", phases[^1].Phase);
+    }
+    catch
+    {
+      fixture.Screenshot("failure-hold.png");
+      throw;
+    }
+  }
+
+  /// <summary>A typed epoch is one jump, not a scrub: the full render starts at once, no hold.</summary>
+  [SkippableFact]
+  public void EpochBoxSeek_StartsTheFullRender_WithoutAHold()
+  {
+    var s = Start();
+    try
+    {
+      var target = ReviewSave.Epoch(s).Date.AddDays(2);
+      var text = target.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+      // from before the typing: the first lines are at the old epoch
+      var since = DateTime.UtcNow;
+      s.TypeInto(s.Find("CurrentEpochBox"), text, enter: false);
+      s.Click("SeekToEpochButton");
+      var phases = Phases(s, since, TimeSpan.FromSeconds(60));
+      output.WriteLine($"after the seek: {Describe(phases)}");
+      Assert.DoesNotContain(phases, p => p.Phase == "hold");
+      int rendering = phases.FindIndex(p => p.Phase == "rendering");
+      Assert.True(rendering >= 0, $"no full render after the seek: {Describe(phases)}");
+      // on the app's clock (a UIA click lands seconds late): the seek is between the last line
+      // at the old epoch and the first at the new one; the full render starts by the next sample
+      int landed = phases.FindIndex(p => p.EpochS != phases[0].EpochS);
+      Assert.True(landed > 0, $"the clock never moved: {Describe(phases)}");
+      double startMs = phases[rendering].TMs - phases[landed - 1].TMs;
+      Assert.True(startMs <= 2100,
+        $"the full render started up to {startMs / 1000:0.0} s after the seek: {Describe(phases)}");
+      Assert.Equal("settled", phases[^1].Phase);
+    }
+    catch
+    {
+      fixture.Screenshot("failure-seek-render.png");
+      throw;
+    }
+  }
+
+  /// <summary>The perf lines from <paramref name="since"/> until the dust has settled for 3 lines
+  /// in a row after something else (or <paramref name="timeout"/>).</summary>
+  private static List<PerfSample> Phases(AppSession s, DateTime since, TimeSpan timeout)
+  {
+    var limit = DateTime.UtcNow + timeout;
+    while (true)
+    {
+      var lines = PerfLog.Since(s, since);
+      bool busy = lines.Any(p => p.Phase is "hold" or "rendering");
+      if (busy && lines.Count >= 3 && lines.TakeLast(3).All(p => p.Phase == "settled"))
+        return lines;
+      if (DateTime.UtcNow > limit)
+        return lines;
+      s.EnsureAlive("waiting for the dust to settle");
+      Thread.Sleep(250);
+    }
+  }
+
+  private static string Describe(List<PerfSample> phases) =>
+    string.Join(" ", phases.Select(p => (p.Phase == "hold" ? $"hold({p.Hold:0.00})" : p.Phase ?? "null") + $"@{p.TMs / 1000:0.0}"));
 
   /// <summary>Skips off Windows, else the shared session paused at the committed start, 1 h/s chosen.</summary>
   private AppSession Start()
