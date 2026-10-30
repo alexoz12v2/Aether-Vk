@@ -124,6 +124,8 @@ public sealed class AppSession : IDisposable
         // the observer line lives in the diagnostic panel, hidden by default
       },
     };
+    // marks the run as the suite's (its test-only switches, e.g. the crash trigger, need it)
+    process.StartInfo.Environment["AETHERVK_E2E"] = "1";
     if (diagnosticPanels)
       process.StartInfo.Environment["AETHERVK_DIAGNOSTIC_PANELS"] = "1";
     if (logPath is not null)

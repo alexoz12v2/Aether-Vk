@@ -296,7 +296,7 @@ public static partial class FitsComparisonSteps
 
   /// <summary>Waits until two reads of the row's geometry 0.75 s apart agree (the viewport probe
   /// runs every 250 ms and a bound billboard follows it).</summary>
-  private static void WaitForSettledGeometry(AppSession s, int row)
+  public static void WaitForSettledGeometry(AppSession s, int row)
   {
     var last = ReadGeometry(s, row);
     Ui.WaitUntil(() =>

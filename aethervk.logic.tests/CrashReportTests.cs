@@ -82,6 +82,42 @@ public sealed class CrashReportTests : IDisposable
     Assert.StartsWith("aethervk-crash-20261029-120003-", kept[0]);
   }
 
+  /// <summary>
+  /// The end-to-end crash trigger needs both variables: AETHERVK_TEST_CRASH alone (a stray
+  /// variable on a user's machine) never arms it, nor does AETHERVK_E2E alone or any value but "1".
+  /// </summary>
+  [Theory]
+  [InlineData(null, null)]
+  [InlineData(null, "1")]
+  [InlineData("0", "1")]
+  [InlineData("true", "1")]
+  [InlineData("1", null)]
+  [InlineData("1", "0")]
+  [InlineData("1", "yes")]
+  public void TheTestCrash_WithoutBothVariables_DoesNothing(string? e2e, string? crash)
+  {
+    string? Env(string name) => name switch
+    {
+      CrashReport.E2EEnvVar => e2e,
+      CrashReport.TestCrashEnvVar => crash,
+      _ => null,
+    };
+
+    Assert.False(CrashReport.TestCrashRequested(Env));
+    // not armed: no thread is started, so nothing throws (a started one would take the test host down)
+    Assert.False(CrashReport.StartTestCrashIfRequested(Env, TimeSpan.Zero));
+    System.Threading.Thread.Sleep(100);
+  }
+
+  [Fact]
+  public void TheTestCrash_IsRequested_OnlyWithBothVariablesSetToOne()
+  {
+    Assert.Equal("AETHERVK_E2E", CrashReport.E2EEnvVar);
+    Assert.Equal("AETHERVK_TEST_CRASH", CrashReport.TestCrashEnvVar);
+    Assert.True(CrashReport.TestCrashRequested(name =>
+      name is CrashReport.E2EEnvVar or CrashReport.TestCrashEnvVar ? "1" : null));
+  }
+
   [Fact]
   public void AnUnwritableFolder_ReturnsNull_AndDoesNotThrow()
   {

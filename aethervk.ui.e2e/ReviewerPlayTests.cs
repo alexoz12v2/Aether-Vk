@@ -103,15 +103,9 @@ public sealed class ReviewerPlayTests(ITestOutputHelper output)
   private static DateTime Epoch(AppSession s) =>
     DateTime.ParseExact(s.Find("CurrentEpochBox").Text.Trim()[..19], "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
 
-  /// <summary>The viewport's central 90 %, on a 32 × 32 luminance grid (the nucleus stays centred).</summary>
-  private static double[] Sample(OpenQA.Selenium.Appium.AppiumWebElement vp)
-  {
-    int w = (int)(vp.Size.Width * 0.9), h = (int)(vp.Size.Height * 0.9);
-    return Win32.SampleLuminance(vp.Location.X + (vp.Size.Width - w) / 2, vp.Location.Y + (vp.Size.Height - h) / 2, w, h, 32);
-  }
+  private static double[] Sample(OpenQA.Selenium.Appium.AppiumWebElement vp) => FrameMetrics.Sample(vp);
 
-  /// <summary>The share of samples whose luminance moved by more than 0.01.</summary>
-  private static double Changed(double[] a, double[] b) => a.Zip(b, (x, y) => Math.Abs(x - y) > 0.01 ? 1.0 : 0.0).Average();
+  private static double Changed(double[] a, double[] b) => FrameMetrics.Changed(a, b);
 
   private void Step(string name) => output.WriteLine($"{DateTime.Now:HH:mm:ss} {name}");
 }

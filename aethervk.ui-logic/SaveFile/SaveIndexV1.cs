@@ -326,6 +326,13 @@ public sealed class BillboardDto
   /// absent / null in either: the image centre (older saves).</summary>
   public double? ImageNucleusX { get; set; }
   public double? ImageNucleusY { get; set; }
+  /// <summary>The centre as an offset from the viewport's top-left corner, physical px of the
+  /// viewport's screen, with that screen's scaling (physical px per DIP). Absent / null in older
+  /// saves, which open on <see cref="CenterX"/> / <see cref="CenterY"/> (desktop px) and are only
+  /// brought over the viewport when none of them is over it.</summary>
+  public double? ViewportOffsetX { get; set; }
+  public double? ViewportOffsetY { get; set; }
+  public double? ViewportScaling { get; set; }
 }
 
 /// <summary>A FITS billboard's stretch; enum values snake_case.</summary>
