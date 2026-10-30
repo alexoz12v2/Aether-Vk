@@ -13,9 +13,8 @@ namespace AetherVk.Logic.Tests;
 
 /// <summary>
 /// Checks for the reviewer's complaints (the mail of 2026-10-29, R1–R10, and the third-round docx
-/// items) that no other test asserted on the current tree. The markup checks read the .axaml files as
-/// text, the way <c>ModelTabMarkupTests</c> in aethervk.app.tests does; they belong there once the
-/// app test project is the place for every view check (see VERIFY_2026-10-30.md).
+/// items) that no other test asserted on the current tree. The view items are checked on the loaded
+/// views in aethervk.app.tests (<c>ReviewFeedbackViewTests</c>).
 /// </summary>
 public class ReviewFeedbackVerificationTests
 {
@@ -35,41 +34,8 @@ public class ReviewFeedbackVerificationTests
   }
 
   private static string ModelTabAxaml() => ReadRepoFile("aethervk.ui-app", "Views", "ModelTabView.axaml");
-  private static string SettingsTabAxaml() => ReadRepoFile("aethervk.ui-app", "Views", "SettingsTabView.axaml");
-
-  /// <summary>The <paramref name="chars"/> characters of <paramref name="text"/> before the first <paramref name="anchor"/>.</summary>
-  private static string Before(string text, string anchor, int chars)
-  {
-    int i = text.IndexOf(anchor, StringComparison.Ordinal);
-    Assert.True(i >= 0, $"anchor not found: {anchor}");
-    return text.Substring(Math.Max(0, i - chars), Math.Min(chars, i));
-  }
-
-  /// <summary>The <paramref name="chars"/> characters of <paramref name="text"/> after the first <paramref name="anchor"/>.</summary>
-  private static string After(string text, string anchor, int chars)
-  {
-    int i = text.IndexOf(anchor, StringComparison.Ordinal);
-    Assert.True(i >= 0, $"anchor not found: {anchor}");
-    return text.Substring(i, Math.Min(chars, text.Length - i));
-  }
 
   // ── mail ─────────────────────────────────────────────────────────────────────
-
-  /// <summary>
-  /// R1: a refused jet's row says so and offers Retry (the logic is in JetNativeSyncTests; this is
-  /// the row's markup), and the aperture shows two decimals (0.2° used to read "0°").
-  /// </summary>
-  [Fact]
-  public void Review_mail_R1_RefusedJetRowHasRetry_AndApertureShowsTwoDecimals()
-  {
-    var text = ModelTabAxaml();
-    Assert.StartsWith("Not in the simulation", JetNativeSync.RefusedText);
-    Assert.Contains("{Binding NativeError}", text);
-    var retry = After(text, "Content=\"Retry\"", 400);
-    Assert.Contains("RetryNativeJetsCommand", retry);
-    Assert.Contains("{Binding ApertureDeg, StringFormat='{}{0:0.##}°'}", text);
-    Assert.DoesNotContain("{Binding ApertureDeg, StringFormat='{}{0:0}°'}", text);
-  }
 
   /// <summary>R6: no "Afρ" or "afrho" is left in any user-visible string of either resource file.</summary>
   [Theory]
@@ -103,38 +69,26 @@ public class ReviewFeedbackVerificationTests
   // ── docx ─────────────────────────────────────────────────────────────────────
 
   /// <summary>
-  /// docx 1 and 2: the General section (unbound placeholder) and the Orbital Elements section
-  /// (never filled) of the Settings tab are hidden.
-  /// </summary>
-  [Fact]
-  public void Review_docx_1_2_GeneralAndOrbitalElementsSectionsAreHidden()
-  {
-    var text = SettingsTabAxaml();
-    foreach (var header in new[] { "Header=\"{Binding StrGeneral}\"", "Header=\"{Binding StrOrbitalElements}\"" })
-    {
-      var before = Before(text, header, 200);
-      Assert.Contains("IsVisible=\"False\"", before);
-    }
-  }
-
-  /// <summary>
-  /// docx 8: numbers print with a dot on an Italian locale once the number format is the invariant
-  /// one (the Program.cs recipe: clone the culture, swap NumberFormat), and the date keeps the locale.
-  /// Without the swap the same formatting path prints a comma, so the swap is what the user sees.
+  /// docx 8: numbers print with a dot on an Italian locale once <see cref="NumberCulture.Apply"/>
+  /// (what Program.Main runs at startup) has run, and the date keeps the locale. Without it the same
+  /// formatting path prints a comma, so the swap is what the user sees.
   /// </summary>
   [Fact]
   public void Review_docx_8_NumbersUseADot_UnderAnItalianLocale()
   {
     var previous = Thread.CurrentThread.CurrentCulture;
+    var previousDefault = CultureInfo.DefaultThreadCurrentCulture;
     try
     {
       var italian = CultureInfo.GetCultureInfo("it-IT");
       Thread.CurrentThread.CurrentCulture = italian;
       Assert.Equal("0,5", ViewportOverlayViewModel.FormatNiceNumber(0.5)); // the complaint
 
-      var culture = (CultureInfo)italian.Clone();
-      culture.NumberFormat = CultureInfo.InvariantCulture.NumberFormat;
-      Thread.CurrentThread.CurrentCulture = culture;
+      // what Program.Main runs at startup
+      var culture = NumberCulture.Apply();
+      Assert.Same(culture, Thread.CurrentThread.CurrentCulture);
+      Assert.Same(culture, CultureInfo.DefaultThreadCurrentCulture);
+      Assert.Equal("it-IT", culture.Name);
       Assert.Equal("0.5", ViewportOverlayViewModel.FormatNiceNumber(0.5));
       Assert.Equal("0.005", ViewportOverlayViewModel.FormatNiceNumber(0.005));
       Assert.Equal("42.2 km", ViewportOverlayViewModel.FormatKm(42.24));
@@ -149,6 +103,7 @@ public class ReviewFeedbackVerificationTests
     finally
     {
       Thread.CurrentThread.CurrentCulture = previous;
+      CultureInfo.DefaultThreadCurrentCulture = previousDefault;
     }
   }
 
@@ -160,39 +115,5 @@ public class ReviewFeedbackVerificationTests
     Assert.Equal(0.0, s.RotPoleRaRateDegCen);
     Assert.Equal(0.0, s.RotPoleDecRateDegCen);
   }
-
-  /// <summary>
-  /// docx 9: the Sun and the Nucleus-and-Spin-Axis sections of the Model tab follow the legacy flag,
-  /// which is off in the design view model and in a fresh real one (its backing field has no initialiser).
-  /// </summary>
-  [Fact]
-  public void Review_docx_9_SunAndNucleusSectionsAreHiddenBehindTheLegacyFlag()
-  {
-    var text = ModelTabAxaml();
-    foreach (var section in new[] { "AutomationId=\"ModelSunSection\"", "AutomationId=\"NucleusSpinSection\"" })
-    {
-      var before = Before(text, section, 1200);
-      Assert.Contains("IsVisible=\"{Binding EnableLegacyExpanders}\"", before);
-    }
-    Assert.False(new DesignModelTabViewModel().EnableLegacyExpanders);
-    var field = typeof(ModelTabViewModel).GetField("_enableLegacyExpanders",
-      System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-    Assert.NotNull(field);
-    Assert.Equal(typeof(bool), field!.FieldType); // a bool field without an initialiser starts false
-  }
-
-  /// <summary>
-  /// docx 10: the reference position error, the dust visibility and the flow speed controls each
-  /// carry a tooltip saying what they do.
-  /// </summary>
-  [Fact]
-  public void Review_docx_10_DustSettingsHaveTooltips()
-  {
-    var text = ModelTabAxaml();
-    foreach (var binding in new[] { "{Binding StrShowReferenceError}", "{Binding StrDustVisibility}", "{Binding StrDustFlowSpeed}" })
-    {
-      var after = After(text, binding, 1200);
-      Assert.Contains("ToolTip.Tip=\"", after);
-    }
-  }
 }
+
