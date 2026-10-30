@@ -161,9 +161,11 @@ public partial class ModelTabViewModel
     IPlatformWindowService platformWindowService,
     TimelineService timelineService,
     ICameraServiceRegistry? cameras = null,
-    CometPositionTrackerService? cometTracker = null)
+    CometPositionTrackerService? cometTracker = null,
+    TimeScaleService? timeScale = null)
     : base("Model", sessionService, cometMessenger)
   {
+    _timeScale = timeScale;
     _translationService = translationService;
     _cometSessionService = cometSessionService;
     _cometConfigService = cometConfigService;
@@ -175,6 +177,18 @@ public partial class ModelTabViewModel
     _cameras = cameras;
     Icon = "⬡"; // hexagon / 3D object — U+2B21
     SubscribeToStrings(schedulerProvider);
+
+    // the lit warnings' dates follow the chosen time scale (Settings › Time scale for dates)
+    if (_timeScale is not null)
+    {
+      Action<TimeScale> onScale = _ =>
+      {
+        if (CurrentSession is { } s)
+          JetNativeSync.RefreshLitWarnings(_runtimeService, s, LitWarningFormat, _timeScale);
+      };
+      _timeScale.ScaleChanged += onScale;
+      _disposables.Add(System.Reactive.Disposables.Disposable.Create(() => _timeScale.ScaleChanged -= onScale));
+    }
 
     _timelineService.IsSimulationRunning
       .ObserveOn(schedulerProvider.MainThread)
@@ -241,7 +255,7 @@ public partial class ModelTabViewModel
         {
           // idempotent: a savefile open may have created them already
           JetNativeSync.EnsureNative(_runtimeService, session, EffectiveNucleusRadiusKm, _timelineService.IgnitionUs(),
-            LitWarningFormat);
+            LitWarningFormat, _timeScale);
         }
       })
       .AddDisposableTo(_disposables);
@@ -286,6 +300,9 @@ public partial class ModelTabViewModel
   /// <summary>Localized <see cref="JetViewModel.LitWarning"/> text ({0} / {1}: the committed range ends).</summary>
   private string LitWarningFormat => _translationService.GetString("Tabs_Model_JetNeverLit");
 
+  /// <summary>The scale the lit warnings' dates are in (null: TDB).</summary>
+  private readonly TimeScaleService? _timeScale;
+
   public bool IsNucleusRadiusUnknown => EffectiveNucleusRadiusKm == 0f;
 
 
@@ -315,7 +332,7 @@ public partial class ModelTabViewModel
   {
     JetNativeSync.AddNative(_runtimeService, BuildModel(session, jet),
       JetNativeSync.BuildJet(jet, EffectiveNucleusRadiusKm, _timelineService.IgnitionUs()), jet, isFirst,
-      LitWarningFormat);
+      LitWarningFormat, _timeScale);
     // a new native jet starts without angles: the selected one gets them back
     if (ShowJetAngles && ReferenceEquals(jet, SelectedJet) && jet.NativePsId != 0)
       _runtimeService.SetJetAngleVisibility(jet.NativePsId, true);
@@ -330,7 +347,7 @@ public partial class ModelTabViewModel
   {
     if (!IsCometCommitted || CurrentSession is not { } session) return;
     JetNativeSync.EnsureNative(_runtimeService, session, EffectiveNucleusRadiusKm, _timelineService.IgnitionUs(),
-      LitWarningFormat);
+      LitWarningFormat, _timeScale);
     RefreshTotalActivityText();
   }
 
@@ -932,7 +949,7 @@ public partial class ModelTabViewModel
           jet.DustProductionRateAt1AuKgs = computed.DustProductionRateAt1AuKgs;
         }
         // the site may have moved into (or out of) the polar night
-        JetNativeSync.RefreshLitWarning(_runtimeService, jet, LitWarningFormat);
+        JetNativeSync.RefreshLitWarning(_runtimeService, jet, LitWarningFormat, _timeScale);
       })
       .AddDisposableTo(_disposables);
 

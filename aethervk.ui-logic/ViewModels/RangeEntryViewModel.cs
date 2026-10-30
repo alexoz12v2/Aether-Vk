@@ -20,6 +20,10 @@ namespace AetherVk.Logic.ViewModels;
 /// <see cref="TimelineService"/>; a commit copies the range it was made with into the committed
 /// range (<see cref="ApplyCommitted"/>), a decommit flows it back (<see cref="ApplyDecommitted"/>).
 /// The Timeline tab runs the same two helpers on the same messages, so the order does not matter.</para>
+///
+/// <para>The boxes are typed and shown in the chosen <see cref="TimeScale"/> (UTC by default,
+/// <see cref="TimeScaleService"/>); the proposal and the committed range are TDB parts. A scale
+/// switch rewrites the texts to the other scale without changing the committed parts.</para>
 /// </summary>
 public partial class RangeEntryViewModel : ObservableObject, IDisposable
 {
@@ -27,6 +31,7 @@ public partial class RangeEntryViewModel : ObservableObject, IDisposable
   private readonly TimelineService? _timeline;
   private readonly IMessenger? _messenger;
   private readonly Func<double> _rotRateDegDay;
+  private readonly TimeScaleService _timeScale;
   private readonly CompositeDisposable _disposables = [];
   // used without a session service (design time, tests of the hosting tab alone)
   private readonly TimelineSession _standalone = new();
@@ -39,23 +44,28 @@ public partial class RangeEntryViewModel : ObservableObject, IDisposable
   /// <param name="timeline">receives the proposals, the lead time and the recommit request</param>
   /// <param name="messenger">comet commit / decommit messages (saves commit without the Comet tab)</param>
   /// <param name="rotRateDegDay">the nucleus rotation rate (°/day) for the Model range</param>
+  /// <param name="timeScale">the scale the boxes are in (null: TDB, no conversion)</param>
   public RangeEntryViewModel(
     ITabStateService<TimelineSession>? sessions,
     TimelineService? timeline,
     IMessenger? messenger,
-    Func<double> rotRateDegDay)
+    Func<double> rotRateDegDay,
+    TimeScaleService? timeScale = null)
   {
     _sessions = sessions;
     _timeline = timeline;
     _messenger = messenger;
     _rotRateDegDay = rotRateDegDay;
+    _timeScale = timeScale ?? TimeScaleService.TdbOnly();
 
     if (_timeline is not null)
     {
       _timeline.ModelRangeRequests
         .Subscribe(end =>
         {
-          ModelEndEpoch = end.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
+          // the request is a UTC instant (the image's mid-exposure): shown in the chosen scale
+          var (c, ns) = _timeScale.FromUtc(end);
+          ModelEndEpoch = _timeScale.Format(c, ns, TimeScaleService.IsoSecondsFormat);
           ApplyModelRange();
         })
         .AddDisposableTo(_disposables);
@@ -67,6 +77,7 @@ public partial class RangeEntryViewModel : ObservableObject, IDisposable
       _messenger.Register<RangeEntryViewModel, CometDecommittedMessage>(this, static (r, _) => r.OnDecommitted());
     }
 
+    _timeScale.ScaleChanged += OnScaleChanged;
     Reload();
   }
 
@@ -170,6 +181,45 @@ public partial class RangeEntryViewModel : ObservableObject, IDisposable
   [RelayCommand]
   private void Restore() => Reload();
 
+  // ── Time scale (UTC / TDB) ─────────────────────────────────────────────────
+
+  /// <summary>The scale service (the Comet tab's other date texts use it too).</summary>
+  public TimeScaleService TimeScale => _timeScale;
+
+  /// <summary>"UTC" or "TDB": the boxes' labels ("Start (UTC):").</summary>
+  public string ScaleName => _timeScale.ScaleName;
+
+  /// <summary>The labels' tooltip: the scale and its offset to the other one.</summary>
+  public string ScaleTip => _timeScale.ScaleTip;
+
+  /// <summary>
+  /// A box's UTC date is outside the leap-second table (after its validity, or before 1972): the
+  /// conversion may be off by a leap second. Shown as a warning glyph next to the boxes.
+  /// </summary>
+  [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(HasTimeScaleWarning))]
+  private string? _timeScaleWarningText;
+
+  public bool HasTimeScaleWarning => TimeScaleWarningText is not null;
+
+  /// <summary>The leap-second status of the boxes (the worse of the two).</summary>
+  public UtcStatus TimeScaleStatus { get; private set; } = UtcStatus.Ok;
+
+  /// <summary>The warning's action: dates in TDB (exact), Settings › Time scale for dates.</summary>
+  [RelayCommand]
+  private void UseTdb() => _timeScale.Scale = Services.TimeScale.Tdb;
+
+  private void OnScaleChanged(TimeScale scale)
+  {
+    OnPropertyChanged(nameof(ScaleName));
+    OnPropertyChanged(nameof(ScaleTip));
+    // the texts to the new scale, the committed parts unchanged; then the texts back into the boxes
+    Update(s => _timeScale.ApplyTo(s));
+    ReloadBoxes();
+  }
+
+  private static UtcStatus Worse(UtcStatus a, UtcStatus b) => (int)a >= (int)b ? a : b;
+
   // ── Model range (feedback #20): N rotations ending at the image epoch ─────────
 
   /// <summary>End of the model range (the image's epoch); empty: the end box.</summary>
@@ -195,30 +245,31 @@ public partial class RangeEntryViewModel : ObservableObject, IDisposable
 
   /// <summary>
   /// Proposes <see cref="ModelRotations"/> rotations ending at <see cref="ModelEndEpoch"/> (or the
-  /// end box), the period from the comet's rotation rate. Commit as usual.
+  /// end box), the period from the comet's rotation rate. Commit as usual. The span is measured
+  /// in TDB (uniform time); the boxes show both ends in the chosen scale.
   /// </summary>
   [RelayCommand]
   private void ApplyModelRange()
   {
     string endText = string.IsNullOrWhiteSpace(ModelEndEpoch) ? EndEpoch : ModelEndEpoch;
-    if (!TimeUtils.TryParseIso8601(endText, out var end))
+    if (!_timeScale.TryParse(endText, out var endParts))
     {
       SetProposalError("Model range: the end epoch is not a date (yyyy-MM-ddTHH:mm:ss).");
       return;
     }
     double rate = _rotRateDegDay();
     double periodHours = rate == 0 || double.IsNaN(rate) ? 0 : 360.0 * 24.0 / Math.Abs(rate);
-    if (ModelRange(end, ModelRotations, periodHours) is not { } r)
+    var endTdb = TimeUtils.FromTdbParts(endParts.Centuries, endParts.Nanoseconds);
+    if (ModelRange(endTdb, ModelRotations, periodHours) is not { } r)
     {
       SetProposalError(ModelRotations < 1
         ? "Model range: at least one rotation."
         : "Model range: the comet has no rotation period (Rotational Model).");
       return;
     }
-    const string Fmt = "yyyy-MM-ddTHH:mm:ss";
-    var ci = System.Globalization.CultureInfo.InvariantCulture;
-    StartEpoch = r.Start.UtcDateTime.ToString(Fmt, ci);
-    EndEpoch = r.End.UtcDateTime.ToString(Fmt, ci);
+    var (sc, sn) = TimeUtils.ToTdbParts(r.Start);
+    StartEpoch = _timeScale.Format(sc, sn, TimeScaleService.IsoSecondsFormat);
+    EndEpoch = _timeScale.Format(endParts.Centuries, endParts.Nanoseconds, TimeScaleService.IsoSecondsFormat);
   }
 
   // ── Dust lead time (R3) ────────────────────────────────────────────────────
@@ -254,7 +305,8 @@ public partial class RangeEntryViewModel : ObservableObject, IDisposable
   /// <summary>
   /// Re-reads the session (construction, Restore, a savefile open): the boxes show the committed
   /// range when there is one (a save keeps a later, uncommitted proposal: reviewer report
-  /// 2026-10-29), else the proposal; the proposal then follows them.
+  /// 2026-10-29), else the proposal; the proposal then follows them. The texts are first brought
+  /// to the chosen scale (a save may hold them in the other one).
   /// </summary>
   public void Reload()
   {
@@ -267,19 +319,11 @@ public partial class RangeEntryViewModel : ObservableObject, IDisposable
         if (string.IsNullOrEmpty(s.ProposedEndEpoch)) s.ProposedEndEpoch = TimelineSession.DefaultProposedEnd;
       });
     }
+    // pins the texts' scale (so a later switch knows what to rewrite from) and rewrites a save's
+    // texts typed in the other scale; the committed parts never change
+    Update(s => _timeScale.ApplyTo(s));
 
-    RefreshCommittedState();
-    // both boxes first, then one proposal: a box-by-box proposal would persist a mixed range
-    _suppressPropose = true;
-    try
-    {
-      StartEpoch = HasCommittedState ? session.CommittedStartEpoch : session.ProposedStartEpoch;
-      EndEpoch = HasCommittedState ? session.CommittedEndEpoch : session.ProposedEndEpoch;
-    }
-    finally
-    {
-      _suppressPropose = false;
-    }
+    ReloadBoxes();
 
     _reloading = true;
     try { DustLeadDays = session.DustLeadDays ?? TimelineService.MaxDustLeadDays; }
@@ -295,6 +339,27 @@ public partial class RangeEntryViewModel : ObservableObject, IDisposable
     CheckProposedVsCommitted();
   }
 
+  /// <summary>The boxes from the session's texts (the committed range, else the proposal), without proposing.</summary>
+  private void ReloadBoxes()
+  {
+    var session = Session;
+    RefreshCommittedState();
+    // both boxes first, then one proposal: a box-by-box proposal would persist a mixed range
+    _suppressPropose = true;
+    try
+    {
+      StartEpoch = HasCommittedState ? session.CommittedStartEpoch : session.ProposedStartEpoch;
+      EndEpoch = HasCommittedState ? session.CommittedEndEpoch : session.ProposedEndEpoch;
+    }
+    finally
+    {
+      _suppressPropose = false;
+    }
+    RefreshTimeScaleWarning();
+    RefreshProposedState();
+    CheckProposedVsCommitted();
+  }
+
   /// <summary>
   /// A commit with <paramref name="range"/> (null: the boxes): the session's committed range is
   /// the range committed, and the boxes show it. Idempotent.
@@ -303,7 +368,7 @@ public partial class RangeEntryViewModel : ObservableObject, IDisposable
   {
     string start = StartEpoch, end = EndEpoch;
     string typedStart = StartEpoch, typedEnd = EndEpoch;
-    Update(s => (start, end) = ApplyCommitted(s, range, typedStart, typedEnd));
+    Update(s => (start, end) = ApplyCommitted(s, range, typedStart, typedEnd, _timeScale));
     RefreshCommittedState();
     _suppressPropose = true;
     try
@@ -324,7 +389,7 @@ public partial class RangeEntryViewModel : ObservableObject, IDisposable
   public void OnDecommitted()
   {
     TimeRange? back = null;
-    Update(s => back = ApplyDecommitted(s));
+    Update(s => back = ApplyDecommitted(s, _timeScale));
     if (back is not null)
       _timeline?.ProposeEpochRange(back);
     var session = Session;
@@ -341,22 +406,26 @@ public partial class RangeEntryViewModel : ObservableObject, IDisposable
     }
     HasError = false;
     ErrorMessage = string.Empty;
+    RefreshTimeScaleWarning();
     RefreshProposedState();
     CheckProposedVsCommitted();
   }
 
   /// <summary>
   /// Writes a commit into <paramref name="s"/>: the committed (and proposed) range is
-  /// <paramref name="range"/>, the texts kept as typed when they name the same instant; without a
-  /// range, the given texts. Returns the texts.
+  /// <paramref name="range"/>, the texts kept as typed when they name the same instant (in the
+  /// session's scale); without a range, the given texts. Returns the texts.
   /// </summary>
-  internal static (string Start, string End) ApplyCommitted(TimelineSession s, TimeRange? range, string startText, string endText)
+  internal static (string Start, string End) ApplyCommitted(TimelineSession s, TimeRange? range, string startText, string endText,
+    TimeScaleService? timeScale = null)
   {
+    var ts = timeScale ?? TimeScaleService.TdbOnly();
+    var scale = ts.ScaleOf(s);
     string start = startText, end = endText;
     if (range is { } r)
     {
-      start = TimeUtils.EpochText(r.StartCenturies, r.StartNs, startText);
-      end = TimeUtils.EpochText(r.EndCenturies, r.EndNs, endText);
+      start = ts.EpochText(r.StartCenturies, r.StartNs, startText, scale);
+      end = ts.EpochText(r.EndCenturies, r.EndNs, endText, scale);
     }
     s.CommittedStartEpoch = start;
     s.CommittedEndEpoch = end;
@@ -365,6 +434,7 @@ public partial class RangeEntryViewModel : ObservableObject, IDisposable
       s.ProposedStartEpoch = start;
       s.ProposedEndEpoch = end;
     }
+    s.ProposedScale = TimeScaleService.KeyOf(scale);
     return (start, end);
   }
 
@@ -372,27 +442,28 @@ public partial class RangeEntryViewModel : ObservableObject, IDisposable
   /// Writes a decommit into <paramref name="s"/>: a committed range becomes the proposal (returned,
   /// for re-proposing), and the committed range is cleared. Null when nothing was committed.
   /// </summary>
-  internal static TimeRange? ApplyDecommitted(TimelineSession s)
+  internal static TimeRange? ApplyDecommitted(TimelineSession s, TimeScaleService? timeScale = null)
   {
     TimeRange? back = null;
     if (!string.IsNullOrEmpty(s.CommittedStartEpoch))
     {
       s.ProposedStartEpoch = s.CommittedStartEpoch;
       s.ProposedEndEpoch = s.CommittedEndEpoch;
-      back = TryParseRange(s.CommittedStartEpoch, s.CommittedEndEpoch);
+      back = TryParseRange(s.CommittedStartEpoch, s.CommittedEndEpoch, timeScale ?? TimeScaleService.TdbOnly(), s);
     }
     s.CommittedStartEpoch = string.Empty;
     s.CommittedEndEpoch = string.Empty;
     return back;
   }
 
-  private static TimeRange? TryParseRange(string start, string end)
+  /// <summary>The range of two texts in <paramref name="s"/>'s scale; null when one is no date.</summary>
+  internal static TimeRange? TryParseRange(string start, string end, TimeScaleService timeScale, TimelineSession s)
   {
-    if (!TimeUtils.TryParseIso8601(start, out var a) || !TimeUtils.TryParseIso8601(end, out var b))
+    var scale = timeScale.ScaleOf(s);
+    if (!timeScale.TryParse(start, scale, out short sc, out ulong sn, out _)
+        || !timeScale.TryParse(end, scale, out short ec, out ulong en, out _))
       return null;
-    var x = TimeUtils.ToTaiParts(a);
-    var y = TimeUtils.ToTaiParts(b);
-    return new TimeRange(x.centuries, x.nanoseconds, y.centuries, y.nanoseconds);
+    return new TimeRange(sc, sn, ec, en);
   }
 
   private void RefreshCommittedState()
@@ -415,6 +486,14 @@ public partial class RangeEntryViewModel : ObservableObject, IDisposable
     IsProposedDifferentFromCommitted = StartEpoch != s.CommittedStartEpoch || EndEpoch != s.CommittedEndEpoch;
   }
 
+  /// <summary>The warning from the boxes' texts in the chosen scale.</summary>
+  private void RefreshTimeScaleWarning()
+  {
+    var status = Worse(_timeScale.StatusOf(StartEpoch), _timeScale.StatusOf(EndEpoch));
+    TimeScaleStatus = status;
+    TimeScaleWarningText = TimeScaleService.Warns(status) ? _timeScale.WarningText(status) : null;
+  }
+
   // ── Proposal ───────────────────────────────────────────────────────────────
 
   private bool _isProposing;
@@ -435,17 +514,20 @@ public partial class RangeEntryViewModel : ObservableObject, IDisposable
       HasError = false;
       ErrorMessage = string.Empty;
 
-      bool startOk = TimeUtils.TryParseIso8601(StartEpoch, out var startDt);
-      bool endOk = TimeUtils.TryParseIso8601(EndEpoch, out var endDt);
+      bool startOk = _timeScale.TryParse(StartEpoch, out short sc, out ulong sn, out var startStatus);
+      bool endOk = _timeScale.TryParse(EndEpoch, out short ec, out ulong en, out var endStatus);
+      var status = Worse(startStatus, endStatus);
+      TimeScaleStatus = status;
+      TimeScaleWarningText = startOk && endOk && TimeScaleService.Warns(status) ? _timeScale.WarningText(status) : null;
       if (!startOk || !endOk)
       {
         SetProposalError(string.Concat(
           !startOk ? "Start" : "End",
-          " epoch: use yyyy-MM-dd or yyyy-MM-ddTHH:mm:ss (UTC unless an offset is given)."));
+          " epoch: use yyyy-MM-dd or yyyy-MM-ddTHH:mm:ss (", ScaleName, " unless an offset is given)."));
         return;
       }
 
-      var diff = endDt - startDt;
+      var diff = TimeUtils.FromTdbParts(ec, en) - TimeUtils.FromTdbParts(sc, sn);
       if (diff.TotalDays < MinRangeDays)
       {
         SetProposalError(diff.TotalDays <= 0
@@ -455,15 +537,15 @@ public partial class RangeEntryViewModel : ObservableObject, IDisposable
         return;
       }
 
-      var startTai = TimeUtils.ToTaiParts(startDt);
-      var endTai = TimeUtils.ToTaiParts(endDt);
       string start = StartEpoch, end = EndEpoch;
+      string scaleKey = TimeScaleService.KeyOf(_timeScale.Scale);
       Update(s =>
       {
         s.ProposedStartEpoch = start;
         s.ProposedEndEpoch = end;
+        s.ProposedScale = scaleKey;
       });
-      _timeline?.ProposeEpochRange(new TimeRange(startTai.centuries, startTai.nanoseconds, endTai.centuries, endTai.nanoseconds));
+      _timeline?.ProposeEpochRange(new TimeRange(sc, sn, ec, en));
       RefreshProposedState();
       CheckProposedVsCommitted();
     }
@@ -481,6 +563,7 @@ public partial class RangeEntryViewModel : ObservableObject, IDisposable
 
   public void Dispose()
   {
+    _timeScale.ScaleChanged -= OnScaleChanged;
     if (_restoredHooked is not null) _restoredHooked.Restored -= Reload;
     _restoredHooked = null;
     _messenger?.UnregisterAll(this);
