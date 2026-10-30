@@ -234,12 +234,14 @@ public partial class ModelTabViewModel
           {
             jet.NativePsId = 0;
             jet.NativeError = null;
+            jet.LitWarning = null;
           }
         }
         else
         {
           // idempotent: a savefile open may have created them already
-          JetNativeSync.EnsureNative(_runtimeService, session, EffectiveNucleusRadiusKm, _timelineService.IgnitionUs());
+          JetNativeSync.EnsureNative(_runtimeService, session, EffectiveNucleusRadiusKm, _timelineService.IgnitionUs(),
+            LitWarningFormat);
         }
       })
       .AddDisposableTo(_disposables);
@@ -281,6 +283,9 @@ public partial class ModelTabViewModel
 
   private bool CanAddJet() => IsCometCommitted && EffectiveNucleusRadiusKm > 0f;
 
+  /// <summary>Localized <see cref="JetViewModel.LitWarning"/> text ({0} / {1}: the committed range ends).</summary>
+  private string LitWarningFormat => _translationService.GetString("Tabs_Model_JetNeverLit");
+
   public bool IsNucleusRadiusUnknown => EffectiveNucleusRadiusKm == 0f;
 
 
@@ -309,7 +314,8 @@ public partial class ModelTabViewModel
   private void AddJetNatively(JetViewModel jet, ModelSession session, bool isFirst)
   {
     JetNativeSync.AddNative(_runtimeService, BuildModel(session, jet),
-      JetNativeSync.BuildJet(jet, EffectiveNucleusRadiusKm, _timelineService.IgnitionUs()), jet, isFirst);
+      JetNativeSync.BuildJet(jet, EffectiveNucleusRadiusKm, _timelineService.IgnitionUs()), jet, isFirst,
+      LitWarningFormat);
     // a new native jet starts without angles: the selected one gets them back
     if (ShowJetAngles && ReferenceEquals(jet, SelectedJet) && jet.NativePsId != 0)
       _runtimeService.SetJetAngleVisibility(jet.NativePsId, true);
@@ -323,7 +329,8 @@ public partial class ModelTabViewModel
   private void RetryNativeJets()
   {
     if (!IsCometCommitted || CurrentSession is not { } session) return;
-    JetNativeSync.EnsureNative(_runtimeService, session, EffectiveNucleusRadiusKm, _timelineService.IgnitionUs());
+    JetNativeSync.EnsureNative(_runtimeService, session, EffectiveNucleusRadiusKm, _timelineService.IgnitionUs(),
+      LitWarningFormat);
     RefreshTotalActivityText();
   }
 
@@ -924,6 +931,8 @@ public partial class ModelTabViewModel
           jet.Beta = computed.Beta;
           jet.DustProductionRateAt1AuKgs = computed.DustProductionRateAt1AuKgs;
         }
+        // the site may have moved into (or out of) the polar night
+        JetNativeSync.RefreshLitWarning(_runtimeService, jet, LitWarningFormat);
       })
       .AddDisposableTo(_disposables);
 

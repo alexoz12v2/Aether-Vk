@@ -17,6 +17,21 @@ public class ViewModesTests
     Assert.StartsWith("From Earth, ecliptic north up", ViewportOverlayViewModel.FrameLabelFor(EarthObserverState.EarthPositioning, ObserverUp.Ecliptic));
   }
 
+  /// Feedback #17: the nucleus-from-Earth view is the comet orbit posed by the core on the
+  /// Earth → comet line: its label says "from Earth", not the body-fixed frame, and keeps the epoch.
+  [Fact]
+  public void FrameLabel_NucleusFromEarth_SaysFromEarth()
+  {
+    const string epoch = "2021-12-27 00:14:47 UTC";
+    string label = ViewportOverlayViewModel.FrameLabelFor(EarthObserverState.CometOrbiting, ObserverUp.Ecliptic, epoch, nucleusFromEarth: true);
+    Assert.StartsWith("Nucleus from Earth", label);
+    Assert.Contains("from Earth", label);
+    Assert.EndsWith(" · " + epoch, label);
+    // the flag only applies to the comet orbit; off, the orbit is the body-fixed frame
+    Assert.StartsWith("Body-fixed frame", ViewportOverlayViewModel.FrameLabelFor(EarthObserverState.CometOrbiting, ObserverUp.Ecliptic, epoch, nucleusFromEarth: false));
+    Assert.StartsWith("Orbit-plane frame", ViewportOverlayViewModel.FrameLabelFor(EarthObserverState.UpZenith, ObserverUp.Ecliptic, epoch, nucleusFromEarth: true));
+  }
+
   /// Feedback #16: the label states at which date the view is drawn (the epoch the overlay shows).
   [Theory]
   [InlineData(EarthObserverState.UpZenith, ObserverUp.Ecliptic, "Orbit-plane frame")]

@@ -818,7 +818,113 @@ impl SimulationContext {
     look: [f64; 4],
     up: crate::simulation_api::earth_observer::ObserverUp,
   ) -> bool {
-    use crate::simulation_api::earth_observer::{EarthObserverState, clear_light_time_view};
+    use crate::simulation_api::earth_observer::EarthObserverState;
+    let Some(mode) = mode else {
+      return self.clear_earth_observer(scene_id);
+    };
+    self.install_earth_observer(scene_id, camera, comet, |comet, last| {
+      let mut state = EarthObserverState::new(
+        mode,
+        EntityId::from_ffi(camera),
+        EntityId::from_ffi(earth),
+        comet,
+        topocentric,
+        lat_deg,
+        lon_deg,
+        elev_m,
+        look,
+        last,
+      );
+      state.up = up;
+      state
+    })
+  }
+
+  /// Sets the native "nucleus from Earth" view of `scene_id` (reviewer feedback #17): the Earth
+  /// observer's camera `distance_au` short of the astrometric comet on the Earth → comet line,
+  /// J2000 celestial north up ([`crate::simulation_api::earth_observer::nucleus_view_from_earth`]):
+  /// the nucleus shows the face and orientation an Earth telescope sees, posed now and re-posed in
+  /// every commit (it follows the comet). The comet is drawn light-time retarded like the Earth
+  /// observer's. Cleared like the observer (`set_earth_observer` with `mode = None`). Returns false
+  /// when the scene or an entity is missing, without a comet, or for a non-positive distance.
+  pub fn set_nucleus_view_from_earth(
+    &self,
+    scene_id: u64,
+    camera: u64,
+    earth: u64,
+    comet: u64,
+    distance_au: f64,
+  ) -> bool {
+    use crate::simulation_api::earth_observer::{EarthObserverMode, EarthObserverState, ObserverUp};
+    if comet == 0 || !(distance_au > 0.0 && distance_au.is_finite()) {
+      let _ = self.clear_earth_observer(scene_id);
+      return false;
+    }
+    // the camera is posed a few tens of km from the nucleus: a parent ~1 AU away (the Earth)
+    // quantizes its f32 local offset to ~10 km, so it hangs from the comet itself (the comet
+    // orbit mode the UI enters first does the same; every UI mode re-parents on entry)
+    {
+      let Some(scene_arc) = self.scenes.read().get_scene(scene_id) else {
+        return false;
+      };
+      let g = scene_arc.write();
+      let cam = EntityId::from_ffi(camera);
+      let comet_id = EntityId::from_ffi(comet);
+      if g.scene.get_parent(cam) != Some(comet_id) {
+        g.scene.set_parent(cam, Some(comet_id));
+      }
+    }
+    self.install_earth_observer(scene_id, camera, comet, |comet, last| {
+      let mut state = EarthObserverState::new(
+        EarthObserverMode::CometTracking,
+        EntityId::from_ffi(camera),
+        EntityId::from_ffi(earth),
+        comet,
+        false,
+        0.0,
+        0.0,
+        0.0,
+        [0.0, 0.0, 0.0, 1.0],
+        last,
+      );
+      state.up = ObserverUp::CelestialNorth;
+      state.nucleus_distance_au = Some(distance_au);
+      state
+    })
+  }
+
+  /// Clears the native Earth observer (or nucleus view) of `scene_id`: the UI poses the camera
+  /// again. False without the scene.
+  fn clear_earth_observer(&self, scene_id: u64) -> bool {
+    use crate::simulation_api::earth_observer::clear_light_time_view;
+    let Some(scene_arc) = self.scenes.read().get_scene(scene_id) else {
+      return false;
+    };
+    let mut guard = scene_arc.write();
+    if let Some(old) = guard.earth_observer.take() {
+      clear_light_time_view(&guard.scene, old.camera);
+    }
+    true
+  }
+
+  /// Installs the observer `build` makes (from the comet entity and the camera's current rotation,
+  /// the `last` pose) on `scene_id` and poses the camera right away. The comet's heliocentric
+  /// velocity now (light time until the next commit refreshes it) comes from its SPK id in the
+  /// scene and the almanac, with no scene lock held. False when the scene or an entity is missing:
+  /// no observer at all then, so the UI that poses the camera instead is never overridden by a
+  /// previous one (`LogicCommand::AnimateCameraTo` and the transform writes leave an observer's
+  /// camera alone).
+  fn install_earth_observer(
+    &self,
+    scene_id: u64,
+    camera: u64,
+    comet: u64,
+    build: impl FnOnce(
+      Option<EntityId>,
+      [f64; 4],
+    ) -> crate::simulation_api::earth_observer::EarthObserverState,
+  ) -> bool {
+    use crate::simulation_api::earth_observer::clear_light_time_view;
     let (scene_arc, epoch) = {
       let scenes = self.scenes.read();
       let Some(scene_arc) = scenes.get_scene(scene_id) else {
@@ -830,8 +936,6 @@ impl SimulationContext {
       )
     };
     let comet = (comet != 0).then(|| EntityId::from_ffi(comet));
-    // the comet's heliocentric velocity now (light time until the next commit refreshes it): its
-    // SPK id from the scene, then the almanac, with no scene lock held
     let comet_naif = comet.and_then(|c| {
       scene_arc
         .read()
@@ -847,15 +951,6 @@ impl SimulationContext {
       _ => None,
     };
     let mut guard = scene_arc.write();
-    let Some(mode) = mode else {
-      if let Some(old) = guard.earth_observer.take() {
-        clear_light_time_view(&guard.scene, old.camera);
-      }
-      return true;
-    };
-    // refused (an entity missing): no observer at all, so the UI that poses the camera instead
-    // is never overridden by a previous one (`LogicCommand::AnimateCameraTo` and the transform
-    // writes leave an observer's camera alone)
     let refuse = |guard: &mut crate::simulation_api::structs::SceneContext| {
       if let Some(old) = guard.earth_observer.take() {
         clear_light_time_view(&guard.scene, old.camera);
@@ -869,16 +964,8 @@ impl SimulationContext {
     if let Some(old) = guard.earth_observer.filter(|o| o.camera != camera) {
       clear_light_time_view(&guard.scene, old.camera);
     }
-    let mut state = EarthObserverState::new(
-      mode,
-      camera,
-      EntityId::from_ffi(earth),
+    let mut state = build(
       comet,
-      topocentric,
-      lat_deg,
-      lon_deg,
-      elev_m,
-      look,
       [
         cam.rotation[0],
         cam.rotation[1],
@@ -887,7 +974,6 @@ impl SimulationContext {
       ],
     );
     state.comet_vel_km_s = comet_vel_km_s;
-    state.up = up;
     if crate::simulation_api::earth_observer::apply(&guard.scene, &mut state).is_none() {
       return refuse(&mut guard);
     }
@@ -919,6 +1005,95 @@ impl SimulationContext {
         .unwrap_or((o.last_error, o.last_elevation));
       (o.mode, error, elevation)
     })
+  }
+
+  /// Ephemeris of the committed comet of `scene_id` at its current (shown) epoch, seen from the
+  /// Earth's centre ([`crate::simulation_api::astrometry::comet_ephemeris_at`]: astrometric J2000
+  /// RA/Dec, r, Δ, phase, elongation, PsAng), with that epoch. The states come from the almanac,
+  /// the ones the commit places the bodies at, with no scene lock held over it. `None` without a
+  /// committed comet (no `AlmanacPlanet` on the comet body) or when the almanac does not cover the
+  /// epoch.
+  pub fn comet_ephemeris(
+    &self,
+    scene_id: u64,
+  ) -> Option<(
+    hifitime::Epoch,
+    crate::simulation_api::astrometry::CometEphemeris,
+  )> {
+    let (scene_arc, epoch) = {
+      let scenes = self.scenes.read();
+      let scene_arc = scenes.get_scene(scene_id)?;
+      (scene_arc, scenes.time_managers.get(&scene_id)?.current_epoch())
+    };
+    let naif = {
+      let g = scene_arc.read();
+      let body = g.comet.as_ref()?.body;
+      g.scene
+        .with_component(body, |p: &crate::scene::AlmanacPlanet| p.naif_id)?
+    };
+    let e = crate::simulation_api::astrometry::comet_ephemeris_at(
+      &self.logic_state.read().almanac_data,
+      naif,
+      epoch,
+    )?;
+    Some((epoch, e))
+  }
+
+  /// Windows the committed range is cut into by [`Self::jet_lit_fraction`]: 2048 over 16 days
+  /// is an 11-minute window, well under the 67P-class spin (12 h) and the light model integrates
+  /// the spin phase within each window anyway.
+  pub const JET_LIT_SAMPLES: usize = 2048;
+
+  /// Lit fraction of jet `jet_id`'s surface site over the committed range of `scene_id`
+  /// (`dust::lit_fraction_sampled` on the emission's own jet state, `logic_thread::utils::jet_state_at`),
+  /// with that range. On demand (a commit, a jet edit, a save open): [`Self::JET_LIT_SAMPLES`]
+  /// ephemeris steps per call, no scene lock held over them. `None` when `jet_id` is not a jet
+  /// of a committed, almanac-driven comet (no `AlmanacPlanet` on its parent body).
+  pub fn jet_lit_fraction(
+    &self,
+    scene_id: u64,
+    jet_id: EntityId,
+  ) -> Option<(f64, hifitime::Epoch, hifitime::Epoch)> {
+    use crate::scene::particles::ParticleSystemComponent;
+    let (scene_arc, start, end) = {
+      let scenes = self.scenes.read();
+      let scene_arc = scenes.get_scene(scene_id)?;
+      let tm = scenes.time_managers.get(&scene_id)?;
+      (scene_arc, tm.start_epoch, tm.end_epoch)
+    };
+    // the body's own components: the cartesian cache is filled by the logic tick only, so it
+    // can still be empty right after a commit or a save open (paused)
+    let (jet_local, body, planet, rot_model) = {
+      let g = scene_arc.read();
+      g.scene.with_component(jet_id, |_: &ParticleSystemComponent| ())?;
+      // the jet is a direct child of the comet body (see `avkSimulationContext_addParticleSystem`)
+      let body = g.scene.get_parent(jet_id)?;
+      let planet = g.scene.with_component(body, |p: &crate::scene::AlmanacPlanet| *p)?;
+      let rot_model = g.scene.with_component(body, |m: &crate::scene::BodyRotationalModel| *m);
+      (g.scene.with_component(jet_id, |t: &TransformComponent| *t)?, body, planet, rot_model)
+    };
+    let rot_model = rot_model.or_else(|| {
+      self
+        .scenes
+        .read()
+        .cartesian_state_cache
+        .get(&structs::SceneEntityId::new(scene_id, body))
+        .and_then(|c| c.comet_state.as_ref().and_then(|b| b.body_rotational_model))
+    });
+    let span_s = (end - start).to_seconds();
+    let logic = self.logic_state.read();
+    let frac = crate::scene::dust::lit_fraction_sampled(span_s, Self::JET_LIT_SAMPLES, |t| {
+      super::logic_thread::utils::jet_state_at(
+        &planet,
+        rot_model.as_ref(),
+        &jet_local,
+        None,
+        &logic.almanac_data,
+        start,
+        t,
+      )
+    })?;
+    Some((frac, start, end))
   }
 
   /// Radius (km) of the visible dust coma of `scene_id` (largest over its particle systems, see

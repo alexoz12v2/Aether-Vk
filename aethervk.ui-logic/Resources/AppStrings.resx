@@ -255,6 +255,9 @@
   <data name="Tabs_Model_Distance" xml:space="preserve">
     <value>Distance</value>
   </data>
+  <data name="Tabs_Model_JetNeverLit" xml:space="preserve">
+    <value>This site is never lit between {0} and {1}: the jet emits no dust. Move it to another latitude, or change the range.</value>
+  </data>
   <data name="Tabs_Model_STO" xml:space="preserve">
     <value>STO</value>
   </data>
@@ -609,5 +612,38 @@
   </data>
   <data name="Billboard_PxRatio_Tip" xml:space="preserve">
     <value>How many viewport pixels one image pixel covers at the viewport's current zoom and size: the image's arcsec per px divided by the viewport centre pixel's arcsec per px (vertical field of view ÷ viewport height px). At 1.0 the model and the telescope image are compared at the same scale.</value>
+  </data>
+  <data name="Ephemeris_Title" xml:space="preserve">
+    <value>Ephemeris</value>
+  </data>
+  <data name="Ephemeris_Tip" xml:space="preserve">
+    <value>Geocentric astrometric ephemeris of the committed comet at the shown epoch (light-time corrected, no aberration), as in a JPL Horizons observer table. Sun PA is Horizons' PsAng: the position angle of the extended Sun→comet vector on the sky, from north through east; a tail points near it.</value>
+  </data>
+  <data name="Ephemeris_Epoch" xml:space="preserve">
+    <value>Epoch (UTC)</value>
+  </data>
+  <data name="Ephemeris_Ra" xml:space="preserve">
+    <value>RA (J2000)</value>
+  </data>
+  <data name="Ephemeris_Dec" xml:space="preserve">
+    <value>Dec (J2000)</value>
+  </data>
+  <data name="Ephemeris_R" xml:space="preserve">
+    <value>r (Sun–comet)</value>
+  </data>
+  <data name="Ephemeris_Delta" xml:space="preserve">
+    <value>Δ (Earth–comet)</value>
+  </data>
+  <data name="Ephemeris_Phase" xml:space="preserve">
+    <value>Phase (Sun–comet–Earth)</value>
+  </data>
+  <data name="Ephemeris_Elongation" xml:space="preserve">
+    <value>Elongation (Sun–Earth–comet)</value>
+  </data>
+  <data name="Ephemeris_SunPa" xml:space="preserve">
+    <value>Sun PA (N→E)</value>
+  </data>
+  <data name="Ephemeris_Debug" xml:space="preserve">
+    <value>Debug (camera position)</value>
   </data>
 </root>

@@ -135,6 +135,11 @@ pub struct EarthObserverState {
   pub comet_vel_km_s: Option<V3>,
   /// light time of the last pose (`None` without a comet or its velocity)
   pub light_time: Option<LightTime>,
+  /// `Some(d)`: the "nucleus from Earth" view ([`nucleus_view_from_earth`]): the camera `d` AU
+  /// from the astrometric comet on the Earth → comet line (celestial north up) instead of at the
+  /// site; `None`: the observer at the site. Set by
+  /// `SimulationContext::set_nucleus_view_from_earth`.
+  pub nucleus_distance_au: Option<f64>,
 }
 
 impl EarthObserverState {
@@ -171,6 +176,7 @@ impl EarthObserverState {
       last_elevation: 0.0,
       comet_vel_km_s: None,
       light_time: None,
+      nucleus_distance_au: None,
     }
   }
 
@@ -300,10 +306,10 @@ fn scale(a: V3, s: f64) -> V3 {
 fn add(a: V3, b: V3) -> V3 {
   [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 }
-fn sub(a: V3, b: V3) -> V3 {
+pub fn sub(a: V3, b: V3) -> V3 {
   [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
-fn normalize(a: V3) -> V3 {
+pub fn normalize(a: V3) -> V3 {
   let l = dot(a, a).sqrt();
   if l > 0.0 { scale(a, 1.0 / l) } else { a }
 }
@@ -506,7 +512,12 @@ pub fn apply(scene: &Scene, s: &mut EarthObserverState) -> Option<(V3, Q)> {
   } else {
     Some([0.0, 0.0, 0.0])
   };
-  let (pos, rot) = pose(s, v3(earth.position), earth_rot, target);
+  let (pos, rot) = match s.nucleus_distance_au {
+    // the nucleus view: from the site along the line of sight, `d` AU short of the astrometric
+    // comet (the comet is needed: no view without it)
+    Some(d) => nucleus_view_from_earth(site, target.filter(|_| s.comet.is_some())?, d)?,
+    None => pose(s, v3(earth.position), earth_rot, target),
+  };
   scene
     .set_global_transform_f64(
       s.camera,

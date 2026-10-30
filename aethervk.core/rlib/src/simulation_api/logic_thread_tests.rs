@@ -3382,3 +3382,151 @@ fn test_play_quality_follows_start_pause() {
   assert!(!on2, "paused again: play quality off");
   assert_eq!(k2, settings, "paused again: the scene's settings byte-identical");
 }
+
+/// Reviewer feedback #17, the "nucleus from Earth" view (`set_nucleus_view_from_earth`): the
+/// camera stands the requested distance short of the astrometric comet on the Earth → comet line,
+/// looking along it with the projected J2000 celestial north up, posed when set, re-posed by the
+/// commits while playing and after a seek (it follows the comet), and owned by the core (a UI
+/// transform write is ignored) until the view is cleared like the Earth observer, after which the
+/// UI's write lands.
+#[test]
+fn nucleus_view_from_earth_follows_the_comet_until_cleared() {
+  use crate::simulation_api::earth_observer::{celestial_north, normalize, sub};
+  use aethervk_oshal_rlib::math::vector::{vec3f64::Vec3f64, vec4f64::Quat64};
+  use aethervk_oshal_rlib::os::time::v2::SimSpeed;
+  let (ctx, scene_id, cam, earth, comet, _site) = light_time_observer_fixture();
+  let start = Epoch::from_gregorian_utc(2021, 12, 27, 0, 14, 47, 0);
+  // 16 radii of a 2 km nucleus: the nucleus 1/4 of a 28° field tall
+  let d_au = 32.0 / crate::simulation_api::astrometry::AU_KM;
+  // refused without a comet or with no distance: nothing posed, the UI keeps the camera
+  assert!(!ctx.set_nucleus_view_from_earth(scene_id, cam.as_ffi(), earth.as_ffi(), 0, d_au));
+  assert!(!ctx.set_nucleus_view_from_earth(scene_id, cam.as_ffi(), earth.as_ffi(), comet.as_ffi(), 0.0));
+  assert!(ctx.scenes.read().get_scene(scene_id).unwrap().read().earth_observer.is_none());
+  assert!(ctx.set_nucleus_view_from_earth(
+    scene_id,
+    cam.as_ffi(),
+    earth.as_ffi(),
+    comet.as_ffi(),
+    d_au
+  ));
+
+  // `(camera position, forward, up, Earth position, astrometric comet)` of the scene now
+  let read = || {
+    let scenes = ctx.scenes.read();
+    let g = scenes.get_scene(scene_id).unwrap();
+    let g = g.read();
+    let t = g.scene.global_transform_f64(cam).unwrap();
+    let p: [f64; 3] = t.position.into();
+    let fwd: [f64; 3] = t.rotation.rotate_vector(Vec3f64::from_components(0.0, -1.0, 0.0)).into();
+    let up: [f64; 3] = t.rotation.rotate_vector(Vec3f64::from_components(0.0, 0.0, 1.0)).into();
+    let e: [f64; 3] = g.scene.global_transform_f64(earth).unwrap().position.into();
+    let c: [f64; 3] = g.scene.global_transform_f64(comet).unwrap().position.into();
+    let lt = g.earth_observer.and_then(|o| o.light_time).expect("the view's light time");
+    (p, fwd, up, e, [0, 1, 2].map(|i| c[i] + lt.offset_au[i]))
+  };
+  let angle = |a: [f64; 3], b: [f64; 3]| {
+    let (a, b) = (normalize(a), normalize(b));
+    let c = [
+      a[1] * b[2] - a[2] * b[1],
+      a[2] * b[0] - a[0] * b[2],
+      a[0] * b[1] - a[1] * b[0],
+    ];
+    (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt().atan2(a[0] * b[0] + a[1] * b[1] + a[2] * b[2])
+  };
+  let check = |label: &str| {
+    let (p, fwd, up, e, c) = read();
+    let line = normalize(sub(c, e));
+    let aim = angle(fwd, line);
+    let to_comet = sub(c, p);
+    let dist = (to_comet[0] * to_comet[0] + to_comet[1] * to_comet[1] + to_comet[2] * to_comet[2]).sqrt();
+    let n = celestial_north();
+    let nd = n[0] * line[0] + n[1] * line[1] + n[2] * line[2];
+    let north_proj = [0, 1, 2].map(|i| n[i] - nd * line[i]);
+    let roll = angle(up, north_proj).to_degrees();
+    println!("{label}: aim {aim:.3e} rad, distance {dist:.6e} AU (asked {d_au:.6e}), up {roll:.4}° off the projected celestial north");
+    assert!(aim < 1e-6, "{label}: the view axis is {aim} rad off the Earth → comet line");
+    assert!(
+      (dist - d_au).abs() < 1e-6 * d_au,
+      "{label}: {dist} AU from the astrometric comet, asked {d_au}"
+    );
+    assert!(roll < 0.1, "{label}: screen up {roll}° off the projected celestial north");
+    (p, c)
+  };
+  let (p0, c0) = check("set");
+
+  // a few commits while playing: the comet moves, the camera follows
+  assert!(ctx.start_simulation(scene_id, SimSpeed::OneHourPerSec));
+  std::thread::sleep(std::time::Duration::from_millis(400));
+  assert!(ctx.pause_simulation_sync(scene_id));
+  let (p1, c1) = check("playing");
+  let moved = |a: [f64; 3], b: [f64; 3]| {
+    let d = sub(a, b);
+    (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
+  };
+  // how far depends on how soon the play starts (0.4 s of wall time is ~1-3 km at the first
+  // ticks): any motion, and the camera's about the comet's. Not equal: the fixture's "comet" is
+  // the Mars barycentre, whose ~19 000 km light-time offset is re-derived every tick and turns
+  // the line of sight by ~1e-4 rad (0.2 % of the motion at 32 km); the exact aim and distance
+  // are `check`'s
+  let (dc, dp) = (moved(c1, c0), moved(p1, p0));
+  assert!(dc > 0.0, "the comet must have moved while playing");
+  assert!((dp - dc).abs() < 1e-2 * dc, "the camera must follow the comet ({dp:e} vs {dc:e} AU)");
+
+  // later, at a faster speed (the fixture's scene is one day long): still the same view. How much
+  // simulated time a debug test plays is up to the physics catch-up (it drops time when behind),
+  // so the distance travelled is not asserted, only that the view keeps up. Played, not sought:
+  // the fixture's "comet" is a bare AlmanacPlanet entity (no planet marker), moved by the play
+  // sweep only, while a seek repositions the scene's own bodies
+  // the pause's physics task may still be finishing: a start is refused until it resolves
+  let t0 = std::time::Instant::now();
+  while !ctx.start_simulation(scene_id, SimSpeed::OneDayPerSec) {
+    assert!(t0.elapsed().as_secs_f64() < 10.0, "the play never restarted");
+    std::thread::sleep(std::time::Duration::from_millis(20));
+  }
+  std::thread::sleep(std::time::Duration::from_millis(600));
+  assert!(ctx.pause_simulation_sync(scene_id));
+  let (p2, c2) = check("later");
+  let (dc, dp) = (moved(c2, c1), moved(p2, p1));
+  assert!(dc > 0.0, "the comet must have moved");
+  assert!((dp - dc).abs() < 1e-2 * dc, "the camera must follow the comet ({dp:e} vs {dc:e} AU)");
+
+  // owned by the core: a UI transform write is ignored while the view is on
+  let tx = ctx.threads.logic_thread.tx();
+  let ui_write = |pos: [f64; 3]| {
+    tx.try_send(LogicCommand::SetCameraTransform {
+      scene_id,
+      camera_id: cam.as_ffi(),
+      transform: Some((Vec3f64::from_array(pos), Quat64::identity())),
+      projection: None,
+    })
+    .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let scenes = ctx.scenes.read();
+    let g = scenes.get_scene(scene_id).unwrap();
+    let g = g.read();
+    let p: [f64; 3] = g.scene.global_transform_f64(cam).unwrap().position.into();
+    p
+  };
+  let elsewhere = [1.0, 2.0, 3.0];
+  let p3 = ui_write(elsewhere);
+  assert!(moved(p3, p2) < 1e-12, "the UI's write moved the owned camera by {:e} AU", moved(p3, p2));
+
+  // cleared like the Earth observer: the view is gone and the UI's write lands
+  assert!(ctx.set_earth_observer(
+    scene_id,
+    cam.as_ffi(),
+    None,
+    earth.as_ffi(),
+    comet.as_ffi(),
+    false,
+    0.0,
+    0.0,
+    0.0,
+    [0.0, 0.0, 0.0, 1.0],
+    crate::simulation_api::earth_observer::ObserverUp::CelestialNorth
+  ));
+  assert!(ctx.scenes.read().get_scene(scene_id).unwrap().read().earth_observer.is_none());
+  let p4 = ui_write(elsewhere);
+  assert!(moved(p4, elsewhere) < 1e-9, "cleared: the UI's write must land ({:?} AU)", p4);
+  ctx.threads.logic_thread.tx().try_send(LogicCommand::Shutdown).unwrap();
+}

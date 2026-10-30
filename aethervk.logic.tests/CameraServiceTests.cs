@@ -1439,6 +1439,59 @@ public class CameraServiceTests
     Assert.False(service.ViewNucleusFromEarth());
   }
 
+  /// Feedback #17: "Nucleus from Earth" is the comet orbit handed to the core's nucleus view
+  /// (not the Earth observer with a telescope field): the runtime's SetNucleusViewFromEarth gets
+  /// the camera, the Earth, the comet and the distance at which 4 nucleus diameters fill the
+  /// orthographic field (2 × the field); the view is announced, and an orbit drag takes the
+  /// camera back (the observer cleared with mode −1, the view announced off).
+  [Fact]
+  public void NucleusFromEarth_HandsTheCometOrbitToTheCoreView_UntilADrag()
+  {
+    var (service, runtime, _) = BuildService();
+    runtime.Setup(r => r.CometEntityId).Returns(7UL);
+    var nucleusCalls = new List<(ulong cam, ulong earth, ulong comet, double d)>();
+    runtime
+      .Setup(r => r.SetNucleusViewFromEarth(It.IsAny<ulong>(), It.IsAny<ulong>(), It.IsAny<ulong>(), It.IsAny<double>()))
+      .Callback<ulong, ulong, ulong, double>((c, e, k, d) => nucleusCalls.Add((c, e, k, d)))
+      .Returns(true);
+    var observerModes = new List<int>();
+    runtime
+      .Setup(r => r.SetEarthObserver(It.IsAny<ulong>(), It.IsAny<int>(), It.IsAny<ulong>(), It.IsAny<ulong>(), It.IsAny<bool>(),
+        It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<Quaterniond>(), It.IsAny<ObserverUp>()))
+      .Callback<ulong, int, ulong, ulong, bool, double, double, double, Quaterniond, ObserverUp>((_, m, _, _, _, _, _, _, _, _) => observerModes.Add(m))
+      .Returns(true);
+    var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+    var cometConfig = (CometConfigService)typeof(CameraService).GetField("_cometConfigService", flags)!.GetValue(service)!;
+    ((System.Reactive.Subjects.BehaviorSubject<bool>)typeof(CometConfigService)
+      .GetField("_isCommittedSubject", flags)!.GetValue(cometConfig)!).OnNext(true);
+    var announced = new List<bool>();
+    service.NucleusFromEarthChanged.Subscribe(announced.Add);
+
+    // already orbiting: posed at once
+    service.SetCameraMode(CameraMode.CometOrbiting);
+    Assert.True(service.ViewNucleusFromEarth());
+    Assert.Equal(CameraMode.CometOrbiting, service.CurrentMode);
+    Assert.True(service.IsNucleusFromEarth);
+    var call = Assert.Single(nucleusCalls);
+    Assert.Equal((100UL, 42UL, 7UL), (call.cam, call.earth, call.comet));
+    // no projection yet (orthographic default): 2 × a field of 4 diameters of the 5 km fallback
+    const double AuToKm = 149_597_870.7;
+    Assert.Equal(2.0 * 2.0 * 5.0 * CameraService.NucleusFromEarthDiameters / AuToKm, call.d, 15);
+    Assert.Empty(observerModes); // never the Earth observer field path
+
+    // an orbit drag takes the camera back
+    Assert.True(service.RequestOrbit(new Vector2(10f, 0f), InputModifiers.None));
+    Assert.False(service.IsNucleusFromEarth);
+    Assert.Equal(new List<int> { -1 }, observerModes);
+    Assert.Equal(new List<bool> { false, true, false }, announced);
+
+    // leaving the mode clears it too
+    Assert.True(service.ViewNucleusFromEarth());
+    service.SetCameraMode(CameraMode.UpZenith);
+    Assert.False(service.IsNucleusFromEarth);
+    Assert.Equal(new List<int> { -1, -1 }, observerModes);
+  }
+
   /// Free orbit (feedback #16): the elevation wraps in (−π, π] and the camera turns smoothly over
   /// the pole (no flip at ±90°), keeping the old +Z-up framing below it.
   [Fact]

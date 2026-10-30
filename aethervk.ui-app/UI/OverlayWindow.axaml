@@ -119,8 +119,8 @@
       </StackPanel>
     </Border>
 
-    <!-- Camera global position tracker (all builds, polled at 2 Hz); hidden unless Settings ›
-         viewport › "Show diagnostic panels" -->
+    <!-- The ephemeris at the shown epoch (whenever a comet is committed) and the camera position
+         tracker (all builds, polled at 2 Hz; Settings › viewport › "Show diagnostic panels") -->
     <controls:CollapsibleHudPanel x:CompileBindings="False"
             DataContext="{ReflectionBinding CameraMatrixDebug}"
             IsVisible="{ReflectionBinding IsShown}"

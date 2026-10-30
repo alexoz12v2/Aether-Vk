@@ -58,17 +58,25 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
   [NotifyPropertyChangedFor(nameof(FrameLabel))]
   private ObserverUp _observerUp = ObserverUp.Ecliptic;
 
+  /// <summary>The core poses the "nucleus from Earth" view (feedback #17), for <see cref="FrameLabel"/>.</summary>
+  [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(FrameLabel))]
+  private bool _isNucleusFromEarth;
+
   /// <summary>
   /// The reference frame the view is drawn in and the epoch shown (feedback #16), under the epoch:
   /// body-fixed / orbit plane / from Earth, which way is up, and at which date.
   /// </summary>
-  public string FrameLabel => FrameLabelFor(CurrentMode, ObserverUp, CurrentEpochString);
+  public string FrameLabel => FrameLabelFor(CurrentMode, ObserverUp, CurrentEpochString, IsNucleusFromEarth);
 
-  internal static string FrameLabelFor(EarthObserverState mode, ObserverUp up, string? epoch = null)
+  /// <summary>Feedback #17: the "nucleus from Earth" view (the comet orbit posed by the core on
+  /// the Earth → comet line) is labelled as seen from Earth, not as the body-fixed orbit.</summary>
+  internal static string FrameLabelFor(EarthObserverState mode, ObserverUp up, string? epoch = null, bool nucleusFromEarth = false)
   {
     string frame = mode switch
     {
       EarthObserverState.UpZenith => "Orbit-plane frame (ecliptic J2000 seen from above, ecliptic north up)",
+      EarthObserverState.CometOrbiting when nucleusFromEarth => "Nucleus from Earth, celestial north up (J2000)",
       EarthObserverState.CometOrbiting => "Body-fixed frame (turns with the nucleus, spin axis up)",
       EarthObserverState.EarthPositioning => up == ObserverUp.CelestialNorth
         ? "From Earth, celestial north up (J2000)"
@@ -155,7 +163,8 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
     ISchedulerProvider schedulerProvider,
     TimelineService timelineService,
     ITabStateService<ModelSession> modelSessionService,
-    PreferencesService? preferences = null
+    PreferencesService? preferences = null,
+    ITranslationService? translationService = null
   )
   {
     _cameraService = cameraService;
@@ -171,13 +180,18 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
     DebugTelemetry   = new DebugTelemetryPanelViewModel(runtimeService);
 #endif
     CameraMatrixDebug = new CameraMatrixDebugViewModel(runtimeService, schedulerProvider, preferences,
-      () => (_cameraService.GetCometScreenPosition(), _cameraService.ViewportWidthPx, _cameraService.ViewportHeightPx));
+      () => (_cameraService.GetCometScreenPosition(), _cameraService.ViewportWidthPx, _cameraService.ViewportHeightPx),
+      translationService);
     CometOrbitDebug   = new CometOrbitDebugViewModel(preferences);
     _disposables.Add(CameraMatrixDebug);
     _disposables.Add(CometOrbitDebug);
 
     _cameraService
       .EarthObserverUpChanged.Subscribe(up => _dispatcher.Dispatch(() => ObserverUp = up))
+      .AddDisposableTo(_disposables);
+
+    _cameraService
+      .NucleusFromEarthChanged.Subscribe(on => _dispatcher.Dispatch(() => IsNucleusFromEarth = on))
       .AddDisposableTo(_disposables);
 
     _cameraService

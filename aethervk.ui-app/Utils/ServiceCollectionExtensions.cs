@@ -139,6 +139,7 @@ public static class ServiceCollectionExtensions
       var timelineService = sp.GetRequiredService<TimelineService>();
       var modelSessionService = sp.GetRequiredService<ITabStateService<ModelSession>>();
       var prefs = sp.GetRequiredService<PreferencesService>();
+      var translation = sp.GetRequiredService<ITranslationService>();
       return vm => new ViewportOverlayViewModel(
         cameraService,
         runtimeService,
@@ -151,7 +152,8 @@ public static class ServiceCollectionExtensions
         schedulerProvider,
         timelineService,
         modelSessionService,
-        prefs
+        prefs,
+        translation
       );
     });
   }

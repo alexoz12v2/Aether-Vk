@@ -2486,6 +2486,30 @@ impl JetState {
   }
 }
 
+/// Lit fraction of a jet site over `[0, span_s]` with the emission's light model: the span is
+/// cut into `samples` consecutive windows and each one's `lit_window` lit time is summed
+/// (exact within a window: the spin phase is integrated, not sampled). `jet_at(t)` is the jet
+/// state at `t` seconds into the span (`None` where the ephemeris is unavailable: that window
+/// counts as dark). `None` for an empty span or without a single jet state.
+pub fn lit_fraction_sampled(
+  span_s: f64,
+  samples: usize,
+  mut jet_at: impl FnMut(f64) -> Option<JetState>,
+) -> Option<f64> {
+  if !(span_s > 0.0) || samples == 0 {
+    return None;
+  }
+  let dur = span_s / samples as f64;
+  let (mut lit_s, mut any) = (0.0f64, false);
+  for k in 0..samples {
+    if let Some(js) = jet_at(k as f64 * dur) {
+      lit_s += js.lit_window(dur).lit_time_s;
+      any = true;
+    }
+  }
+  any.then(|| (lit_s / span_s).clamp(0.0, 1.0))
+}
+
 /// Everything the renderer needs to evaluate and draw one system this frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DustDrawState {

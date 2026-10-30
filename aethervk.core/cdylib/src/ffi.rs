@@ -772,6 +772,30 @@ pub unsafe extern "C" fn avkSimulationContext_setEarthObserver(
   )
 }
 
+/// Sets the native "nucleus from Earth" view (reviewer feedback #17): the camera `distance_au`
+/// short of the astrometric comet on the Earth → comet line, J2000 celestial north up, re-posed in
+/// every commit (`SimulationContext::set_nucleus_view_from_earth`). Cleared like the Earth
+/// observer (`avkSimulationContext_setEarthObserver` with mode `u32::MAX`). Returns false when the
+/// scene, the camera, the Earth or the comet is missing, or for a non-positive distance.
+///
+/// # Safety
+/// FFI Contract: `ctx` is a valid pointer from `avkSimulationContext_startup`
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setNucleusViewFromEarth(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  camera_id: u64,
+  earth_id: u64,
+  comet_id: u64,
+  distance_au: f64,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  unsafe { &*ctx }.set_nucleus_view_from_earth(scene_id, camera_id, earth_id, comet_id, distance_au)
+}
+
 /// Native Earth observer status (`avkSimulationContext_earthObserverStatus`). 24 bytes.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
@@ -812,6 +836,73 @@ pub unsafe extern "C" fn avkSimulationContext_earthObserverStatus(
     None => CEarthObserverStatus::default(),
   };
   unsafe { out.write(status) };
+  true
+}
+
+/// Ephemeris of the committed comet at the scene's shown epoch
+/// (`avkSimulationContext_cometEphemeris`), the rows of a JPL Horizons observer table: see
+/// `astrometry::CometEphemeris` for every convention (PsAng north through east, phase S-T-O,
+/// elongation S-O-T, r light-time corrected). 80 bytes.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CCometEphemeris {
+  /// 1 with a committed comet the almanac covers at the epoch; 0 leaves the rest zero
+  pub active: u32,
+  pub _pad: u32,
+  /// the shown epoch, UTC seconds since 1970-01-01T00:00:00Z
+  pub epoch_unix_s: f64,
+  /// astrometric geocentric RA, J2000 (rad, `[0, 2π)`)
+  pub ra_rad: f64,
+  /// astrometric geocentric Dec, J2000 (rad)
+  pub dec_rad: f64,
+  /// heliocentric distance r (AU)
+  pub r_au: f64,
+  /// geocentric distance Δ (AU)
+  pub delta_au: f64,
+  /// Sun–comet–Earth (rad)
+  pub phase_rad: f64,
+  /// Sun–Earth–comet (rad)
+  pub elongation_rad: f64,
+  /// position angle of the extended Sun→comet vector, north through east (rad, `[0, 2π)`)
+  pub sun_pa_rad: f64,
+  /// Δ/c (s)
+  pub light_time_s: f64,
+}
+const _: () = assert!(core::mem::size_of::<CCometEphemeris>() == 80);
+
+/// Writes the committed comet's ephemeris at the shown epoch of `scene_id` into `out` (`active` 0
+/// without a committed comet). A query, not a push: the UI polls it at its overlay refresh rate.
+/// Returns false when `ctx` or `out` is null.
+///
+/// # Safety
+/// FFI Contract: `out` points to one writable `CCometEphemeris`
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_cometEphemeris(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  out: *mut CCometEphemeris,
+) -> bool {
+  if ctx.is_null() || out.is_null() {
+    return false;
+  }
+  let value = match unsafe { &*ctx }.comet_ephemeris(scene_id) {
+    Some((epoch, e)) => CCometEphemeris {
+      active: 1,
+      _pad: 0,
+      epoch_unix_s: epoch.to_unix_seconds(),
+      ra_rad: e.ra_rad,
+      dec_rad: e.dec_rad,
+      r_au: e.r_au,
+      delta_au: e.delta_au,
+      phase_rad: e.phase_rad,
+      elongation_rad: e.elongation_rad,
+      sun_pa_rad: e.sun_pa_rad,
+      light_time_s: e.light_time_s,
+    },
+    None => CCometEphemeris::default(),
+  };
+  unsafe { out.write(value) };
   true
 }
 
@@ -3164,6 +3255,43 @@ pub unsafe extern "C" fn avkSimulationContext_setJetPreviewVisibility(
   );
 
   changed
+}
+
+/// Lit fraction (0..1) of one jet's surface site over the committed range, with that range
+/// (TDB parts since J2000, as `avkSimulationContext_getSimulationClock`): a site that is never
+/// lit emits no dust (`SimulationContext::jet_lit_fraction`). On demand only: ~2048 ephemeris
+/// steps per call. False when `jet_entity_id` is not a jet of a committed comet.
+///
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_jetLitFraction(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  jet_entity_id: u64,
+  out_lit_fraction: *mut f64,
+  out_start: *mut CTime,
+  out_end: *mut CTime,
+) -> bool {
+  if ctx.is_null() || out_lit_fraction.is_null() || out_start.is_null() || out_end.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { ctx.as_ref().unwrap() };
+  let jet_id = aethervk_core_rlib::scene::EntityId::from_ffi(jet_entity_id);
+  let Some((frac, start, end)) = ctx_ref.jet_lit_fraction(scene_id, jet_id) else {
+    return false;
+  };
+  let parts = |e: anise::time::Epoch| {
+    let p = e.to_tdb_duration().to_parts();
+    CTime::new(p.1, p.0)
+  };
+  unsafe {
+    *out_lit_fraction = frac;
+    *out_start = parts(start);
+    *out_end = parts(end);
+  }
+  true
 }
 
 /// Shows (or hides) the latitude/longitude arcs and degree labels of one jet (the C# side keeps

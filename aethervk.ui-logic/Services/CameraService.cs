@@ -328,6 +328,16 @@ public sealed class CameraService : IDisposable
   /// (<see cref="PushNativeObserver"/>): the UI then never writes the pose per tick.</summary>
   private bool _nativeObserverActive;
 
+  /// <summary>True while the core poses the "nucleus from Earth" view
+  /// (<see cref="ViewNucleusFromEarth"/>); false once the user orbits, zooms or changes mode.</summary>
+  private readonly BehaviorSubject<bool> _nucleusFromEarthSubject = new(false);
+
+  /// <summary>Fires when the "nucleus from Earth" view is entered (true) or left (false).</summary>
+  public IObservable<bool> NucleusFromEarthChanged => _nucleusFromEarthSubject.DistinctUntilChanged();
+
+  /// <summary>Whether the core poses the "nucleus from Earth" view now.</summary>
+  public bool IsNucleusFromEarth => _nucleusFromEarthSubject.Value;
+
   // Projection preset of the active tracking submode (target spans 10% of the view);
   // null in Free mode. Exposed to enable "Restore preset projection".
   private CameraProjectionState? _earthPresetProjection;
@@ -699,6 +709,9 @@ public sealed class CameraService : IDisposable
     var previous = _modeSubject.Value;
     if (previous == mode)
       return;
+
+    // the nucleus-from-Earth view belongs to the outgoing comet orbit
+    ClearNucleusFromEarth();
 
     // Snapshot the outgoing mode's confirmed state for restoration on re-entry.
     SaveModeSnapshot(previous);
@@ -2020,35 +2033,81 @@ public sealed class CameraService : IDisposable
   public const double NucleusFromEarthDiameters = 4.0;
 
   /// <summary>
-  /// The nucleus as seen from Earth (feedback #17): <see cref="EnterModelView"/>, then a field
-  /// <see cref="NucleusFromEarthDiameters"/> nucleus diameters tall at the comet — the same Earth
-  /// observer (and Sun phase) as the rest of the comparison work, unlike the body-fixed comet orbit
-  /// camera. Entering the mode, the field waits for the mode switch's own projection.
+  /// The nucleus as seen from Earth (feedback #17): the comet orbit (the camera rides with the
+  /// nucleus, physical lighting) handed to the core, which poses it on the Earth → comet line,
+  /// looking at the comet with J2000 celestial north up, and keeps it there in every commit
+  /// (<see cref="INativeRuntimeService.SetNucleusViewFromEarth"/>): the face, phase and
+  /// orientation an Earth telescope sees, close enough that the nucleus spans
+  /// <see cref="NucleusFromEarthDiameters"/> diameters over the view height — not the Earth
+  /// observer's ~1e-7 rad field from 0.47 AU. Orbiting, zooming or another mode takes the camera
+  /// back. Entering the mode, the pose waits for the mode switch (its animation and projection).
+  /// False without a comet (the mode is refused, with its toast).
   /// </summary>
   public bool ViewNucleusFromEarth()
   {
-    bool switching = _modeSubject.Value != CameraMode.EarthPosition;
-    if (!EnterModelView())
+    bool switching = _modeSubject.Value != CameraMode.CometOrbiting;
+    SetCameraMode(CameraMode.CometOrbiting);
+    if (_modeSubject.Value != CameraMode.CometOrbiting)
       return false;
     if (!switching)
-      return ApplyNucleusFromEarthField();
+      return ApplyNucleusFromEarthPose();
     _ = Task.Delay(TimeSpan.FromSeconds(ModeSwitchAnimationSeconds + 0.1)).ContinueWith(
       _ => _schedulerProvider.MainThread.Schedule(() =>
       {
-        if (_modeSubject.Value == CameraMode.EarthPosition)
-          ApplyNucleusFromEarthField();
+        if (_modeSubject.Value == CameraMode.CometOrbiting)
+          ApplyNucleusFromEarthPose();
       }),
       CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     return true;
   }
 
-  private bool ApplyNucleusFromEarthField()
+  /// <summary>
+  /// Hands the camera to the core's nucleus-from-Earth view: the nucleus
+  /// <see cref="NucleusFromEarthDiameters"/> diameters over the view height. Orthographic: the
+  /// half-height is set to that and the camera stands 2 × the field away; perspective: the
+  /// distance follows the current vertical fov. Near / far planes as the comet orbit's
+  /// (<see cref="CometOrbitingNearFar"/> from the distance).
+  /// </summary>
+  private bool ApplyNucleusFromEarthPose()
   {
-    if (GetEarthObserverCometDistanceKm() is not { } dKm)
+    const double AuToKm = 149_597_870.7;
+    ulong cam = CameraEntityId ?? 0;
+    ulong earth = _runtimeService.EarthEntityId ?? 0;
+    ulong comet = _cometConfigService.IsAlmanacCommittedValue ? _runtimeService.CometEntityId ?? 0 : 0;
+    if (cam == 0 || earth == 0 || comet == 0)
       return false;
     double rKm = _lastKnownNucleusRadiusKm > 0f ? _lastKnownNucleusRadiusKm : 5.0;
-    double heightKm = 2.0 * rKm * NucleusFromEarthDiameters;
-    return SetEarthObserverField(heightKm, 2.0 * Math.Atan(heightKm * 0.5 / dKm));
+    double heightAu = 2.0 * rKm * NucleusFromEarthDiameters / AuToKm;
+    var proj = _projectionSubject.Value;
+    bool perspective = proj?.IsPerspective ?? false;
+    double distanceAu = perspective && proj is { Fov: > 0f and < (float)(Math.PI * 0.9) }
+      ? heightAu * 0.5 / Math.Tan(proj.Fov * 0.5)
+      : heightAu * 2.0;
+    bool ok = _runtimeService.SetNucleusViewFromEarth(cam, earth, comet, distanceAu);
+    _nucleusFromEarthSubject.OnNext(ok);
+    if (!ok)
+    {
+      Console.WriteLine($"[CameraService] nucleus from Earth refused (earth {earth}, comet {comet}, {distanceAu:E3} AU)");
+      return false;
+    }
+    float near = (float)Math.Max(1e-12, distanceAu * 0.05), far = (float)(distanceAu * 200.0);
+    if (perspective)
+      RequestPerspectiveProjection(proj!.Fov, _viewportAspect, near, far);
+    else
+    {
+      float halfH = (float)(heightAu * 0.5);
+      RequestOrthographicProjection(-halfH * _viewportAspect, halfH * _viewportAspect, -halfH, halfH, near, far);
+    }
+    return true;
+  }
+
+  /// <summary>Takes the camera back from the core's nucleus-from-Earth view (no-op when off).</summary>
+  private void ClearNucleusFromEarth()
+  {
+    if (!_nucleusFromEarthSubject.Value)
+      return;
+    _runtimeService.SetEarthObserver(CameraEntityId ?? 0, -1, 0, 0, false, 0, 0, 0, Quaterniond.Identity, ObserverUp.Ecliptic);
+    _nucleusFromEarthSubject.OnNext(false);
   }
 
   /// <summary>See <see cref="GetEarthObserverScale"/>: the scale of a projection on a
@@ -2490,6 +2549,10 @@ public sealed class CameraService : IDisposable
     ulong? camId = CameraEntityId;
     if (camId is null)
       return;
+
+    // an orbit pose (drag, zoom, radius change, mode entry) takes the camera back from the
+    // nucleus-from-Earth view
+    ClearNucleusFromEarth();
 
     Vector3 offset;
     float azimuth, elevation;
