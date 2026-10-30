@@ -148,7 +148,8 @@ public sealed class AppSaveFileHost : ISaveFileHost
       [.. _cameras.All.Select(c => SaveIndexMapping.ToDto(c.GetPersistedState()))],
       liveAssets,
       appearance,
-      [.. _billboards.Current.Select(SaveIndexMapping.ToDto)]);
+      // each centre also against the viewport, so the save reopens over it on any monitor
+      [.. _billboards.Current.Select(b => SaveIndexMapping.ToDto(b, _billboards.ViewportOffsetOf(b)))]);
   }
 
   private LiveAsset ToLive(ImportedAsset a, Func<ulong, string?> keyOf)
@@ -396,7 +397,7 @@ public sealed class AppSaveFileHost : ISaveFileHost
   }
 
   public void ApplyBillboards(IReadOnlyList<BillboardDto> billboards) =>
-    _billboards.Restore(billboards.Select(SaveIndexMapping.FromDto));
+    _billboards.RestoreOverViewport(billboards.Select(b => (SaveIndexMapping.FromDto(b), SaveIndexMapping.ViewportOffsetOf(b))));
 
   public void SyncClock()
   {

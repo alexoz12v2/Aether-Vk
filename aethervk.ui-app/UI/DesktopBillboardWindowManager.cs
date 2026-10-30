@@ -198,6 +198,7 @@ public sealed class DesktopBillboardWindowManager : IDisposable
     var w = new DesktopBillboardWindow(b, edited => _service.Update(edited));
     w.SetBitmap(BitmapFor(b.TextureKey));
     w.InputRegionChanged += UpdateInputRegion;
+    w.DraggingChanged += OnDraggingChanged;
     w.Activated += OnWindowActivated;
     w.Deactivated += OnWindowDeactivated;
     _windows[b.Id] = w;
@@ -256,10 +257,16 @@ public sealed class DesktopBillboardWindowManager : IDisposable
     _activation?.Closed(w);
     _setUp.Remove(w);
     w.InputRegionChanged -= UpdateInputRegion;
+    w.DraggingChanged -= OnDraggingChanged;
     w.Activated -= OnWindowActivated;
     w.Deactivated -= OnWindowDeactivated;
+    _service.SetDragging(id, false);
     w.Close();
   }
+
+  // a viewport move (the main window dragged) must not fight the user's drag of a billboard
+  private void OnDraggingChanged(DesktopBillboardWindow w, bool dragging) =>
+    _service.SetDragging(w.BillboardId, dragging);
 
   private void RefreshBitmaps()
   {

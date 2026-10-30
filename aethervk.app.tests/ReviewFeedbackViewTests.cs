@@ -173,5 +173,82 @@ public class ReviewFeedbackViewTests
     Assert.Contains("Visual only", flow);
     window.Close();
   }
+
+  /// <summary>
+  /// R5: the ruler's label (the overlay's scale bar) is a TextBlock with an AutomationId, so the
+  /// end-to-end suite can read its unit; it shows the view model's text while the bar is shown.
+  /// </summary>
+  [AvaloniaFact]
+  public void Review_mail_R5_TheRulerLabel_IsReadableByItsAutomationId()
+  {
+    var host = AetherVk.App.Host ?? throw new InvalidOperationException("DI host not initialised");
+    using var scope = host.Services.CreateScope();
+    var viewportVm = scope.ServiceProvider.GetRequiredService<Viewport3DViewModel>();
+    using var vm = scope.ServiceProvider.GetRequiredService<Func<Viewport3DViewModel, ViewportOverlayViewModel>>()(viewportVm);
+    var window = new AetherVk.UI.OverlayWindow { DataContext = vm, Width = 800, Height = 600 };
+    window.Show();
+    Dispatcher.UIThread.RunJobs();
+    vm.MeasurementIndicatorWidth = 80;
+    vm.MeasurementIndicatorText = "20 arcsec ≈ 38,300 km at the comet";
+    vm.ShowMeasurementIndicator = true;
+    Dispatcher.UIThread.RunJobs();
+
+    var ruler = ById<TextBlock>(window, "ViewportRulerText");
+    Assert.Equal("20 arcsec ≈ 38,300 km at the comet", ruler.Text);
+    Assert.True(ruler.IsEffectivelyVisible);
+
+    vm.ShowMeasurementIndicator = false;
+    Dispatcher.UIThread.RunJobs();
+    Assert.False(ruler.IsEffectivelyVisible);
+    window.Close();
+  }
+
+  /// <summary>The dust-history object the diagnostic panel binds to (a reflection binding).</summary>
+  public sealed class DustHistorySource : System.ComponentModel.INotifyPropertyChanged
+  {
+    private string _dustHistory = string.Empty;
+
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+
+    public string DustHistory
+    {
+      get => _dustHistory;
+      set
+      {
+        _dustHistory = value;
+        PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(DustHistory)));
+      }
+    }
+  }
+
+  /// <summary>
+  /// The DUST HISTORY line of the diagnostic panel carries an AutomationId (the end-to-end suite
+  /// waits for "building" to go away while it plays), shows the formatted tiers, and is hidden
+  /// without dust.
+  /// </summary>
+  [AvaloniaFact]
+  public void DustHistoryLine_IsReadableByItsAutomationId()
+  {
+    var source = new DustHistorySource();
+    var panel = new AetherVk.UI.CameraMatrixDebugPanel { DataContext = source };
+    var window = new Window { Content = panel, Width = 520, Height = 800 };
+    window.Show();
+    Dispatcher.UIThread.RunJobs();
+
+    var line = ById<TextBlock>(panel, "DustHistoryText");
+    Assert.False(line.IsEffectivelyVisible);
+
+    var text = AetherVk.Logic.ViewModels.Debug.CameraMatrixDebugViewModel.FormatDustHistory(new[]
+    {
+      new AetherVk.Logic.Services.DustTierStats(LiveClusters: 1200, Capacity: 4096, YoungestAgeS: 0, OldestAgeS: 86400,
+        BandMinS: 0, BandMaxS: 172800, CaughtUp: false),
+    });
+    Assert.EndsWith(" building", text);
+    source.DustHistory = text;
+    Dispatcher.UIThread.RunJobs();
+    Assert.True(line.IsEffectivelyVisible);
+    Assert.Equal(text, line.Text);
+    window.Close();
+  }
 }
 #endif

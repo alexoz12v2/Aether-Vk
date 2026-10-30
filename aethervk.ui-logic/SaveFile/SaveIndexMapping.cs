@@ -359,7 +359,12 @@ public static class SaveIndexMapping
 
   // ── billboards ─────────────────────────────────────────────────────────────
 
-  public static BillboardDto ToDto(DesktopBillboard b) => new()
+  /// <summary>
+  /// <paramref name="viewportOffset"/>: the centre against the viewport
+  /// (<see cref="Utils.BillboardViewportPlacement.OffsetOf"/>); null when the viewport's place is
+  /// not known, which leaves the save with desktop positions only.
+  /// </summary>
+  public static BillboardDto ToDto(DesktopBillboard b, Utils.ViewportOffset? viewportOffset = null) => new()
   {
     Id = b.Id,
     TextureKey = b.TextureKey,
@@ -380,7 +385,17 @@ public static class SaveIndexMapping
       : null,
     ImageNucleusX = b.ImageNucleusPx?.X,
     ImageNucleusY = b.ImageNucleusPx?.Y,
+    ViewportOffsetX = viewportOffset?.X,
+    ViewportOffsetY = viewportOffset?.Y,
+    ViewportScaling = viewportOffset?.Scaling,
   };
+
+  /// <summary>The saved offset from the viewport (null: an older save, or one saved before the
+  /// viewport was laid out). A missing scaling counts as 100 %.</summary>
+  public static Utils.ViewportOffset? ViewportOffsetOf(BillboardDto d) =>
+    d.ViewportOffsetX is { } x && d.ViewportOffsetY is { } y && !double.IsNaN(x) && !double.IsNaN(y)
+      ? new Utils.ViewportOffset(x, y, d.ViewportScaling is { } s && s > 0 && !double.IsInfinity(s) ? s : 1.0)
+      : null;
 
   public static DesktopBillboard FromDto(BillboardDto d) =>
     new(d.Id, d.TextureKey, d.CenterX, d.CenterY, d.WidthPx, d.HeightPx, d.Alpha, d.RotationDeg, d.Visible)

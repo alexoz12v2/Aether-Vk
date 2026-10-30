@@ -201,6 +201,56 @@ internal static partial class Win32
     }
   }
 
+  private delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdc, ref Rect rect, IntPtr lParam);
+
+  [DllImport("user32.dll")]
+  private static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr clip, MonitorEnumProc callback, IntPtr lParam);
+
+  [DllImport("user32.dll")]
+  private static extern bool ShowWindow(IntPtr hWnd, int cmd);
+
+  [DllImport("user32.dll", SetLastError = true)]
+  private static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int w, int h, uint flags);
+
+  [StructLayout(LayoutKind.Sequential)]
+  private struct Rect
+  {
+    public int Left, Top, Right, Bottom;
+  }
+
+  /// <summary>A monitor's bounds, physical desktop px.</summary>
+  public sealed record Monitor(int Left, int Top, int Width, int Height);
+
+  /// <summary>Every monitor of the desktop, the primary (the one at the origin) first.</summary>
+  public static List<Monitor> Monitors()
+  {
+    var found = new List<Monitor>();
+    EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (IntPtr _, IntPtr _, ref Rect r, IntPtr _) =>
+    {
+      found.Add(new Monitor(r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top));
+      return true;
+    }, IntPtr.Zero);
+    return found.OrderBy(m => m.Left != 0 || m.Top != 0).ThenBy(m => m.Left).ToList();
+  }
+
+  /// <summary>
+  /// Moves a top-level window onto <paramref name="monitor"/> and maximises it there: restored
+  /// first (a maximised window cannot be moved), placed inside the monitor, then maximised, which
+  /// Windows does on the monitor the window is on.
+  /// </summary>
+  public static void MaximizeOn(IntPtr hWnd, Monitor monitor)
+  {
+    const int SW_RESTORE = 9, SW_MAXIMIZE = 3;
+    const uint SWP_NOZORDER = 0x0004, SWP_NOACTIVATE = 0x0010;
+    ShowWindow(hWnd, SW_RESTORE);
+    Thread.Sleep(300);
+    if (!SetWindowPos(hWnd, IntPtr.Zero, monitor.Left + 40, monitor.Top + 40, monitor.Width - 80, monitor.Height - 80, SWP_NOZORDER | SWP_NOACTIVATE))
+      throw new InvalidOperationException($"SetWindowPos failed ({Marshal.GetLastWin32Error()})");
+    Thread.Sleep(300);
+    ShowWindow(hWnd, SW_MAXIMIZE);
+    Thread.Sleep(500);
+  }
+
   public const byte VK_RETURN = 0x0D;
   public const byte VK_CONTROL = 0x11;
   public const byte VK_MENU = 0x12;

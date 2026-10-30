@@ -217,9 +217,10 @@ public partial class VulkanViewportControlViewModel(
       Viewport3DViewModel.DipToPixels(width, renderScaling),
       Viewport3DViewModel.DipToPixels(height, renderScaling));
 
-  /// <summary>The control's top-left corner on the desktop, physical px (billboard coordinates).</summary>
-  public void NotifyScreenOrigin(double x, double y) =>
-    _viewport3DViewModel.CameraService.ViewportScreenOriginPx = (x, y);
+  /// <summary>The control's top-left corner on the desktop, physical px (billboard coordinates),
+  /// and its screen's render scaling.</summary>
+  public void NotifyScreenOrigin(double x, double y, double renderScaling = 1.0) =>
+    _viewport3DViewModel.CameraService.SetViewportScreenOrigin(x, y, renderScaling);
 
   public void Dispose()
   {

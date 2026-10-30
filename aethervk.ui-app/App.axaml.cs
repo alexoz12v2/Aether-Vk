@@ -212,6 +212,8 @@ public partial class App : Application
 
             mainWindow.Show();
             splashWindow.Close();
+            // the end-to-end suite's crash-report check (needs AETHERVK_E2E=1 as well)
+            Logic.Services.CrashReport.StartTestCrashIfRequested(Environment.GetEnvironmentVariable, TimeSpan.FromSeconds(3));
           });
         };
 
