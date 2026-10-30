@@ -264,8 +264,8 @@ public sealed class AppSaveFileHostTests
     Assert.Equal((12f, 5u, 1), (jet.ApertureDeg, jet.Seed, jet.DisplayIndex));
     Assert.Equal(1, modelRestored);
 
-    var start = Utils.TimeUtils.ToTaiParts(new DateTimeOffset(2025, 10, 1, 0, 0, 0, TimeSpan.Zero));
-    var end = Utils.TimeUtils.ToTaiParts(new DateTimeOffset(2025, 12, 1, 0, 0, 0, TimeSpan.Zero));
+    var start = Utils.TimeUtils.ToTdbParts(new DateTimeOffset(2025, 10, 1, 0, 0, 0, TimeSpan.Zero));
+    var end = Utils.TimeUtils.ToTdbParts(new DateTimeOffset(2025, 12, 1, 0, 0, 0, TimeSpan.Zero));
     rig.Host.ApplyTimeline(new TimelineDto
     {
       ProposedStart = "2025-10-01T00:00:00Z", ProposedEnd = "2025-11-11T00:00:00Z",

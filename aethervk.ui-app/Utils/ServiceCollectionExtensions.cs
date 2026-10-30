@@ -84,6 +84,22 @@ public static class ServiceCollectionExtensions
     inputRegistry.CaptureDefaults();
     collection.AddSingleton<InputRegistry>(_ => inputRegistry);
     collection.AddSingleton<PreferencesService>();
+    // UTC <-> TDB through the core's leap-second table; the dates' scale is a preference
+    collection.AddSingleton<ITimeScaleConverter, NativeTimeScaleConverter>();
+    collection.AddSingleton(sp => new TimeScaleService(
+      sp.GetRequiredService<ITimeScaleConverter>(), sp.GetRequiredService<PreferencesService>()));
+    // a newer NAIF leap-second kernel, cached in the persistent folder (the core keeps the
+    // shipped naif0012.tls unless the download is a consistent, newer table)
+    collection.AddSingleton(sp =>
+    {
+      var runtime = sp.GetRequiredService<INativeRuntimeService>();
+      var console = sp.GetRequiredService<ConsoleService>();
+      return new LeapSecondsUpdateService(
+        LeapSecondsUpdateService.CreateDefaultHttpClient(),
+        LeapSecondsUpdateService.DefaultCacheDirectory(sp.GetRequiredService<ILocalStorageService>()),
+        path => { var (status, entries) = runtime.LoadLeapSecondsFile(path); return ((int)status, (uint)Math.Max(0, entries)); },
+        console.Log);
+    });
     collection.AddSingleton<ITranslationService, TranslationService>(provider =>
     {
       // if this is used elsewhere then add it as a singleton

@@ -61,8 +61,8 @@ public class TimelineRangeLockTests
     /// <summary>A commit with this range, as the Comet tab and the messenger deliver it.</summary>
     public void Commit(string start, string end)
     {
-      var a = TimeUtils.ToTaiParts(DateTimeOffset.Parse(start + "Z", System.Globalization.CultureInfo.InvariantCulture));
-      var b = TimeUtils.ToTaiParts(DateTimeOffset.Parse(end + "Z", System.Globalization.CultureInfo.InvariantCulture));
+      var a = TimeUtils.ToTdbParts(DateTimeOffset.Parse(start + "Z", System.Globalization.CultureInfo.InvariantCulture));
+      var b = TimeUtils.ToTdbParts(DateTimeOffset.Parse(end + "Z", System.Globalization.CultureInfo.InvariantCulture));
       var range = new TimeRange(a.centuries, a.nanoseconds, b.centuries, b.nanoseconds);
       Entry.OnCommitted(range);
       Tl.Receive(new CometCommittedMessage(range));
@@ -166,8 +166,8 @@ public class TimelineRangeLockTests
     var rig = new Rig();
     rig.Entry.StartEpoch = "2021-12-17T15:48:00";
     rig.Entry.EndEpoch = "2021-12-28T00:00:00";
-    var a = TimeUtils.ToTaiParts(new DateTimeOffset(2021, 12, 12, 0, 0, 0, TimeSpan.Zero));
-    var b = TimeUtils.ToTaiParts(new DateTimeOffset(2021, 12, 28, 0, 0, 0, TimeSpan.Zero));
+    var a = TimeUtils.ToTdbParts(new DateTimeOffset(2021, 12, 12, 0, 0, 0, TimeSpan.Zero));
+    var b = TimeUtils.ToTdbParts(new DateTimeOffset(2021, 12, 28, 0, 0, 0, TimeSpan.Zero));
     var range = new TimeRange(a.centuries, a.nanoseconds, b.centuries, b.nanoseconds);
 
     rig.Tl.Receive(new CometCommittedMessage(range)); // the Timeline first this time

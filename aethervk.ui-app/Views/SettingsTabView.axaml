@@ -62,6 +62,22 @@
   <ScrollViewer Classes="left-scrollbar" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
     <StackPanel Orientation="Vertical" Spacing="16" Margin="16,16,16,16">
 
+      <!-- Time scale for dates (UTC ↔ TDB): how dates are typed and shown; the engine, the committed
+           range and the save file always hold TDB (TDB = UTC + 69.18 s since 2017) -->
+      <Border Classes="accordion">
+        <Expander Header="{Binding StrTimeScale}" AutomationProperties.AutomationId="TimeScaleSection" IsExpanded="True">
+          <StackPanel Orientation="Horizontal" Spacing="8" Margin="12,8,12,12">
+            <ComboBox AutomationProperties.AutomationId="TimeScalePicker" SelectedIndex="{Binding TimeScaleIndex}" Width="300"
+                      ToolTip.Tip="The scale the Comet tab's Start/End boxes, the Timeline epoch box and the viewport's epoch label are typed and shown in. UTC is what a telescope image's DATE-OBS uses; TDB is the engine's own time. Switching only reformats the dates: the committed range does not move.">
+              <ComboBoxItem Content="{Binding StrTimeScaleUtc}" />
+              <ComboBoxItem Content="{Binding StrTimeScaleTdb}" />
+            </ComboBox>
+            <controls:PropertyHelpButton AutomationProperties.AutomationId="TimeScaleHelp" HelpHeader="{Binding StrTimeScale}"
+                                         HelpContent="{Binding TimeScaleHelpText}" FlyoutMaxWidth="320" />
+          </StackPanel>
+        </Expander>
+      </Border>
+
       <!-- General Settings for Research: not wired yet (the dates live in the timeline), hidden
            until it drives the session (third feedback round) -->
       <Border Classes="accordion" IsVisible="False">

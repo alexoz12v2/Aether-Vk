@@ -19,9 +19,12 @@ public static class TimeUtils
   }
 
   /// <summary>
-  /// Converts a DateTimeOffset to TAI parts (Centuries and Nanoseconds relative to J2000).
+  /// Converts a calendar instant read as TDB to the engine's epoch parts (centuries and
+  /// nanoseconds since J2000 TDB, <c>CTimeRange</c> / <c>seekEpochSync</c>): a plain difference
+  /// from J2000, no leap seconds and no TT offset. A UTC instant goes through
+  /// <see cref="Services.ITimeScaleConverter"/> instead (TDB = UTC + 69.18 s in 2017–2026).
   /// </summary>
-  public static (short centuries, ulong nanoseconds) ToTaiParts(DateTimeOffset time)
+  public static (short centuries, ulong nanoseconds) ToTdbParts(DateTimeOffset time)
   {
     var diff = time - J2000;
 
@@ -41,9 +44,10 @@ public static class TimeUtils
   }
 
   /// <summary>
-  /// Converts TAI parts back to a DateTimeOffset.
+  /// The inverse of <see cref="ToTdbParts"/>: the engine epoch as a calendar instant read as TDB
+  /// (a <see cref="DateTimeOffset"/> with a zero offset, not a UTC instant).
   /// </summary>
-  public static DateTimeOffset FromTaiParts(short centuries, ulong nanoseconds)
+  public static DateTimeOffset FromTdbParts(short centuries, ulong nanoseconds)
   {
     long ticksPerCentury = TimeSpan.TicksPerDay * 36525L;
     long ticks = (long)centuries * ticksPerCentury + (long)(nanoseconds / 100UL);
@@ -53,21 +57,28 @@ public static class TimeUtils
   /// <summary>
   /// The text for the epoch (<paramref name="centuries"/>, <paramref name="nanoseconds"/>):
   /// <paramref name="sameInstant"/> when it names the same instant (to 1 ms; keeps what the user
-  /// typed), else ISO-8601 with a Z.
+  /// typed), else ISO-8601 with a Z. Texts read as TDB; <c>TimeScaleService.EpochText</c> for the
+  /// chosen scale.
   /// </summary>
   public static string EpochText(short centuries, ulong nanoseconds, string sameInstant)
   {
-    var at = FromTaiParts(centuries, nanoseconds);
+    var at = FromTdbParts(centuries, nanoseconds);
     if (TryParseIso8601(sameInstant, out var p) && Math.Abs((p - at).TotalMilliseconds) < 1)
       return sameInstant;
     return at.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
   }
 
   /// <summary>
-  /// Formats TAI parts as a UTC display string.
+  /// Formats engine epoch parts as a TDB calendar string ("yyyy-MM-dd HH:mm", invariant).
   /// </summary>
-  public static string FormatTaiEpoch(short centuries, ulong nanoseconds)
+  public static string FormatTdbEpoch(short centuries, ulong nanoseconds)
   {
-    return FromTaiParts(centuries, nanoseconds).ToString("yyyy-MM-dd HH:mm");
+    return FromTdbParts(centuries, nanoseconds).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
+  }
+
+  /// <summary><paramref name="format"/> of the engine epoch parts read as TDB (invariant culture).</summary>
+  public static string FormatTdbEpoch(short centuries, ulong nanoseconds, string format)
+  {
+    return FromTdbParts(centuries, nanoseconds).ToString(format, CultureInfo.InvariantCulture);
   }
 }

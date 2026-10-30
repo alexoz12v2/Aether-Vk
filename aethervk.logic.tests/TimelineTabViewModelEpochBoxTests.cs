@@ -63,7 +63,7 @@ public class TimelineTabViewModelEpochBoxTests
         }
     }
 
-    private static (short, ulong) Parts(DateTimeOffset t) => TimeUtils.ToTaiParts(t);
+    private static (short, ulong) Parts(DateTimeOffset t) => TimeUtils.ToTdbParts(t);
 
     [Fact]
     public void Box_ShowsTheEngineClock_EvenAtTheStart()
@@ -89,7 +89,7 @@ public class TimelineTabViewModelEpochBoxTests
         Assert.False(rig.Session.IsRunningToEnd);
         Assert.False(rig.Vm.HasCurrentEpochError);
         Assert.Equal("2020-01-15 06:30:15", rig.Vm.CurrentEpochText);
-        Assert.Equal("2020-01-15 06:30", rig.Session.CurrentEpochString);
+        Assert.Equal("2020-01-15 06:30 (TDB)", rig.Session.CurrentEpochString);
         Assert.InRange(rig.Vm.Progress, 46.0, 46.1); // 14.27 d of 31
     }
 
@@ -162,7 +162,7 @@ public class TimelineTabViewModelEpochBoxTests
         await rig.Timeline.SeekAsync(t2.Item1, t2.Item2);
         rig.Schedulers.MainThread.AdvanceBy(1);
         Assert.Equal("2020-01-2", rig.Vm.CurrentEpochText);
-        Assert.Equal("2020-01-25 00:00", rig.Session.CurrentEpochString);
+        Assert.Equal("2020-01-25 00:00 (TDB)", rig.Session.CurrentEpochString);
     }
 
     /// <summary>Feedback #19 (the boxes now in the Comet tab): the range boxes run the proposal on every keystroke; typing the

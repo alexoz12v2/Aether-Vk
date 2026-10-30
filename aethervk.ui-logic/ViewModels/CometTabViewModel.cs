@@ -270,7 +270,8 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
     ITabStateService<ModelSession> modelSessionService,
     ICometMessenger cometMessenger,
     ITabFactory tabFactory,
-    ITabStateService<TimelineSession>? timelineSessions = null
+    ITabStateService<TimelineSession>? timelineSessions = null,
+    TimeScaleService? timeScale = null
   )
     : base("Comet", sessionService)
   {
@@ -290,7 +291,7 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
     Icon = "☄"; // comet — U+2604
 
     // the range is entered here (reviewer feedback item 7); the Timeline tab only shows it
-    Range = new RangeEntryViewModel(timelineSessions, timeline, cometMessenger, () => RotRateDegDay);
+    Range = new RangeEntryViewModel(timelineSessions, timeline, cometMessenger, () => RotRateDegDay, timeScale);
     Range.PropertyChanged += OnRangePropertyChanged;
     UpdateGuidedStep();
 
@@ -346,8 +347,8 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
         else
         {
           HasProposedTimeline = true;
-          ProposedStartEpoch = FormatTaiEpoch(range.StartCenturies, range.StartNs);
-          ProposedEndEpoch = FormatTaiEpoch(range.EndCenturies, range.EndNs);
+          ProposedStartEpoch = FormatProposedEpoch(range.StartCenturies, range.StartNs);
+          ProposedEndEpoch = FormatProposedEpoch(range.EndCenturies, range.EndNs);
 
           // Detect change-after-commit by comparing ISO display strings — avoids
           // nanosecond rounding false-positives that occur with TAI record equality.
@@ -661,8 +662,8 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
   {
     var ci = System.Globalization.CultureInfo.InvariantCulture;
     return (
-      TimeUtils.FromTaiParts(range.StartCenturies, range.StartNs).UtcDateTime.ToString("yyyy-MM-dd", ci),
-      TimeUtils.FromTaiParts(range.EndCenturies, range.EndNs).UtcDateTime.ToString("yyyy-MM-dd", ci));
+      TimeUtils.FromTdbParts(range.StartCenturies, range.StartNs).UtcDateTime.ToString("yyyy-MM-dd", ci),
+      TimeUtils.FromTdbParts(range.EndCenturies, range.EndNs).UtcDateTime.ToString("yyyy-MM-dd", ci));
   }
 
   [RelayCommand]
@@ -898,15 +899,12 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
     }
   }
 
-  /// <summary>Formats a TAI epoch (centuries + ns) as a UTC display string.</summary>
-  private static string FormatTaiEpoch(short centuries, ulong nanoseconds)
+  /// <summary>Formats an engine epoch (TDB centuries + ns) in the chosen scale (<see cref="RangeEntryViewModel.TimeScale"/>).</summary>
+  private string FormatProposedEpoch(short centuries, ulong nanoseconds)
   {
     try
     {
-      long ticksPerCentury = TimeSpan.TicksPerDay * 36525L;
-      long ticks = (long)centuries * ticksPerCentury + (long)(nanoseconds / 100UL);
-      var dt = new DateTimeOffset(2000, 1, 1, 12, 0, 0, TimeSpan.Zero).AddTicks(ticks);
-      return dt.ToString("yyyy-MM-dd HH:mm");
+      return Range.TimeScale.Format(centuries, nanoseconds, "yyyy-MM-dd HH:mm");
     }
     catch
     {

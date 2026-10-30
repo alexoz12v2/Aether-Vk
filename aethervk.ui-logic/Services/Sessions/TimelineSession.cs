@@ -18,6 +18,13 @@ public sealed class TimelineSession : ITabSession
   // TODO: read defaults from a configuration file in the future.
   public const string DefaultProposedStart = "2025-10-01T00:00:00Z";
   public const string DefaultProposedEnd = "2025-11-11T00:00:00Z";
+
+  /// <summary>
+  /// The scale the four texts above are in: "utc" or "tdb" (<c>TimeScaleService</c>); empty: the
+  /// chosen scale, not pinned yet (a fresh session). Pinned when a text is typed, committed or
+  /// rewritten for a scale switch; a save without it is read as "tdb" (older saves typed TDB).
+  /// </summary>
+  public string ProposedScale { get; set; } = string.Empty;
   
   public string CurrentEpochString { get; set; } = string.Empty;
 

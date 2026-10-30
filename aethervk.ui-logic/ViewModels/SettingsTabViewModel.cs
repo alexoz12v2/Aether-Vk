@@ -21,6 +21,30 @@ public partial class SettingsTabViewModel
   private readonly INativeRuntimeService _runtimeService;
   private readonly ISchedulerProvider _schedulerProvider;
   private readonly PreferencesService _preferences;
+  private readonly TimeScaleService _timeScale;
+
+  /// <summary>
+  /// Time scale for dates: 0 = UTC (what a telescope image's DATE-OBS uses, the default), 1 = TDB
+  /// (the engine's dynamical time). Saved to preferences.json; the Comet and Timeline boxes, the
+  /// overlay label and the FITS facts follow it. The committed range stays TDB parts.
+  /// </summary>
+  public int TimeScaleIndex
+  {
+    get => _timeScale.Scale == Services.TimeScale.Tdb ? 1 : 0;
+    set
+    {
+      var scale = value == 1 ? Services.TimeScale.Tdb : Services.TimeScale.Utc;
+      if (scale == _timeScale.Scale)
+        return;
+      _timeScale.Scale = scale;
+      OnPropertyChanged();
+      OnPropertyChanged(nameof(TimeScaleHelpText));
+    }
+  }
+
+  /// <summary>The help next to the picker: the two scales, today's offset and the active
+  /// leap-second table ("Leap seconds: naif0012.tls, last +37 s on 2017-01-01").</summary>
+  public string TimeScaleHelpText => _timeScale.HelpText;
 
   /// <summary>The diagnostic HUD panels over every viewport (camera coordinates, dust history,
   /// observer line, orbit debug); hidden by default, saved to preferences.json.</summary>
@@ -71,7 +95,8 @@ public partial class SettingsTabViewModel
     PreferencesService preferences,
     IFileDialogService? fileDialogService = null,
     FitsImageService? fitsImageService = null,
-    ViewModeBarViewModel? modeBar = null
+    ViewModeBarViewModel? modeBar = null,
+    TimeScaleService? timeScale = null
   )
     : base("Settings", sessionService)
   {
@@ -79,6 +104,10 @@ public partial class SettingsTabViewModel
     _runtimeService = runtimeService;
     _schedulerProvider = schedulerProvider;
     _preferences = preferences;
+    _timeScale = timeScale ?? TimeScaleService.TdbOnly();
+    // a switch from elsewhere (the boxes' "Use TDB for dates" action): the picker follows
+    _timeScale.ScaleChanged += OnTimeScaleChanged;
+    _disposables.Add(System.Reactive.Disposables.Disposable.Create(() => _timeScale.ScaleChanged -= OnTimeScaleChanged));
     CometAppearance = new CometAppearanceViewModel(
       runtimeService,
       assetLibrary,
@@ -145,6 +174,12 @@ public partial class SettingsTabViewModel
         HasActiveViewport = ActiveViewports.Count > 0;
       })
       .AddDisposableTo(_disposables);
+  }
+
+  private void OnTimeScaleChanged(TimeScale _)
+  {
+    OnPropertyChanged(nameof(TimeScaleIndex));
+    OnPropertyChanged(nameof(TimeScaleHelpText));
   }
 
   public override void Dispose()

@@ -81,7 +81,7 @@ public class SessionRestoredTabTests
     session.CommittedEndEpoch = "2024-08-15T00:00:00Z";
     session.Speed = (int)TimelineTabViewModel.SimulationSpeed.OneDayPerSec;
     TimeUtils.TryParseIso8601(session.CommittedEndEpoch, out var end);
-    var (cent, ns) = TimeUtils.ToTaiParts(end);
+    var (cent, ns) = TimeUtils.ToTdbParts(end);
     runtime.Setup(r => r.GetSimulationClock(out cent, out ns)).Returns(true);
     session.NotifyRestored();
 

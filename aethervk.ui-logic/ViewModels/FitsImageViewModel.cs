@@ -499,8 +499,11 @@ public partial class FitsImageViewModel : ObservableObject
     Add("Object", f.Object);
     Add(f.DateSource ?? "DATE-OBS", f.DateObs);
     if (f.DateMidUtc is { } mid)
-      Add("Mid-exposure", mid + (f.DateIsMid == true ? " (the card is mid-exposure)" : "")
+      Add("Mid-exposure UTC", mid + (f.DateIsMid == true ? " (the card is mid-exposure)" : "")
         + (f.TimesysAssumed == true ? " · no TIMESYS: read as UTC" : ""), "FitsFact_DateMid");
+    // the engine's epoch of the same instant (TDB = UTC + 69.18 s): what Seek and Model range use
+    if (f is { DateMidTdbCenturies: { } tdbC, DateMidTdbNanoseconds: { } tdbNs })
+      Add("Mid-exposure TDB", TimeUtils.FormatTdbEpoch(tdbC, tdbNs, "yyyy-MM-dd'T'HH:mm:ss") + " TDB", "FitsFact_DateMidTdb");
     Add("Telescope", Join(" / ", f.Telescope, f.Instrument));
     Add("Filter", f.Filter);
     Add("Exposure", f.ExposureS is { } e ? string.Format(Ci, "{0:0.###} s", e) : null);

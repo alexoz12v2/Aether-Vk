@@ -292,16 +292,29 @@
         <Expander Header="{Binding StrSimulatedRange}" AutomationProperties.AutomationId="SimulatedRangeSection" IsExpanded="True">
           <StackPanel Spacing="6" Margin="4,4,4,4">
             <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" RowSpacing="4" ColumnSpacing="8">
-              <TextBlock Grid.Row="0" Grid.Column="0" Classes="label" Text="Start (TDB):" />
+              <!-- the boxes are in the chosen time scale (Settings › Time scale for dates; UTC by default) -->
+              <TextBlock Grid.Row="0" Grid.Column="0" Classes="label" AutomationProperties.AutomationId="StartEpochLabel"
+                         Text="{Binding Range.ScaleName, StringFormat='Start ({0}):'}" ToolTip.Tip="{Binding Range.ScaleTip}" />
               <TextBox Grid.Row="0" Grid.Column="1" AutomationProperties.AutomationId="StartEpochBox"
                        Text="{Binding Range.StartEpoch}" Watermark="e.g. 2000-01-01T12:00:00Z"
                        FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11"
                        ToolTip.Tip="Start of the simulated period (ISO 8601, e.g. 2000-01-01T12:00:00Z). Typing here only proposes a range; Download &amp; Commit applies it. The period must be at least 1 day long." />
-              <TextBlock Grid.Row="1" Grid.Column="0" Classes="label" Text="End (TDB):" />
-              <TextBox Grid.Row="1" Grid.Column="1" AutomationProperties.AutomationId="EndEpochBox"
-                       Text="{Binding Range.EndEpoch}" Watermark="e.g. 2000-02-01T12:00:00Z"
-                       FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11"
-                       ToolTip.Tip="End of the simulated period (ISO 8601). It must be at least 1 day after the start. Typing here only proposes a range; Download &amp; Commit applies it." />
+              <TextBlock Grid.Row="1" Grid.Column="0" Classes="label" AutomationProperties.AutomationId="EndEpochLabel"
+                         Text="{Binding Range.ScaleName, StringFormat='End ({0}):'}" ToolTip.Tip="{Binding Range.ScaleTip}" />
+              <Grid Grid.Row="1" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="4">
+                <TextBox Grid.Column="0" AutomationProperties.AutomationId="EndEpochBox"
+                         Text="{Binding Range.EndEpoch}" Watermark="e.g. 2000-02-01T12:00:00Z"
+                         FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11"
+                         ToolTip.Tip="End of the simulated period (ISO 8601). It must be at least 1 day after the start. Typing here only proposes a range; Download &amp; Commit applies it." />
+                <!-- a UTC date outside the leap-second table (after its validity, before 1972): converted all the same, may be off by a leap second -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center" IsVisible="{Binding Range.HasTimeScaleWarning}">
+                  <TextBlock AutomationProperties.AutomationId="TimeScaleWarning" Text="⚠" Foreground="{DynamicResource Sem.Warning}"
+                             VerticalAlignment="Center" ToolTip.Tip="{Binding Range.TimeScaleWarningText}" />
+                  <controls:PropertyHelpButton AutomationProperties.AutomationId="TimeScaleWarningHelp"
+                     HelpHeader="Leap seconds" HelpContent="{Binding Range.TimeScaleWarningText}"
+                     ActionText="Use TDB for dates" ActionCommand="{Binding Range.UseTdbCommand}" FlyoutMaxWidth="320" />
+                </StackPanel>
+              </Grid>
             </Grid>
 
             <StackPanel Orientation="Horizontal" Spacing="8">

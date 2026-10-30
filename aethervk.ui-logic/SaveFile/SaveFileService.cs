@@ -127,6 +127,7 @@ public sealed class SaveFileService
         CommittedEnd = s.Timeline.CommittedEnd,
         ProposedStart = s.Timeline.ProposedStart,
         ProposedEnd = s.Timeline.ProposedEnd,
+        ProposedScale = s.Timeline.ProposedScale,
       },
       Spk = s.Comet is { } c ? [c.Spk] : [],
       Model = s.Model,

@@ -25,6 +25,7 @@ pub mod components_api;
 pub mod core_api;
 pub mod debug_perf;
 pub mod earth_observer;
+pub mod leap_seconds;
 pub mod earth_visual;
 pub mod logic_thread;
 pub mod misc_api;

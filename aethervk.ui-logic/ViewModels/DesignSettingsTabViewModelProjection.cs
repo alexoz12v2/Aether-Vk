@@ -25,6 +25,10 @@ public partial class DesignSettingsTabViewModel
 
   public ParticleRenderingViewModel ParticleRendering { get; } = new(null, null);
 
+  public int TimeScaleIndex { get; set; }
+
+  public string TimeScaleHelpText { get; } = "UTC is civil time; TDB is the engine's dynamical time. TDB = UTC + 69.18 s.\n\nLeap seconds: naif0012.tls, last +37 s on 2017-01-01.";
+
   private static InputBindingsViewModel DesignBindings()
   {
     var r = new Input.InputRegistry();

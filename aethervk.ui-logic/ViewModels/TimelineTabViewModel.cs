@@ -25,6 +25,7 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
   private readonly ITabStateService<TimelineSession> _timelineSessionService;
   private readonly ITabStateService<CometSession> _cometSessionService;
   private readonly INativeRuntimeService _runtimeService;
+  private readonly TimeScaleService _timeScale;
   private readonly CompositeDisposable _disposables = [];
 
   private string _startEpoch = string.Empty;
@@ -189,6 +190,43 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
   /// <summary>Set by the view while the box has focus, so playback does not overwrite typing.</summary>
   public bool IsEditingCurrentEpoch { get; set; }
 
+  // ── Time scale (UTC / TDB): the boxes and the overlay label are in the chosen scale ─────
+
+  /// <summary>The scale service (null at construction: TDB, no conversion).</summary>
+  public TimeScaleService TimeScale => _timeScale;
+
+  /// <summary>"UTC" or "TDB": the labels ("Start Epoch (UTC):", "Epoch (UTC)").</summary>
+  public string ScaleName => _timeScale.ScaleName;
+
+  /// <summary>The labels' tooltip: the scale and its offset to the other one.</summary>
+  public string ScaleTip => _timeScale.ScaleTip;
+
+  /// <summary>
+  /// The epoch box's UTC date is outside the leap-second table (after its validity, or before
+  /// 1972): the conversion may be off by a leap second. A warning glyph next to the box.
+  /// </summary>
+  [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(HasCurrentEpochTimeScaleWarning))]
+  private string? _currentEpochTimeScaleWarningText;
+
+  public bool HasCurrentEpochTimeScaleWarning => CurrentEpochTimeScaleWarningText is not null;
+
+  /// <summary>The warning's action: dates in TDB (exact), Settings › Time scale for dates.</summary>
+  [RelayCommand]
+  private void UseTdb() => _timeScale.Scale = Services.TimeScale.Tdb;
+
+  private void OnScaleChanged(TimeScale scale)
+  {
+    OnPropertyChanged(nameof(ScaleName));
+    OnPropertyChanged(nameof(ScaleTip));
+    // the session's texts to the new scale (the Comet tab does the same; idempotent), then the display
+    if (CurrentSession is not null)
+      _timelineSessionService.UpdateSession(SessionId, s => _timeScale.ApplyTo(s));
+    RefreshRangeDisplay();
+    CurrentEpochError = string.Empty;
+    PollSimulationClock(force: true);
+  }
+
   public TimelineTabViewModel(
     ITranslationService translationService,
     ISchedulerProvider schedulerProvider,
@@ -196,7 +234,8 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
     ITabStateService<CometSession> cometSessionService,
     TimelineService timelineService,
     INativeRuntimeService runtimeService,
-    ICometMessenger cometMessenger)
+    ICometMessenger cometMessenger,
+    TimeScaleService? timeScale = null)
     : base("Timeline", sessionService, cometMessenger)
   {
     _translationService = translationService;
@@ -204,6 +243,8 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
     _cometSessionService = cometSessionService;
     _timelineService = timelineService;
     _runtimeService = runtimeService;
+    _timeScale = timeScale ?? TimeScaleService.TdbOnly();
+    _timeScale.ScaleChanged += OnScaleChanged;
     Icon = "⏱"; // stopwatch — U+23F1
 
     PlayPauseCommand = new RelayCommand(() => IsPlaying = !IsPlaying, CanPlayPause);
@@ -274,7 +315,7 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
   /// </summary>
   private async Task RunToEndAsync()
   {
-    if (CurrentSession is null || RunToEndTarget(_confirmedRange, CurrentSession.CommittedEndEpoch) is not var (cent, ns))
+    if (CurrentSession is null || RunToEndTarget(_confirmedRange, CurrentSession.CommittedEndEpoch, _timeScale, CurrentSession) is not var (cent, ns))
       return;
     IsPlaying = false;
     _timelineSessionService.UpdateSession(SessionId, s => s.IsRunningToEnd = true);
@@ -293,23 +334,25 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
   }
 
   /// <summary>
-  /// The epoch box: parses <see cref="CurrentEpochText"/> (UTC, as displayed), refuses it outside
-  /// the committed range, else pauses and seeks there.
+  /// The epoch box: parses <see cref="CurrentEpochText"/> (in the chosen scale, as displayed),
+  /// converts it to the engine's TDB, refuses it outside the committed range, else pauses and
+  /// seeks there.
   /// </summary>
   private async Task SeekToEpochAsync()
   {
     if (CurrentSession is null || !HasCommittedState)
       return;
-    if (!TryParseEpochBox(CurrentEpochText, out var target))
+    if (!TryParseEpochBox(CurrentEpochText, _timeScale, out var target, out var status))
     {
-      CurrentEpochError = $"Not an epoch: use {EpochBoxFormat}.";
+      CurrentEpochError = $"Not an epoch: use {EpochBoxFormat} ({ScaleName}).";
       return;
     }
+    CurrentEpochTimeScaleWarningText = TimeScaleService.Warns(status) ? _timeScale.WarningText(status) : null;
     if (EffectiveRange() is not { } range)
       return;
     if (!InRange(target, range))
     {
-      CurrentEpochError = $"Outside the timeline ({FormatEpoch(range.StartCenturies, range.StartNs)} to {FormatEpoch(range.EndCenturies, range.EndNs)}).";
+      CurrentEpochError = $"Outside the timeline ({FormatEpochText(range.StartCenturies, range.StartNs)} to {FormatEpochText(range.EndCenturies, range.EndNs)}).";
       return;
     }
     CurrentEpochError = string.Empty;
@@ -328,20 +371,42 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
     if (!ok) Console.WriteLine("[Timeline] epoch box: the seek did not confirm in time");
   }
 
-  /// <summary>The epoch box's text as an engine epoch: invariant culture, UTC unless an offset is typed.</summary>
-  internal static bool TryParseEpochBox(string text, out (short Centuries, ulong Nanoseconds) epoch)
+  /// <summary>The epoch box's text read as TDB (no scale service): invariant culture, no offset unless typed.</summary>
+  internal static bool TryParseEpochBox(string text, out (short Centuries, ulong Nanoseconds) epoch) =>
+    TryParseEpochBox(text, TimeScaleService.TdbOnly(), out epoch, out _);
+
+  /// <summary>
+  /// The epoch box's text in the chosen scale as an engine epoch (TDB parts): invariant culture,
+  /// the scale's own instant unless an offset is typed. <paramref name="status"/>: the
+  /// leap-second status of a UTC text (the date is converted all the same).
+  /// </summary>
+  internal static bool TryParseEpochBox(string text, TimeScaleService timeScale, out (short Centuries, ulong Nanoseconds) epoch, out UtcStatus status)
   {
     epoch = default;
+    status = UtcStatus.Ok;
     if (string.IsNullOrWhiteSpace(text)
         || !DateTimeOffset.TryParse(text.Trim(), System.Globalization.CultureInfo.InvariantCulture,
              System.Globalization.DateTimeStyles.AssumeUniversal, out var dt))
       return false;
-    epoch = TimeUtils.ToTaiParts(dt);
+    if (!timeScale.IsUtc)
+    {
+      epoch = TimeUtils.ToTdbParts(dt);
+      return true;
+    }
+    // the text in ISO form: the service parses with the converter
+    string iso = dt.ToString("yyyy-MM-dd'T'HH:mm:ss.FFFFFFFK", System.Globalization.CultureInfo.InvariantCulture);
+    if (!timeScale.TryParse(iso, out short c, out ulong ns, out status))
+      return false;
+    epoch = (c, ns);
     return true;
   }
 
+  /// <summary>The engine epoch in <see cref="EpochBoxFormat"/> read as TDB (no scale service).</summary>
   internal static string FormatEpoch(short cent, ulong ns) =>
-    TimeUtils.FromTaiParts(cent, ns).ToString(EpochBoxFormat, System.Globalization.CultureInfo.InvariantCulture);
+    TimeUtils.FromTdbParts(cent, ns).ToString(EpochBoxFormat, System.Globalization.CultureInfo.InvariantCulture);
+
+  /// <summary>The engine epoch in <see cref="EpochBoxFormat"/> in the chosen scale.</summary>
+  private string FormatEpochText(short cent, ulong ns) => _timeScale.Format(cent, ns, EpochBoxFormat);
 
   internal static bool InRange((short Centuries, ulong Nanoseconds) e, TimeRange range) =>
     Compare(e, (range.StartCenturies, range.StartNs)) >= 0 && Compare(e, (range.EndCenturies, range.EndNs)) <= 0;
@@ -349,45 +414,58 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
   private static int Compare((short C, ulong N) a, (short C, ulong N) b) =>
     a.C != b.C ? a.C.CompareTo(b.C) : a.N.CompareTo(b.N);
 
-  /// <summary>The engine-confirmed range, else the committed text.</summary>
+  /// <summary>The engine-confirmed range, else the committed text (in the session's scale).</summary>
   private TimeRange? EffectiveRange()
   {
     if (_confirmedRange is not null)
       return _confirmedRange;
-    if (CurrentSession is null
-        || !TimeUtils.TryParseIso8601(CurrentSession.CommittedStartEpoch, out var startDt)
-        || !TimeUtils.TryParseIso8601(CurrentSession.CommittedEndEpoch, out var endDt))
+    if (CurrentSession is null)
       return null;
-    var a = TimeUtils.ToTaiParts(startDt);
-    var b = TimeUtils.ToTaiParts(endDt);
-    return new TimeRange(a.centuries, a.nanoseconds, b.centuries, b.nanoseconds);
+    return RangeEntryViewModel.TryParseRange(CurrentSession.CommittedStartEpoch, CurrentSession.CommittedEndEpoch, _timeScale, CurrentSession);
   }
 
   /// <summary>
   /// Where Run to End seeks: exactly the engine-confirmed end (the user's end date as the engine
-  /// holds it), else the committed end text; <c>null</c> without either.
+  /// holds it), else the committed end text read as TDB; <c>null</c> without either.
   /// </summary>
-  internal static (short Centuries, ulong Nanoseconds)? RunToEndTarget(TimeRange? confirmed, string committedEndEpoch)
+  internal static (short Centuries, ulong Nanoseconds)? RunToEndTarget(TimeRange? confirmed, string committedEndEpoch) =>
+    RunToEndTarget(confirmed, committedEndEpoch, TimeScaleService.TdbOnly(), null);
+
+  /// <summary>
+  /// Where Run to End seeks: exactly the engine-confirmed end, else the committed end text in
+  /// <paramref name="session"/>'s scale; <c>null</c> without either.
+  /// </summary>
+  internal static (short Centuries, ulong Nanoseconds)? RunToEndTarget(TimeRange? confirmed, string committedEndEpoch,
+    TimeScaleService timeScale, TimelineSession? session)
   {
     if (confirmed is not null)
       return (confirmed.EndCenturies, confirmed.EndNs);
-    if (TimeUtils.TryParseIso8601(committedEndEpoch, out var endDt))
-      return TimeUtils.ToTaiParts(endDt);
+    var scale = session is null ? timeScale.Scale : timeScale.ScaleOf(session);
+    if (timeScale.TryParse(committedEndEpoch, scale, out short c, out ulong ns, out _))
+      return (c, ns);
     return null;
   }
 
   /// <summary>
   /// The viewport's date label for the engine clock (<paramref name="cent"/>, <paramref name="ns"/>):
-  /// "yyyy-MM-dd HH:mm", or empty at the committed start (and without a committed start).
+  /// "yyyy-MM-dd HH:mm (TDB)" with the text read as TDB (no scale service), or empty at the
+  /// committed start (and without a committed start).
   /// </summary>
-  internal static string ClockLabel(short cent, ulong ns, string committedStartEpoch)
+  internal static string ClockLabel(short cent, ulong ns, string committedStartEpoch) =>
+    ClockLabel(cent, ns, committedStartEpoch, TimeScaleService.TdbOnly(), Services.TimeScale.Tdb);
+
+  /// <summary>
+  /// The viewport's date label for the engine clock: "yyyy-MM-dd HH:mm (UTC)" in the chosen
+  /// scale (the suffix names it), or empty at the committed start (and without a committed
+  /// start, whose text is in <paramref name="sessionScale"/>).
+  /// </summary>
+  internal static string ClockLabel(short cent, ulong ns, string committedStartEpoch, TimeScaleService timeScale, TimeScale sessionScale)
   {
-    if (!TimeUtils.TryParseIso8601(committedStartEpoch, out var startDt))
+    if (!timeScale.TryParse(committedStartEpoch, sessionScale, out short sc, out ulong sn, out _))
       return string.Empty;
-    var currentDt = new DateTimeOffset(2000, 1, 1, 12, 0, 0, TimeSpan.Zero)
-       .AddTicks((long)cent * TimeSpan.TicksPerDay * 36525L + (long)(ns / 100UL));
-    var currentStr = currentDt.ToString("yyyy-MM-dd HH:mm");
-    return currentStr != startDt.ToString("yyyy-MM-dd HH:mm") ? currentStr : string.Empty;
+    const string Fmt = "yyyy-MM-dd HH:mm";
+    var currentStr = timeScale.Format(cent, ns, Fmt);
+    return currentStr != timeScale.Format(sc, sn, Fmt) ? currentStr + " (" + timeScale.ScaleName + ")" : string.Empty;
   }
 
   private void PollSimulationClock() => PollSimulationClock(force: false);
@@ -398,7 +476,11 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
     if (_runtimeService.GetSimulationClock(out var cent, out var ns))
     {
       if (force || !IsEditingCurrentEpoch)
-        CurrentEpochText = FormatEpoch(cent, ns);
+      {
+        CurrentEpochText = FormatEpochText(cent, ns);
+        var status = _timeScale.StatusOf(cent, ns);
+        CurrentEpochTimeScaleWarningText = TimeScaleService.Warns(status) ? _timeScale.WarningText(status) : null;
+      }
       string startEpochStr = CurrentSession?.CommittedStartEpoch ?? "";
       string endEpochStr = CurrentSession?.CommittedEndEpoch ?? "";
 
@@ -407,20 +489,19 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
          return;
       }
 
-      if (TimeUtils.TryParseIso8601(startEpochStr, out var startDt) && TimeUtils.TryParseIso8601(endEpochStr, out var endDt))
+      var sessionScale = CurrentSession is { } cs ? _timeScale.ScaleOf(cs) : _timeScale.Scale;
+      if (_timeScale.TryParse(startEpochStr, sessionScale, out short startC, out ulong startN, out _)
+          && _timeScale.TryParse(endEpochStr, sessionScale, out short endC, out ulong endN, out _))
       {
-         var startTai = TimeUtils.ToTaiParts(startDt);
-         var endTai = TimeUtils.ToTaiParts(endDt);
-
-         double startTicks = (double)startTai.centuries * TimeSpan.TicksPerDay * 36525.0 * 1e7 + startTai.nanoseconds / 100.0;
-         double endTicks = (double)endTai.centuries * TimeSpan.TicksPerDay * 36525.0 * 1e7 + endTai.nanoseconds / 100.0;
+         double startTicks = (double)startC * TimeSpan.TicksPerDay * 36525.0 * 1e7 + startN / 100.0;
+         double endTicks = (double)endC * TimeSpan.TicksPerDay * 36525.0 * 1e7 + endN / 100.0;
          double currentTicks = (double)cent * TimeSpan.TicksPerDay * 36525.0 * 1e7 + ns / 100.0;
 
          double progress = (currentTicks - startTicks) / (endTicks - startTicks) * 100.0;
          Progress = Math.Max(0, Math.Min(100, progress));
 
          // Publish the current epoch string to the session for Overlay window
-         var label = ClockLabel(cent, ns, startEpochStr);
+         var label = ClockLabel(cent, ns, startEpochStr, _timeScale, sessionScale);
          _timelineSessionService.UpdateSession(SessionId, s => s.CurrentEpochString = label);
       }
     }
@@ -439,7 +520,7 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
     // discard the committed range: it flows back into the proposal (the Comet tab's boxes run the
     // same helper on the same message, so the order does not matter)
     TimeRange? back = null;
-    _timelineSessionService.UpdateSession(SessionId, s => back = RangeEntryViewModel.ApplyDecommitted(s));
+    _timelineSessionService.UpdateSession(SessionId, s => back = RangeEntryViewModel.ApplyDecommitted(s, _timeScale));
     if (back is not null)
       _timelineService.ProposeEpochRange(back);
     RefreshRangeDisplay();
@@ -474,6 +555,7 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
 
   public override void Dispose()
   {
+    _timeScale.ScaleChanged -= OnScaleChanged;
     HookRestored(null);
     _disposables.Dispose();
     base.Dispose();
@@ -484,6 +566,8 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
   {
     if (CurrentSession == null || _timelineSessionService == null) return;
 
+    // the texts in the chosen scale (a save may hold them in the other one); the parts never change
+    _timelineSessionService.UpdateSession(SessionId, s => _timeScale.ApplyTo(s));
     RefreshRangeDisplay();
 
     // the saved speed (a savefile open); none saved keeps the current selection
@@ -503,7 +587,7 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
     // the range the comet was committed with, not the proposal (a save opens with a later one);
     // texts that name the same instant are kept as typed. The Comet tab runs the same helper.
     _timelineSessionService.UpdateSession(SessionId, s =>
-      RangeEntryViewModel.ApplyCommitted(s, message.Range, s.ProposedStartEpoch, s.ProposedEndEpoch));
+      RangeEntryViewModel.ApplyCommitted(s, message.Range, s.ProposedStartEpoch, s.ProposedEndEpoch, _timeScale));
 
     RefreshRangeDisplay();
     CurrentEpochError = string.Empty;

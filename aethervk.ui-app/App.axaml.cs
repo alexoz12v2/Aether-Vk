@@ -146,6 +146,16 @@ public partial class App : Application
             runtimeAtStartup.SetDustPropagateDetail(preferences.DustPropagateDetail);
             runtimeAtStartup.SetDustHazeDetail(preferences.DustHazeDetail);
             runtimeAtStartup.SetDustReuseTolerance(preferences.DustReuseTolerance);
+            // leap seconds: the validity horizon starts from today; a cached newer kernel loads
+            // now, the NAIF check runs in the background (never with the mock runtime)
+            runtimeAtStartup.SetNowUtc(DateTimeOffset.UtcNow);
+            if (runtimeAtStartup is not MockNativeRuntimeService)
+            {
+              var leapSeconds = ServiceProviderServiceExtensions.GetRequiredService<LeapSecondsUpdateService>(Host!.Services);
+              leapSeconds.LoadCachedKernel();
+              _ = leapSeconds.StartBackgroundUpdate(
+                ServiceProviderServiceExtensions.GetRequiredService<IHostApplicationLifetime>(Host!.Services).ApplicationStopping);
+            }
 
             var mainWindowViewModel =
               ServiceProviderServiceExtensions.GetRequiredService<MainWindowViewModel>(
@@ -307,6 +317,27 @@ public class MockNativeRuntimeService : INativeRuntimeService
     nanoseconds = 0;
     return true;
   }
+
+  // UTC ↔ TDB without the core: a fixed 69.184 s (ΔAT 37 s + 32.184 s), no leap-second table
+  private const double MockTdbMinusUtcSeconds = 69.184;
+
+  public UtcStatus UtcToTdb(UtcFields utc, out short centuries, out ulong nanoseconds)
+  {
+    (centuries, nanoseconds) = AetherVk.Logic.Utils.TimeUtils.ToTdbParts(utc.ToDateTimeOffset().AddSeconds(MockTdbMinusUtcSeconds));
+    return utc.Year < 1972 ? UtcStatus.BeforeLeapSeconds : UtcStatus.Ok;
+  }
+
+  public UtcStatus TdbToUtc(short centuries, ulong nanoseconds, out UtcFields utc)
+  {
+    utc = UtcFields.From(AetherVk.Logic.Utils.TimeUtils.FromTdbParts(centuries, nanoseconds).AddSeconds(-MockTdbMinusUtcSeconds));
+    return utc.Year < 1972 ? UtcStatus.BeforeLeapSeconds : UtcStatus.Ok;
+  }
+
+  public bool SetNowUtc(DateTimeOffset now) => true;
+
+  public (LeapSecondsLoadStatus Status, int EntryCount) LoadLeapSecondsFile(string path) => (LeapSecondsLoadStatus.KeptCurrent, 0);
+
+  public LeapSecondsInfo LeapSecondsInfo() => new(false, 28, 37, new DateTime(2017, 1, 1, 0, 0, 0, DateTimeKind.Utc), string.Empty);
 
   public bool CleanupParticleSystem(ulong psId) => true;
 

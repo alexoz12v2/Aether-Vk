@@ -23,4 +23,10 @@ public partial interface ISettingsTabViewModel
   InputBindingsViewModel InputBindings { get; }
 
   ParticleRenderingViewModel ParticleRendering { get; }
+
+  /// <summary>Time scale for dates: 0 = UTC, 1 = TDB (<c>TimeScaleService</c>, preferences.json).</summary>
+  int TimeScaleIndex { get; set; }
+
+  /// <summary>The time-scale help (the two scales, the offset, the leap-second table).</summary>
+  string TimeScaleHelpText { get; }
 }

@@ -194,6 +194,23 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
           panic!("gm_de431.pca");
         }
         drop(logic);
+        // leap seconds: the newest naif00NN.tls beside pck00011 (built-in table otherwise);
+        // the wall clock sets the table's validity horizon
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Ok(unix) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+          let (y, mo, d, h, mi, s, ns) =
+            anise::time::Epoch::from_unix_seconds(unix.as_secs() as f64).to_gregorian_utc();
+          let _ = leap_seconds::set_now(&leap_seconds::UtcFields {
+            year: y,
+            month: mo,
+            day: d,
+            hour: h,
+            minute: mi,
+            second: s,
+            nanos: ns,
+          });
+        }
+        leap_seconds::init_from_asset_dir(&asset_dir);
       }
 
       // purposefully unwrap to crash
@@ -2501,6 +2518,228 @@ pub unsafe extern "C" fn avkSetAssetPath(path: *const c_char) {
   if let Ok(path_str) = unsafe { core::ffi::CStr::from_ptr(path) }.to_str() {
     SimulationContext::set_asset_path(path_str)
   }
+}
+
+// ── UTC ↔ TDB (leap seconds) ────────────────────────────────────────────────────────────────────
+// The engine's one conversion point (`simulation_api::leap_seconds`): the UI has no time scales
+// and converts every typed / displayed calendar date here. Engine epochs are `(centuries, ns)`
+// since J2000 TDB, the `CTimeRange` parts.
+
+/// Calendar fields of a UTC instant; `second` may be 60 on a leap second. 16 bytes.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct CUtcFields {
+  pub year: i32,
+  pub nanos: u32,
+  pub month: u8,
+  pub day: u8,
+  pub hour: u8,
+  pub minute: u8,
+  pub second: u8,
+  pub _padding: [u8; 3],
+}
+const _: () = assert!(core::mem::size_of::<CUtcFields>() == 16);
+
+impl From<CUtcFields> for leap_seconds::UtcFields {
+  fn from(c: CUtcFields) -> Self {
+    Self {
+      year: c.year,
+      month: c.month,
+      day: c.day,
+      hour: c.hour,
+      minute: c.minute,
+      second: c.second,
+      nanos: c.nanos,
+    }
+  }
+}
+
+impl From<leap_seconds::UtcFields> for CUtcFields {
+  fn from(f: leap_seconds::UtcFields) -> Self {
+    Self {
+      year: f.year,
+      nanos: f.nanos,
+      month: f.month,
+      day: f.day,
+      hour: f.hour,
+      minute: f.minute,
+      second: f.second,
+      _padding: [0; 3],
+    }
+  }
+}
+
+/// The active leap-second table (`avkTime_leapSecondsInfo`). 16 bytes.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct CLeapSecondsInfo {
+  /// 0: hifitime's built-in table, 1: a NAIF LSK file (its path in `avkTime_leapSecondsInfo`'s buffer)
+  pub source: u32,
+  /// entries in the table (28 for naif0012.tls)
+  pub entry_count: u32,
+  /// TAI − UTC after the last entry (37 since 2017-01-01)
+  pub last_delta_at: i32,
+  /// UTC date of the last entry
+  pub last_year: i16,
+  pub last_month: u8,
+  pub last_day: u8,
+}
+const _: () = assert!(core::mem::size_of::<CLeapSecondsInfo>() == 16);
+
+/// UTC calendar fields → engine epoch (TDB parts). Returns the `leap_seconds::UtcStatus` value:
+/// 0 OK, 1 before 1972 (nominal 10 s ΔAT, value written), 2 beyond the table's validity horizon
+/// (value written, future leap seconds unknown), 3 malformed (nothing written). Null pointers: 3.
+///
+/// P/Invoke: `int avkTime_utcToTdb(CUtcFields* utc, short* outCenturies, ulong* outNanoseconds)`
+/// # Safety
+/// FFI Contract: `utc` readable, the out pointers writable
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkTime_utcToTdb(
+  utc: *const CUtcFields,
+  out_centuries: *mut i16,
+  out_nanoseconds: *mut u64,
+) -> i32 {
+  if utc.is_null() || out_centuries.is_null() || out_nanoseconds.is_null() {
+    return leap_seconds::UtcStatus::Malformed as i32;
+  }
+  let fields = leap_seconds::UtcFields::from(unsafe { *utc });
+  match leap_seconds::with_active(|t, now| leap_seconds::utc_to_tdb(t, &fields, now)) {
+    Ok((tdb, status)) => {
+      let (c, ns) = tdb.to_parts();
+      unsafe {
+        out_centuries.write(c);
+        out_nanoseconds.write(ns);
+      }
+      status as i32
+    }
+    Err(status) => status as i32,
+  }
+}
+
+/// Engine epoch (TDB parts) → UTC calendar fields, the inverse of `avkTime_utcToTdb` (exact to
+/// the nanosecond on the round trip). Same status values; a value is always written for 0–2.
+///
+/// P/Invoke: `int avkTime_tdbToUtc(short centuries, ulong nanoseconds, CUtcFields* outUtc)`
+/// # Safety
+/// FFI Contract: `out_utc` writable
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkTime_tdbToUtc(
+  centuries: i16,
+  nanoseconds: u64,
+  out_utc: *mut CUtcFields,
+) -> i32 {
+  if out_utc.is_null() {
+    return leap_seconds::UtcStatus::Malformed as i32;
+  }
+  let tdb = anise::time::Duration::from_parts(centuries, nanoseconds);
+  let (fields, status) = leap_seconds::with_active(|t, now| leap_seconds::tdb_to_utc(t, tdb, now));
+  unsafe { out_utc.write(fields.into()) };
+  status as i32
+}
+
+/// The host's wall clock (UTC fields): sets the validity horizon of the leap-second table to
+/// `max(last entry, now) + 6 months` (IERS Bulletin C notice). Called at startup from the system
+/// clock; the UI may refresh it. Returns 0, or 3 when the fields are malformed.
+///
+/// P/Invoke: `int avkTime_setNowUtc(CUtcFields* utc)`
+/// # Safety
+/// FFI Contract: `utc` readable
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkTime_setNowUtc(utc: *const CUtcFields) -> i32 {
+  if utc.is_null() {
+    return leap_seconds::UtcStatus::Malformed as i32;
+  }
+  match leap_seconds::set_now(&leap_seconds::UtcFields::from(unsafe { *utc })) {
+    Ok(()) => leap_seconds::UtcStatus::Ok as i32,
+    Err(status) => status as i32,
+  }
+}
+
+/// Loads a NAIF leap-second kernel (`naif00NN.tls`, untrusted text, ≤ 64 KB) from `path` and
+/// offers it to the active table: adopted only when it keeps every entry of the active table
+/// with the same values and is newer. Returns `leap_seconds::LoadStatus`: 0 adopted, 1 kept the
+/// current table (not newer), 2 unreadable / oversized, 3 malformed, 4 inconsistent (an old entry
+/// dropped or changed). `out_entry_count` (optional) receives the file's entry count (0 when it
+/// did not parse). The choice is logged.
+///
+/// P/Invoke: `int avkTime_loadLeapSecondsFile(byte* path, uint* outEntryCount)`
+/// # Safety
+/// FFI Contract: `path` a NUL-terminated UTF-8 string
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkTime_loadLeapSecondsFile(
+  path: *const c_char,
+  out_entry_count: *mut u32,
+) -> i32 {
+  if !out_entry_count.is_null() {
+    unsafe { out_entry_count.write(0) };
+  }
+  if path.is_null() {
+    return leap_seconds::LoadStatus::Unreadable as i32;
+  }
+  let Ok(path_str) = unsafe { CStr::from_ptr(path) }.to_str() else {
+    return leap_seconds::LoadStatus::Unreadable as i32;
+  };
+  let (status, count) = leap_seconds::load_file(path_str);
+  if !out_entry_count.is_null() {
+    unsafe { out_entry_count.write(count as u32) };
+  }
+  status as i32
+}
+
+/// The active leap-second source and its last entry (for the UI). `path_buf` (optional,
+/// `path_cap` bytes) receives the LSK path as a NUL-terminated UTF-8 string (truncated to fit;
+/// empty for the built-in table). Returns false when `out` is null.
+///
+/// P/Invoke: `bool avkTime_leapSecondsInfo(CLeapSecondsInfo* out, byte* pathBuf, uint pathCap)`
+/// # Safety
+/// FFI Contract: `out` writable; `path_buf` writable for `path_cap` bytes when not null
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkTime_leapSecondsInfo(
+  out: *mut CLeapSecondsInfo,
+  path_buf: *mut c_char,
+  path_cap: u32,
+) -> bool {
+  if out.is_null() {
+    return false;
+  }
+  let (info, path) = leap_seconds::with_active(|t, _| {
+    let last = t.last();
+    let (y, m, d) = last.ymd();
+    let (source, path) = match t.source() {
+      leap_seconds::LeapSource::BuiltIn => (0, alloc::string::String::new()),
+      leap_seconds::LeapSource::File(p) => (1, p.clone()),
+    };
+    (
+      CLeapSecondsInfo {
+        source,
+        entry_count: t.entries().len() as u32,
+        last_delta_at: last.delta_at,
+        last_year: y as i16,
+        last_month: m,
+        last_day: d,
+      },
+      path,
+    )
+  });
+  unsafe { out.write(info) };
+  if !path_buf.is_null() && path_cap > 0 {
+    let cap = path_cap as usize - 1;
+    // cut on a char boundary so the buffer stays valid UTF-8
+    let mut n = path.len().min(cap);
+    while n > 0 && !path.is_char_boundary(n) {
+      n -= 1;
+    }
+    unsafe {
+      core::ptr::copy_nonoverlapping(path.as_ptr(), path_buf as *mut u8, n);
+      path_buf.add(n).write(0);
+    }
+  }
+  true
 }
 
 /// # Safety
