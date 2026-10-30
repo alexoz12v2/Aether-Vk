@@ -338,6 +338,57 @@
   <data name="Tabs_Comet_Title" xml:space="preserve">
     <value>Cometa</value>
   </data>
+  <data name="Tabs_Comet_Nucleus" xml:space="preserve">
+    <value>Nucleo</value>
+  </data>
+  <data name="Tabs_Comet_NucleusRadius" xml:space="preserve">
+    <value>Raggio del nucleo</value>
+  </data>
+  <data name="Tabs_Comet_Step1" xml:space="preserve">
+    <value>Cerca la cometa</value>
+  </data>
+  <data name="Tabs_Comet_Step2" xml:space="preserve">
+    <value>Scegli il record SPK</value>
+  </data>
+  <data name="Tabs_Comet_Step3" xml:space="preserve">
+    <value>Imposta l'intervallo</value>
+  </data>
+  <data name="Tabs_Comet_Step4" xml:space="preserve">
+    <value>Conferma</value>
+  </data>
+  <data name="Tabs_Comet_Step1Help" xml:space="preserve">
+    <value>Scrivi il nome o la designazione della cometa (per esempio 67P) e premi Cerca.</value>
+  </data>
+  <data name="Tabs_Comet_Step2Help" xml:space="preserve">
+    <value>Seleziona la cometa tra i risultati, poi uno dei suoi record di effemeridi (SPK).</value>
+  </data>
+  <data name="Tabs_Comet_Step3Help" xml:space="preserve">
+    <value>Inserisci le epoche di inizio e fine da simulare (almeno 1 giorno), oppure usa Intervallo modello qui sotto.</value>
+  </data>
+  <data name="Tabs_Comet_Step4Help" xml:space="preserve">
+    <value>Scegli l'orbita di riferimento e premi Download &amp; Commit (o Recommit dopo aver cambiato l'intervallo).</value>
+  </data>
+  <data name="Tabs_Comet_StepsDoneHelp" xml:space="preserve">
+    <value>Confermata: premi Play nella scheda Timeline. Modifica qui l'intervallo e usa Recommit per applicarlo.</value>
+  </data>
+  <data name="Tabs_Comet_SimulatedRange" xml:space="preserve">
+    <value>Intervallo simulato</value>
+  </data>
+  <data name="Tabs_Comet_TipReferenceOrbit" xml:space="preserve">
+    <value>L'orbita di riferimento a due corpi disegnata accanto al percorso SPK reale. Obbligatoria prima della prima conferma; bloccata mentre una cometa è confermata.</value>
+  </data>
+  <data name="Tabs_Comet_TipPoleRa" xml:space="preserve">
+    <value>Ascensione retta dell'asse di rotazione (J2000), in gradi.</value>
+  </data>
+  <data name="Tabs_Comet_TipPoleDec" xml:space="preserve">
+    <value>Declinazione dell'asse di rotazione (J2000), in gradi.</value>
+  </data>
+  <data name="Tabs_Comet_TipPrimeMeridian" xml:space="preserve">
+    <value>Angolo di rotazione del nucleo a J2000, in gradi: stabilisce quale lato è rivolto dove in un dato istante.</value>
+  </data>
+  <data name="Tabs_Comet_TipRotPeriod" xml:space="preserve">
+    <value>Periodo di rotazione siderale in ore. Fissa anche la durata di una rotazione in Intervallo modello.</value>
+  </data>
 
   <!-- Imports Tab -->
   <data name="Tabs_Imports_Title" xml:space="preserve">
@@ -514,5 +565,50 @@
   </data>
   <data name="Tabs_Settings_ReuseToleranceOff" xml:space="preserve">
     <value>Disattivato</value>
+  </data>
+  <data name="ModeBar_Orbit" xml:space="preserve">
+    <value>Orbita</value>
+  </data>
+  <data name="ModeBar_Nucleus" xml:space="preserve">
+    <value>Nucleo</value>
+  </data>
+  <data name="ModeBar_Model" xml:space="preserve">
+    <value>Modello</value>
+  </data>
+  <data name="ModeBar_OrbitTip" xml:space="preserve">
+    <value>Vista orbita: l'orbita della cometa nel Sistema Solare, animata sull'intervallo scelto</value>
+  </data>
+  <data name="ModeBar_NucleusTip" xml:space="preserve">
+    <value>Nucleo: orientamento, direzione del Sole, illuminazione e aree attive</value>
+  </data>
+  <data name="ModeBar_ModelTip" xml:space="preserve">
+    <value>Modello: confronto con l'immagine del telescopio; la data finale è quella dell'immagine, quella iniziale il numero di rotazioni scelto prima</value>
+  </data>
+  <data name="ModeBar_NoFitsHint" xml:space="preserve">
+    <value>Importa un'immagine FITS per ricavarne le date del modello</value>
+  </data>
+  <data name="ModeBar_Recommit" xml:space="preserve">
+    <value>Ricommetti con questo intervallo</value>
+  </data>
+  <data name="Billboard_PxRatio_ImageToViewport" xml:space="preserve">
+    <value>1 px immagine = {N} px viewport</value>
+  </data>
+  <data name="Billboard_PxRatio_ViewportToImage" xml:space="preserve">
+    <value>1 px viewport = {N} px immagine</value>
+  </data>
+  <data name="Billboard_PxRatio_AtComet" xml:space="preserve">
+    <value>ortografica: l'angolo alla distanza della cometa</value>
+  </data>
+  <data name="Billboard_PxRatio_Orthographic" xml:space="preserve">
+    <value>1 px immagine = n/d (ortografica)</value>
+  </data>
+  <data name="Billboard_PxRatio_NoPlateScale" xml:space="preserve">
+    <value>1 px immagine = n/d (nessuna scala in arcsec/px)</value>
+  </data>
+  <data name="Billboard_PxRatio_NoViewport" xml:space="preserve">
+    <value>1 px immagine = n/d (nessuna viewport)</value>
+  </data>
+  <data name="Billboard_PxRatio_Tip" xml:space="preserve">
+    <value>Quanti pixel della viewport copre un pixel dell'immagine con lo zoom e la dimensione attuali della viewport: gli arcsec per px dell'immagine divisi per gli arcsec per px del pixel centrale della viewport (campo visivo verticale ÷ altezza della viewport in px). A 1.0 il modello e l'immagine del telescopio sono confrontati alla stessa scala.</value>
   </data>
 </root>

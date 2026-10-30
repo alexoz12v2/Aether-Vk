@@ -42,6 +42,8 @@ public class ReviewSaveReproTests
       AppSaveFileHostTests.Rig.Sessions(rig.Timeline).Object, AppSaveFileHostTests.Rig.Sessions(rig.Comet).Object,
       rig.TimelineService, rig.Runtime.Object, rig.Messenger);
     vm.CurrentSession = rig.Timeline;
+    // the range boxes live in the Comet tab (reviewer feedback item 7), over the same session
+    var entry = new RangeEntryViewModel(AppSaveFileHostTests.Rig.Sessions(rig.Timeline).Object, rig.TimelineService, null, () => 0);
 
     // SaveFileService.OpenCoreAsync: model, timeline (uncommitted), commit, timeline (committed)
     rig.Host.ApplyModel(index.Model, index.Jets);
@@ -55,7 +57,9 @@ public class ReviewSaveReproTests
     Assert.StartsWith("2021-12-12", vm.StartEpoch);
     Assert.StartsWith("2021-12-28", vm.EndEpoch);
     Assert.StartsWith("2021-12-12", rig.Timeline.CommittedStartEpoch);
-    Assert.False(vm.IsRangeLocked);
+    Assert.StartsWith("2021-12-12", entry.StartEpoch);
+    Assert.StartsWith("2021-12-28", entry.EndEpoch);
+    Assert.False(entry.IsRangeLocked);
     // all four saved jets were asked of the core (first + three later), ignited one TTL (30 d,
     // the default lead: the save has none) before the committed start, so the tail exists at play
     long ignition = 692_539_200_000_000L - 30L * 86_400L * 1_000_000L;
@@ -64,7 +68,7 @@ public class ReviewSaveReproTests
       It.Is<ParticleSystemJet>(j => j.EmissionStartUs == ignition), out ps), Times.Once);
     rig.Runtime.Verify(r => r.AddParticleSystem(It.IsAny<ParticleSystemModel>(),
       It.Is<ParticleSystemJet>(j => j.EmissionStartUs == ignition), out ps), Times.Exactly(3));
-    Assert.Equal(30.0, vm.DustLeadDays);
+    Assert.Equal(30.0, entry.DustLeadDays);
   }
 
   [Fact]

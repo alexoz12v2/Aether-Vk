@@ -415,6 +415,12 @@ pub struct DustViewHost {
   /// (the raise's rule mirrored: a readback lags `DUST_READBACK_SLOTS` frames); the first
   /// readback that does not lower ends it
   warmup: [bool; 2],
+  /// the play pin (handoff P3b, [`Self::play_pin_enter`]): the biases every frame begins with
+  /// while the simulation runs with the play quality on, over whatever the feedback absorbed
+  pub play: Option<dust::play_quality::PinnedFeedback>,
+  /// the paused feedback state saved at the pin's entry, restored at its exit
+  /// ([`Self::play_pin_leave`]): the paused path never sees what the play frames taught
+  play_saved: Option<SavedFeedback>,
   /// the newest readback's `(EWA bias, texels)`: what the image the view now shows cost
   pub refine_seen: Option<(u32, u64)>,
   /// the last drawn image was refined (a reused frame shows it)
@@ -553,6 +559,20 @@ pub struct DustViewHost {
   /// the scene's dust feedback generation this host's feedback was measured under
   /// (`SceneContext::dust_feedback_gen`, [`Device::dust_sync_feedback_gen`])
   pub feedback_gen: u32,
+}
+
+/// The paused feedback state the play pin saves ([`DustViewHost::play_pin_enter`]) and restores
+/// ([`DustViewHost::play_pin_leave`]): the fields, the memory, both regimes and the warm-up
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SavedFeedback {
+  split_depth: u32,
+  split_depth_over: u32,
+  volume_bias: u32,
+  ewa_bias: u32,
+  fb_memory: FeedbackSet,
+  fb_full: FeedbackSet,
+  fb_cad: Option<FeedbackSet>,
+  warmup: [bool; 2],
 }
 
 /// One regime's feedback state ([`DustViewHost::absorb`]: the split depth and its over-budget
@@ -868,8 +888,13 @@ impl DustBudgetTelemetry {
     let cad = self.cadence.as_ref().map_or("null".into(), |c| {
       let t = c.timings;
       format!(
-        "{{\"eps_px\":{},\"classes\":{:?},\"live\":{},\"fresh\":{},\"fresh_fraction\":{},\"images_shown\":{},\"class_hist\":{:?},\"d3_rejected\":{},\"d3_at_classify\":{},\"shown_light_share\":{},\"ghost_share\":{},\"aborts\":{:?},\"builds_ms\":{},\"pair_build_ms\":[{}],\"classify_ms\":{},\"reproject_ms\":{},\"fresh_splat_ms\":{}}}",
-        num(c.eps_px as f64), c.classes, c.live, c.fresh, num(c.fresh_fraction as f64), c.images_shown, c.class_hist, c.d3_rejected, c.d3_at_classify,
+        "{{\"eps_px\":{},\"classes\":{:?},\"mode\":{},\"reset\":{},\"admitted\":{:?},\"timings_frame\":{},\"live\":{},\"fresh\":{},\"fresh_fraction\":{},\"images_shown\":{},\"class_hist\":{:?},\"d3_rejected\":{},\"d3_at_classify\":{},\"shown_light_share\":{},\"ghost_share\":{},\"aborts\":{:?},\"builds_ms\":{},\"pair_build_ms\":[{}],\"classify_ms\":{},\"reproject_ms\":{},\"fresh_splat_ms\":{}}}",
+        num(c.eps_px as f64), c.classes,
+        c.mode.map_or("null".into(), |m| format!("\"{m:?}\"")),
+        c.reset.map_or("null".into(), |r| format!("\"{r:?}\"")),
+        c.admitted,
+        t.map_or("null".into(), |t| format!("{}", t.frame)),
+        c.live, c.fresh, num(c.fresh_fraction as f64), c.images_shown, c.class_hist, c.d3_rejected, c.d3_at_classify,
         num(c.shown_light_share), num(c.ghost_share as f64), c.aborts,
         t.map_or("null".into(), |t| num(t.builds_ms)),
         t.map_or(alloc::string::String::new(), |t| t.pair_build_ms.iter().map(|&v| num(v)).collect::<alloc::vec::Vec<_>>().join(",")),
@@ -978,6 +1003,75 @@ impl DustViewHost {
     self.refine_static = 0;
     self.refine_seen = None;
     self.warmup = [true; 2];
+    // under the pin: what the pause restores is this reset (a paused run would be at it too)
+    if self.play_saved.is_some() {
+      self.play_saved = Some(self.saved_feedback());
+    }
+  }
+
+  /// the feedback state the play pin saves and restores
+  fn saved_feedback(&self) -> SavedFeedback {
+    SavedFeedback {
+      split_depth: self.split_depth,
+      split_depth_over: self.split_depth_over,
+      volume_bias: self.volume_bias,
+      ewa_bias: self.ewa_bias,
+      fb_memory: self.fb_memory,
+      fb_full: self.fb_full,
+      fb_cad: self.fb_cad,
+      warmup: self.warmup,
+    }
+  }
+
+  /// Enters (or updates) the play pin: the first call saves the paused feedback state; every
+  /// call sets the biases the next frames begin with ([`Self::apply_play_pin`]). Returns whether
+  /// the pin was entered (the transition, for the log).
+  pub fn play_pin_enter(&mut self, pin: dust::play_quality::PinnedFeedback) -> bool {
+    let entered = self.play.is_none();
+    if entered {
+      self.play_saved = Some(self.saved_feedback());
+    }
+    self.play = Some(pin);
+    entered
+  }
+
+  /// Leaves the play pin: the paused feedback state saved at the entry is restored, so the first
+  /// paused frame draws with the biases the view had before the play (the readbacks of the play
+  /// frames taught the paused state nothing). Returns whether a pin was left.
+  pub fn play_pin_leave(&mut self) -> bool {
+    let Some(s) = self.play_saved.take() else {
+      self.play = None;
+      return false;
+    };
+    self.play = None;
+    self.split_depth = s.split_depth;
+    self.split_depth_over = s.split_depth_over;
+    self.volume_bias = s.volume_bias;
+    self.ewa_bias = s.ewa_bias;
+    self.fb_memory = s.fb_memory;
+    self.fb_full = s.fb_full;
+    self.fb_cad = s.fb_cad;
+    self.warmup = s.warmup;
+    true
+  }
+
+  /// The frame's feedback fields under the pin (after [`Self::feedback_load`]): the pinned
+  /// biases; without a pin, unchanged
+  pub fn apply_play_pin(&mut self) {
+    if let Some(p) = self.play {
+      self.split_depth = p.split_depth;
+      self.volume_bias = p.volume_bias;
+      self.ewa_bias = p.ewa_bias;
+    }
+  }
+
+  /// [`FeedbackSet`] a full-draw frame's header is rewritten from ([`Device::dust_budget_frame_kind`]):
+  /// the full regime's, its three biases pinned while the play pin is on
+  pub fn full_frame_feedback(&self) -> FeedbackSet {
+    match self.play {
+      Some(p) => FeedbackSet { split_depth: p.split_depth, volume_bias: p.volume_bias, ewa_bias: p.ewa_bias, ..self.fb_full },
+      None => self.fb_full,
+    }
   }
 
   /// Static refinement's step for a frame about to begin: `same_inputs` (its draw inputs equal the
@@ -1051,6 +1145,8 @@ impl Default for DustViewHost {
       refine: 0,
       refine_static: 0,
       warmup: [false; 2],
+      play: None,
+      play_saved: None,
       refine_seen: None,
       image_refined: false,
       slot_refined: [false; DUST_READBACK_SLOTS],
@@ -2280,6 +2376,45 @@ impl Device {
   /// Resets `pe`'s feedback ([`DustViewHost::reset_feedback`]) when the scene's dust feedback
   /// generation `generation` differs from the one it was measured under; a no-op without a view.
   /// Returns whether it reset.
+  /// The play pin of `pe` (handoff P3b; `RenderScene::dust_play`, `prepare_dust`): `Some` while
+  /// the simulation runs with the play quality on — the view's frames begin with the play set's
+  /// biases ([`dust::play_quality::PlayFeedback::pin`] at the view's level count: split depth 0,
+  /// the top-only volume bias, EWA 3) over whatever the feedback absorbed; the paused feedback
+  /// state is saved at the first `Some` and restored at the first `None`
+  /// ([`DustViewHost::play_pin_enter`] / [`DustViewHost::play_pin_leave`]). Returns whether the
+  /// pin changed state.
+  pub fn dust_set_play_feedback(&self, pe: gpu::PresentationEngineHandle, play: Option<dust::play_quality::PlayFeedback>) -> bool {
+    let res = self.res.read();
+    let Some(view) = res.dust_manager.as_ref().and_then(|m| m.views.get(&pe)) else {
+      return false;
+    };
+    let levels = view.layout.level_count();
+    let mut host = view.host.lock();
+    match play {
+      Some(p) => {
+        let pin = p.pin(levels);
+        let entered = host.play_pin_enter(pin);
+        if entered {
+          aethervk_oshal_rlib::log!(
+            "[Dust] view {}: play feedback pinned (split depth {}, volume bias {} of {} levels, EWA bias {})",
+            pe.0, pin.split_depth, pin.volume_bias, levels, pin.ewa_bias
+          );
+        }
+        entered
+      }
+      None => {
+        let left = host.play_pin_leave();
+        if left {
+          aethervk_oshal_rlib::log!(
+            "[Dust] view {}: play feedback pin left (paused feedback restored: split depth {}, volume bias {}, EWA bias {})",
+            pe.0, host.split_depth, host.volume_bias, host.ewa_bias
+          );
+        }
+        left
+      }
+    }
+  }
+
   pub fn dust_sync_feedback_gen(&self, pe: gpu::PresentationEngineHandle, generation: u32) -> bool {
     let res = self.res.read();
     let Some(view) = res.dust_manager.as_ref().and_then(|m| m.views.get(&pe)) else {
@@ -2772,6 +2907,8 @@ impl Device {
     // the biases this frame begins with: the cadenced regime's with the cadence on (the full one
     // until a cadenced frame was measured); a full-draw frame gets the full regime's back
     host.feedback_load(if cad_active { 1 } else { 0 });
+    // the play pin (handoff P3b): over the regime's biases while the simulation runs
+    host.apply_play_pin();
     let budget_knobs = host.budget.as_ref().map(|b| b.knobs());
     let shell_cap = host.budget.as_ref().and_then(|b| b.shell_cap_m);
     let unit = host.unit();
@@ -3144,7 +3281,7 @@ impl Device {
     if !full || crate::gpu_backends::vulkan::physics::is_cpu_particles_mode() {
       return;
     }
-    let f = host.fb_full;
+    let f = host.full_frame_feedback();
     let env_u32 = |k: &str| aethervk_oshal_rlib::os::env::var(k).and_then(|v| v.trim().parse::<u32>().ok());
     let mut words = view.frame_words.lock();
     let w = words[dust::PYR_SPLIT_DEPTH as usize];
@@ -5671,5 +5808,75 @@ impl Device {
       (render.address + render_offset, moments.address + moments_offset),
       skipped,
     ))
+  }
+}
+
+/// The play pin (handoff P3b): host logic, no GPU
+#[cfg(test)]
+mod play_pin_tests {
+  use super::*;
+  use dust::play_quality::{PinnedFeedback, PlayFeedback};
+
+  fn taught_host() -> DustViewHost {
+    // a view whose feedback learned a paused state (both regimes, a memory, the warm-up over)
+    let mut h = DustViewHost::default();
+    h.split_depth = 2;
+    h.split_depth_over = 3;
+    h.volume_bias = 4;
+    h.ewa_bias = 1;
+    h.fb_memory.ewa_step_q8[1] = 512;
+    h.fb_memory.volume_prev = (4, 1234);
+    h.fb_full = FeedbackSet { split_depth: 2, volume_bias: 4, ewa_bias: 1, ..FeedbackSet::default() };
+    h.fb_cad = Some(FeedbackSet { split_depth: 1, volume_bias: 6, ewa_bias: 2, ..FeedbackSet::default() });
+    h.warmup = [false; 2];
+    h
+  }
+
+  /// entering pins the frame's biases over the regime's; leaving restores the paused state
+  /// byte-identical, whatever the play frames' readbacks taught in between
+  #[test]
+  fn play_pin_enter_apply_leave_restores_the_paused_state() {
+    let mut h = taught_host();
+    let before = h.saved_feedback();
+    let pin = PlayFeedback::default().pin(11);
+    assert_eq!(pin, PinnedFeedback { split_depth: 0, volume_bias: 10, ewa_bias: 3 });
+    assert!(h.play_pin_enter(pin), "the first call enters");
+    assert!(!h.play_pin_enter(pin), "a repeated call only updates");
+    // a frame begin: the cadenced regime loaded, then the pin
+    h.feedback_load(1);
+    h.apply_play_pin();
+    assert_eq!((h.split_depth, h.volume_bias, h.ewa_bias), (0, 10, 3));
+    assert_eq!(h.full_frame_feedback().volume_bias, 10, "a full frame's header gets the pin too");
+    // the play frames' readbacks move the regimes (what `absorb_at` + `feedback_store` do)
+    h.volume_bias = 13;
+    h.ewa_bias = 5;
+    h.split_depth_over = 0;
+    h.fb_memory.ewa_step_q8[5] = 9;
+    h.feedback_store(1);
+    h.feedback_store(0);
+    h.warmup = [true; 2];
+    assert!(h.play_pin_leave(), "a pin was left");
+    assert_eq!(h.saved_feedback(), before, "paused state restored byte-identical");
+    assert!(h.play.is_none());
+    assert!(!h.play_pin_leave(), "nothing to leave twice");
+    // without a pin the frame's biases are the regime's own
+    h.feedback_load(0);
+    h.apply_play_pin();
+    assert_eq!((h.split_depth, h.volume_bias, h.ewa_bias), (2, 4, 1));
+    assert_eq!(h.full_frame_feedback(), h.fb_full);
+  }
+
+  /// a feedback reset under the pin (a seek past a day while playing) is what the pause restores
+  #[test]
+  fn play_pin_reset_under_the_pin_is_restored_as_the_reset() {
+    let mut h = taught_host();
+    assert!(h.play_pin_enter(PlayFeedback::default().pin(11)));
+    h.reset_feedback();
+    assert!(h.play_pin_leave());
+    let cold = FeedbackSet::coarse();
+    assert_eq!((h.split_depth, h.volume_bias, h.ewa_bias), (cold.split_depth, cold.volume_bias, cold.ewa_bias));
+    assert_eq!(h.fb_full, cold);
+    assert_eq!(h.fb_cad, None);
+    assert_eq!(h.warmup, [true; 2]);
   }
 }

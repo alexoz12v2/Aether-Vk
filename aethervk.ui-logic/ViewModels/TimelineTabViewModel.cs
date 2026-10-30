@@ -27,56 +27,41 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
   private readonly INativeRuntimeService _runtimeService;
   private readonly CompositeDisposable _disposables = [];
 
-  [ObservableProperty]
   private string _startEpoch = string.Empty;
-  partial void OnStartEpochChanged(string value)
+  /// <summary>
+  /// Start of the simulated range, read-only (reviewer feedback item 7: the range is entered in
+  /// the Comet tab; the Timeline only shows it): the committed start, else the proposed one.
+  /// </summary>
+  public string StartEpoch
   {
-    CheckProposedVsCommitted();
-    TryPropose();
+    get => _startEpoch;
+    private set => SetProperty(ref _startEpoch, value);
   }
 
-  [ObservableProperty]
   private string _endEpoch = string.Empty;
-  partial void OnEndEpochChanged(string value)
+  /// <summary>End of the simulated range, read-only (see <see cref="StartEpoch"/>).</summary>
+  public string EndEpoch
   {
-    CheckProposedVsCommitted();
-    TryPropose();
+    get => _endEpoch;
+    private set => SetProperty(ref _endEpoch, value);
   }
 
   /// <summary>
-  /// True when the values currently in the text boxes differ from the last committed range.
-  /// This means the user has typed (or a Propose was restored) something that hasn't been
-  /// committed to the runtime yet.
+  /// The Comet tab holds an edited range that differs from the committed one (it applies only
+  /// after a Recommit there).
   /// </summary>
   [ObservableProperty]
-  [NotifyPropertyChangedFor(nameof(CanRestore))]
-  [NotifyPropertyChangedFor(nameof(IsRangeLocked))]
-  private bool _isProposedDifferentFromCommitted;
+  private bool _hasPendingRangeEdit;
 
-  public bool CanRestore => HasCommittedState && IsProposedDifferentFromCommitted;
+  public const string PendingRangeEditText =
+    "The Comet tab holds a different range: Recommit there to apply it.";
 
-  /// <summary>
-  /// The boxes were edited after a commit: the engine keeps the committed range (reviewer report
-  /// 2026-10-29, "it picks other dates") until the comet is committed again with the new one.
-  /// </summary>
-  public bool IsRangeLocked => HasCommittedState && IsProposedDifferentFromCommitted;
+  /// <summary>The shortest range accepted, days (<see cref="RangeEntryViewModel.MinRangeDays"/>).</summary>
+  public const double MinRangeDays = RangeEntryViewModel.MinRangeDays;
 
-  public const string RangeLockedText =
-    "Range locked while the comet is committed: the simulation keeps the committed range. Decommit to change it, or recommit with this range.";
-
-  /// <summary>Commits the comet again with the boxes' range (the Comet tab's Download &amp; Commit).</summary>
-  [RelayCommand]
-  private void RecommitWithRange()
-  {
-    if (IsRangeLocked && !HasError)
-      _timelineService.RequestRecommit();
-  }
-
-  [ObservableProperty]
-  private bool _hasError;
-
-  [ObservableProperty]
-  private string _errorMessage = string.Empty;
+  /// <inheritdoc cref="RangeEntryViewModel.ModelRange"/>
+  internal static (DateTimeOffset Start, DateTimeOffset End)? ModelRange(DateTimeOffset end, int rotations, double periodHours) =>
+    RangeEntryViewModel.ModelRange(end, rotations, periodHours);
 
   [ObservableProperty]
   private bool _isTimelineValid;
@@ -162,15 +147,7 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
   /// Controls visibility of the playback toolbar and progress bar.
   /// </summary>
   [ObservableProperty]
-  [NotifyPropertyChangedFor(nameof(CanRestore))]
-  [NotifyPropertyChangedFor(nameof(IsRangeLocked))]
   private bool _hasCommittedState;
-  
-  [ObservableProperty]
-  private bool _hasProposedState;
-
-  [ObservableProperty]
-  private string _displayProposedRange = string.Empty;
 
   [ObservableProperty]
   private string _displayCommittedRange = string.Empty;
@@ -185,12 +162,9 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
     {
       HookRestored(CurrentSession);
       Restore();
-      RefreshCommittedState();
-      RefreshProposedState();
     }
   }
 
-  public IRelayCommand RestoreCommand { get; }
   public IRelayCommand PlayPauseCommand { get; }
   public ICommand ResetCommand { get; }
   public IAsyncRelayCommand RunToEndCommand { get; }
@@ -232,7 +206,6 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
     _runtimeService = runtimeService;
     Icon = "⏱"; // stopwatch — U+23F1
 
-    RestoreCommand = new RelayCommand(RestoreCommitted);
     PlayPauseCommand = new RelayCommand(() => IsPlaying = !IsPlaying, CanPlayPause);
     ResetCommand = new RelayCommand(() =>
     {
@@ -259,12 +232,9 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
     RunToEndCommand = new AsyncRelayCommand(RunToEndAsync);
     SeekToEpochCommand = new AsyncRelayCommand(SeekToEpochAsync);
 
-    _timelineService.ModelRangeRequests
-      .Subscribe(end =>
-      {
-        ModelEndEpoch = end.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
-        ApplyModelRange();
-      })
+    // the range is edited in the Comet tab (the same session): keep the read-only display current
+    sessionService.ObserveSession(SessionId)
+      .Subscribe(_ => RefreshRangeDisplay())
       .AddDisposableTo(_disposables);
 
     // any seek (this tab, a FITS observation epoch): show where the clock now is
@@ -466,72 +436,27 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
   {
     if (CurrentSession == null) return;
 
-    // Per spec: discard committed → flow its value back to proposed first.
-    var prevStart = CurrentSession.CommittedStartEpoch;
-    var prevEnd   = CurrentSession.CommittedEndEpoch;
-
-    _timelineSessionService.UpdateSession(SessionId, s =>
-    {
-      // Only flow back if there was actually a committed range.
-      if (!string.IsNullOrEmpty(s.CommittedStartEpoch))
-      {
-        s.ProposedStartEpoch = s.CommittedStartEpoch;
-        s.ProposedEndEpoch   = s.CommittedEndEpoch;
-      }
-      s.CommittedStartEpoch = string.Empty;
-      s.CommittedEndEpoch   = string.Empty;
-    });
-
-    // Re-push the now-restored proposed range to the service so
-    // CometTabViewModel (and any other subscriber) sees the update.
-    if (!string.IsNullOrEmpty(prevStart) && !string.IsNullOrEmpty(prevEnd)
-        && TimeUtils.TryParseIso8601(prevStart, out var startDt)
-        && TimeUtils.TryParseIso8601(prevEnd,   out var endDt))
-    {
-      var s2 = TimeUtils.ToTaiParts(startDt);
-      var e2 = TimeUtils.ToTaiParts(endDt);
-      _timelineService.ProposeEpochRange(
-        new TimeRange(s2.centuries, s2.nanoseconds, e2.centuries, e2.nanoseconds));
-    }
-
-    // Refresh UI to reflect cleared committed and (possibly) updated proposed.
-    StartEpoch = CurrentSession.ProposedStartEpoch;
-    EndEpoch   = CurrentSession.ProposedEndEpoch;
-    RefreshCommittedState();
-    RefreshProposedState();
-    CheckProposedVsCommitted();
+    // discard the committed range: it flows back into the proposal (the Comet tab's boxes run the
+    // same helper on the same message, so the order does not matter)
+    TimeRange? back = null;
+    _timelineSessionService.UpdateSession(SessionId, s => back = RangeEntryViewModel.ApplyDecommitted(s));
+    if (back is not null)
+      _timelineService.ProposeEpochRange(back);
+    RefreshRangeDisplay();
   }
 
-  private void RefreshCommittedState()
+  /// <summary>The read-only range: the committed one, else the proposal; and whether an edit waits.</summary>
+  private void RefreshRangeDisplay()
   {
-    HasCommittedState = CurrentSession != null
-      && !string.IsNullOrEmpty(CurrentSession.CommittedStartEpoch)
-      && !string.IsNullOrEmpty(CurrentSession.CommittedEndEpoch);
-    if (HasCommittedState && CurrentSession != null)
-    {
-      DisplayCommittedRange = $"{CurrentSession.CommittedStartEpoch} to {CurrentSession.CommittedEndEpoch}";
-    }
-  }
-
-  private void RefreshProposedState()
-  {
-    HasProposedState = CurrentSession != null
-      && !string.IsNullOrEmpty(CurrentSession.ProposedStartEpoch)
-      && !string.IsNullOrEmpty(CurrentSession.ProposedEndEpoch);
-    if (HasProposedState && CurrentSession != null)
-    {
-      DisplayProposedRange = $"{CurrentSession.ProposedStartEpoch} to {CurrentSession.ProposedEndEpoch}";
-    }
-  }
-
-  private void CheckProposedVsCommitted()
-  {
-    if (CurrentSession == null) return;
-    // The text boxes always carry the proposed range. The indicator fires
-    // when the proposed range diverges from the last committed range.
-    IsProposedDifferentFromCommitted =
-      StartEpoch != CurrentSession.CommittedStartEpoch ||
-      EndEpoch   != CurrentSession.CommittedEndEpoch;
+    var s = CurrentSession;
+    if (s is null) return;
+    HasCommittedState = !string.IsNullOrEmpty(s.CommittedStartEpoch) && !string.IsNullOrEmpty(s.CommittedEndEpoch);
+    if (HasCommittedState)
+      DisplayCommittedRange = $"{s.CommittedStartEpoch} to {s.CommittedEndEpoch}";
+    StartEpoch = HasCommittedState ? s.CommittedStartEpoch : s.ProposedStartEpoch;
+    EndEpoch = HasCommittedState ? s.CommittedEndEpoch : s.ProposedEndEpoch;
+    HasPendingRangeEdit = HasCommittedState
+      && (s.ProposedStartEpoch != s.CommittedStartEpoch || s.ProposedEndEpoch != s.CommittedEndEpoch);
   }
 
   private TimelineSession? _restoredHooked;
@@ -545,12 +470,7 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
     _restoredHooked = session;
   }
 
-  private void OnSessionRestored()
-  {
-    Restore();
-    RefreshCommittedState();
-    RefreshProposedState();
-  }
+  private void OnSessionRestored() => Restore();
 
   public override void Dispose()
   {
@@ -559,234 +479,33 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
     base.Dispose();
   }
 
-  /// <summary>The Restore button: the boxes back to the committed range (else the saved proposal).</summary>
-  private void RestoreCommitted() => Restore();
-
+  /// <summary>Re-reads the session (construction, a savefile open): the range, the speed, the clock.</summary>
   private void Restore()
   {
     if (CurrentSession == null || _timelineSessionService == null) return;
 
-    // Seed the default proposed range if it was cleared.
-    bool needsSeed = string.IsNullOrEmpty(CurrentSession.ProposedStartEpoch)
-                  || string.IsNullOrEmpty(CurrentSession.ProposedEndEpoch);
-    if (needsSeed)
-    {
-      _timelineSessionService.UpdateSession(SessionId, s =>
-      {
-        if (string.IsNullOrEmpty(s.ProposedStartEpoch))
-          s.ProposedStartEpoch = TimelineSession.DefaultProposedStart;
-        if (string.IsNullOrEmpty(s.ProposedEndEpoch))
-          s.ProposedEndEpoch = TimelineSession.DefaultProposedEnd;
-      });
-    }
-
-    // committed: the boxes show what runs (a save keeps a later, uncommitted proposal: reviewer
-    // report 2026-10-29); the proposal then follows them
-    RefreshCommittedState();
-    StartEpoch = HasCommittedState ? CurrentSession.CommittedStartEpoch : CurrentSession.ProposedStartEpoch;
-    EndEpoch   = HasCommittedState ? CurrentSession.CommittedEndEpoch : CurrentSession.ProposedEndEpoch;
-
-    if (TimeUtils.TryParseIso8601(StartEpoch, out var startDt)
-        && TimeUtils.TryParseIso8601(EndEpoch,   out var endDt))
-    {
-      var startTai = TimeUtils.ToTaiParts(startDt);
-      var endTai   = TimeUtils.ToTaiParts(endDt);
-      _timelineService.ProposeEpochRange(
-        new TimeRange(startTai.centuries, startTai.nanoseconds,
-                      endTai.centuries,   endTai.nanoseconds));
-    }
-
-    // the saved lead time (none: the default)
-    DustLeadDays = CurrentSession.DustLeadDays ?? TimelineService.MaxDustLeadDays;
+    RefreshRangeDisplay();
 
     // the saved speed (a savefile open); none saved keeps the current selection
     if (CurrentSession.Speed is int speed && Enum.IsDefined(typeof(SimulationSpeed), speed))
       SelectedSpeed = (SimulationSpeed)speed;
 
-    HasError = false;
-    ErrorMessage = string.Empty;
-    RefreshCommittedState();
-    RefreshProposedState();
-    CheckProposedVsCommitted();
     // the engine's clock (a reopened save sits at its saved epoch, not at the start)
     if (!IsPlaying) PollSimulationClock();
   }
 
   private TimeRange? _confirmedRange;
 
-  // ── "Model" preset (feedback #20): N rotations ending at the image epoch ─────────────────
-
-  /// <summary>End of the model range (the image's epoch); empty: the end box.</summary>
-  [ObservableProperty]
-  private string _modelEndEpoch = string.Empty;
-
-  /// <summary>Nucleus rotations the model range spans.</summary>
-  [ObservableProperty]
-  private int _modelRotations = 3;
-
-  /// <summary>
-  /// The range <paramref name="rotations"/> sidereal periods of <paramref name="periodHours"/>
-  /// long ending at <paramref name="end"/>, at least <see cref="MinRangeDays"/>. Null for no
-  /// rotation (period ≤ 0) or rotations &lt; 1.
-  /// </summary>
-  internal static (DateTimeOffset Start, DateTimeOffset End)? ModelRange(DateTimeOffset end, int rotations, double periodHours)
-  {
-    if (rotations < 1 || !(periodHours > 0) || double.IsInfinity(periodHours))
-      return null;
-    double hours = Math.Max(rotations * periodHours, MinRangeDays * 24.0);
-    return (end - TimeSpan.FromHours(hours), end);
-  }
-
-  /// <summary>
-  /// Proposes <see cref="ModelRotations"/> rotations ending at <see cref="ModelEndEpoch"/> (or the
-  /// end box), the period from the committed comet's rotation rate. Commit as usual.
-  /// </summary>
-  [RelayCommand]
-  private void ApplyModelRange()
-  {
-    string endText = string.IsNullOrWhiteSpace(ModelEndEpoch) ? EndEpoch : ModelEndEpoch;
-    if (!TimeUtils.TryParseIso8601(endText, out var end))
-    {
-      SetProposalError("Model range: the end epoch is not a date (yyyy-MM-ddTHH:mm:ss).");
-      return;
-    }
-    double rate = _cometSessionService.ActiveSessionIds.Count == 0
-      ? 0
-      : _cometSessionService.GetSession(_cometSessionService.ActiveSessionIds[0]).RotRateDegDay;
-    double periodHours = rate == 0 ? 0 : 360.0 * 24.0 / Math.Abs(rate);
-    if (ModelRange(end, ModelRotations, periodHours) is not { } r)
-    {
-      SetProposalError(ModelRotations < 1
-        ? "Model range: at least one rotation."
-        : "Model range: the comet has no rotation period (Comet tab).");
-      return;
-    }
-    const string Fmt = "yyyy-MM-ddTHH:mm:ss";
-    var ci = System.Globalization.CultureInfo.InvariantCulture;
-    StartEpoch = r.Start.UtcDateTime.ToString(Fmt, ci);
-    EndEpoch = r.End.UtcDateTime.ToString(Fmt, ci);
-  }
-
-  /// <summary>
-  /// Days the jets ignite before the committed start (0 to <see cref="TimelineService.MaxDustLeadDays"/>):
-  /// the tail is already formed when play starts. Used by the next commit.
-  /// </summary>
-  [ObservableProperty]
-  private double _dustLeadDays = TimelineService.MaxDustLeadDays;
-
-  partial void OnDustLeadDaysChanged(double value)
-  {
-    _timelineService.DustLeadDays = value;
-    double applied = _timelineService.DustLeadDays;
-    if (applied != value)
-    {
-      DustLeadDays = applied; // clamped
-      return;
-    }
-    if (CurrentSession is not null)
-      _timelineSessionService.UpdateSession(SessionId, s => s.DustLeadDays = applied);
-  }
-
-  /// <summary>The shortest range the timeline accepts, days.</summary>
-  public const double MinRangeDays = 1;
-
-  private bool _isProposing;
-  /// <summary>
-  /// Proposes the boxes' range as soon as it is valid. Invalid or half-typed text is left as it
-  /// is, with the reason in <see cref="ErrorMessage"/>, and the last valid proposal stays: the
-  /// boxes run this on every keystroke, and snapping them back to the old proposal made a date
-  /// impossible to type (feedback #19, "it picks an end date four years away").
-  /// </summary>
-  private void TryPropose()
-  {
-    if (_isProposing) return;
-    _isProposing = true;
-    try
-    {
-      HasError = false;
-      ErrorMessage = string.Empty;
-      if (CurrentSession == null) return;
-
-      bool startOk = TimeUtils.TryParseIso8601(StartEpoch, out var startDt);
-      bool endOk = TimeUtils.TryParseIso8601(EndEpoch, out var endDt);
-      if (!startOk || !endOk)
-      {
-        SetProposalError(string.Concat(
-          !startOk ? "Start" : "End",
-          " epoch: use yyyy-MM-dd or yyyy-MM-ddTHH:mm:ss (UTC unless an offset is given)."));
-        return;
-      }
-
-      var diff = endDt - startDt;
-      if (diff.TotalDays < MinRangeDays)
-      {
-        SetProposalError(diff.TotalDays <= 0
-          ? "The end epoch must come after the start epoch."
-          : string.Format(System.Globalization.CultureInfo.InvariantCulture,
-              "The range must span at least {0} days (now {1:0.##}).", MinRangeDays, diff.TotalDays));
-        return;
-      }
-
-      var startTai = TimeUtils.ToTaiParts(startDt);
-      var endTai   = TimeUtils.ToTaiParts(endDt);
-      var range    = new TimeRange(startTai.centuries, startTai.nanoseconds,
-                                   endTai.centuries,   endTai.nanoseconds);
-      PersistProposal(StartEpoch, EndEpoch, range);
-    }
-    finally
-    {
-      _isProposing = false;
-    }
-  }
-
-  private void SetProposalError(string message)
-  {
-    ErrorMessage = message;
-    HasError = true;
-  }
-
-  /// <summary>
-  /// Persists a validated proposed range to both the session store and the
-  /// reactive service without performing any user-facing validation.
-  /// Use this from internal paths (Restore, Submit success/rollback) instead of
-  /// calling the public <see cref="Propose"/> command so that validation side-effects
-  /// (clearing errors, etc.) are not inadvertently triggered.
-  /// </summary>
-  private void PersistProposal(string start, string end, TimeRange range)
-  {
-    _timelineSessionService.UpdateSession(SessionId, s =>
-    {
-      s.ProposedStartEpoch = start;
-      s.ProposedEndEpoch   = end;
-    });
-    _timelineService.ProposeEpochRange(range);
-    RefreshProposedState();
-    CheckProposedVsCommitted();
-  }
-
   public void Receive(CometCommittedMessage message)
   {
     if (CurrentSession == null) return;
 
-    // the range the comet was committed with, not the boxes (a save opens with a later proposal
-    // in them); texts that name the same instant are kept as typed
-    string start = StartEpoch, end = EndEpoch;
-    if (message.Range is { } r)
-    {
-      start = TimeUtils.EpochText(r.StartCenturies, r.StartNs, StartEpoch);
-      end = TimeUtils.EpochText(r.EndCenturies, r.EndNs, EndEpoch);
-    }
+    // the range the comet was committed with, not the proposal (a save opens with a later one);
+    // texts that name the same instant are kept as typed. The Comet tab runs the same helper.
     _timelineSessionService.UpdateSession(SessionId, s =>
-    {
-      s.CommittedStartEpoch = start;
-      s.CommittedEndEpoch   = end;
-    });
+      RangeEntryViewModel.ApplyCommitted(s, message.Range, s.ProposedStartEpoch, s.ProposedEndEpoch));
 
-    RefreshCommittedState();
-    // the boxes show what runs
-    StartEpoch = start;
-    EndEpoch = end;
-    CheckProposedVsCommitted();
+    RefreshRangeDisplay();
     CurrentEpochError = string.Empty;
     PollSimulationClock();
   }

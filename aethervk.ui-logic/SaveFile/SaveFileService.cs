@@ -60,7 +60,23 @@ public sealed class SaveFileService
 
   /// <summary>The folder of the open save (for an <c>.avk</c>, its work folder); null for an
   /// unsaved session.</summary>
-  public string? CurrentSaveDir { get; private set; }
+  public string? CurrentSaveDir
+  {
+    get => _currentSaveDir;
+    private set
+    {
+      if (string.Equals(_currentSaveDir, value, StringComparison.Ordinal)) return;
+      // another instance's CleanWorkRoot skips a work folder whose marker names a live process
+      if (_currentSaveDir is { } old && IsUnderWorkRoot(old)) SaveArchive.ReleaseInUse(old);
+      _currentSaveDir = value;
+      if (value is not null && IsUnderWorkRoot(value)) SaveArchive.MarkInUse(value);
+    }
+  }
+
+  private string? _currentSaveDir;
+
+  private bool IsUnderWorkRoot(string dir) =>
+    string.Equals(Path.GetDirectoryName(Path.GetFullPath(dir)), Path.GetFullPath(_archiveWorkRoot), StringComparison.Ordinal);
 
   /// <summary>The <c>.avk</c> the open save came from or was saved to; null for a folder save.</summary>
   public string? CurrentArchivePath { get; private set; }

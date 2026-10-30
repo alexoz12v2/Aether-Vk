@@ -2,6 +2,7 @@
 # Real-X11 end-to-end tests of the desktop billboards (aethervk.x11.tests, plan B-10 … B-15).
 #
 #   scripts/x11_e2e.sh [extra dotnet test args...]
+#   scripts/x11_e2e.sh --filter FullyQualifiedName~SaveArchiveX11Tests   # the .avk save test only (real core)
 #
 # Starts a private Xvfb (3840×1200, two 1920-wide RandR monitors via `xrandr --setmonitor`) with a
 # compositing manager (xcompmgr, for the alpha test), runs the tests on it with AETHERVK_X11_E2E=1,

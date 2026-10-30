@@ -49,8 +49,8 @@ public enum EarthObserverOrientationMode
   /// dragging changes it.
   Free = 0,
 
-  /// Re-aims at the comet every commit: the comet stays at the centre of the view (topocentric:
-  /// faces the horizon under it while it is below).
+  /// Re-aims at the comet every commit: the comet stays at the centre of the view, below the
+  /// site's horizon included (the Earth is drawn in the way; nothing turns with its spin).
   CometTracking = 2,
 
   /// Tracks the Sun (see <see cref="CometTracking"/>).
@@ -2867,8 +2867,6 @@ dump_context()
     // The camera's offset from the Earth's centre: the surface anchor turned by Earth's current
     // orientation (BPC callback) when topocentric, else none (geocentric: translation only).
     var surfaceWorld = ObserverOffsetWorld();
-    bool topocentric = _observerTopocentricSubject.Value;
-    var zenith = topocentric ? Vector3d.Normalize(surfaceWorld) : Vector3d.Zero;
     var camPos = earthPos + surfaceWorld;
 
     // Resolve look direction from the current orientation sub-mode.
@@ -2876,20 +2874,10 @@ dump_context()
     var mode = _earthOrientationMode;
     if (mode.IsTracking() && ResolveEarthObserverTarget(mode.Target()!.Value) is { } targetPos)
     {
-      // Re-aim every tick unless the target is below the local horizon: for an observer on the
-      // sphere the line of sight crosses the Earth exactly then. Hold, and snap back once clear.
-      // Below the horizon the Earth is in the way: face the horizon under the target's azimuth
-      // (mirror of the native observer, `earth_observer::pose`).
-      var toTarget = targetPos - camPos;
-      if (topocentric && IsBelowHorizon(toTarget, zenith))
-      {
-        var h = toTarget - Vector3d.Dot(toTarget, zenith) * zenith;
-        camRot = h.LengthSquared() > 1e-30 ? EarthObserverLookAt(h) : _earthRotation;
-      }
-      else
-      {
-        camRot = EarthObserverLookAt(toTarget);
-      }
+      // Re-aim every tick, below the local horizon included (the Earth is drawn in the way; the
+      // elevation is reported by GetEarthObserverTargetVisibility). Facing the horizon instead made
+      // the view swing with the Earth's spin (mirror of the native observer, `earth_observer::pose`).
+      camRot = EarthObserverLookAt(targetPos - camPos);
     }
     else
     {

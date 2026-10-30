@@ -62,6 +62,105 @@ internal static class NativeInputConverter
   }
 
   /// <summary>
+  /// Maps X11 evdev-based keycodes (keycode = evdev + 8) directly to Win32-style Virtual Key
+  /// codes, matching the unified key standard used by the shared logic dictionary.
+  /// No Xlib calls — evdev keycodes are stable across all standard Linux PC keyboards.
+  /// Platform-agnostic (no Xlib) so the logic tests can reach it; called by the Linux input handler.
+  /// </summary>
+  internal static uint NormalizeX11Keycode(uint keycode) => keycode switch
+  {
+    // --- Letters A-Z (evdev + 8 → Win32 VK_A-Z 0x41-0x5A) ---
+    38 => 0x41, // A
+    57 => 0x4E, // N
+    56 => 0x42, // B
+    32 => 0x4F, // O
+    54 => 0x43, // C
+    33 => 0x50, // P
+    40 => 0x44, // D
+    24 => 0x51, // Q
+    26 => 0x45, // E
+    27 => 0x52, // R
+    41 => 0x46, // F
+    39 => 0x53, // S
+    42 => 0x47, // G
+    28 => 0x54, // T
+    43 => 0x48, // H
+    30 => 0x55, // U
+    31 => 0x49, // I
+    55 => 0x56, // V
+    44 => 0x4A, // J
+    25 => 0x57, // W
+    45 => 0x4B, // K
+    53 => 0x58, // X
+    46 => 0x4C, // L
+    29 => 0x59, // Y
+    58 => 0x4D, // M
+    52 => 0x5A, // Z
+    // --- Digits 0-9 (Win32 0x30-0x39) ---
+    19 => 0x30, // 0
+    10 => 0x31, // 1
+    11 => 0x32, // 2
+    12 => 0x33, // 3
+    13 => 0x34, // 4
+    14 => 0x35, // 5
+    15 => 0x36, // 6
+    16 => 0x37, // 7
+    17 => 0x38, // 8
+    18 => 0x39, // 9
+    // --- Keypad (physical keys, so NumLock does not matter; Win32 VK_NUMPAD0-9 0x60-0x69) ---
+    // Unmapped, these passed through raw and collided with letters (KP_1 = 87 = 'W').
+    90 => 0x60, // KP_0
+    87 => 0x61, // KP_1
+    88 => 0x62, // KP_2
+    89 => 0x63, // KP_3
+    83 => 0x64, // KP_4
+    84 => 0x65, // KP_5
+    85 => 0x66, // KP_6
+    79 => 0x67, // KP_7
+    80 => 0x68, // KP_8
+    81 => 0x69, // KP_9
+    91 => 0x6E, // KP_Decimal → VK_DECIMAL
+
+    // --- Control / Navigation ---
+    9   => 0x1B, // Escape     → VK_ESCAPE
+    36  => 0x0D, // Return     → VK_RETURN
+    104 => 0x0D, // KP_Enter   → VK_RETURN
+    65  => 0x20, // Space      → VK_SPACE
+    23  => 0x09, // Tab        → VK_TAB
+    22  => 0x08, // BackSpace  → VK_BACK
+    119 => 0x2E, // Delete     → VK_DELETE
+    118 => 0x2D, // Insert     → VK_INSERT
+    110 => 0x24, // Home       → VK_HOME
+    115 => 0x23, // End        → VK_END
+    112 => 0x21, // Prior/PgUp → VK_PRIOR
+    117 => 0x22, // Next/PgDn  → VK_NEXT
+
+    // --- Arrow keys ---
+    113 => 0x25, // Left       → VK_LEFT
+    111 => 0x26, // Up         → VK_UP
+    114 => 0x27, // Right      → VK_RIGHT
+    116 => 0x28, // Down       → VK_DOWN
+
+    // --- F-keys (Win32 VK_F1-F12 = 0x70-0x7B) ---
+    67 => 0x70, 68 => 0x71, 69 => 0x72, 70 => 0x73,
+    71 => 0x74, 72 => 0x75, 73 => 0x76, 74 => 0x77,
+    75 => 0x78, 76 => 0x79, 95 => 0x7A, 96 => 0x7B,
+
+    // --- Modifier keys ---
+    50  => 0x10, // Shift_L    → VK_SHIFT
+    62  => 0x10, // Shift_R    → VK_SHIFT
+    37  => 0x11, // Control_L  → VK_CONTROL
+    105 => 0x11, // Control_R  → VK_CONTROL
+    64  => 0x12, // Alt_L      → VK_MENU
+    108 => 0x12, // Alt_R/AltGr→ VK_MENU
+    133 => 0x5B, // Super_L    → VK_LWIN
+    134 => 0x5C, // Super_R    → VK_RWIN
+    66  => 0x14, // CapsLock   → VK_CAPITAL
+
+    _ => keycode  // unmapped — pass raw keycode through
+  };
+
+  /// <summary>
   /// Converts a <see cref="ComposedKeystroke"/> into an <see cref="InputChord"/>.
   /// Policy: modifier flags and key name are taken from the <em>last</em> event in the
   /// sequence, matching the mental model of "hold modifier, press key".

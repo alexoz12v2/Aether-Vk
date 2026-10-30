@@ -52,7 +52,7 @@ public class FitsBillboardTests
     Assert.True(Math.Abs(want - got) <= tol, $"expected {want}, got {got}");
 
   /// Records every viewport call in order.
-  private sealed class FakeProbe : IBillboardViewportProbe
+  internal sealed class FakeProbe : IBillboardViewportProbe
   {
     public readonly List<string> Log = [];
     public double? ArcsecPerPx { get; set; } = 2.0;
@@ -63,6 +63,9 @@ public class FitsBillboardTests
     public bool ViewUpIsCelestialNorth { get; set; } = true;
     public double? CometDistanceKm { get; set; } = 0.47 * 149_597_870.7;
     public double ViewportHeightPx { get; set; } = 1000;
+    /// Perspective vertical field (rad); null: the scale is <see cref="ArcsecPerPx"/> alone.
+    public double? VerticalFovRad { get; set; }
+    public bool IsOrthographic { get; set; }
     public Vector3d? Locked;
     public (double Lat, double Lon, double? Elev)? Site;
     private bool _locked;
@@ -112,7 +115,7 @@ public class FitsBillboardTests
     }
   }
 
-  private sealed class Rig
+  internal sealed class Rig
   {
     public readonly FakeAssetRuntime Fake = new();
     public readonly AssetLibraryService Lib;
@@ -123,8 +126,14 @@ public class FitsBillboardTests
     public readonly List<(short C, ulong Ns)> Seeks = [];
     public readonly List<ulong> TexelsChanged = [];
 
-    public Rig()
+    /// <summary>Every "Model range" request (the observation epoch, UTC), in order.</summary>
+    public readonly List<DateTimeOffset> ModelRanges = [];
+
+    /// <param name="withModelRange">Wire the Timeline's "Model range" request (logged as "range").</param>
+    /// <param name="onModelRange">Also forwards each request (e.g. to <c>TimelineService.RequestModelRange</c>, as the app does); implies <paramref name="withModelRange"/>.</param>
+    public Rig(bool withModelRange = false, Action<DateTimeOffset>? onModelRange = null)
     {
+      withModelRange |= onModelRange is not null;
       Fake.NativeAssets.Add(Tex(FitsId, "/data/lt_67p.fits"));
       Fake.NativeAssets.Add(Tex(8, "/data/tail.png"));
       Fake.Runtime.Setup(r => r.GetFitsMetadataJson(FitsId)).Returns(LtJson);
@@ -142,7 +151,15 @@ public class FitsBillboardTests
           Probe.Log.Add("seek");
           Seeks.Add((c, ns));
           return Task.FromResult(true);
-        });
+        },
+        withModelRange
+          ? end =>
+          {
+            Probe.Log.Add("range");
+            ModelRanges.Add(end);
+            onModelRange?.Invoke(end);
+          }
+          : null);
       Fake.Drain();
       Vm.AttachViewport(Probe, poll: false); // a polling interval never drains
     }
@@ -254,6 +271,84 @@ public class FitsBillboardTests
     rig.Lib.Refresh();
     rig.Fake.Drain();
     Assert.Null(rig.Svc.Find(row.Id)!.ImageArcsecPerPx);
+  }
+
+  // ── scale match: image px vs viewport px (review item R5) ──
+
+  private const double LtScale = 0.30368; // the header's ″/px, auto-filled into the row
+
+  /// N = image ″/px ÷ viewport ″/px, 2 significant figures; below 1 the inverse is shown too.
+  [Theory]
+  [InlineData(1.0, "1 image px = 1.0 viewport px")]
+  [InlineData(2.5, "1 image px = 2.5 viewport px")]
+  [InlineData(0.31, "1 image px = 0.31 viewport px · 1 viewport px = 3.2 image px")]
+  public void PixelRatio_FormatsTwoSignificantFigures_AndTheInverseBelowOne(double n, string want)
+  {
+    var rig = new Rig();
+    var fits = rig.Create("/data/lt_67p.fits").Fits!;
+    rig.Probe.ArcsecPerPx = LtScale / n; // no field reported: the probe's scale
+    rig.Vm.Probe();
+    Assert.Equal(want, fits.PixelRatioText);
+    Near(n, fits.ViewportPxPerImagePx!.Value, 1e-9);
+    Assert.Equal(want, FitsImageViewModel.FormatPixelRatio(rig.Vm.Strings, n));
+  }
+
+  [Theory]
+  [InlineData(1.0, "1.0")]
+  [InlineData(0.31, "0.31")]
+  [InlineData(1 / 0.31, "3.2")]
+  [InlineData(9.96, "10")]
+  [InlineData(1234.0, "1200")]
+  public void PixelRatio_Sig2_RoundsToTwoSignificantFigures(double v, string want) =>
+    Assert.Equal(want, FitsImageViewModel.Sig2(v));
+
+  /// The viewport's centre pixel from its perspective field and height: a zoom (field) or a resize
+  /// (height) changes the line on the next probe tick.
+  [Fact]
+  public void PixelRatio_FollowsTheFieldOfView_AndTheViewportHeight()
+  {
+    var rig = new Rig();
+    var fits = rig.Create("/data/lt_67p.fits").Fits!;
+    rig.Probe.ArcsecPerPx = 99; // ignored while a perspective field is known
+    double pixelRad = LtScale * DesktopBillboardGeometry.ArcsecToRad;
+    // the field whose centre pixel on 1000 px subtends exactly one image px
+    double fov = 2 * Math.Atan(1000 * Math.Tan(pixelRad / 2));
+    rig.Probe.VerticalFovRad = fov;
+    rig.Probe.ViewportHeightPx = 1000;
+    rig.Vm.Probe();
+    Assert.Equal("1 image px = 1.0 viewport px", fits.PixelRatioText);
+    Near(1.0, fits.ViewportPxPerImagePx!.Value, 1e-9);
+    Near(LtScale, FitsImageViewModel.CentrePixelArcsec(fov, 1000), 1e-12);
+
+    // the window shrinks to 400 px: each viewport px covers 2.5 image px
+    rig.Probe.ViewportHeightPx = 400;
+    rig.Vm.Probe();
+    Assert.Equal("1 image px = 0.40 viewport px · 1 viewport px = 2.5 image px", fits.PixelRatioText);
+
+    // back to 1000 px, zoomed in to half the field
+    rig.Probe.ViewportHeightPx = 1000;
+    rig.Probe.VerticalFovRad = fov / 2;
+    rig.Vm.Probe();
+    Assert.Equal("1 image px = 2.0 viewport px", fits.PixelRatioText);
+  }
+
+  /// Orthographic: no field of view; the angle exists only at the comet's distance (the mapping the
+  /// comparison matches with), else n/a.
+  [Fact]
+  public void PixelRatio_Orthographic_IsNotApplicable_WithoutTheCometMapping()
+  {
+    var rig = new Rig();
+    var fits = rig.Create("/data/lt_67p.fits").Fits!;
+    rig.Probe.IsOrthographic = true;
+    rig.Probe.VerticalFovRad = 0.01; // stale: an orthographic view has none
+    rig.Probe.ArcsecPerPx = null;
+    rig.Vm.Probe();
+    Assert.Equal("1 image px = n/a (orthographic)", fits.PixelRatioText);
+    Assert.Null(fits.ViewportPxPerImagePx);
+
+    rig.Probe.ArcsecPerPx = LtScale / 2.5; // the comet's distance gives the angle per px
+    rig.Vm.Probe();
+    Assert.Equal("1 image px = 2.5 viewport px (orthographic: the angle at the comet's distance)", fits.PixelRatioText);
   }
 
   /// A Gaussian nucleus at (x0, y0) image px on a flat background, row 0 = the top.
