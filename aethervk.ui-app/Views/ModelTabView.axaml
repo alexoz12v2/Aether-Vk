@@ -310,24 +310,6 @@
                                         ToolTip.Tip="Speed of the brightness marks that ride the dust while the simulation runs (they freeze on pause).&#x0A;1: the marks move exactly with the dust (its real speed on screen, often far below a pixel per second in wide views).&#x0A;K: every mark moves K times faster than its dust, in its direction, so the whole swarm keeps its true velocity field at a readable pace. Changing it never jumps the marks.&#x0A;Visual only." />
             </Grid>
 
-            <!-- ──── Nucleus radius (required for jet placement) ──────── -->
-            <Grid ColumnDefinitions="*,12,1.6*"
-                  Margin="12,10,12,4">
-              <TextBlock Grid.Column="0"
-                         Text="Nucleus Radius"
-                         VerticalAlignment="Center" />
-              <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="NucleusRadiusSlider"
-                                        Value="{Binding ManualNucleusRadiusKmNullable}"
-                                        HasBounds="True"
-                                        MinBound="0.1"
-                                        MaxBound="100.0"
-                                        ToolTip.Tip="Bounding-sphere radius of the comet nucleus in km.&#x0A;Auto-filled from Horizon when a comet is committed. Override here if needed before committing.">
-                <controls:UnboundedSlider.InnerRightContent>
-                  <TextBlock Classes="unit-of-measurement" Text="km" />
-                </controls:UnboundedSlider.InnerRightContent>
-              </controls:UnboundedSlider>
-            </Grid>
-
             <CheckBox Margin="12,2,12,4"
                       AutomationProperties.AutomationId="SphereGizmoVisibleCheckBox"
                       IsChecked="{Binding IsGizmoVisible}"
@@ -349,7 +331,7 @@
             <!-- Warning: no radius known yet -->
             <TextBlock Margin="12,0,12,6"
                        IsVisible="{Binding IsNucleusRadiusUnknown}"
-                       Text="⚠ Enter a radius or commit a comet to enable jet creation."
+                       Text="⚠ Enter a nucleus radius in the Comet tab or commit a comet to enable jet creation."
                        Foreground="{DynamicResource Text.Tertiary}"
                        FontSize="11"
                        TextWrapping="Wrap" />

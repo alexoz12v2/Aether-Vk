@@ -31,6 +31,8 @@ public class DesktopBillboardGeometryTests
     public PointD? CometDesktopPx => comet;
     public double? CometDistanceKm => null;
     public double ViewportHeightPx => 1000;
+    public double? VerticalFovRad => null;
+    public bool IsOrthographic => false;
     public bool MatchField(double heightKm, double angleRad) => false;
     public bool IsEarthObserver => true;
     public bool EnterEarthObserver() => true;

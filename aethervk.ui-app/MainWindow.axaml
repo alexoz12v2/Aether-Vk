@@ -20,7 +20,7 @@
 
   <!-- TODO: NativeDock property for MacOS when right clicking the icon on dock -->
 
-  <Grid RowDefinitions="Auto, *" Background="{DynamicResource Bg.Canvas}">
+  <Grid RowDefinitions="Auto, Auto, *" Background="{DynamicResource Bg.Canvas}">
     <!-- Windows: the client area takes the caption, as in Visual Studio: icon, menu, title on the
          themed canvas; Avalonia draws the theme-following caption buttons over the right end
          (kept clear by the last column). Elsewhere the system title bar stays and this row is
@@ -40,7 +40,94 @@
       </Border>
       <Border Grid.Column="3" Width="{OnPlatform Default=0, Windows=140}" />
     </Grid>
-    <Border Grid.Row="1">
+    <!-- View-mode strip (reviewer items 4 and 20): Orbit / Nucleus / Model, one source of truth with
+         the viewport overlay's buttons (the active viewport's CameraService). Model runs the FITS
+         comparison; the Timeline's range lock is shown here too, never bypassed. -->
+    <Border Grid.Row="1" x:Name="ModeBar" DataContext="{Binding ModeBar}" x:DataType="vm:ViewModeBarViewModel"
+            IsVisible="{Binding Converter={x:Static ObjectConverters.IsNotNull}}"
+            Background="{DynamicResource Bg.Surface}" BorderBrush="{DynamicResource Bg.Outline}"
+            BorderThickness="0,0,0,1" Padding="8,3">
+      <Border.Styles>
+        <Style Selector="Button.mode">
+          <Setter Property="Background" Value="Transparent"/>
+          <Setter Property="Padding" Value="8,3"/>
+          <Setter Property="CornerRadius" Value="6"/>
+          <Setter Property="Opacity" Value="0.6"/>
+        </Style>
+        <Style Selector="Button.mode:pointerover">
+          <Setter Property="Opacity" Value="0.9"/>
+        </Style>
+        <Style Selector="Button.mode.active">
+          <Setter Property="Background" Value="{DynamicResource Bg.Outline}"/>
+          <Setter Property="Opacity" Value="1"/>
+        </Style>
+        <Style Selector="Button.mode Path">
+          <Setter Property="Stroke" Value="{DynamicResource Text.Primary}"/>
+          <Setter Property="StrokeThickness" Value="1.2"/>
+          <Setter Property="StrokeLineCap" Value="Round"/>
+          <Setter Property="StrokeJoin" Value="Round"/>
+          <Setter Property="Fill" Value="Transparent"/>
+        </Style>
+        <Style Selector="Button.mode TextBlock">
+          <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
+          <Setter Property="FontSize" Value="12"/>
+          <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+      </Border.Styles>
+      <StackPanel Orientation="Horizontal" Spacing="8">
+        <Button Classes="mode" Classes.active="{Binding IsOrbitActive}"
+                AutomationProperties.AutomationId="ModeBarOrbitButton"
+                Command="{Binding SelectOrbitCommand}" ToolTip.Tip="{Binding StrOrbitTip}">
+          <StackPanel Orientation="Horizontal" Spacing="5">
+            <Viewbox Width="16" Height="16" Stretch="Uniform">
+              <Canvas Width="16" Height="16">
+                <Path Data="M 1 8 A 7 3.5 0 0 1 15 8 A 7 3.5 0 0 1 1 8 Z"/>
+                <Ellipse Canvas.Left="6.5" Canvas.Top="6.5" Width="3" Height="3" Fill="{DynamicResource Text.Primary}"/>
+                <Ellipse Canvas.Left="12" Canvas.Top="5" Width="2.5" Height="2.5" Fill="{DynamicResource Text.Primary}"/>
+              </Canvas>
+            </Viewbox>
+            <TextBlock Text="{Binding StrOrbit}"/>
+          </StackPanel>
+        </Button>
+        <Button Classes="mode" Classes.active="{Binding IsNucleusActive}"
+                AutomationProperties.AutomationId="ModeBarNucleusButton"
+                Command="{Binding SelectNucleusCommand}" ToolTip.Tip="{Binding StrNucleusTip}">
+          <StackPanel Orientation="Horizontal" Spacing="5">
+            <Viewbox Width="16" Height="16" Stretch="Uniform">
+              <Canvas Width="16" Height="16">
+                <Path Data="M 5 2 C 9 1 14 4 13 8 C 12 12 9 15 5 14 C 1 13 1 4 5 2 Z M 8 2 L 8 14 M 2 11 L 14 11"/>
+              </Canvas>
+            </Viewbox>
+            <TextBlock Text="{Binding StrNucleus}"/>
+          </StackPanel>
+        </Button>
+        <Button Classes="mode" Classes.active="{Binding IsModelActive}"
+                AutomationProperties.AutomationId="ModeBarModelButton"
+                Command="{Binding SelectModelCommand}" ToolTip.Tip="{Binding StrModelTip}">
+          <StackPanel Orientation="Horizontal" Spacing="5">
+            <Viewbox Width="16" Height="16" Stretch="Uniform">
+              <Canvas Width="16" Height="16">
+                <Path Data="M 2 2 L 14 2 L 14 14 L 2 14 Z M 8 5 A 3 3 0 1 1 7.999 5 Z M 2 8 L 5 8 M 11 8 L 14 8"/>
+              </Canvas>
+            </Viewbox>
+            <TextBlock Text="{Binding StrModel}"/>
+          </StackPanel>
+        </Button>
+        <TextBlock Text="{Binding Hint}" IsVisible="{Binding HasHint}"
+                   AutomationProperties.AutomationId="ModeBarHintText"
+                   Foreground="{DynamicResource Text.Secondary}" FontSize="12"
+                   VerticalAlignment="Center" Margin="8,0,0,0" TextTrimming="CharacterEllipsis"/>
+        <TextBlock Text="{Binding RangeLockText}" IsVisible="{Binding IsRangeLocked}"
+                   AutomationProperties.AutomationId="ModeBarRangeLockText"
+                   Foreground="{DynamicResource Text.Secondary}" FontSize="12"
+                   VerticalAlignment="Center" Margin="8,0,0,0" MaxWidth="520" TextTrimming="CharacterEllipsis"
+                   ToolTip.Tip="{Binding RangeLockText}"/>
+        <Button Content="{Binding StrRecommit}" IsVisible="{Binding IsRangeLocked}"
+                AutomationProperties.AutomationId="ModeBarRecommitButton"
+                Command="{Binding RecommitWithRangeCommand}" FontSize="12" Padding="8,3"/>
+      </StackPanel>
+    </Border>
+    <Border Grid.Row="2">
       <views:DockingManagerView DataContext="{Binding DockingManager}"/>
     </Border>
 

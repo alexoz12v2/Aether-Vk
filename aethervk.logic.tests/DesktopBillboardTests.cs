@@ -535,6 +535,8 @@ public class DesktopBillboardTests
     public PointD? CometDesktopPx { get; set; }
     public double? CometDistanceKm { get; set; }
     public double ViewportHeightPx { get; private set; } = 1000;
+    public double? VerticalFovRad => null;
+    public bool IsOrthographic => false;
     public List<(double HeightKm, double AngleRad)> Matched { get; } = [];
     private double _fieldRad;
     public bool MatchField(double heightKm, double angleRad)

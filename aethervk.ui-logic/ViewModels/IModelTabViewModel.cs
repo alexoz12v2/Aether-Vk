@@ -27,19 +27,9 @@ public partial interface IModelTabViewModel : ICursorWarpingViewModel
   IRelayCommand CopyGrainToAllJetsCommand { get; }
 
   /// <summary>
-  /// Manual override for nucleus bounding-sphere radius in km.
-  /// When &gt; 0, takes precedence over the Horizon-fetched value from CometSession.
-  /// <c>AddJetCommand</c> is disabled until a comet is committed AND this or the Horizon radius is &gt; 0.
+  /// <c>true</c> when no nucleus radius is available — shows the warning hint. The manual radius
+  /// is edited in the Comet tab (<see cref="ICometTabViewModel.ManualNucleusRadiusKm"/>).
   /// </summary>
-  float ManualNucleusRadiusKm { get; set; }
-
-  /// <summary>
-  /// Nullable proxy for <see cref="ManualNucleusRadiusKm"/>.
-  /// <c>null</c> = no manual override set (shows watermark in NumericUpDown).
-  /// </summary>
-  float? ManualNucleusRadiusKmNullable { get; set; }
-
-  /// <summary><c>true</c> when no nucleus radius is available — shows the warning hint.</summary>
   bool IsNucleusRadiusUnknown { get; }
 
   /// <summary>Draws the comet's reference-position error lines (cross-track and same-epoch).</summary>

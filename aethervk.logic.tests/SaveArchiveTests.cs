@@ -28,7 +28,7 @@ public sealed class SaveArchiveTests : IDisposable
     try { Directory.Delete(_root, recursive: true); } catch (IOException) { }
   }
 
-  private sealed class Clock : ISystemClock
+  internal sealed class Clock : ISystemClock
   {
     public DateTimeOffset UtcNow { get; set; } = new(2026, 10, 29, 12, 0, 0, TimeSpan.Zero);
   }
@@ -41,7 +41,7 @@ public sealed class SaveArchiveTests : IDisposable
     return Path.Combine(dir ?? throw new DirectoryNotFoundException("test_assets"), "test_assets", "saves", "review_67p_2021-12");
   }
 
-  private static string[] Tree(string dir) =>
+  internal static string[] Tree(string dir) =>
     Directory.GetFiles(dir, "*", SearchOption.AllDirectories)
       .Select(f => f.Substring(dir.Length + 1).Replace('\\', '/') + " " + Convert.ToBase64String(
         System.Security.Cryptography.SHA256.Create().ComputeHash(File.ReadAllBytes(f))))

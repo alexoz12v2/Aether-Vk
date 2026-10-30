@@ -19,59 +19,10 @@
       693921600000000000
     ],
     "start_paused": true,
-    "speed": 3
+    "speed": 3,
+    "dust_lead_days": null
   },
   "spk": [
-    {
-      "file": "spk/spk_m30_90000703_2021-12-15_2025-11-11.bsp",
-      "naif_id": 1000012,
-      "designation": "67P",
-      "full_name": "   67P/Churyumov-Gerasimenko",
-      "record_id": "90000703",
-      "coverage": {
-        "start": [
-          0,
-          692798400000000000
-        ],
-        "end": [
-          0,
-          816091200000000000
-        ]
-      },
-      "sbdb": {
-        "spk_id": 1000012,
-        "designation": "67P",
-        "full_name": "67P/Churyumov-Gerasimenko",
-        "kind": "cn",
-        "prefix": "P",
-        "orbit_class_name": "Jupiter-family Comet",
-        "orbit_class_code": "JFc",
-        "is_neo": true,
-        "is_pha": false,
-        "orbit_id": "K284/1",
-        "tp": 2457247.588657812,
-        "elements_epoch_jd": 2457305.5,
-        "e": 0.6409081308996354,
-        "q": 1.243265640702404,
-        "i": 7.040294937543767,
-        "om": 50.13557377155012,
-        "w": 12.79824970228189
-      },
-      "reference_orbit_mode": "osculating_at_start",
-      "nucleus_radius_km": 1.7,
-      "rotation": {
-        "pole_ra_deg": 69.54,
-        "pole_dec_deg": 64.11,
-        "prime_meridian_deg": 0,
-        "pole_ra_rate_deg_cen": 0,
-        "pole_dec_rate_deg_cen": 0,
-        "rate_deg_day": 696,
-        "body_fixed_orientation": true
-      },
-      "created_at": "2026-10-28T09:43:54.3680876+00:00",
-      "last_used_at": "2026-10-28T09:43:54.3680876+00:00",
-      "committed": false
-    },
     {
       "file": "spk/spk_67P_90000703_2021-12-12_2021-12-28.bsp",
       "naif_id": 1000012,
@@ -125,16 +76,6 @@
   ],
   "states": [
     {
-      "compat_hash": "b74fbcd2459afc8a",
-      "compatibility_json": "{\u0022version\u0022:8,\u0022start\u0022:[0,692798400000000000],\u0022end\u0022:[0,816091200000000000],\u0022comet_naif\u0022:1000012,\u0022nucleus_radius_km\u0022:1.7000000476837158,\u0022rotation\u0022:[69.54,64.11,0.0,0.0,0.0,696.0,true],\u0022reference_elements\u0022:[0.6496929224352853,1.2106184810454397,3.871668248071364,36.335033366295626,22.133856197513357,2459520.564503622],\u0022dust_tiers\u0022:3,\u0022jets\u0022:[{\u0022ttl_us\u0022:2592000000000,\u0022params\u0022:\u0022ParticleSystemEmitParams { latitude_rad: -0.94247776, longitude_rad: 0.0, aperture_rad: 0.05235988, start_velocity_mean: 60.0, start_velocity_std: 5.0, seed: 3777064823, diametre_um: 30.0, density_gcm3: 0.8, scattering_efficiency: 1.0, geometric_albedo: 0.04, size_q: 2.1, size_range: 10.0, afrho_0_cm: 100.0, afrho_power: 2.0, afrho_cutoff_au: 15.0, afrho_max_value_cm: 100000.0 }\u0022},{\u0022ttl_us\u0022:2592000000000,\u0022params\u0022:\u0022ParticleSystemEmitParams { latitude_rad: -1.1693705, longitude_rad: 0.0, aperture_rad: 0.034906585, start_velocity_mean: 70.0, start_velocity_std: 3.0, seed: 3737610402, diametre_um: 30.0, density_gcm3: 0.8, scattering_efficiency: 1.0, geometric_albedo: 0.04, size_q: 2.1, size_range: 10.0, afrho_0_cm: 100.0, afrho_power: 2.0, afrho_cutoff_au: 15.0, afrho_max_value_cm: 100000.0 }\u0022}]}",
-      "file": "states/b74fbcd2459afc8a/scene.bin",
-      "dump_version": 8,
-      "created_at": "2026-10-28T09:43:54.3680876+00:00",
-      "modified_at": "2026-10-28T09:43:54.3680876+00:00",
-      "last_used_at": "2026-10-28T09:43:54.3680876+00:00",
-      "latest": false
-    },
-    {
       "compat_hash": "fd6124613f8e79c7",
       "compatibility_json": "{\u0022version\u0022:8,\u0022start\u0022:[0,692539200000000000],\u0022end\u0022:[0,693921600000000000],\u0022comet_naif\u0022:1000012,\u0022nucleus_radius_km\u0022:1.7000000476837158,\u0022rotation\u0022:[69.54,64.11,0.0,0.0,0.0,696.2127316680096,true],\u0022reference_elements\u0022:[0.6496932682886161,1.2106177098909632,3.8716701615871654,36.33508118246466,22.13367372091925,2459520.5643791636],\u0022dust_tiers\u0022:3,\u0022jets\u0022:[{\u0022ttl_us\u0022:2592000000000,\u0022params\u0022:\u0022ParticleSystemEmitParams { latitude_rad: -0.17453292, longitude_rad: 0.0, aperture_rad: 0.017453292, start_velocity_mean: 50.0, start_velocity_std: 0.7800244, seed: 1892684929, diametre_um: 30.0, density_gcm3: 0.8, scattering_efficiency: 1.0, geometric_albedo: 0.04, size_q: 2.1, size_range: 10.0, afrho_0_cm: 100.0, afrho_power: 2.0, afrho_cutoff_au: 15.0, afrho_max_value_cm: 100000.0 }\u0022},{\u0022ttl_us\u0022:2592000000000,\u0022params\u0022:\u0022ParticleSystemEmitParams { latitude_rad: -0.94247776, longitude_rad: 0.0, aperture_rad: 0.008726711, start_velocity_mean: 70.0, start_velocity_std: 6.0, seed: 12716195, diametre_um: 30.0, density_gcm3: 0.8, scattering_efficiency: 1.0, geometric_albedo: 0.04, size_q: 2.1, size_range: 10.0, afrho_0_cm: 100.0, afrho_power: 2.0, afrho_cutoff_au: 15.0, afrho_max_value_cm: 100000.0 }\u0022},{\u0022ttl_us\u0022:2592000000000,\u0022params\u0022:\u0022ParticleSystemEmitParams { latitude_rad: 0.6981317, longitude_rad: 0.0, aperture_rad: 0.0034906585, start_velocity_mean: 8.0, start_velocity_std: 0.35233048, seed: 1273352477, diametre_um: 30.0, density_gcm3: 0.8, scattering_efficiency: 1.0, geometric_albedo: 0.04, size_q: 2.1, size_range: 10.0, afrho_0_cm: 100.0, afrho_power: 2.0, afrho_cutoff_au: 15.0, afrho_max_value_cm: 100000.0 }\u0022}]}",
       "file": "states/fd6124613f8e79c7/scene.bin",
@@ -152,6 +93,10 @@
     "geometric_albedo": 0.04,
     "size_q": 2.1,
     "size_range": 10,
+    "dust_rate_1au_kgs": null,
+    "dust_rate_power": null,
+    "dust_rate_cutoff_au": null,
+    "dust_rate_max_kgs": null,
     "afrho0_cm": 100,
     "afrho_power": 2,
     "afrho_cutoff_au": 15,
@@ -160,6 +105,9 @@
     "dust_tracers": false,
     "dust_flow": false,
     "dust_flow_speed": 1,
+    "dust_trajectories": false,
+    "dust_rho_norm": false,
+    "dust_exposure_ev": 0,
     "sphere_gizmo_visible": true,
     "sphere_gizmo_parts": 12,
     "show_jet_angles": true,
@@ -187,6 +135,7 @@
       "geometric_albedo": 0.04,
       "size_q": 2.1,
       "size_range": 10,
+      "dust_rate_1au_kgs": null,
       "afrho0_cm": 100
     },
     {
@@ -209,6 +158,7 @@
       "geometric_albedo": 0.04,
       "size_q": 2.1,
       "size_range": 10,
+      "dust_rate_1au_kgs": null,
       "afrho0_cm": 100
     },
     {
@@ -231,6 +181,7 @@
       "geometric_albedo": 0.04,
       "size_q": 2.1,
       "size_range": 10,
+      "dust_rate_1au_kgs": null,
       "afrho0_cm": 100
     },
     {
@@ -253,6 +204,7 @@
       "geometric_albedo": 0.04,
       "size_q": 2.1,
       "size_range": 10,
+      "dust_rate_1au_kgs": null,
       "afrho0_cm": 100
     }
   ],

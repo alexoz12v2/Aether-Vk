@@ -338,6 +338,57 @@
   <data name="Tabs_Comet_Title" xml:space="preserve">
     <value>Comet</value>
   </data>
+  <data name="Tabs_Comet_Nucleus" xml:space="preserve">
+    <value>Nucleus</value>
+  </data>
+  <data name="Tabs_Comet_NucleusRadius" xml:space="preserve">
+    <value>Nucleus Radius</value>
+  </data>
+  <data name="Tabs_Comet_Step1" xml:space="preserve">
+    <value>Search comet</value>
+  </data>
+  <data name="Tabs_Comet_Step2" xml:space="preserve">
+    <value>Pick the SPK record</value>
+  </data>
+  <data name="Tabs_Comet_Step3" xml:space="preserve">
+    <value>Set the range</value>
+  </data>
+  <data name="Tabs_Comet_Step4" xml:space="preserve">
+    <value>Commit</value>
+  </data>
+  <data name="Tabs_Comet_Step1Help" xml:space="preserve">
+    <value>Type a comet name or designation (for example 67P) and press Search.</value>
+  </data>
+  <data name="Tabs_Comet_Step2Help" xml:space="preserve">
+    <value>Select the comet in the results, then one of its ephemeris (SPK) records.</value>
+  </data>
+  <data name="Tabs_Comet_Step3Help" xml:space="preserve">
+    <value>Enter the start and end epochs to simulate (at least 1 day), or use Model range below.</value>
+  </data>
+  <data name="Tabs_Comet_Step4Help" xml:space="preserve">
+    <value>Choose the reference orbit and press Download &amp; Commit (or Recommit after a range edit).</value>
+  </data>
+  <data name="Tabs_Comet_StepsDoneHelp" xml:space="preserve">
+    <value>Committed: press Play in the Timeline tab. Edit the range here to recommit.</value>
+  </data>
+  <data name="Tabs_Comet_SimulatedRange" xml:space="preserve">
+    <value>Simulated range</value>
+  </data>
+  <data name="Tabs_Comet_TipReferenceOrbit" xml:space="preserve">
+    <value>The two-body reference orbit drawn next to the true SPK path. Required before the first commit; fixed while a comet is committed.</value>
+  </data>
+  <data name="Tabs_Comet_TipPoleRa" xml:space="preserve">
+    <value>Right ascension of the spin axis (J2000), in degrees.</value>
+  </data>
+  <data name="Tabs_Comet_TipPoleDec" xml:space="preserve">
+    <value>Declination of the spin axis (J2000), in degrees.</value>
+  </data>
+  <data name="Tabs_Comet_TipPrimeMeridian" xml:space="preserve">
+    <value>Rotation angle of the nucleus at J2000, in degrees: it sets which side faces where at a given time.</value>
+  </data>
+  <data name="Tabs_Comet_TipRotPeriod" xml:space="preserve">
+    <value>Sidereal rotation period in hours. It also sets the length of one rotation in Model range.</value>
+  </data>
 
   <!-- Imports Tab -->
   <data name="Tabs_Imports_Title" xml:space="preserve">
@@ -513,5 +564,50 @@
   </data>
   <data name="Tabs_Settings_ReuseToleranceOff" xml:space="preserve">
     <value>Off</value>
+  </data>
+  <data name="ModeBar_Orbit" xml:space="preserve">
+    <value>Orbit</value>
+  </data>
+  <data name="ModeBar_Nucleus" xml:space="preserve">
+    <value>Nucleus</value>
+  </data>
+  <data name="ModeBar_Model" xml:space="preserve">
+    <value>Model</value>
+  </data>
+  <data name="ModeBar_OrbitTip" xml:space="preserve">
+    <value>Orbit viewer: the comet's orbit in the Solar System, animated over the chosen interval</value>
+  </data>
+  <data name="ModeBar_NucleusTip" xml:space="preserve">
+    <value>Nucleus: orientation, Sun direction, illumination and active areas</value>
+  </data>
+  <data name="ModeBar_ModelTip" xml:space="preserve">
+    <value>Model: compare with the telescope image; the end date is the image date, the start date the chosen number of rotations earlier</value>
+  </data>
+  <data name="ModeBar_NoFitsHint" xml:space="preserve">
+    <value>Import a FITS image to set the model's dates from it</value>
+  </data>
+  <data name="ModeBar_Recommit" xml:space="preserve">
+    <value>Recommit with this range</value>
+  </data>
+  <data name="Billboard_PxRatio_ImageToViewport" xml:space="preserve">
+    <value>1 image px = {N} viewport px</value>
+  </data>
+  <data name="Billboard_PxRatio_ViewportToImage" xml:space="preserve">
+    <value>1 viewport px = {N} image px</value>
+  </data>
+  <data name="Billboard_PxRatio_AtComet" xml:space="preserve">
+    <value>orthographic: the angle at the comet's distance</value>
+  </data>
+  <data name="Billboard_PxRatio_Orthographic" xml:space="preserve">
+    <value>1 image px = n/a (orthographic)</value>
+  </data>
+  <data name="Billboard_PxRatio_NoPlateScale" xml:space="preserve">
+    <value>1 image px = n/a (no plate scale)</value>
+  </data>
+  <data name="Billboard_PxRatio_NoViewport" xml:space="preserve">
+    <value>1 image px = n/a (no viewport)</value>
+  </data>
+  <data name="Billboard_PxRatio_Tip" xml:space="preserve">
+    <value>How many viewport pixels one image pixel covers at the viewport's current zoom and size: the image's arcsec per px divided by the viewport centre pixel's arcsec per px (vertical field of view ÷ viewport height px). At 1.0 the model and the telescope image are compared at the same scale.</value>
   </data>
 </root>

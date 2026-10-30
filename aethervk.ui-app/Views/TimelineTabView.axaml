@@ -38,64 +38,30 @@
     <ScrollViewer Classes="left-scrollbar" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
       <Grid ColumnDefinitions="Auto,*,Auto" VerticalAlignment="Center" Margin="16,8">
 
-        <!-- Left: Epoch Settings -->
+        <!-- Left: the simulated range, read-only (reviewer feedback item 7: it is entered in the Comet tab) -->
         <StackPanel Grid.Column="0" Orientation="Vertical" VerticalAlignment="Center" Spacing="4">
           <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
             <TextBlock Text="Start Epoch (TDB):" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" />
-            <TextBox AutomationProperties.AutomationId="StartEpochBox"
-              ToolTip.Tip="Start of the simulated period (ISO 8601, e.g. 2000-01-01T12:00:00Z). Typing here only proposes a range; commit it in the Comet tab. The period must be at least 1 day long." Text="{Binding StartEpoch}" Width="180" Watermark="e.g. 2000-01-01T12:00:00Z" />
+            <TextBox AutomationProperties.AutomationId="TimelineStartEpochBox" IsReadOnly="True"
+              ToolTip.Tip="Start of the simulated period: the committed one (before a commit, the range proposed in the Comet tab). Change it in the Comet tab." Text="{Binding StartEpoch, Mode=OneWay}" Width="180" />
 
             <TextBlock Text="End Epoch (TDB):" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" Margin="8,0,0,0"/>
-            <TextBox AutomationProperties.AutomationId="EndEpochBox"
-              ToolTip.Tip="End of the simulated period (ISO 8601). It must be at least 1 day after the start. Typing here only proposes a range; commit it in the Comet tab." Text="{Binding EndEpoch}" Width="180" Watermark="e.g. 2000-02-01T12:00:00Z" />
-
-            <Button AutomationProperties.AutomationId="RestoreButton" Content="Restore" Command="{Binding RestoreCommand}" IsEnabled="{Binding CanRestore}" ToolTip.Tip="Puts the committed range (the one the simulation runs) back in the Start/End boxes and drops the edit." ToolTip.ShowDelay="1000" />
-
-            <!-- Indicator: proposed range differs from committed -->
-            <TextBlock Text="●" Foreground="{DynamicResource Sem.Warning}" IsVisible="{Binding IsProposedDifferentFromCommitted}" ToolTip.Tip="Proposed range differs from committed" VerticalAlignment="Center" />
+            <TextBox AutomationProperties.AutomationId="TimelineEndEpochBox" IsReadOnly="True"
+              ToolTip.Tip="End of the simulated period: the committed one (before a commit, the range proposed in the Comet tab). Change it in the Comet tab." Text="{Binding EndEpoch, Mode=OneWay}" Width="180" />
           </StackPanel>
 
-          <!-- "Model" preset (feedback #20): N nucleus rotations ending at the image epoch -->
-          <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-            <TextBlock Text="Model range:" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" />
-            <TextBox AutomationProperties.AutomationId="ModelRotationsBox"
-              ToolTip.Tip="Number of full nucleus rotations (a whole number, at least 1) that the model range should span. One rotation lasts the period set in the Comet tab (360 deg divided by the rotation rate)." Text="{Binding ModelRotations}" Width="48" />
-            <TextBlock Text="rotations ending at" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" />
-            <TextBox AutomationProperties.AutomationId="ModelEndEpochBox"
-              ToolTip.Tip="End of the model range, normally the epoch of your telescope image (the FITS &quot;Model range&quot; button fills it with the observation epoch). Leave empty to use the End Epoch box." Text="{Binding ModelEndEpoch}" Width="180" Watermark="image epoch (empty: End)" />
-            <Button AutomationProperties.AutomationId="ApplyModelRangeButton" Content="Set range" Command="{Binding ApplyModelRangeCommand}"
-                    ToolTip.Tip="Sets Start and End so the timeline ends at the image epoch and starts N nucleus rotation periods earlier (N x period, never less than 1 day). The simulated dust history then covers N full spins before the image. It only proposes the range: commit it in the Comet tab." />
-          </StackPanel>
-          
-          <!-- R3: jets ignite this long before the committed start, so the tail exists when play starts -->
-          <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-            <TextBlock Text="Dust lead time:" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" />
-            <TextBox AutomationProperties.AutomationId="DustLeadDaysBox"
-              ToolTip.Tip="Days the jets start emitting before the start epoch (0 to 30; 30 = one dust lifetime, the default). With 30 the tail is already fully formed when the timeline starts; with 0 the jets switch on at the start and the tail grows from nothing. Used the next time the comet is committed." Text="{Binding DustLeadDays}" Width="56" />
-            <TextBlock Text="days before the start" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" />
+          <TextBlock Text="Set the range in the Comet tab (step 3), then Download &amp; Commit there." FontSize="11"
+                     Foreground="{DynamicResource Text.Secondary}" IsVisible="{Binding !HasCommittedState}" />
+
+          <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding HasCommittedState}">
+            <TextBlock Text="Committed Range:" FontWeight="SemiBold" FontSize="12" Foreground="{DynamicResource Text.Secondary}" />
+            <TextBlock AutomationProperties.AutomationId="CommittedRangeText" Text="{Binding DisplayCommittedRange}" ToolTip.Tip="The range the simulation runs: the comet's ephemeris covers it and Play, Reset, Run to End and Go stay inside it." FontSize="12" FontFamily="Cascadia Mono, Consolas, monospace" />
           </StackPanel>
 
-          <StackPanel Orientation="Horizontal" Spacing="24" Margin="0,8,0,0">
-            <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding HasProposedState}">
-              <TextBlock Text="Proposed Range:" FontWeight="SemiBold" FontSize="12" Foreground="{DynamicResource Text.Secondary}" />
-              <TextBlock AutomationProperties.AutomationId="ProposedRangeText" Text="{Binding DisplayProposedRange}" ToolTip.Tip="The range in the boxes: what the next Download &amp; Commit (Comet tab) or Recommit will use. It does not change the running simulation." FontSize="12" FontFamily="Cascadia Mono, Consolas, monospace" />
-            </StackPanel>
-            
-            <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding HasCommittedState}">
-              <TextBlock Text="Committed Range:" FontWeight="SemiBold" FontSize="12" Foreground="{DynamicResource Text.Secondary}" />
-              <TextBlock AutomationProperties.AutomationId="CommittedRangeText" Text="{Binding DisplayCommittedRange}" ToolTip.Tip="The range the simulation runs: the comet's ephemeris covers it and Play, Reset, Run to End and Go stay inside it." FontSize="12" FontFamily="Cascadia Mono, Consolas, monospace" />
-            </StackPanel>
-          </StackPanel>
-
-          <!-- Edited after a commit: the engine keeps the committed range until a recommit -->
-          <StackPanel AutomationProperties.AutomationId="RangeLockedPanel" Orientation="Horizontal" Spacing="8" IsVisible="{Binding IsRangeLocked}">
-            <TextBlock Text="{x:Static vm:TimelineTabViewModel.RangeLockedText}" Foreground="{DynamicResource Sem.Warning}" FontSize="11" TextWrapping="Wrap" MaxWidth="520" VerticalAlignment="Center" />
-            <Button AutomationProperties.AutomationId="RecommitWithRangeButton" Content="Recommit with this range" Command="{Binding RecommitWithRangeCommand}"
-                    ToolTip.Tip="Commits the comet again (as Download &amp; Commit in the Comet tab) with the range in the boxes. The dust restarts from the new start." />
-          </StackPanel>
-
-          <!-- Error Message -->
-          <TextBlock AutomationProperties.AutomationId="TimelineErrorText" Text="{Binding ErrorMessage}" Foreground="{DynamicResource Sem.Error}" IsVisible="{Binding HasError}" FontSize="11" />
+          <!-- an edit waits in the Comet tab: the engine keeps the committed range until a recommit there -->
+          <TextBlock AutomationProperties.AutomationId="PendingRangeEditText" Text="{x:Static vm:TimelineTabViewModel.PendingRangeEditText}"
+                     Foreground="{DynamicResource Sem.Warning}" FontSize="11" TextWrapping="Wrap" MaxWidth="520"
+                     IsVisible="{Binding HasPendingRangeEdit}" />
         </StackPanel>
 
         <!-- Center: Timeline Progress (Visible only when current session has a committed state) -->

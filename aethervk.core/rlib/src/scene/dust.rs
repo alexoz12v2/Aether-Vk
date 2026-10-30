@@ -22,6 +22,7 @@
 pub mod cadence;
 pub mod df;
 pub mod phase;
+pub mod play_quality;
 pub mod specks;
 pub mod splat;
 pub mod trajectories;

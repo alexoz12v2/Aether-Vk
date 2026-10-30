@@ -160,7 +160,7 @@ public sealed class ThesisScenarioTests(ITestOutputHelper output)
 
   private static void SetTimeline(AppSession s, Scenario sc)
   {
-    s.SelectTab("TimelineTab");
+    s.OpenRangeEntry();
     s.TypeInto(s.Find("StartEpochBox"), Epoch(sc.ObservationUtc.AddDays(-sc.LeadDays)));
     s.TypeInto(s.Find("EndEpochBox"), Epoch(sc.ObservationUtc));
     // an out-of-range value is reverted without a message: the proposed range tells
@@ -258,7 +258,14 @@ public sealed class ThesisScenarioTests(ITestOutputHelper output)
     s.Expand("DustSection", "AddJetButton");
     var add = s.Find("AddJetButton");
     if (!add.Enabled)
+    {
+      // the nucleus radius lives in the Comet tab (feedback item 10b)
+      s.SelectTab("CometTab");
+      s.Expand("NucleusSection", "NucleusRadiusSlider");
       s.SetSlider("NucleusRadiusSlider", sc.FallbackNucleusRadiusKm);
+      s.SelectTab("ModelTab");
+      s.Expand("DustSection", "AddJetButton");
+    }
     if (sc.GrainSizeRange is { } f)
     {
       s.Expand("SizeDistributionAdvancedExpander", "SizeRangeBox");
@@ -660,8 +667,9 @@ public sealed class ThesisScenarioTests(ITestOutputHelper output)
   private static void AssertRestored(AppSession s, Scenario sc)
   {
     s.SelectTab("TimelineTab");
-    Assert.Equal(sc.ObservationUtc.AddDays(-sc.LeadDays), ParseEpoch(s.Find("StartEpochBox").Text));
-    Assert.Equal(sc.ObservationUtc, ParseEpoch(s.Find("EndEpochBox").Text));
+    // the Timeline tab's read-only copy of the committed range
+    Assert.Equal(sc.ObservationUtc.AddDays(-sc.LeadDays), ParseEpoch(s.Find("TimelineStartEpochBox").Text));
+    Assert.Equal(sc.ObservationUtc, ParseEpoch(s.Find("TimelineEndEpochBox").Text));
     // the save sits at the observation epoch, paused, with its speed: Play is available
     Assert.True(Ui.ReadRange(s.Find("TimelineProgress")) >= 99.9, "the clock is not back at the observation epoch");
     Assert.True(s.Find("PlayPauseButton").Enabled, "no playback speed restored");

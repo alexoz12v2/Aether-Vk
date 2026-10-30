@@ -51,9 +51,7 @@ public partial class DesignModelTabViewModel
   public IRelayCommand<JetViewModel?> RemoveJetCommand => new RelayCommand<JetViewModel?>(_ => { });
   public IRelayCommand RetryNativeJetsCommand => new RelayCommand(() => { });
   public IRelayCommand CopyGrainToAllJetsCommand => new RelayCommand(() => { });
-  public float ManualNucleusRadiusKm { get; set; } = 2.0f;
-  public float? ManualNucleusRadiusKmNullable { get; set; } = 2.0f;
-  public bool IsNucleusRadiusUnknown => ManualNucleusRadiusKm == 0f;
+  public bool IsNucleusRadiusUnknown => false;
   public bool ShowReferencePositionError { get; set; }
   public double DustSoftening { get; set; } = AetherVk.Logic.Services.ModelTabDefaults.DustSoftening;
   public bool DustTracers { get; set; } = false;

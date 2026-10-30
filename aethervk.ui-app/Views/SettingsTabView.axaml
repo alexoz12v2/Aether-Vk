@@ -518,6 +518,10 @@
                                 <ProgressBar IsIndeterminate="True" Height="4" IsVisible="{Binding IsApplyingStretch}" />
 
                                 <TextBlock Text="Compare with the simulation" FontWeight="SemiBold" />
+                                <SelectableTextBlock Text="{Binding PixelRatioText}" TextWrapping="Wrap" Opacity="0.85"
+                                                     FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11"
+                                                     AutomationProperties.AutomationId="BillboardFitsPixelRatio"
+                                                     ToolTip.Tip="{Binding PixelRatioTip}" />
                                 <WrapPanel Orientation="Horizontal">
                                   <Button Content="Seek to observation" Margin="0,0,6,4"
                                           Command="{Binding SeekToObservationCommand}"

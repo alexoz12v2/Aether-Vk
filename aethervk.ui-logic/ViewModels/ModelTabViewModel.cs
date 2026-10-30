@@ -38,19 +38,16 @@ public partial class ModelTabViewModel
 
   public string? StrPM { get; set; } = "PM";
 
-  // Subject used to debounce manual nucleus radius edits. Throttle(250 ms) prevents
-  // flooding the native FFI layer when the user drags the slider continuously.
+  // Subject used to debounce the radius push (startup and session restore). The manual radius
+  // is edited in the Comet tab (feedback item 10b); this tab only reads it from the session.
   private readonly System.Reactive.Subjects.Subject<float> _radiusChanges = new();
+  private float _lastSeenManualRadiusKm = 2.0f;
 
   // ── Observable properties ───────────────────────────────────────────────────────
 
   /// <summary>The currently selected jet, or <c>null</c> when none is selected.</summary>
   [ObservableProperty]
   private JetViewModel? _selectedJet;
-
-  [ObservableProperty]
-  [NotifyCanExecuteChangedFor(nameof(AddJetCommand))]
-  private float _manualNucleusRadiusKm = 2.0f;
 
   /// <summary>
   /// <c>true</c> when a comet has been committed to the native runtime
@@ -252,6 +249,8 @@ public partial class ModelTabViewModel
       {
         _dispatcher.Dispatch(() =>
         {
+          // the Comet tab pushed its radius edit: already pushed, nothing to re-push on a rewire
+          if (CurrentSession is { } cs) _lastSeenManualRadiusKm = cs.ManualNucleusRadiusKm;
           AddJetCommand.NotifyCanExecuteChanged();
           OnPropertyChanged(nameof(IsNucleusRadiusUnknown));
         });
@@ -269,55 +268,22 @@ public partial class ModelTabViewModel
 
   private CometSession? GetCometSession()
   {
-    if (_cometSessionService.ActiveSessionIds.Count == 0) return null;
+    // null while the base constructor wires the first session
+    if (_cometSessionService is null || _cometSessionService.ActiveSessionIds.Count == 0) return null;
     return _cometSessionService.GetSession(_cometSessionService.ActiveSessionIds[0]);
   }
 
+  /// <summary>The model session's manual radius (edited in the Comet tab), else the catalogue one.</summary>
   private float EffectiveNucleusRadiusKm =>
-    ManualNucleusRadiusKm > 0f
-      ? ManualNucleusRadiusKm
+    CurrentSession is { ManualNucleusRadiusKm: > 0f } s
+      ? s.ManualNucleusRadiusKm
       : (GetCometSession()?.NucleusRadiusKm ?? 0f);
 
   private bool CanAddJet() => IsCometCommitted && EffectiveNucleusRadiusKm > 0f;
 
-  /// <summary>
-  /// Nullable proxy for <see cref="ManualNucleusRadiusKm"/> so that the
-  /// <c>NumericUpDown</c> shows a watermark when no manual radius is entered.
-  /// <c>null</c> ↔ internal value 0 (not yet set).
-  /// </summary>
-  public float? ManualNucleusRadiusKmNullable
-  {
-    get => ManualNucleusRadiusKm > 0f ? ManualNucleusRadiusKm : null;
-    set
-    {
-      ManualNucleusRadiusKm = value ?? 0f;
-      OnPropertyChanged();
-    }
-  }
-
-  /// <summary>
-  /// <c>true</c> when no nucleus radius is available from either Horizon or manual entry.
-  /// Drives the "Enter a radius to enable jet creation" hint in the view.
-  /// </summary>
   public bool IsNucleusRadiusUnknown => EffectiveNucleusRadiusKm == 0f;
 
 
-
-  /// <summary>
-  /// Raised automatically by the MVVM toolkit when <see cref="ManualNucleusRadiusKm"/> changes.
-  /// Keeps <see cref="ManualNucleusRadiusKmNullable"/> and <see cref="IsNucleusRadiusUnknown"/> in sync.
-  /// </summary>
-  partial void OnManualNucleusRadiusKmChanged(float value)
-  {
-    if (CurrentSession is { } s)
-      s.ManualNucleusRadiusKm = value;
-    OnPropertyChanged(nameof(ManualNucleusRadiusKmNullable));
-    OnPropertyChanged(nameof(IsNucleusRadiusUnknown));
-    // Publish to the debounced subject — the subscription in the constructor
-    // fires SetNucleusRadiusKm (→ UpdateCometNucleusRadius FFI) at most once
-    // per 250 ms, preventing FFI flood while the user drags the slider.
-    _radiusChanges.OnNext(EffectiveNucleusRadiusKm);
-  }
 
   /// <summary>
   /// Called whenever an observable property changes. Intercepts <see cref="CurrentSession"/>
@@ -328,12 +294,6 @@ public partial class ModelTabViewModel
   protected override void OnPropertyChanged(System.ComponentModel.PropertyChangedEventArgs e)
   {
     base.OnPropertyChanged(e);
-
-    if (e.PropertyName == nameof(ManualNucleusRadiusKm) && !_timelineService.IsSimulationRunningValue && _snapshotExists)
-    {
-        _timelineService.SnapshotRestore();
-        _snapshotExists = false;
-    }
 
     if (e.PropertyName == nameof(CurrentSession))
     {
@@ -679,7 +639,15 @@ public partial class ModelTabViewModel
       session.Restored += OnSessionRestored;
       _restoredHooked = session;
     }
-    ManualNucleusRadiusKm = session.ManualNucleusRadiusKm;
+    // the radius may have changed with the session (savefile open): push it (debounced) when it
+    // did, as the tab's own radius property used to, and re-evaluate the jet button
+    if (session.ManualNucleusRadiusKm != _lastSeenManualRadiusKm)
+    {
+      _lastSeenManualRadiusKm = session.ManualNucleusRadiusKm;
+      _radiusChanges.OnNext(EffectiveNucleusRadiusKm);
+    }
+    AddJetCommand.NotifyCanExecuteChanged();
+    OnPropertyChanged(nameof(IsNucleusRadiusUnknown));
     HookCurveSession(session);
     RefreshDustCurves();
     EnsureJetSubscriptions(session);

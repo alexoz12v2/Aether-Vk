@@ -14,7 +14,7 @@ public enum AppTheme
   Dark,
 }
 
-public partial class MainWindowViewModel : ViewModelBase
+public partial class MainWindowViewModel : ViewModelBase, IDisposable
 {
   private readonly INativeRuntimeService _runtimeService;
   private readonly BreadcrumbService _breadcrumbService;
@@ -49,6 +49,16 @@ public partial class MainWindowViewModel : ViewModelBase
   [ObservableProperty]
   private bool _isViewportFocused;
 
+  /// <summary>The top-bar Orbit / Nucleus / Model strip (null at design time); it acts on
+  /// <see cref="ActiveViewport"/>'s camera.</summary>
+  public ViewModeBarViewModel? ModeBar { get; }
+
+  partial void OnActiveViewportChanged(Viewport3DViewModel? value)
+  {
+    if (ModeBar is { } bar)
+      bar.ActiveCamera = value?.CameraService;
+  }
+
   /// <summary>Avalonia window should call AttachToWindow on this in OnOpened can call Dispose on
   /// OnClosed</summary>
   public IWindowInputRouter InputRouter { get; }
@@ -76,9 +86,11 @@ public partial class MainWindowViewModel : ViewModelBase
     IPlatformWindowService platformWindowService,
     SaveFileService? saveFiles = null,
     PreferencesService? preferences = null,
-    IUnsavedChangesPrompt? unsavedPrompt = null
+    IUnsavedChangesPrompt? unsavedPrompt = null,
+    ViewModeBarViewModel? modeBar = null
   )
   {
+    ModeBar = modeBar;
     _saveFiles = saveFiles;
     _preferences = preferences;
     _unsavedPrompt = unsavedPrompt;
@@ -127,6 +139,15 @@ public partial class MainWindowViewModel : ViewModelBase
       _noRecentItem.IsVisible = recent.Count == 0;
   }
 
+  private bool _disposed;
+
+  /// <summary>Stops the title timer: the host disposes this before the services it reads.</summary>
+  public void Dispose()
+  {
+    _disposed = true;
+    _titleTimer?.Dispose();
+  }
+
   /// <summary>The open save's name: the <c>.avk</c> without its extension, else the folder's.</summary>
   private static string SaveName(SaveFileService saves) =>
     saves.CurrentArchivePath is { } avk ? System.IO.Path.GetFileNameWithoutExtension(avk)
@@ -135,7 +156,8 @@ public partial class MainWindowViewModel : ViewModelBase
 
   public void RefreshTitle()
   {
-    if (_saveFiles is null) return;
+    // a tick dispatched before the host stopped must not read the disposed services
+    if (_saveFiles is null || _disposed) return;
     var name = SaveName(_saveFiles);
     WindowTitle = $"{AppName} — {name}{(_saveFiles.IsDirty ? " *" : string.Empty)}";
   }

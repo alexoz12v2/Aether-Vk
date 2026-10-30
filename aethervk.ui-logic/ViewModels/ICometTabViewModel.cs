@@ -22,6 +22,28 @@ public partial interface ICometTabViewModel
   /// <summary><c>true</c> when a proposed timeline is available in the Timeline tab.</summary>
   bool HasProposedTimeline { get; }
 
+  /// <summary>
+  /// The simulated range, entered in this tab (reviewer feedback item 7): Start/End, the Model
+  /// range, the dust lead time, and the lock + Recommit after a commit.
+  /// </summary>
+  RangeEntryViewModel Range { get; }
+
+  // ── Guided flow (reviewer feedback item 3) ────────────────────────────────
+
+  /// <summary>1 Search comet, 2 Pick the SPK record, 3 Set the range, 4 Commit; 5 = all done.</summary>
+  int CurrentGuidedStep { get; }
+  bool IsStep1Done { get; }
+  bool IsStep2Done { get; }
+  bool IsStep3Done { get; }
+  bool IsStep4Done { get; }
+  bool IsStep1Current { get; }
+  bool IsStep2Current { get; }
+  bool IsStep3Current { get; }
+  bool IsStep4Current { get; }
+
+  /// <summary>One-line help of the current step.</summary>
+  string CurrentStepHelp { get; }
+
   /// <summary>Reference orbit ComboBox index (-1 = none chosen, 0 = SBDB, 1 = re-osculated).</summary>
   int ReferenceOrbitIndex { get; set; }
 
@@ -86,6 +108,21 @@ public partial interface ICometTabViewModel
   /// <summary>Sidereal rotation period in hours (the rate seen another way).</summary>
   double RotationPeriodHours { get; set; }
   int BodyFixedOrientationIndex { get; set; }
+
+  // ── Nucleus (feedback item 10b: the radius belongs here, not in the Model tab) ──
+
+  /// <summary>
+  /// Manual nucleus bounding-sphere radius in km, stored in <c>ModelSession.ManualNucleusRadiusKm</c>
+  /// (saves unchanged). When &gt; 0 it takes precedence over the catalogue radius of the comet;
+  /// the Model tab's jet button needs this or the catalogue radius &gt; 0.
+  /// </summary>
+  float ManualNucleusRadiusKm { get; set; }
+
+  /// <summary>Nullable proxy for <see cref="ManualNucleusRadiusKm"/> (<c>null</c> = 0, no override).</summary>
+  float? ManualNucleusRadiusKmNullable { get; set; }
+
+  /// <summary><c>true</c> when neither a manual nor a catalogue radius is known.</summary>
+  bool IsNucleusRadiusUnknown { get; }
 
   // ── Commands ──────────────────────────────────────────────────────────────
 

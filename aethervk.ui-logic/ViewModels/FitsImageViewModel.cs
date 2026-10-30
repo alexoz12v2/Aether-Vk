@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Threading.Tasks;
 using AetherVk.Logic.Models;
+using AetherVk.Logic.Services;
 using AetherVk.Logic.Utils;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -117,6 +118,25 @@ public partial class FitsImageViewModel : ObservableObject
 
   private double? _lastBlack, _lastWhite;
 
+  // ── scale match (image px vs viewport px) ──
+
+  /// <summary>
+  /// How many viewport px one image px covers at the viewport's current zoom and size: "1 image px
+  /// = 2.5 viewport px", or with N &lt; 1 also the inverse ("1 image px = 0.31 viewport px · 1
+  /// viewport px = 3.2 image px"); 2 significant figures. N = image ″/px ÷ viewport ″/px, see
+  /// <see cref="ViewportPxPerImagePx"/>. Refreshed with the pilot (the viewport probe's tick: zoom,
+  /// field and resize) and whenever the row's plate scale changes.
+  /// </summary>
+  [ObservableProperty]
+  private string _pixelRatioText = string.Empty;
+
+  /// <summary>What <see cref="PixelRatioText"/> means and how it is computed (tooltip).</summary>
+  [ObservableProperty]
+  private string _pixelRatioTip = string.Empty;
+
+  /// <summary>N, viewport px per image px (null: n/a, see <see cref="PixelRatioText"/>).</summary>
+  public double? ViewportPxPerImagePx { get; private set; }
+
   public FitsImageViewModel(DesktopBillboardItemViewModel row, FitsMetadata metadata, ulong assetId)
   {
     _row = row;
@@ -149,6 +169,7 @@ public partial class FitsImageViewModel : ObservableObject
       _settingStretch = false;
     }
     Facts = BuildFacts();
+    RefreshPixelRatio();
   }
 
   /// <summary>The Match camera button is the row's own.</summary>
@@ -164,6 +185,96 @@ public partial class FitsImageViewModel : ObservableObject
     UseObservatorySiteCommand.NotifyCanExecuteChanged();
     OrientToImageCommand.NotifyCanExecuteChanged();
     SetUpComparisonCommand.NotifyCanExecuteChanged();
+    RefreshPixelRatio();
+  }
+
+  /// <summary>
+  /// The image's angle per px (″): the row's image angular height (km at the comet, else the plate
+  /// scale, <see cref="DesktopBillboardGeometry.ImageAngularHeightRad"/>, as the comparison sizes the
+  /// billboard) over its height px; else the header's plate scale. Null without either.
+  /// </summary>
+  private double? ImageArcsecPerPx()
+  {
+    var b = _row.Current;
+    if (b.ImageHeightPx > 0 && DesktopBillboardGeometry.ImageAngularHeightRad(b, _row.Owner?.CometDistanceKm) is { } a)
+      return a / DesktopBillboardGeometry.ArcsecToRad / b.ImageHeightPx;
+    return FactsData.PixelScaleArcsec is { } s && s > 0 && !double.IsInfinity(s) ? s : null;
+  }
+
+  /// <summary>
+  /// The angle (″) the viewport's centre pixel subtends in a perspective view of vertical field
+  /// <paramref name="fovRad"/> on <paramref name="heightPx"/> px: the pixel spans tan θ ∈
+  /// [−t / H, t / H] with t = tan(fov / 2), so 2·atan(t / H) (fov / H for a narrow field).
+  /// </summary>
+  internal static double CentrePixelArcsec(double fovRad, double heightPx) =>
+    2.0 * Math.Atan(Math.Tan(fovRad * 0.5) / Math.Max(1.0, heightPx)) / DesktopBillboardGeometry.ArcsecToRad;
+
+  /// <summary>
+  /// Viewport ″/px for the ratio: perspective with a known field: the centre pixel
+  /// (<see cref="CentrePixelArcsec"/>); orthographic: the probe's scale at the comet's distance
+  /// (the mapping the comparison matches with; null without a comet → n/a); otherwise the probe's
+  /// scale (field ÷ height).
+  /// </summary>
+  private double? ViewportArcsecPerPx(IBillboardViewportProbe v)
+  {
+    double? probe = _row.Owner?.ViewportArcsecPerPx;
+    if (v.IsOrthographic)
+      return probe;
+    if (v.VerticalFovRad is { } fov && fov > 0 && !double.IsInfinity(fov))
+      return CentrePixelArcsec(fov, v.ViewportHeightPx);
+    return probe;
+  }
+
+  private void RefreshPixelRatio()
+  {
+    var t = _row.Owner?.Strings;
+    string S(string key) => t?.GetString(key) ?? key;
+    PixelRatioTip = S("Billboard_PxRatio_Tip");
+    double? n = null;
+    string text;
+    if (Viewport is not { } v)
+      text = S("Billboard_PxRatio_NoViewport");
+    else if (ImageArcsecPerPx() is not { } image)
+      text = S("Billboard_PxRatio_NoPlateScale");
+    else if (ViewportArcsecPerPx(v) is { } view && view > 0 && !double.IsInfinity(view))
+    {
+      n = image / view;
+      text = FormatPixelRatio(t, n.Value, atComet: v.IsOrthographic);
+    }
+    else
+      text = S(v.IsOrthographic ? "Billboard_PxRatio_Orthographic" : "Billboard_PxRatio_NoViewport");
+    ViewportPxPerImagePx = n;
+    PixelRatioText = text;
+  }
+
+  /// <summary>
+  /// "1 image px = {N} viewport px", plus " · 1 viewport px = {1/N} image px" when N &lt; 1, both
+  /// to 2 significant figures (<see cref="Sig2"/>); <paramref name="atComet"/> (orthographic) adds
+  /// that the angle holds at the comet's distance.
+  /// </summary>
+  internal static string FormatPixelRatio(ITranslationService? t, double n, bool atComet = false)
+  {
+    string F(string key, string value) =>
+      t is null ? key : t.GetFormattedString(key, new Dictionary<string, string> { ["N"] = value });
+    string text = F("Billboard_PxRatio_ImageToViewport", Sig2(n));
+    if (n < 1.0 && n > 0.0)
+      text += " · " + F("Billboard_PxRatio_ViewportToImage", Sig2(1.0 / n));
+    if (atComet)
+      text += " (" + (t?.GetString("Billboard_PxRatio_AtComet") ?? "Billboard_PxRatio_AtComet") + ")";
+    return text;
+  }
+
+  /// <summary>Two significant figures, invariant dot decimals: 1 → "1.0", 2.5 → "2.5", 0.31 →
+  /// "0.31", 3.2258 → "3.2", 9.96 → "10", 1234 → "1200".</summary>
+  internal static string Sig2(double v)
+  {
+    if (!(v > 0) || double.IsInfinity(v))
+      return v.ToString(Ci);
+    int e = (int)Math.Floor(Math.Log10(v));
+    double step = Math.Pow(10, e - 1);
+    double r = Math.Round(v / step, MidpointRounding.AwayFromZero) * step;
+    e = (int)Math.Floor(Math.Log10(r)); // 9.96 rounds up to 10
+    return r.ToString("F" + Math.Max(0, 1 - e), Ci);
   }
 
   partial void OnFlipSiteLonChanged(bool value) => Facts = BuildFacts();

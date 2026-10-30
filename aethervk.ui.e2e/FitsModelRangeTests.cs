@@ -5,7 +5,7 @@ namespace AetherVk.UI.E2E;
 
 /// <summary>
 /// The FITS row's "Model range" on the reviewer's 67P save: the image's mid-exposure epoch goes to
-/// the Timeline tab's "rotations ending at" box, and Start/End become N nucleus rotations ending
+/// the Comet tab's "rotations ending at" box (Simulated range), and Start/End become N nucleus rotations ending
 /// there (at least 1 day). The save is committed, so the edit is locked until Restore.
 /// </summary>
 public sealed class FitsModelRangeTests(ITestOutputHelper output)
@@ -37,7 +37,7 @@ public sealed class FitsModelRangeTests(ITestOutputHelper output)
       Thread.Sleep(3000);
 
       // N = 2: 24.8 h, above the 1-day floor
-      s.SelectTab("TimelineTab");
+      s.OpenRangeEntry("ModelRotationsBox");
       s.TypeInto(s.Find("ModelRotationsBox"), "2", enter: false);
 
       s.SelectTab("SettingsTab");
@@ -45,7 +45,7 @@ public sealed class FitsModelRangeTests(ITestOutputHelper output)
       s.Expand("BillboardFitsSection", "BillboardFitsModelRange");
       s.Find("BillboardFitsModelRange").RealClick();
 
-      s.SelectTab("TimelineTab");
+      s.OpenRangeEntry("ModelEndEpochBox");
       Ui.WaitUntil(() => s.Find("ModelEndEpochBox").Text.StartsWith(FitsComparisonSteps.DateMidUtc, StringComparison.Ordinal),
         TimeSpan.FromSeconds(10), "the image epoch in the model end box");
       AssertRange(s, imageEpoch, TimeSpan.FromHours(2 * periodH), "2 rotations");

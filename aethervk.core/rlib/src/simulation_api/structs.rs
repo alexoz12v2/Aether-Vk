@@ -1423,6 +1423,38 @@ impl Drop for SceneContext {
 }
 
 impl SceneContext {
+  /// The dust quality knobs the render thread draws the next frame with
+  /// (`scene::dust::play_quality`, handoff P3): the scene's settings, coarsened by
+  /// [`crate::scene::dust::play_quality::PlayQuality`] while the simulation runs
+  /// (`simulation_running`: set by start, cleared by pause / seek), byte-identical to the
+  /// settings while paused. Logs `[Dust] play quality on (…)` / `off` once per transition.
+  /// Returns the knobs and whether the play quality is applied.
+  pub fn dust_render_knobs(&self) -> (crate::scene::dust::play_quality::DustKnobs, bool) {
+    use core::sync::atomic::Ordering;
+    use crate::scene::dust::play_quality::{DustKnobs, PlayQuality};
+    let knobs = DustKnobs {
+      volume_detail: self.dust_volume_detail.load(Ordering::Relaxed),
+      haze_detail: self.dust_haze_detail.load(Ordering::Relaxed),
+      propagate_detail: self.dust_propagate_detail.load(Ordering::Relaxed),
+      reuse_px: self.dust_reuse_px.load(Ordering::Relaxed),
+    };
+    let running = self.simulation_running.load(Ordering::Acquire);
+    let Some(pq) = PlayQuality::from_env() else {
+      return (knobs, false);
+    };
+    // once per transition (0 = never logged, 1 = on, 2 = off)
+    static LOGGED: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+    let state = if running { 1 } else { 2 };
+    if LOGGED.swap(state, Ordering::Relaxed) != state {
+      if running {
+        aethervk_oshal_rlib::log!("[Dust] play quality on ({})", pq.describe());
+      } else {
+        aethervk_oshal_rlib::log!("[Dust] play quality off");
+      }
+    }
+    (pq.apply(running, knobs), running)
+  }
+
   pub fn register_custom_render_callback(&mut self, callback: Option<CustomRenderCallback>) {
     self.custom_render_callback = callback;
   }

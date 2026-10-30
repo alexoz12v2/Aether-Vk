@@ -25,6 +25,7 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
   private readonly Viewport3DViewModel _viewportVm;
 
   [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(FrameLabel))]
   private string _currentEpochString = string.Empty;
 
   /// <summary>Run to End in progress: the viewport spinner.</summary>
@@ -58,20 +59,24 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
   private ObserverUp _observerUp = ObserverUp.Ecliptic;
 
   /// <summary>
-  /// The reference frame the view is drawn in (feedback #16), shown under the epoch: which way is
-  /// up and whether the view turns with the nucleus.
+  /// The reference frame the view is drawn in and the epoch shown (feedback #16), under the epoch:
+  /// body-fixed / orbit plane / from Earth, which way is up, and at which date.
   /// </summary>
-  public string FrameLabel => FrameLabelFor(CurrentMode, ObserverUp);
+  public string FrameLabel => FrameLabelFor(CurrentMode, ObserverUp, CurrentEpochString);
 
-  internal static string FrameLabelFor(EarthObserverState mode, ObserverUp up) => mode switch
+  internal static string FrameLabelFor(EarthObserverState mode, ObserverUp up, string? epoch = null)
   {
-    EarthObserverState.UpZenith => "Ecliptic J2000, seen from above (ecliptic north up)",
-    EarthObserverState.CometOrbiting => "Nucleus body frame (turns with the nucleus, spin axis up)",
-    EarthObserverState.EarthPositioning => up == ObserverUp.CelestialNorth
-      ? "From Earth, celestial north up (J2000)"
-      : "From Earth, ecliptic north up",
-    _ => string.Empty,
-  };
+    string frame = mode switch
+    {
+      EarthObserverState.UpZenith => "Orbit-plane frame (ecliptic J2000 seen from above, ecliptic north up)",
+      EarthObserverState.CometOrbiting => "Body-fixed frame (turns with the nucleus, spin axis up)",
+      EarthObserverState.EarthPositioning => up == ObserverUp.CelestialNorth
+        ? "From Earth, celestial north up (J2000)"
+        : "From Earth, ecliptic north up",
+      _ => string.Empty,
+    };
+    return frame.Length == 0 || string.IsNullOrWhiteSpace(epoch) ? frame : $"{frame} · {epoch}";
+  }
 
   // ── Mode buttons (feedback #20): Orbit / Nucleus / Model ─────────────────────
   [RelayCommand]

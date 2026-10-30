@@ -3336,3 +3336,49 @@ fn test_dust_trajectory_lines_follow_the_view_flag_and_never_enter_a_dump() {
 fn dumped_lines_total(scene: &crate::scene::Scene) -> usize {
   crate::simulation_api::scene_dump::serialize_scene(scene).len()
 }
+
+/// Play quality (handoff P3): start / pause toggle `simulation_running`, the flag the render
+/// thread reads through `SceneContext::dust_render_knobs`: running → the play knobs, paused →
+/// the scene's settings byte-identical (the byte gate runs paused)
+#[test]
+fn test_play_quality_follows_start_pause() {
+  use crate::scene::dust::play_quality::{DustKnobs, PlayQuality};
+  use aethervk_oshal_rlib::os::time::v2::SimSpeed;
+  if PlayQuality::from_env().is_none() {
+    // AETHERVK_DUST_PLAY_QUALITY=0 in the environment: nothing to test
+    return;
+  }
+  let ctx = SimulationContext::startup(None).expect("SimulationContext");
+  let start = hifitime::Epoch::from_gregorian_utc(2025, 10, 15, 0, 0, 0, 0);
+  let end = start + hifitime::Duration::from_days(10.0);
+  let scene_id = ctx.create_empty_scene2(false, start, end).expect("scene").scene_id;
+  let knobs = |ctx: &SimulationContext| {
+    let scene = ctx.get_scene(scene_id).unwrap();
+    let g = scene.read();
+    g.dust_render_knobs()
+  };
+  let settings = {
+    let scene = ctx.get_scene(scene_id).unwrap();
+    let g = scene.read();
+    DustKnobs {
+      volume_detail: g.dust_volume_detail.load(core::sync::atomic::Ordering::Relaxed),
+      haze_detail: g.dust_haze_detail.load(core::sync::atomic::Ordering::Relaxed),
+      propagate_detail: g.dust_propagate_detail.load(core::sync::atomic::Ordering::Relaxed),
+      reuse_px: g.dust_reuse_px.load(core::sync::atomic::Ordering::Relaxed),
+    }
+  };
+  let (k0, on0) = knobs(&ctx);
+  assert!(!on0, "paused at creation: play quality off");
+  assert_eq!(k0, settings, "paused: the scene's settings byte-identical");
+
+  assert!(ctx.start_simulation(scene_id, SimSpeed::Realtime));
+  let (k1, on1) = knobs(&ctx);
+  assert!(on1, "running: play quality on");
+  assert_eq!(k1, PlayQuality::from_env().unwrap().apply(true, settings));
+  assert_ne!(k1, settings, "running: coarser knobs");
+
+  assert!(ctx.pause_simulation_sync(scene_id));
+  let (k2, on2) = knobs(&ctx);
+  assert!(!on2, "paused again: play quality off");
+  assert_eq!(k2, settings, "paused again: the scene's settings byte-identical");
+}
