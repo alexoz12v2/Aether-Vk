@@ -255,6 +255,9 @@
   <data name="Tabs_Model_Distance" xml:space="preserve">
     <value>Distanza</value>
   </data>
+  <data name="Tabs_Model_JetNeverLit" xml:space="preserve">
+    <value>Questo sito non è mai illuminato tra {0} e {1}: il getto non emette polvere. Spostalo a un'altra latitudine, o cambia l'intervallo.</value>
+  </data>
   <data name="Tabs_Model_STO" xml:space="preserve">
     <value>STO</value>
   </data>
@@ -610,5 +613,38 @@
   </data>
   <data name="Billboard_PxRatio_Tip" xml:space="preserve">
     <value>Quanti pixel della viewport copre un pixel dell'immagine con lo zoom e la dimensione attuali della viewport: gli arcsec per px dell'immagine divisi per gli arcsec per px del pixel centrale della viewport (campo visivo verticale ÷ altezza della viewport in px). A 1.0 il modello e l'immagine del telescopio sono confrontati alla stessa scala.</value>
+  </data>
+  <data name="Ephemeris_Title" xml:space="preserve">
+    <value>Effemeridi</value>
+  </data>
+  <data name="Ephemeris_Tip" xml:space="preserve">
+    <value>Effemeridi astrometriche geocentriche della cometa impegnata all'epoca mostrata (corrette per il tempo luce, senza aberrazione), come in una tabella osservatore di JPL Horizons. AP Sole è il PsAng di Horizons: l'angolo di posizione del vettore Sole→cometa esteso sul cielo, da nord verso est; una coda punta vicino a esso.</value>
+  </data>
+  <data name="Ephemeris_Epoch" xml:space="preserve">
+    <value>Epoca (UTC)</value>
+  </data>
+  <data name="Ephemeris_Ra" xml:space="preserve">
+    <value>AR (J2000)</value>
+  </data>
+  <data name="Ephemeris_Dec" xml:space="preserve">
+    <value>Dec (J2000)</value>
+  </data>
+  <data name="Ephemeris_R" xml:space="preserve">
+    <value>r (Sole–cometa)</value>
+  </data>
+  <data name="Ephemeris_Delta" xml:space="preserve">
+    <value>Δ (Terra–cometa)</value>
+  </data>
+  <data name="Ephemeris_Phase" xml:space="preserve">
+    <value>Fase (Sole–cometa–Terra)</value>
+  </data>
+  <data name="Ephemeris_Elongation" xml:space="preserve">
+    <value>Elongazione (Sole–Terra–cometa)</value>
+  </data>
+  <data name="Ephemeris_SunPa" xml:space="preserve">
+    <value>AP Sole (N→E)</value>
+  </data>
+  <data name="Ephemeris_Debug" xml:space="preserve">
+    <value>Debug (posizione camera)</value>
   </data>
 </root>

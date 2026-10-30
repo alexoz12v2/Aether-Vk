@@ -271,6 +271,12 @@ struct Args {
   /// `--ortho` (`--pose earth`): an orthographic camera at the observing site aimed at the comet
   /// (frontal), half-height `--earth-field-km`/2 (else the framing's half-height)
   earth_ortho: bool,
+  /// `--nucleus-from-earth RADII` (`--pose earth`): the "nucleus from Earth" view (reviewer
+  /// feedback #17, `SimulationContext::set_nucleus_view_from_earth`) instead of the observer at
+  /// the site: the camera RADII nucleus radii short of the astrometric comet on the Earth → comet
+  /// line, celestial north up, with a perspective fov that makes the nucleus 1/4 of the frame
+  /// tall (`2·atan(4 / RADII)`), near / far `1e-3 · D` / `max(1e4 · D, 2 · coma)`
+  nucleus_from_earth: Option<f64>,
   /// `--sky-image-check` (`--pose earth`): per frame, a synthetic FITS of crosses at known RA/Dec
   /// loaded as the sky overlay, rendered, the crosses found within 1 px of their WCS pixels
   sky_image_check: bool,
@@ -380,7 +386,7 @@ fn usage() -> ! {
     "usage: dust_observer --out DIR [--days 30] [--step-hours 24] [--size 1280x800]\n\
      \x20      [--pose up-zenith|anti-sun|earth|inside] [--play SECONDS] [--play-live SECONDS --sample-s S [--play-quality-off] [--play-live-paused]] [--reemit-every N] [--check] [--dust-budget-ms MS]\n\
      \x20      [--half-height-km KM] [--fov-deg DEG] [--inside-m D | --inside-km D] [--lat DEG --lon DEG --elev M] [--sky-image-check]\n\
-     \x20      [--north-up] [--earth-field-km KM] [--ortho] [--start YYYY-MM-DD[THH:MM:SS[Z]]] [--spk FILE.bsp]\n\
+     \x20      [--north-up] [--earth-field-km KM] [--ortho] [--nucleus-from-earth RADII] [--start YYYY-MM-DD[THH:MM:SS[Z]]] [--spk FILE.bsp]\n\
      \x20      [--quiet] [--settle-frames N] [--no-jet] [--hide-sun] [--no-trajectories] [--full-teardown] [--no-sheet]\n\
      \x20      [--jet LAT,LON,SPEED_MS,APERTURE_DEG[,SIGMA_FRAC]]... [--pole RA_DEG,DEC_DEG,W0_DEG,RATE_DEG_PER_DAY]\n\
      \x20      [--ignite-days D] [--prestart] [--ripple-max R] [--spin-hours H] [--mc N] [--mc-max R] [--mc-age-min S] [--view-flags F] [--exposure-ev X]\n\
@@ -418,6 +424,7 @@ fn parse_args() -> Args {
     north_up: false,
     earth_field_km: None,
     earth_ortho: false,
+    nucleus_from_earth: None,
     start: Epoch::from_gregorian_utc(2025, 10, 2, 0, 0, 0, 0),
     spk: None,
     quiet: false,
@@ -576,6 +583,9 @@ fn parse_args() -> Args {
       "--sky-image-check" => a.sky_image_check = true,
       "--north-up" => a.north_up = true,
       "--ortho" => a.earth_ortho = true,
+      "--nucleus-from-earth" => {
+        a.nucleus_from_earth = Some(next(&mut i).parse().unwrap_or_else(|_| usage()))
+      }
       "--earth-field-km" => {
         a.earth_field_km = Some(next(&mut i).parse().unwrap_or_else(|_| usage()))
       }
@@ -644,9 +654,21 @@ fn parse_args() -> Args {
     );
     usage();
   }
-  if (a.north_up || a.earth_ortho || a.earth_field_km.is_some()) && a.pose != Pose::Earth {
-    eprintln!("--north-up / --ortho / --earth-field-km need --pose earth");
+  if (a.north_up || a.earth_ortho || a.earth_field_km.is_some() || a.nucleus_from_earth.is_some())
+    && a.pose != Pose::Earth
+  {
+    eprintln!("--north-up / --ortho / --earth-field-km / --nucleus-from-earth need --pose earth");
     usage();
+  }
+  if let Some(r) = a.nucleus_from_earth {
+    if !(r > 0.0 && r.is_finite()) {
+      eprintln!("--nucleus-from-earth: the distance in nucleus radii must be positive");
+      usage();
+    }
+    if a.earth_ortho || a.earth_field_km.is_some() || a.sky_image_check {
+      eprintln!("--nucleus-from-earth sets its own perspective field (not --ortho / --earth-field-km / --sky-image-check)");
+      usage();
+    }
   }
   if a.earth_field_km.is_some_and(|k| !(k > 0.0 && k.is_finite())) {
     eprintln!("--earth-field-km: the field must be positive");
@@ -2931,7 +2953,39 @@ fn main() {
         "earth pose: no Earth transform at the start epoch (Earth→comet distance unknown)".into(),
       );
     }
-    let (fov_deg, tan_h, hh_au, near, far) = if args.earth_ortho {
+    let (fov_deg, tan_h, hh_au, near, far) = if let Some(radii) = args.nucleus_from_earth {
+      // the nucleus view: the camera `radii` R short of the comet, the nucleus 1/4 of the frame
+      // tall (4 diameters = 8 R over the full height: half-height 4 R at the nucleus)
+      let r_au = NUCLEUS_RADIUS_KM as f64 / AU_KM;
+      let d_nuc_au = radii * r_au;
+      let hh_au = 4.0 * r_au;
+      let tan_h = hh_au / d_nuc_au;
+      let f = (2.0 * tan_h.atan()).to_degrees();
+      let (near, far) = (1e-3 * d_nuc_au, (1e4 * d_nuc_au).max(2.0 * coma0_km / AU_KM));
+      ctx
+        .threads
+        .logic_thread
+        .tx()
+        .try_send(LogicCommand::SetCameraTransform {
+          scene_id,
+          camera_id: cam.as_ffi(),
+          transform: None,
+          projection: Some(CameraProjection::Perspective {
+            fov: f.to_radians() as f32,
+            aspect_ratio: aspect as f32,
+            near: near as f32,
+            far: far as f32,
+          }),
+        })
+        .expect("SetCameraTransform send");
+      log_line(&format!(
+        "nucleus from Earth: camera {radii} R ({:.1} km) short of the astrometric comet, fov {f:.3}° (nucleus 1/4 of the height), near {:.3} km, far {:.1} km",
+        d_nuc_au * AU_KM,
+        near * AU_KM,
+        far * AU_KM
+      ));
+      (f, Some(tan_h), hh_au, near, far)
+    } else if args.earth_ortho {
       let hh_au = args.earth_field_km.map_or(half_height_au, |k| k / 2.0 / AU_KM);
       let (near, far) = (0.5 * d_au, 2.0 * d_au);
       let hw = (hh_au * aspect) as f32;
@@ -3126,27 +3180,40 @@ fn main() {
         }
       }
     });
-    let ok = ctx.set_earth_observer(
-      scene_id,
-      cam.as_ffi(),
-      Some(earth_observer::EarthObserverMode::CometTracking),
-      scene_ret.earth_body,
-      scene_ret.comet_body,
-      true,
-      args.lat_deg,
-      lon_deg,
-      args.elev_m,
-      [0.0, 0.0, 0.0, 1.0],
-      if args.north_up {
-        earth_observer::ObserverUp::CelestialNorth
-      } else {
-        earth_observer::ObserverUp::Ecliptic
-      },
-    );
-    log_line(&format!(
-      "earth observer (comet tracking) set: {ok}, site lat {:.4}° lon {:.4}° elev {:.1} m, north-up {}",
-      args.lat_deg, lon_deg, args.elev_m, args.north_up
-    ));
+    if let Some(radii) = args.nucleus_from_earth {
+      let ok = ctx.set_nucleus_view_from_earth(
+        scene_id,
+        cam.as_ffi(),
+        scene_ret.earth_body,
+        scene_ret.comet_body,
+        radii * NUCLEUS_RADIUS_KM as f64 / AU_KM,
+      );
+      log_line(&format!(
+        "nucleus view from Earth set: {ok}, {radii} nucleus radii short of the comet, celestial north up"
+      ));
+    } else {
+      let ok = ctx.set_earth_observer(
+        scene_id,
+        cam.as_ffi(),
+        Some(earth_observer::EarthObserverMode::CometTracking),
+        scene_ret.earth_body,
+        scene_ret.comet_body,
+        true,
+        args.lat_deg,
+        lon_deg,
+        args.elev_m,
+        [0.0, 0.0, 0.0, 1.0],
+        if args.north_up {
+          earth_observer::ObserverUp::CelestialNorth
+        } else {
+          earth_observer::ObserverUp::Ecliptic
+        },
+      );
+      log_line(&format!(
+        "earth observer (comet tracking) set: {ok}, site lat {:.4}° lon {:.4}° elev {:.1} m, north-up {}",
+        args.lat_deg, lon_deg, args.elev_m, args.north_up
+      ));
+    }
   } else {
     let (p, q) = pose_for(comet0);
     set_camera_pose(&ctx, scene_id, cam, p, q);

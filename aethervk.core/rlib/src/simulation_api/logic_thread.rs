@@ -3350,7 +3350,7 @@ pub(crate) fn update_reference_errors(scene_ctx: &SceneContext, epoch: anise::ti
   utils::update_reference_errors(scene_ctx, epoch)
 }
 
-mod utils {
+pub(crate) mod utils {
   use super::*;
   use crate::{
     gpu::{RenderDeviceHandle, RenderFrontend},
@@ -4152,6 +4152,10 @@ mod utils {
     scene: &crate::scene::Scene,
     obs: &crate::simulation_api::earth_observer::EarthObserverState,
   ) {
+    // the nucleus view stands near the comet, not at the site
+    if obs.nucleus_distance_au.is_some() {
+      return;
+    }
     let o = obs.offset_bf_au();
     let radius_au = (o[0] * o[0] + o[1] * o[1] + o[2] * o[2]).sqrt();
     let (Some(cam), Some(earth)) = (

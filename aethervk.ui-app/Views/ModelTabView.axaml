@@ -411,6 +411,11 @@
                                 Command="{Binding #JetListBox.((vm:IModelTabViewModel)DataContext).RetryNativeJetsCommand}"
                                 ToolTip.Tip="Ask the core again for every refused jet" />
                       </StackPanel>
+                      <!-- the site is never lit over the committed range: the jet emits no dust -->
+                      <TextBlock FontSize="11" Foreground="{DynamicResource Sem.Warning}" TextWrapping="Wrap"
+                                 AutomationProperties.AutomationId="JetLitWarning"
+                                 IsVisible="{Binding LitWarning, Converter={x:Static ObjectConverters.IsNotNull}}"
+                                 Text="{Binding LitWarning, StringFormat='⚠ {0}'}" />
                     </StackPanel>
 
                     <!-- Remove button — reflection binding to reach the parent UserControl's VM -->

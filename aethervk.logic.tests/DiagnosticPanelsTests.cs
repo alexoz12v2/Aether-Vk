@@ -103,6 +103,35 @@ public sealed class DiagnosticPanelsTests : IDisposable
     Assert.True(vm.IsShown);
   }
 
+  /// <summary>The ephemeris is not a diagnostic: with the panels off the camera panel still shows
+  /// once a comet is committed, with its diagnostic sections hidden.</summary>
+  [Fact]
+  public void TheEphemeris_ShowsWithTheDiagnosticsOff_OnceACometIsCommitted()
+  {
+    var p = Prefs();
+    var schedulers = new TestSchedulerProvider();
+    var runtime = new Mock<INativeRuntimeService>();
+    using var vm = new CameraMatrixDebugViewModel(runtime.Object, schedulers, p);
+    void Poll()
+    {
+      schedulers.Background.AdvanceBy(TimeSpan.FromMilliseconds(500).Ticks);
+      schedulers.MainThread.AdvanceBy(1);
+    }
+    Poll();
+    Assert.False(vm.IsShown);
+
+    runtime.Setup(r => r.CometEphemeris()).Returns(new CometEphemeris(
+      new DateTimeOffset(2021, 12, 27, 0, 0, 0, TimeSpan.Zero), 2.36, 0.49, 1.388, 0.466, 0.43, 2.51, 4.74, 232.7));
+    Poll();
+    Assert.True(vm.HasEphemeris);
+    Assert.True(vm.IsShown);
+    Assert.False(vm.ShowDiagnostics);
+
+    runtime.Setup(r => r.CometEphemeris()).Returns((CometEphemeris?)null);
+    Poll();
+    Assert.False(vm.IsShown);
+  }
+
   [Fact]
   public void WithoutPreferences_ThePanelsShow()
   {

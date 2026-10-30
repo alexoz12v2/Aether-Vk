@@ -311,6 +311,12 @@ public class MockNativeRuntimeService : INativeRuntimeService
   public bool CleanupParticleSystem(ulong psId) => true;
 
   public bool SetJetPreviewVisibility(ulong psId, bool visibility) => true;
+  public bool GetJetLitFraction(ulong jetEntityId, out double litFraction, out TimeRange committedRange)
+  {
+    litFraction = 1;
+    committedRange = new TimeRange(0, 0, 0, 0);
+    return false;
+  }
   public bool SetJetAngleVisibility(ulong psId, bool visibility) => true;
 
   public bool SetCometIndicatorVisible(bool visible) => true;
@@ -330,7 +336,9 @@ public class MockNativeRuntimeService : INativeRuntimeService
   public uint SceneDumpVersion => 0;
   public double DustComaRadiusKm() => 0.0;
   public EarthObserverStatus? EarthObserverStatus() => null;
+  public CometEphemeris? CometEphemeris() => null;
   public bool SetEarthObserver(ulong cameraId, int mode, ulong earthId, ulong cometId, bool topocentric, double latDeg, double lonDeg, double elevM, AetherVk.Logic.Utils.Quaterniond look, AetherVk.Logic.Services.ObserverUp up) => true;
+  public bool SetNucleusViewFromEarth(ulong cameraId, ulong earthId, ulong cometId, double distanceAu) => true;
 
   public bool SetReferenceErrorVisible(bool visible) => true;
   public bool SetDustSoftening(float softening) => true;
