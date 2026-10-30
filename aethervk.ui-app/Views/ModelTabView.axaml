@@ -234,6 +234,7 @@
 
             <!-- ──── Reference-position error lines (comet vs osculating reference) ── -->
             <CheckBox Margin="12,10,12,0"
+                      AutomationProperties.AutomationId="ShowReferenceErrorToggle"
                       Content="{Binding StrShowReferenceError}"
                       IsChecked="{Binding ShowReferencePositionError}"
                       ToolTip.Tip="Draws two lines from the comet to its reference orbit (red track): the closest point of the track (cross-track) and where the reference says the comet should be now (same-epoch). Each is shown only while longer than 10 nucleus radii." />
@@ -245,6 +246,7 @@
                          Text="{Binding StrDustVisibility}"
                          VerticalAlignment="Center" />
               <controls:UnboundedSlider Grid.Column="2"
+                                        AutomationProperties.AutomationId="DustVisibilitySlider"
                                         Value="{Binding DustSoftening}"
                                         IsLogarithmic="True"
                                         HasBounds="True"
@@ -301,6 +303,7 @@
                          Text="{Binding StrDustFlowSpeed}"
                          VerticalAlignment="Center" />
               <controls:UnboundedSlider Grid.Column="2"
+                                        AutomationProperties.AutomationId="DustFlowSpeedSlider"
                                         Value="{Binding DustFlowSpeed}"
                                         IsLogarithmic="True"
                                         HasBounds="True"
@@ -405,9 +408,11 @@
                       <StackPanel Orientation="Horizontal" Spacing="6"
                                   IsVisible="{Binding NativeError, Converter={x:Static ObjectConverters.IsNotNull}}">
                         <TextBlock FontSize="11" Foreground="{DynamicResource Sem.Warning}"
+                                   AutomationProperties.AutomationId="JetNativeErrorText"
                                    Text="⚠ Not in the simulation" VerticalAlignment="Center"
                                    ToolTip.Tip="{Binding NativeError}" />
                         <Button Content="Retry" Padding="6,0" FontSize="11"
+                                AutomationProperties.AutomationId="JetRetryButton"
                                 Command="{Binding #JetListBox.((vm:IModelTabViewModel)DataContext).RetryNativeJetsCommand}"
                                 ToolTip.Tip="Ask the core again for every refused jet" />
                       </StackPanel>
