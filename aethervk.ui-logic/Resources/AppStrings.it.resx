@@ -656,4 +656,588 @@
   <data name="Tabs_Settings_TimeScaleTdb" xml:space="preserve">
     <value>TDB (tempo dinamico: il motore)</value>
   </data>
+  <data name="Tabs_Comet_HelpHeaderSpkRecords" xml:space="preserve">
+    <value>Record SPK disponibili</value>
+  </data>
+  <data name="Tabs_Comet_HelpSpkRecords" xml:space="preserve">
+    <value>Record di effemeridi (SPK) della cometa selezionata: ognuno è un fit distinto della sua orbita.
+
+Selezionane uno, poi premi Download &amp; Commit per collegarlo alla simulazione.</value>
+  </data>
+  <data name="Tabs_Comet_HelpHeaderEpochRange" xml:space="preserve">
+    <value>Inizio e Fine</value>
+  </data>
+  <data name="Tabs_Comet_HelpEpochRange" xml:space="preserve">
+    <value>Inizio e Fine del periodo simulato, come date ISO 8601 (es. 2000-01-01T12:00:00Z), nella scala dei tempi indicata nelle etichette (Impostazioni › Scala dei tempi per le date; UTC di default).
+
+Il periodo deve durare almeno 1 giorno: la Fine almeno 1 giorno dopo l'Inizio.
+
+Scrivere qui propone soltanto un intervallo; Download &amp; Commit (o Recommit) lo applica.</value>
+  </data>
+  <data name="Tabs_Comet_HelpHeaderProposedRange" xml:space="preserve">
+    <value>Intervallo proposto</value>
+  </data>
+  <data name="Tabs_Comet_HelpProposedRange" xml:space="preserve">
+    <value>L'intervallo nelle caselle Inizio/Fine: quello che userà il prossimo Download &amp; Commit o Recommit.
+
+Non modifica la simulazione in corso. Restore rimette nelle caselle l'intervallo confermato.</value>
+  </data>
+  <data name="Tabs_Comet_HelpHeaderRecommit" xml:space="preserve">
+    <value>Recommit con questo intervallo</value>
+  </data>
+  <data name="Tabs_Comet_HelpRecommit" xml:space="preserve">
+    <value>Conferma di nuovo la cometa (come Download &amp; Commit) con l'intervallo nelle caselle. La polvere riparte dal nuovo inizio.
+
+Fino ad allora la simulazione mantiene l'intervallo confermato.</value>
+  </data>
+  <data name="Tabs_Comet_HelpHeaderModelRange" xml:space="preserve">
+    <value>Intervallo modello</value>
+  </data>
+  <data name="Tabs_Comet_HelpModelRange" xml:space="preserve">
+    <value>Un intervallo per il confronto con un'immagine al telescopio (la vista Modello): termina all'epoca dell'immagine e inizia N rotazioni complete del nucleo prima, così la storia simulata della polvere copre N giri completi prima dell'immagine.
+
+Rotazioni: N, un numero intero di almeno 1. Una rotazione dura il periodo di rotazione (Modello rotazionale: 360° diviso la velocità di rotazione).
+
+Che terminano a: di norma l'epoca della tua immagine al telescopio (il pulsante FITS "Intervallo modello" la compila con l'epoca dell'osservazione). Lascialo vuoto per usare la casella Fine.
+
+Set range: imposta Inizio e Fine (N × periodo, mai meno di 1 giorno). Propone soltanto l'intervallo: Download &amp; Commit lo applica.</value>
+  </data>
+  <data name="Tabs_Comet_HelpHeaderDustLead" xml:space="preserve">
+    <value>Anticipo della polvere</value>
+  </data>
+  <data name="Tabs_Comet_HelpDustLead" xml:space="preserve">
+    <value>Giorni in cui i getti iniziano a emettere prima dell'epoca di inizio, da 0 a 30 (30 = una vita della polvere, il default).
+
+Con 30 la coda è già completamente formata quando parte la timeline; con 0 i getti si accendono all'inizio e la coda cresce dal nulla.
+
+Usato alla prossima conferma della cometa.</value>
+  </data>
+  <data name="Tabs_Comet_HelpHeaderReferenceOrbit" xml:space="preserve">
+    <value>Orbita di riferimento</value>
+  </data>
+  <data name="Tabs_Comet_HelpReferenceOrbit" xml:space="preserve">
+    <value>La traccia rossa è un'orbita di riferimento a due corpi (kepleriana) disegnata accanto al percorso SPK reale.
+
+Soluzione SBDB: gli elementi pubblicati dal JPL, osculanti all'epoca della soluzione, che può distare anni dalla tua finestra (67P: 2015-10-10, circa 0,12 UA lontano dal suo percorso del 2025 a causa di Giove).
+
+Osculante all'epoca di inizio: elementi ricalcolati dalla posizione e velocità SPK alla tua epoca di inizio. Esatta lì, ed entro circa 10³ km su un mese (perturbazioni planetarie e forze del degassamento).
+
+Obbligatoria prima della prima conferma; non si può cambiare mentre una cometa è confermata.</value>
+  </data>
+  <data name="Tabs_Comet_HelpNucleusRadius" xml:space="preserve">
+    <value>Raggio della sfera che racchiude il nucleo della cometa, in km (da 0,1 a 100); i getti partono da questa sfera.
+
+Compilato automaticamente da Horizons quando una cometa viene confermata. Modificalo qui se serve.
+
+Una modifica dopo Play riporta la simulazione allo snapshot preso al Play.</value>
+  </data>
+  <data name="Tabs_Comet_HelpHeaderPoleRa" xml:space="preserve">
+    <value>RA del polo</value>
+  </data>
+  <data name="Tabs_Comet_HelpPoleRa" xml:space="preserve">
+    <value>Ascensione retta dell'asse di rotazione (J2000), in gradi.
+
+Insieme alla Dec del polo stabilisce dove punta l'asse di rotazione nel cielo. Non sono rotazioni: il nucleo ruota solo attorno al proprio asse, e l'asse resta fisso nello spazio; RA/Dec lo orientano soltanto.</value>
+  </data>
+  <data name="Tabs_Comet_HelpHeaderPoleDec" xml:space="preserve">
+    <value>Dec del polo</value>
+  </data>
+  <data name="Tabs_Comet_HelpPoleDec" xml:space="preserve">
+    <value>Declinazione dell'asse di rotazione (J2000), in gradi.
+
+Insieme alla RA del polo stabilisce dove punta l'asse di rotazione nel cielo. Non sono rotazioni: il nucleo ruota solo attorno al proprio asse, e l'asse resta fisso nello spazio; RA/Dec lo orientano soltanto.</value>
+  </data>
+  <data name="Tabs_Comet_HelpHeaderPrimeMeridian" xml:space="preserve">
+    <value>Meridiano principale</value>
+  </data>
+  <data name="Tabs_Comet_HelpPrimeMeridian" xml:space="preserve">
+    <value>L'angolo di rotazione del nucleo alla data di riferimento J2000, in gradi (dove è rivolta la longitudine 0).
+
+Stabilisce quale lato è rivolto dove in un dato istante, cioè la fase delle spirali dei getti, non il contorno del ventaglio.</value>
+  </data>
+  <data name="Tabs_Comet_HelpHeaderRotPeriod" xml:space="preserve">
+    <value>Periodo di rotazione (h)</value>
+  </data>
+  <data name="Tabs_Comet_HelpRotPeriod" xml:space="preserve">
+    <value>Periodo di rotazione siderale, in ore. Modifica la velocità di rotazione nella sezione Avanzate (°/giorno); il segno (progrado/retrogrado) viene mantenuto. Esempio: 718 °/giorno = 12,03 h.
+
+Fissa anche la durata di una rotazione in Intervallo modello.</value>
+  </data>
+  <data name="Tabs_Comet_HelpHeaderRatesAdvanced" xml:space="preserve">
+    <value>Avanzate: velocità</value>
+  </data>
+  <data name="Tabs_Comet_HelpRatesAdvanced" xml:space="preserve">
+    <value>Velocità in RA e in Dec: lenta deriva dell'ascensione retta e della declinazione dell'asse di rotazione (precessione), in gradi per secolo giuliano. 0, il default, mantiene l'asse fisso.
+
+Velocità di rotazione: la rotazione del nucleo in gradi al giorno (la velocità di rotazione IAU W), la stessa rotazione del periodo: periodo (h) = 360 × 24 / |velocità|. Il segno indica rotazione progrado (+) o retrograda (−).</value>
+  </data>
+  <data name="Tabs_Comet_HelpHeaderBodyFixed" xml:space="preserve">
+    <value>Orientamento della camera solidale al nucleo</value>
+  </data>
+  <data name="Tabs_Comet_HelpBodyFixed" xml:space="preserve">
+    <value>Sì: una camera agganciata al nucleo ruota con esso, quindi la superficie del nucleo resta ferma nella vista.
+
+No: la rotazione viene compensata, quindi la vista mantiene la sua direzione rispetto alle stelle mentre il nucleo ruota.</value>
+  </data>
+  <data name="Tabs_Timeline_HelpHeaderEpochRange" xml:space="preserve">
+    <value>Periodo simulato</value>
+  </data>
+  <data name="Tabs_Timeline_HelpEpochRange" xml:space="preserve">
+    <value>Inizio e Fine del periodo simulato: quello confermato (prima di una conferma, l'intervallo proposto nella scheda Cometa), nella scala dei tempi indicata nelle etichette (Impostazioni › Scala dei tempi per le date).
+
+Qui è in sola lettura: modificalo nella scheda Cometa (passo 3), poi Download &amp; Commit lì.</value>
+  </data>
+  <data name="Tabs_Timeline_HelpHeaderCommittedRange" xml:space="preserve">
+    <value>Intervallo confermato</value>
+  </data>
+  <data name="Tabs_Timeline_HelpCommittedRange" xml:space="preserve">
+    <value>L'intervallo su cui gira la simulazione: le effemeridi della cometa lo coprono, e Play, Reset, Vai alla fine e Vai restano al suo interno.</value>
+  </data>
+  <data name="Tabs_Timeline_HelpHeaderSpeed" xml:space="preserve">
+    <value>Velocità di riproduzione</value>
+  </data>
+  <data name="Tabs_Timeline_HelpSpeed" xml:space="preserve">
+    <value>Quanto velocemente scorre il tempo simulato durante la riproduzione, come tempo simulato per secondo reale (per esempio 1 h/s: un'ora simulata al secondo).</value>
+  </data>
+  <data name="Tabs_Timeline_HelpHeaderPlayback" xml:space="preserve">
+    <value>Riproduzione</value>
+  </data>
+  <data name="Tabs_Timeline_HelpPlayback" xml:space="preserve">
+    <value>Reimposta: torna all'epoca di inizio dell'intervallo confermato; la polvere viene ricostruita lì.
+
+Avvia / Pausa: il tempo simulato scorre alla velocità scelta e la polvere viene calcolata fotogramma per fotogramma, così la coda evolve mentre la guardi. Pausa mantiene l'epoca corrente.
+
+Vai alla fine: salta all'epoca finale senza animazione. La polvere lì viene ricostruita subito, quindi può apparire completa prima che durante la riproduzione.</value>
+  </data>
+  <data name="Tabs_Timeline_TipReset" xml:space="preserve">
+    <value>Reimposta</value>
+  </data>
+  <data name="Tabs_Timeline_TipPlayPause" xml:space="preserve">
+    <value>Avvia / Pausa</value>
+  </data>
+  <data name="Tabs_Timeline_TipRunToEnd" xml:space="preserve">
+    <value>Vai alla fine</value>
+  </data>
+  <data name="Tabs_Timeline_TipGo" xml:space="preserve">
+    <value>Vai all'epoca</value>
+  </data>
+  <data name="Tabs_Timeline_HelpHeaderCurrentEpoch" xml:space="preserve">
+    <value>Epoca corrente</value>
+  </data>
+  <data name="Tabs_Timeline_HelpCurrentEpoch" xml:space="preserve">
+    <value>L'epoca corrente della simulazione, nella scala dei tempi indicata nell'etichetta.
+
+Scrivi un'epoca dentro l'intervallo confermato e premi Invio, o Vai, per saltarci; la polvere viene ricostruita a quell'epoca.</value>
+  </data>
+  <data name="ModeBar_ModelShortTip" xml:space="preserve">
+    <value>Modello: confronto con immagine</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderGizmo" xml:space="preserve">
+    <value>Mostra gizmo sferico</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderJetAngles" xml:space="preserve">
+    <value>Mostra angoli del getto</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderStreamColor" xml:space="preserve">
+    <value>Colore del flusso</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderJetBeta" xml:space="preserve">
+    <value>β (beta)</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderJetQDust" xml:space="preserve">
+    <value>Q_dust a 1 UA</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderJetDiameter" xml:space="preserve">
+    <value>Diametro</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderQpr" xml:space="preserve">
+    <value>Q_pr</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderSizeLawQ" xml:space="preserve">
+    <value>Legge dimensionale q</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderSizeRangeF" xml:space="preserve">
+    <value>Intervallo dimensionale F</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderJetGrain" xml:space="preserve">
+    <value>Grani (questo getto)</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderJetActivity" xml:space="preserve">
+    <value>Attività (questo getto)</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderQd1Au" xml:space="preserve">
+    <value>Q_d a 1 UA (kg/s)</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderCopyGrain" xml:space="preserve">
+    <value>Copia su tutti i getti</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderJetDefaults" xml:space="preserve">
+    <value>Valori predefiniti per i nuovi getti</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderActivity" xml:space="preserve">
+    <value>Attività (Q_d)</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderQdExponent" xml:space="preserve">
+    <value>Esponente della legge di Q_d</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderQdCutoff" xml:space="preserve">
+    <value>Distanza di cutoff (UA)</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderQdMax" xml:space="preserve">
+    <value>Q_d massimo (kg/s)</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderSizeDistribution" xml:space="preserve">
+    <value>Distribuzione dimensionale dei grani</value>
+  </data>
+  <data name="Tabs_Model_HelpSun" xml:space="preserve">
+    <value>Geometria Sole–cometa: la distanza della cometa dal Sole (UA), la latitudine subsolare, STO (l'angolo di fase Sole–oggetto–osservatore) e l'angolo di posizione (PA) del Sole, in gradi.&#10;&#10;Pannello obsoleto, disattivato: il motore ora li calcola dalle effemeridi SPK di JPL Horizons lungo la linea temporale delle epoche, quindi non serve inserirli a mano.</value>
+  </data>
+  <data name="Tabs_Model_HelpShowReferenceError" xml:space="preserve">
+    <value>Traccia due linee dalla cometa alla sua orbita di riferimento (la traccia rossa):&#10;• fuori traccia (cross-track): verso il punto più vicino della traccia;&#10;• stessa epoca: verso il punto in cui, secondo il riferimento, la cometa dovrebbe trovarsi ora.&#10;&#10;Ogni linea è mostrata solo finché è più lunga di 10 raggi del nucleo.</value>
+  </data>
+  <data name="Tabs_Model_HelpDustVisibility" xml:space="preserve">
+    <value>Stiramento di visualizzazione della polvere: l'addolcimento di una curva asinh applicata alla profondità ottica accumulata, relativa alla polvere più luminosa nella vista (si adatta alla vista come un occhio). Da 0,00001 a 1, su scala logaritmica.&#10;&#10;Più piccolo: la coda e la scia deboli e vecchie (migliaia di volte più deboli della chioma) diventano visibili mentre la chioma satura.&#10;1: quasi lineare, luminosità fisicamente proporzionale.&#10;&#10;Solo visivo: la polvere simulata non cambia.</value>
+  </data>
+  <data name="Tabs_Model_HelpDustFlow" xml:space="preserve">
+    <value>Segni di luminosità che viaggiano con la polvere lungo le sincrone (la polvere emessa in uno stesso istante), un indizio di moto vicino al nucleo: picco 4×, minimo 0,15×, media 1.&#10;&#10;Disattivati per impostazione predefinita: visti da 0,03 UA e oltre, i segni sono il ventaglio stesso delle sincrone, raggi netti attraverso il nucleo che la profondità ottica fisica non mostra.&#10;&#10;Solo visivo. La loro velocità si regola con il time-lapse del flusso.</value>
+  </data>
+  <data name="Tabs_Model_HelpDustRhoNorm" xml:space="preserve">
+    <value>Divide la luminosità della polvere per la distanza dal nucleo (ρ), così la chioma interna brillante e i getti esterni deboli condividono un'unica esposizione.&#10;&#10;Solo visualizzazione: la polvere simulata non cambia.</value>
+  </data>
+  <data name="Tabs_Model_HelpDustTrajectories" xml:space="preserve">
+    <value>Disegna come linee i percorsi di circa 200 grani da quando hanno lasciato il nucleo, un colore per getto.</value>
+  </data>
+  <data name="Tabs_Model_HelpDustExposure" xml:space="preserve">
+    <value>Schiarisce (+) o scurisce (−) la polvere rispetto all'esposizione automatica, in stop fotografici (EV), da −6 a +6 a passi di 0,25. Uno stop raddoppia o dimezza la luminosità.</value>
+  </data>
+  <data name="Tabs_Model_HelpDustTracers" xml:space="preserve">
+    <value>Disegna un ammasso di polvere su 256 come punti luminosi nelle posizioni esatte delle sue dimensioni di grano, dai grani grandi e lenti a quelli piccoli e veloci: i punti coprono la coda.&#10;&#10;La polvere si sposta a 2–150 m/s mentre un pixel di una vista ampia copre decine di km: a bassa velocità di simulazione si muove molto meno di un pixel al secondo e i punti densi si fondono in una nebbia ferma. I traccianti sono particelle reali da seguire (aumenta la velocità di simulazione per vederle scorrere).&#10;&#10;Solo visivo.</value>
+  </data>
+  <data name="Tabs_Model_HelpDustFlowSpeed" xml:space="preserve">
+    <value>Velocità dei segni di luminosità (impulsi del flusso) che viaggiano con la polvere mentre la simulazione è in corso; si fermano in pausa. Da 1 a 10000, su scala logaritmica.&#10;&#10;1: i segni si muovono esattamente con la polvere (la sua velocità reale sullo schermo, spesso molto meno di un pixel al secondo nelle viste ampie).&#10;K: ogni segno si muove K volte più veloce della sua polvere, nella sua direzione, così l'intero sciame mantiene il suo vero campo di velocità a un ritmo leggibile. Cambiarlo non fa mai saltare i segni.&#10;&#10;Solo visivo.</value>
+  </data>
+  <data name="Tabs_Model_HelpGizmo" xml:space="preserve">
+    <value>La sfera a reticolo e gli assi attorno al nucleo. Salvato con il file.&#10;&#10;Le caselle sotto ne scelgono le parti:&#10;• Grid: il reticolo di latitudine / longitudine;&#10;• Body X/Y: gli assi X (rosso) e Y (verde) solidali al corpo, che ruotano con il nucleo;&#10;• Spin axis: l'asse di rotazione (Z del corpo, blu);&#10;• Sun: la freccia verso il Sole;&#10;• Velocity: la direzione della velocità eliocentrica della cometa (magenta).</value>
+  </data>
+  <data name="Tabs_Model_HelpJetAngles" xml:space="preserve">
+    <value>Disegna nella vista la latitudine e la longitudine del getto selezionato come archi, con i loro valori in gradi. Salvato con il file.</value>
+  </data>
+  <data name="Tabs_Model_HelpJetLatitude" xml:space="preserve">
+    <value>Latitudine della sorgente del getto sul nucleo, in gradi nel sistema solidale al corpo: +90 è il polo nord di rotazione, 0 l'equatore, −90 il polo sud.</value>
+  </data>
+  <data name="Tabs_Model_HelpJetLongitude" xml:space="preserve">
+    <value>Longitudine della sorgente del getto sul nucleo, in gradi dal meridiano fondamentale (da −180 a 180). La rotazione del nucleo trascina il getto con sé.</value>
+  </data>
+  <data name="Tabs_Model_HelpJetStreamColor" xml:space="preserve">
+    <value>Colore usato per disegnare questo getto nella vista (la sua polvere e la sua linea di direzione).&#10;&#10;Solo visualizzazione: non cambia la fisica.</value>
+  </data>
+  <data name="Tabs_Model_HelpJetBeta" xml:space="preserve">
+    <value>Calcolato, sola lettura. β è il rapporto tra la forza della pressione di radiazione solare e la gravità solare sul grano di riferimento:&#10;β ≈ 0,57 · Q_pr / (ρ · s), con ρ la densità in g/cm³ e s il raggio del grano in µm.&#10;&#10;I grani piccoli e leggeri hanno un β maggiore e si allontanano più rapidamente dal Sole.</value>
+  </data>
+  <data name="Tabs_Model_HelpJetQDust" xml:space="preserve">
+    <value>Calcolato, sola lettura. Il tasso di produzione in massa di polvere a 1 UA dal Sole, in kg/s, come lo applica il motore: il Q_d a 1 UA di questo getto limitato al massimo comune al modello (Q_d massimo).</value>
+  </data>
+  <data name="Tabs_Model_HelpJetDiameter" xml:space="preserve">
+    <value>Diametro del grano di riferimento di questo getto, in µm. Con la densità e Q_pr determina β, la spinta della pressione di radiazione: i grani più piccoli o più leggeri si allontanano più rapidamente dal Sole.&#10;&#10;La legge dimensionale copre raggi da s₀/F a s₀·F attorno a s₀, metà del diametro.</value>
+  </data>
+  <data name="Tabs_Model_HelpJetDensity" xml:space="preserve">
+    <value>Densità di massa dei grani di questo getto, in g/cm³ (polvere cometaria circa da 0,5 a 1). Entra in β e nella massa di polvere necessaria per una data luminosità.</value>
+  </data>
+  <data name="Tabs_Model_HelpJetQpr" xml:space="preserve">
+    <value>Efficienza della pressione di radiazione Q_pr dei grani di questo getto (da 0,5 a 2; 1 è un corpo grigio). Scala solo β, non la luminosità.</value>
+  </data>
+  <data name="Tabs_Model_HelpJetAlbedo" xml:space="preserve">
+    <value>Albedo geometrica della polvere di questo getto (da 0,01 a 0,5; polvere cometaria da 0,03 a 0,06). Scala solo la luminosità; la quantità di polvere è il tasso di produzione Q_d del getto.</value>
+  </data>
+  <data name="Tabs_Model_HelpJetSizeQ" xml:space="preserve">
+    <value>Esponente q della legge dimensionale dei grani di questo getto, n(s) ∝ s^−q (da 2 a 5; 3,5 è il valore usuale). Un q maggiore significa più grani piccoli.&#10;&#10;Limitazione: q cambia solo i singoli granelli luminosi; la resa continua della polvere assume q = 3,5.</value>
+  </data>
+  <data name="Tabs_Model_HelpJetSizeRange" xml:space="preserve">
+    <value>Fattore di intervallo F dei grani di questo getto (da 1 a 1000): i raggi vanno da s₀/F a s₀·F, dove s₀ è metà del diametro. Un F maggiore significa una gamma più ampia di dimensioni dei grani.</value>
+  </data>
+  <data name="Tabs_Model_HelpJetGrain" xml:space="preserve">
+    <value>I grani di polvere propri di questo getto: ogni getto ha i suoi, e un nuovo getto parte dai valori predefiniti più in basso.&#10;&#10;I raggi dei grani seguono n(s) ∝ s^−q da s₀/F a s₀·F, s₀ = diametro/2 (q = 3.5, F = 10, 100 µm → raggi 5–500 µm).&#10;&#10;Diametro, densità e Q_pr determinano β ∝ Q_pr/(ρ·s), cioè quanto la luce solare spinge i grani lontano dal Sole. L'albedo determina quanto sono luminosi; la quantità di polvere è il tasso di produzione Q_d del getto (Advanced: activity).&#10;&#10;Ogni campo ha il suo ? con il suo intervallo.&#10;&#10;Limitazione: q cambia solo i singoli granelli luminosi; la resa continua della polvere è costruita per q = 3.5 qualunque sia q.</value>
+  </data>
+  <data name="Tabs_Model_HelpJetActivity" xml:space="preserve">
+    <value>Il tasso di produzione in massa di polvere Q_d di questo getto a 1 UA dal Sole, in kg/s: quanta polvere produce. I getti si sommano: il totale della cometa è la lettura Σ in Advanced: activity (Q_d) tra i valori predefiniti.&#10;&#10;Q_d(r) = min(max, Q_d₀ · r^−k), nullo oltre il cutoff; l'esponente k, il cutoff e il massimo sono comuni a tutti i getti (Advanced: activity (Q_d) sotto Defaults for new jets).&#10;&#10;Q_d non dipende dal grano (densità, dimensione, albedo) né dalla velocità: questi determinano solo la luminosità e β.&#10;&#10;Le comete vanno da molto meno di 1 kg/s a migliaia di kg/s.</value>
+  </data>
+  <data name="Tabs_Model_HelpJetDustRate0" xml:space="preserve">
+    <value>Il tasso di produzione in massa di polvere di questo getto a 1 UA dal Sole, in kg/s. Scala come r_h^−k fino al massimo e si annulla oltre il cutoff (entrambi comuni a tutti i getti).&#10;&#10;Le comete vanno da molto meno di 1 kg/s a migliaia di kg/s.</value>
+  </data>
+  <data name="Tabs_Model_HelpCopyGrain" xml:space="preserve">
+    <value>Assegna a tutti gli altri getti i grani e l'attività di questo getto: diametro, densità, Q_pr, albedo, q, F e Q_d₀.&#10;&#10;I loro siti, velocità e colori restano invariati.</value>
+  </data>
+  <data name="Tabs_Model_HelpJetDefaults" xml:space="preserve">
+    <value>Ogni getto ha i propri grani (diametro, densità, Q_pr, albedo, q, F) e il proprio Q_d₀: modificali nei pannelli Grain e Activity del getto selezionato.&#10;&#10;I valori qui sono quelli da cui parte un getto appena aggiunto; cambiarli non modifica i getti esistenti. Solo la forma della legge di Q_d (esponente, cutoff, massimo, in Advanced: activity) è comune a tutti i getti.</value>
+  </data>
+  <data name="Tabs_Model_HelpDustDensity" xml:space="preserve">
+    <value>Densità di massa dei grani dei nuovi getti, in g/cm³ (polvere cometaria circa da 0,5 a 1). Entra in β e nella massa di polvere necessaria per una data luminosità.&#10;&#10;Poi ogni getto ha la sua (nel suo pannello Grain).</value>
+  </data>
+  <data name="Tabs_Model_HelpDustDiameter" xml:space="preserve">
+    <value>Diametro del grano di riferimento dei nuovi getti, in µm. Con la densità e Q_pr determina β, la spinta della pressione di radiazione: i grani più piccoli o più leggeri si allontanano più rapidamente dal Sole.&#10;&#10;Poi ogni getto ha il suo (nel suo pannello Grain).</value>
+  </data>
+  <data name="Tabs_Model_HelpScatteringEfficiency" xml:space="preserve">
+    <value>Efficienza della pressione di radiazione Q_pr dei grani dei nuovi getti (da 0,5 a 2; 1 è un corpo grigio). Scala solo β, non la luminosità.&#10;&#10;Poi ogni getto ha la sua (nel suo pannello Grain).</value>
+  </data>
+  <data name="Tabs_Model_HelpDustAlbedo" xml:space="preserve">
+    <value>Albedo geometrica della polvere dei nuovi getti (da 0,01 a 0,5; polvere cometaria da 0,03 a 0,06). Scala solo la luminosità, non il tasso di produzione Q_d.&#10;&#10;Poi ogni getto ha la sua (nel suo pannello Grain).</value>
+  </data>
+  <data name="Tabs_Model_HelpActivity" xml:space="preserve">
+    <value>Q_d è il tasso di produzione in massa di polvere: quanta polvere (kg/s) produce la cometa a ogni distanza dal Sole.&#10;&#10;Q_d(r) = min(max, Q_d₀ · r^−k), nullo oltre il cutoff.&#10;• Q_d a 1 UA: il tasso a 1 UA (kg/s), per getto; il valore qui è quello predefinito per i nuovi getti.&#10;• Esponente k: quanto rapidamente il tasso cala con la distanza dal Sole (k = 2: al doppio della distanza → 4× meno polvere).&#10;• Cutoff: distanza alla quale l'emissione si ferma.&#10;• Max: limite del tasso vicino al Sole.&#10;k, cutoff e massimo sono comuni a tutti i getti.&#10;&#10;La riga Σ in alto è l'attività totale della cometa: i tassi Q_d dei getti si sommano. È mostrata a 1 UA dal Sole e, con una cometa confermata, alla sua distanza attuale.&#10;&#10;Q_d determina direttamente la quantità di polvere: non dipende dal grano né dalla velocità. Densità, diametro e albedo determinano quanto è luminosa quella polvere e quanto la pressione di radiazione spinge i grani (β ∝ 1/(ρ·s)), cioè quanto la chioma si piega lontano dal Sole.</value>
+  </data>
+  <data name="Tabs_Model_HelpDustRate0" xml:space="preserve">
+    <value>Tasso predefinito di produzione in massa di polvere a 1 UA dal Sole per i nuovi getti, in kg/s. Scala come r_h^−k fino al massimo e si annulla oltre il cutoff.&#10;&#10;Poi ogni getto ha il suo (nel suo pannello Activity).</value>
+  </data>
+  <data name="Tabs_Model_HelpDustRatePower" xml:space="preserve">
+    <value>Esponente k della legge di produzione Q_d(r) = Q_d₀ · r^−k, con r la distanza dal Sole in UA (da 1 a 4). 2 è il valore classico; un k maggiore significa che il tasso cala più rapidamente mentre la cometa si allontana.&#10;&#10;Comune a tutti i getti.</value>
+  </data>
+  <data name="Tabs_Model_HelpDustRateCutoff" xml:space="preserve">
+    <value>Distanza dal Sole, in UA (da 3 a 100), oltre la quale la cometa non emette polvere.&#10;&#10;Comune a tutti i getti.</value>
+  </data>
+  <data name="Tabs_Model_HelpDustRateMax" xml:space="preserve">
+    <value>Limite superiore del tasso di produzione di polvere di ciascun getto, in kg/s, perché l'emissione non cresca senza limite vicino al Sole.&#10;&#10;Comune a tutti i getti.</value>
+  </data>
+  <data name="Tabs_Model_HelpSizeDistribution" xml:space="preserve">
+    <value>L'intervallo dimensionale da cui partono i nuovi getti. L'esponente q si imposta per getto, nel pannello Grain di ciascun getto (i nuovi getti partono da q = 3.5).&#10;&#10;I raggi dei grani seguono n(s) ∝ s^−q da s₀/F a s₀·F, s₀ = diametro/2 (q = 3.5, F = 10, 100 µm → raggi 5–500 µm).&#10;&#10;In numero dominano i grani piccoli; in sezione d'urto (ciò che determina la luminosità) la legge è s^(2−q), quindi la luminosità favorisce i grani piccoli solo lentamente.&#10;&#10;La resa continua della polvere è costruita per q = 3.5; cambiare q influisce solo sui singoli granelli luminosi.</value>
+  </data>
+  <data name="Tabs_Model_HelpSizeRange" xml:space="preserve">
+    <value>Fattore di intervallo F predefinito per i nuovi getti (da 1 a 1000): i raggi dei grani vanno da s₀/F a s₀·F, dove s₀ è metà del diametro di riferimento. Un F maggiore significa una gamma più ampia di dimensioni dei grani.&#10;&#10;Poi ogni getto ha il suo (nel suo pannello Grain).</value>
+  </data>
+  <data name="Tabs_Settings_HelpDisplayMode" xml:space="preserve">
+    <value>Predefinita: disegna il nucleo come una semplice sfera procedurale del raggio del nucleo.&#10;&#10;Mesh personalizzata: disegna una mesh 3D importata con le sue texture, scelte qui sotto (importa le mesh nella scheda Importazioni).&#10;&#10;Solo aspetto: la simulazione non cambia. La scelta si blocca mentre la simulazione è in esecuzione.</value>
+  </data>
+  <data name="Tabs_Settings_HelpMesh" xml:space="preserve">
+    <value>Mesh 3D importata usata per disegnare il nucleo. Importa le mesh nella scheda Importazioni.&#10;&#10;Solo aspetto: la simulazione non cambia.</value>
+  </data>
+  <data name="Tabs_Settings_HelpChannelAlbedo" xml:space="preserve">
+    <value>Texture per il canale albedo: il colore di base e la riflettività della superficie del nucleo.&#10;&#10;Solo aspetto.</value>
+  </data>
+  <data name="Tabs_Settings_HelpChannelNormal" xml:space="preserve">
+    <value>Texture per il canale delle normali: il rilievo fine della superficie (rugosità e pendenze) usato per l'ombreggiatura.&#10;&#10;Solo aspetto.</value>
+  </data>
+  <data name="Tabs_Settings_HelpChannelRoughness" xml:space="preserve">
+    <value>Texture per il canale di rugosità: quanto ogni punto della superficie è opaco (ruvido) o lucido.&#10;&#10;Solo aspetto.</value>
+  </data>
+  <data name="Tabs_Settings_HelpChannelAo" xml:space="preserve">
+    <value>Texture per il canale di occlusione ambientale: scurisce le fessure che ricevono meno luce diffusa.&#10;&#10;Solo aspetto.</value>
+  </data>
+  <data name="Tabs_Settings_HelpBillboardTexture" xml:space="preserve">
+    <value>Texture importata da mostrare in una nuova finestra billboard sopra il desktop; il pulsante accanto apre la finestra. Importa le immagini nella scheda Importazioni.</value>
+  </data>
+  <data name="Tabs_Settings_HelpBillboardAspectLock" xml:space="preserve">
+    <value>Se attivo, cambiare la larghezza o l'altezza cambia anche l'altra, mantenendo le proporzioni dell'immagine.</value>
+  </data>
+  <data name="Tabs_Settings_HelpBillboardAlpha" xml:space="preserve">
+    <value>Opacità del billboard, da 0 (completamente trasparente) a 1 (completamente opaco).</value>
+  </data>
+  <data name="Tabs_Settings_HelpBillboardRotation" xml:space="preserve">
+    <value>Rotazione del billboard attorno al suo centro, in gradi (da −180 a 180). La maniglia di rotazione sul billboard fa lo stesso.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderImageHeightKm" xml:space="preserve">
+    <value>Altezza dell'immagine alla cometa (km)</value>
+  </data>
+  <data name="Tabs_Settings_HelpImageHeightKm" xml:space="preserve">
+    <value>L'estensione verticale dell'immagine alla cometa, in chilometri (decimali con il punto), per un'immagine senza WCS (per esempio un JPEG). Se impostata, prevale sulla scala di lastra.&#10;&#10;Vuoto: non impostata.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderPlateScale" xml:space="preserve">
+    <value>Scala di lastra (″/px)</value>
+  </data>
+  <data name="Tabs_Settings_HelpPlateScale" xml:space="preserve">
+    <value>La scala di lastra dell'immagine, in secondi d'arco per pixel dell'immagine (decimali con il punto). Un'immagine FITS la ricava dal suo WCS. L'altezza dell'immagine alla cometa, se impostata, prevale su di essa.&#10;&#10;Vuoto: non impostata.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderNucleusPixel" xml:space="preserve">
+    <value>Pixel del nucleo (px dell'immagine: x verso destra, y verso il basso, centri dei pixel ai numeri interi)</value>
+  </data>
+  <data name="Tabs_Settings_HelpNucleusPixel" xml:space="preserve">
+    <value>Dove si trova il nucleo della cometa nell'immagine, in pixel dell'immagine: x è la colonna da sinistra, y la riga dall'alto; il centro della prima colonna e della prima riga è 0. «Center on comet» porta questo punto sulla cometa.&#10;&#10;Vuoto: il centro dell'immagine.&#10;&#10;«Detect» trova il nucleo: la macchia di 9 × 9 px più luminosa nel terzo centrale dell'immagine, raffinata al baricentro pesato sulla luminosità entro 12 px (un'immagine FITS è misurata sui suoi dati, non sullo stretch).</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderPhysicalSize" xml:space="preserve">
+    <value>Dimensione fisica</value>
+  </data>
+  <data name="Tabs_Settings_HelpPhysicalSize" xml:space="preserve">
+    <value>Dimensiona e posiziona il billboard come il cielo coperto dalla sua immagine, per l'osservatore terrestre.&#10;&#10;«Apply physical size»: dimensiona il billboard sul cielo coperto dalla sua immagine alla scala attuale dell'osservatore terrestre, e lo mantiene così a ogni zoom e ridimensionamento (un ridimensionamento manuale scioglie il vincolo).&#10;&#10;«Center on comet»: sposta il billboard in modo che il suo pixel del nucleo (il centro dell'immagine se non impostato) cada sulla cometa come la disegna il viewport, mantenendone dimensione e rotazione. Attivo mentre la cometa è sullo schermo.&#10;&#10;«Match camera to image»: punta l'osservatore terrestre sulla cometa e ne imposta il campo in modo che l'altezza del viewport mostri l'altezza dell'immagine (km, oppure scala di lastra × altezza dell'immagine); il billboard riempie l'altezza del viewport, centrato sulla cometa.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderFlipLon" xml:space="preserve">
+    <value>Inverti il segno della longitudine</value>
+  </data>
+  <data name="Tabs_Settings_HelpFlipLon" xml:space="preserve">
+    <value>Usa il segno opposto della longitudine del sito: alcuni header indicano «ovest» per un valore positivo verso est (il LONGITUD del Liverpool Telescope). Il LST dell'header lo decide quando è presente.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderStretch" xml:space="preserve">
+    <value>Stretch</value>
+  </data>
+  <data name="Tabs_Settings_HelpStretch" xml:space="preserve">
+    <value>Come i valori dei dati FITS vengono mappati su nero e bianco.&#10;&#10;Modalità: ZScale è lo zscale di IRAF (il predefinito dell'importazione); Percentile pone nero e bianco a due percentili; Manuale li pone a due valori in unità dei dati.&#10;&#10;Curva: la curva di trasferimento tra nero e bianco, lineare, logaritmica o asinh (fa emergere la polvere debole).&#10;&#10;I due valori (decimali con il punto): il percentile basso e alto in % in modalità Percentile, i punti del nero e del bianco in unità dei dati in modalità Manuale.&#10;&#10;«Apply stretch» ridisegna l'immagine.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderPixelRatio" xml:space="preserve">
+    <value>Rapporto tra pixel</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderCompare" xml:space="preserve">
+    <value>Confronto con la simulazione</value>
+  </data>
+  <data name="Tabs_Settings_HelpCompare" xml:space="preserve">
+    <value>«Model range»: inserisce l'epoca di questa osservazione (metà esposizione, altrimenti DATE-OBS) nella casella «rotazioni che terminano a» della scheda Timeline e imposta Inizio/Fine a N rotazioni del nucleo che terminano lì (almeno 1 giorno). Propone soltanto l'intervallo: confermalo nella scheda Cometa, oppure usa Recommit nella scheda Timeline.&#10;&#10;«Orient to image» (solo osservatore terrestre): guarda il centro dell'immagine (WCS), ruota il billboard come il cielo nella vista e lo sposta al centro del viewport.&#10;&#10;«Match camera to image» (solo osservatore terrestre): punta sulla cometa e adatta il campo dell'immagine (scala di lastra WCS × altezza) all'altezza del viewport; il billboard lo riempie, centrato sulla cometa.&#10;&#10;«Set up comparison»: entra nell'osservatore terrestre, poi va all'epoca, usa il sito, allinea il campo, orienta, centra il billboard e blocca il viewport per il confronto.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderDustQuality" xml:space="preserve">
+    <value>Qualità</value>
+  </data>
+  <data name="Tabs_Settings_HelpDustQuality" xml:space="preserve">
+    <value>Qualità del disegno delle polveri, da 1 (la più bassa e veloce) a 5 (ultra). Ogni passo disegna le polveri più finemente e costa più tempo di GPU.&#10;&#10;Spostare il cursore preimposta le quattro impostazioni di dettaglio sottostanti (volume, traiettorie, alone e riuso temporale). Modificarne una a mano porta la qualità a Personalizzata.&#10;&#10;Salvata per il prossimo avvio.</value>
+  </data>
+  <data name="Tabs_Settings_HelpVolumeDetail" xml:space="preserve">
+    <value>Dettaglio delle polveri volumetriche. Valori più bassi sono più veloci ma le disegnano in modo più grossolano; valori più alti sono più fini e costano più tempo di GPU.&#10;&#10;Impostato dal preset Qualità; salvato per il prossimo avvio.</value>
+  </data>
+  <data name="Tabs_Settings_HelpPropagateDetail" xml:space="preserve">
+    <value>Numero di passi di dimensione dei grani le cui orbite sono risolte esattamente a ogni fotogramma; le dimensioni intermedie sono interpolate.&#10;&#10;Valori più bassi sono più veloci, con code di polvere un po' più dritte.&#10;&#10;Impostato dal preset Qualità; salvato per il prossimo avvio.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHazeDetail" xml:space="preserve">
+    <value>Pacchetti per gruppo di polveri quando l'alone è disegnato al livello più grossolano.&#10;&#10;Valori più bassi sono più veloci, con la luce dell'alone campionata in modo più grossolano.&#10;&#10;Impostato dal preset Qualità; salvato per il prossimo avvio.</value>
+  </data>
+  <data name="Tabs_Settings_HelpReuseTolerance" xml:space="preserve">
+    <value>Le polveri che si sono spostate di meno di questo numero di pixel sullo schermo vengono riutilizzate invece di essere ridisegnate (Disattivato, oppure da 1 a 16 px).&#10;&#10;Disattivato ridisegna ogni fotogramma da zero; valori più alti sono più veloci ma possono sbavare le polveri in movimento.&#10;&#10;Impostato dal preset Qualità; salvato per il prossimo avvio.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewDiagnostics" xml:space="preserve">
+    <value>Pannelli diagnostici</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewDiagnostics" xml:space="preserve">
+    <value>Mostra sopra la vista i pannelli di debug delle coordinate della camera, della storia delle polveri, della linea dell'osservatore e delle orbite, in tutte le viste contemporaneamente.&#10;&#10;Servono a verificare il motore; nascosti per impostazione predefinita.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewComparisonLock" xml:space="preserve">
+    <value>Blocca la vista per il confronto</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewComparisonLock" xml:space="preserve">
+    <value>Blocca rotazione orbitale, spostamento e zoom con il mouse e disattiva le impostazioni di proiezione, così la vista resta allineata a un'immagine telescopica.&#10;&#10;Disattivalo per muovere di nuovo la camera.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewProjectionType" xml:space="preserve">
+    <value>Tipo di proiezione</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewProjectionType" xml:space="preserve">
+    <value>Prospettica: gli oggetti lontani appaiono più piccoli, come in una fotocamera. Il campo visivo determina lo zoom.&#10;&#10;Ortografica: nessuna prospettiva, la dimensione di un oggetto non dipende dalla sua distanza (come in una mappa o in un'immagine telescopica piana). La semi-larghezza e la semi-altezza determinano cosa è visibile.&#10;&#10;I parametri di entrambe si trovano in Avanzate: proiezione.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewProjectionAdvanced" xml:space="preserve">
+    <value>Avanzate: proiezione</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewProjectionAdvanced" xml:space="preserve">
+    <value>Il campo visivo (prospettica) oppure la semi-larghezza e la semi-altezza (ortografica), i piani di taglio vicino e lontano e le unità in cui sono mostrati.&#10;&#10;Il comando Adatta la camera all'immagine di un billboard imposta invece il campo a partire dall'immagine.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewFov" xml:space="preserve">
+    <value>Campo visivo</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewFov" xml:space="preserve">
+    <value>Campo visivo verticale della camera prospettica, nell'unità scelta in Unità qui sotto.&#10;&#10;Valori più piccoli ingrandiscono; i campi dei telescopi si misurano in primi d'arco.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewFovUnits" xml:space="preserve">
+    <value>Unità del campo visivo</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewFovUnits" xml:space="preserve">
+    <value>Unità del campo visivo: gradi, primi d'arco (1/60 di grado) o secondi d'arco (1/3600 di grado).&#10;&#10;Cambia solo la visualizzazione: il campo resta lo stesso.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewNear" xml:space="preserve">
+    <value>Piano di taglio vicino</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewPerspNear" xml:space="preserve">
+    <value>Gli oggetti più vicini alla camera di questa distanza non vengono disegnati.&#10;&#10;Mostrato nelle unità di distanza qui sotto.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewFar" xml:space="preserve">
+    <value>Piano di taglio lontano</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewPerspFar" xml:space="preserve">
+    <value>Gli oggetti più lontani dalla camera di questa distanza non vengono disegnati.&#10;&#10;Mostrato nelle unità di distanza qui sotto.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewDistanceUnits" xml:space="preserve">
+    <value>Unità di distanza</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewDistanceUnits" xml:space="preserve">
+    <value>Unità usata per mostrare le distanze dei piani di taglio: UA, km o m.&#10;&#10;Cambia solo la visualizzazione; i valori sono memorizzati in UA.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewHalfWidth" xml:space="preserve">
+    <value>Semi-larghezza</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewHalfWidth" xml:space="preserve">
+    <value>Metà della larghezza visibile della vista ortografica, nelle unità scelte: la vista si estende di più o meno questo valore attorno al centro.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewHalfHeight" xml:space="preserve">
+    <value>Semi-altezza</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewHalfHeight" xml:space="preserve">
+    <value>Metà dell'altezza visibile della vista ortografica, nelle unità scelte: la vista si estende di più o meno questo valore attorno al centro.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewOrthoUnits" xml:space="preserve">
+    <value>Unità</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewOrthoUnits" xml:space="preserve">
+    <value>Unità usata per mostrare la semi-larghezza, la semi-altezza e i piani di taglio: UA, km o m.&#10;&#10;Cambia solo la visualizzazione; i valori sono memorizzati in UA.</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewOrthoNear" xml:space="preserve">
+    <value>Distanza minima lungo la direzione di vista che viene disegnata, nelle unità scelte. Ciò che è più vicino non viene disegnato.</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewOrthoFar" xml:space="preserve">
+    <value>Distanza massima lungo la direzione di vista che viene disegnata, nelle unità scelte. Ciò che è più lontano non viene disegnato.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewProportionsLock" xml:space="preserve">
+    <value>Mantieni le proporzioni</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewProportionsLock" xml:space="preserve">
+    <value>Mantiene il rapporto tra semi-larghezza e semi-altezza uguale alla forma della vista, anche quando la finestra viene ridimensionata, così l'immagine non viene mai deformata.&#10;&#10;Ripristina proporzioni ricalcola una volta la semi-larghezza dalla semi-altezza.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewShowBehindCamera" xml:space="preserve">
+    <value>Mostra gli oggetti dietro la camera</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewShowBehindCamera" xml:space="preserve">
+    <value>Solo ortografica: disegna anche la geometria dietro il piano della camera (entro la distanza lontana), come fa un'immagine telescopica.&#10;&#10;Le polveri dietro la camera non vengono disegnate. Una vista prospettica non può mostrarla.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewPhysicalLighting" xml:space="preserve">
+    <value>Illuminazione fisica</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewPhysicalLighting" xml:space="preserve">
+    <value>Solo luce solare diretta, scalata con la distanza eliocentrica r della cometa come (1 UA / r)², ed esposta in modo che una superficie bianca rivolta al Sole a 1 UA sia disegnata bianca. Nessuna luce ambiente.&#10;&#10;La superficie non raggiunta dal Sole è disegnata in indaco scuro.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewNucleusFromEarth" xml:space="preserve">
+    <value>Nucleo dalla Terra</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewNucleusFromEarth" xml:space="preserve">
+    <value>Passa all'osservatore terrestre che insegue la cometa, con il nord celeste in alto e un campo alto pochi diametri del nucleo: il nucleo illuminato dal Sole come visto dalla Terra.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewNucleusExposure" xml:space="preserve">
+    <value>Esposizione del nucleo</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewNucleusExposure" xml:space="preserve">
+    <value>Luminosità del nucleo illuminato dal Sole, in stop (EV): ogni passo intero la raddoppia o la dimezza; il cursore si muove a mezzi stop.&#10;&#10;A 0 una superficie bianca rivolta al Sole è disegnata bianca.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderObserverTopocentric" xml:space="preserve">
+    <value>Osservatore sulla superficie terrestre</value>
+  </data>
+  <data name="Tabs_Settings_HelpObserverTopocentric" xml:space="preserve">
+    <value>Attivo (topocentrico): l'osservatore si trova nel sito del telescopio sulla superficie terrestre (latitudine e longitudine qui sotto) e ruota con la Terra. Questo sposta la posizione apparente degli oggetti vicini per la parallasse diurna e aggiunge un orizzonte.&#10;&#10;Disattivo (geocentrico): la camera è al centro della Terra e ne segue solo il moto attorno al Sole.&#10;&#10;La vista non ruota mai con la Terra. Salvato nel file.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderObserverNorthUp" xml:space="preserve">
+    <value>Nord in alto</value>
+  </data>
+  <data name="Tabs_Settings_HelpObserverNorthUp" xml:space="preserve">
+    <value>Attivo: la vista è allineata al nord celeste (J2000), nord in alto ed est a sinistra, come un'immagine telescopica.&#10;&#10;Disattivo: allineata al polo dell'eclittica (dal lato dell'equatore in cui si trova il sito).&#10;&#10;Salvato nel file.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderObserverLatitude" xml:space="preserve">
+    <value>Latitudine</value>
+  </data>
+  <data name="Tabs_Settings_HelpObserverLatitude" xml:space="preserve">
+    <value>Latitudine del sito di osservazione in gradi, positiva a nord dell'equatore (da −90 a 90). Usata dall'osservatore topocentrico.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderObserverLongitude" xml:space="preserve">
+    <value>Longitudine</value>
+  </data>
+  <data name="Tabs_Settings_HelpObserverLongitude" xml:space="preserve">
+    <value>Longitudine del sito di osservazione in gradi, positiva a est di Greenwich (da −180 a 180). Usata dall'osservatore topocentrico.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderObserverLookDirection" xml:space="preserve">
+    <value>Direzione di vista</value>
+  </data>
+  <data name="Tabs_Settings_HelpObserverLookDirection" xml:space="preserve">
+    <value>Vista libera: trascina per guardarti attorno; la direzione resta fissa rispetto alle stelle.&#10;&#10;Inseguimento della cometa: mantiene la cometa esattamente al centro della vista.&#10;&#10;Inseguimento del Sole: mantiene il Sole al centro della vista.&#10;&#10;Dalla superficie, mentre l'oggetto inseguito è sotto l'orizzonte, la vista è rivolta al punto dell'orizzonte in cui sorgerà.&#10;&#10;Ripristina proiezione predefinita riapplica la proiezione di inseguimento in cui l'oggetto occupa il 10% della vista.</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderObserverScale" xml:space="preserve">
+    <value>Scala telescopica</value>
+  </data>
+  <data name="Tabs_Settings_HelpObserverScale" xml:space="preserve">
+    <value>L'angolo coperto da un pixel dello schermo e il campo visivo; alla distanza della cometa anche i chilometri per pixel e la semi-larghezza e la semi-altezza della vista.</value>
+  </data>
 </root>

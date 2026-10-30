@@ -212,13 +212,17 @@
                        TextWrapping="Wrap" />
 
             <Grid ColumnDefinitions="Auto,16,*">
-              <TextBlock Grid.Column="0" Text="{Binding StrDisplayMode}" />
+              <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                <TextBlock Text="{Binding StrDisplayMode}" />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="CometDisplayModeHelp"
+                                             HelpHeader="{Binding StrDisplayMode}"
+                                             HelpContent="{Binding StrHelpDisplayMode}" FlyoutMaxWidth="300" />
+              </StackPanel>
               <!-- grouped by their parent panel, not by GroupName: a named group is global
                    while the view is unrooted, so two views' buttons fought forever -->
               <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="16"
                           IsEnabled="{Binding CometAppearance.IsWiringEnabled}">
-                <RadioButton Content="{Binding StrDisplayModeDefault}"
-                  ToolTip.Tip="Draw the nucleus as a plain procedural sphere of the nucleus radius. Appearance only: the simulation is unaffected."
+                <RadioButton Content="{Binding StrDisplayModeDefault}" AutomationProperties.AutomationId="CometDisplayModeDefault"
                              IsChecked="{Binding CometAppearance.IsDefaultMode}" />
                 <RadioButton Content="{Binding StrDisplayModeCustom}" AutomationProperties.AutomationId="CometDisplayModeCustom"
                              IsChecked="{Binding CometAppearance.IsCustomMode}"
@@ -239,10 +243,13 @@
                 <Grid ColumnDefinitions="Auto,16,*"
                       RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto"
                       IsEnabled="{Binding CometAppearance.IsWiringEnabled}">
-                  <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding StrMesh}" />
+                  <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                    <TextBlock Text="{Binding StrMesh}" />
+                    <controls:PropertyHelpButton AutomationProperties.AutomationId="CometMeshPickerHelp"
+                                                 HelpHeader="{Binding StrMesh}" HelpContent="{Binding StrHelpMesh}" />
+                  </StackPanel>
                   <ComboBox Grid.Row="0" Grid.Column="2" HorizontalAlignment="Stretch"
                             AutomationProperties.AutomationId="CometMeshPicker"
-                            ToolTip.Tip="Imported 3D mesh used to draw the nucleus. Import meshes in the Imports tab. Appearance only."
                             ItemsSource="{Binding CometAppearance.MeshOptions}"
                             SelectedItem="{Binding CometAppearance.SelectedMesh}">
                     <ComboBox.ItemTemplate>
@@ -256,32 +263,48 @@
                     </ComboBox.ItemTemplate>
                   </ComboBox>
 
-                  <TextBlock Grid.Row="2" Grid.Column="0" Text="{Binding StrChannelAlbedo}" />
+                  <StackPanel Grid.Row="2" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                    <TextBlock Text="{Binding StrChannelAlbedo}" />
+                    <controls:PropertyHelpButton AutomationProperties.AutomationId="CometTextureAlbedoPickerHelp"
+                                                 HelpHeader="{Binding StrChannelAlbedo}" HelpContent="{Binding StrHelpChannelAlbedo}" />
+                  </StackPanel>
                   <ComboBox Grid.Row="2" Grid.Column="2" HorizontalAlignment="Stretch"
+                            AutomationProperties.AutomationId="CometTextureAlbedoPicker"
                             ItemsSource="{Binding CometAppearance.TextureOptions}"
                             SelectedItem="{Binding CometAppearance.SelectedAlbedo}"
-                            ToolTip.Tip="Texture for the albedo channel: the base colour and reflectivity of the nucleus surface."
                             ItemTemplate="{StaticResource TextureOptionTemplate}" />
 
-                  <TextBlock Grid.Row="4" Grid.Column="0" Text="{Binding StrChannelNormal}" />
+                  <StackPanel Grid.Row="4" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                    <TextBlock Text="{Binding StrChannelNormal}" />
+                    <controls:PropertyHelpButton AutomationProperties.AutomationId="CometTextureNormalPickerHelp"
+                                                 HelpHeader="{Binding StrChannelNormal}" HelpContent="{Binding StrHelpChannelNormal}" />
+                  </StackPanel>
                   <ComboBox Grid.Row="4" Grid.Column="2" HorizontalAlignment="Stretch"
+                            AutomationProperties.AutomationId="CometTextureNormalPicker"
                             ItemsSource="{Binding CometAppearance.TextureOptions}"
                             SelectedItem="{Binding CometAppearance.SelectedNormal}"
-                            ToolTip.Tip="Texture for the normal channel: fine surface relief (bumps and slopes) used for shading."
                             ItemTemplate="{StaticResource TextureOptionTemplate}" />
 
-                  <TextBlock Grid.Row="6" Grid.Column="0" Text="{Binding StrChannelRoughness}" />
+                  <StackPanel Grid.Row="6" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                    <TextBlock Text="{Binding StrChannelRoughness}" />
+                    <controls:PropertyHelpButton AutomationProperties.AutomationId="CometTextureRoughnessPickerHelp"
+                                                 HelpHeader="{Binding StrChannelRoughness}" HelpContent="{Binding StrHelpChannelRoughness}" />
+                  </StackPanel>
                   <ComboBox Grid.Row="6" Grid.Column="2" HorizontalAlignment="Stretch"
+                            AutomationProperties.AutomationId="CometTextureRoughnessPicker"
                             ItemsSource="{Binding CometAppearance.TextureOptions}"
                             SelectedItem="{Binding CometAppearance.SelectedRoughness}"
-                            ToolTip.Tip="Texture for the roughness channel: how matte (rough) or glossy each point of the surface is."
                             ItemTemplate="{StaticResource TextureOptionTemplate}" />
 
-                  <TextBlock Grid.Row="8" Grid.Column="0" Text="{Binding StrChannelAo}" />
+                  <StackPanel Grid.Row="8" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                    <TextBlock Text="{Binding StrChannelAo}" />
+                    <controls:PropertyHelpButton AutomationProperties.AutomationId="CometTextureAoPickerHelp"
+                                                 HelpHeader="{Binding StrChannelAo}" HelpContent="{Binding StrHelpChannelAo}" />
+                  </StackPanel>
                   <ComboBox Grid.Row="8" Grid.Column="2" HorizontalAlignment="Stretch"
+                            AutomationProperties.AutomationId="CometTextureAoPicker"
                             ItemsSource="{Binding CometAppearance.TextureOptions}"
                             SelectedItem="{Binding CometAppearance.SelectedAo}"
-                            ToolTip.Tip="Texture for the ambient occlusion channel: darkens crevices that receive less scattered light."
                             ItemTemplate="{StaticResource TextureOptionTemplate}" />
                 </Grid>
 
@@ -343,10 +366,14 @@
                        IsVisible="{Binding !Billboards.HasTextures}" />
 
             <Grid ColumnDefinitions="Auto,16,*,8,Auto">
-              <TextBlock Grid.Column="0" Text="{Binding StrBillboardTexture}" />
+              <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                <TextBlock Text="{Binding StrBillboardTexture}" />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="BillboardTexturePickerHelp"
+                                             HelpHeader="{Binding StrBillboardTexture}"
+                                             HelpContent="{Binding StrHelpBillboardTexture}" />
+              </StackPanel>
               <ComboBox Grid.Column="2" HorizontalAlignment="Stretch"
-                        x:Name="BillboardTexturePicker"
-                        ToolTip.Tip="Imported texture to show in a new billboard window over the desktop. Import images in the Imports tab."
+                        x:Name="BillboardTexturePicker" AutomationProperties.AutomationId="BillboardTexturePicker"
                         ItemsSource="{Binding Billboards.TextureOptions}"
                         SelectedItem="{Binding Billboards.SelectedTexture}">
                 <ComboBox.ItemTemplate>
@@ -403,21 +430,32 @@
                           <NumericUpDown AutomationProperties.AutomationId="BillboardWidth" Value="{Binding Width}" Minimum="16" Increment="1" FormatString="F0" ToolTip.Tip="Billboard width in pixels (at least 16)." />
                           <NumericUpDown AutomationProperties.AutomationId="BillboardHeight" Value="{Binding Height}" Minimum="16" Increment="1" FormatString="F0" ToolTip.Tip="Billboard height in pixels (at least 16)." />
                         </UniformGrid>
-                        <CheckBox IsChecked="{Binding IsAspectLocked}"
-                          ToolTip.Tip="When on, changing the width or height also changes the other, keeping the image proportions."
-                                  Content="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrBillboardAspectLock}" />
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                          <CheckBox IsChecked="{Binding IsAspectLocked}" AutomationProperties.AutomationId="BillboardAspectLock"
+                                    Content="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrBillboardAspectLock}" />
+                          <controls:PropertyHelpButton AutomationProperties.AutomationId="BillboardAspectLockHelp"
+                                                       HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrBillboardAspectLock}"
+                                                       HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpBillboardAspectLock}" />
+                        </StackPanel>
                       </StackPanel>
 
-                      <TextBlock Grid.Row="6" Grid.Column="0"
-                                 Text="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrBillboardAlpha}" />
+                      <StackPanel Grid.Row="6" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                        <TextBlock Text="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrBillboardAlpha}" />
+                        <controls:PropertyHelpButton AutomationProperties.AutomationId="BillboardAlphaHelp"
+                                                     HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrBillboardAlpha}"
+                                                     HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpBillboardAlpha}" />
+                      </StackPanel>
                       <Slider Grid.Row="6" Grid.Column="2" AutomationProperties.AutomationId="BillboardAlpha"
-                        ToolTip.Tip="Opacity of the billboard: 0 is fully transparent, 1 fully opaque." Minimum="0" Maximum="1" SmallChange="0.05" LargeChange="0.1" Value="{Binding Alpha}" />
+                              Minimum="0" Maximum="1" SmallChange="0.05" LargeChange="0.1" Value="{Binding Alpha}" />
 
-                      <TextBlock Grid.Row="8" Grid.Column="0"
-                                 Text="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrBillboardRotation}" />
+                      <StackPanel Grid.Row="8" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                        <TextBlock Text="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrBillboardRotation}" />
+                        <controls:PropertyHelpButton AutomationProperties.AutomationId="BillboardRotationHelp"
+                                                     HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrBillboardRotation}"
+                                                     HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpBillboardRotation}" />
+                      </StackPanel>
                       <controls:UnboundedSlider Grid.Row="8" Grid.Column="2" Value="{Binding Rotation}"
                                                 AutomationProperties.AutomationId="BillboardRotation"
-                        ToolTip.Tip="Rotation of the billboard about its centre, in degrees (-180 to 180). The rotation handle on the billboard does the same."
                                                 IsWrapped="True" WrapMin="-180" WrapMax="180"
                                                 Step="1" DragSensitivity="2.0" DisplayFormat="F1" />
 
@@ -427,31 +465,46 @@
 
                       <!-- Physical size (Earth observer): the image's height at the comet (km) or its
                            plate scale sizes it on the sky -->
-                      <TextBlock Grid.Row="12" Grid.Column="0" Text="Physical size" />
+                      <StackPanel Grid.Row="12" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                        <TextBlock Text="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderPhysicalSize}" />
+                        <controls:PropertyHelpButton AutomationProperties.AutomationId="BillboardPhysicalSizeHelp"
+                                                     HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderPhysicalSize}"
+                                                     HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpPhysicalSize}" FlyoutMaxWidth="320" />
+                      </StackPanel>
                       <StackPanel Grid.Row="12" Grid.Column="2" Spacing="4">
-                        <TextBlock Text="Image height at the comet (km)" Opacity="0.85" />
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                          <TextBlock Text="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderImageHeightKm}" Opacity="0.85" />
+                          <controls:PropertyHelpButton AutomationProperties.AutomationId="BillboardImageHeightKmHelp"
+                                                       HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderImageHeightKm}"
+                                                       HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpImageHeightKm}" />
+                        </StackPanel>
                         <TextBox AutomationProperties.AutomationId="BillboardImageHeightKm" Text="{Binding ImageHeightKmText}"
-                                 Watermark="km at the comet (e.g. 120000)"
-                                 ToolTip.Tip="The image's vertical extent at the comet in kilometres (dot decimals), for an image without a WCS (a JPEG). It wins over the plate scale. Empty: not set." />
-                        <TextBlock Text="Plate scale (″/px)" Opacity="0.85" />
+                                 Watermark="km at the comet (e.g. 120000)" />
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                          <TextBlock Text="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderPlateScale}" Opacity="0.85" />
+                          <controls:PropertyHelpButton AutomationProperties.AutomationId="BillboardArcsecPerPxHelp"
+                                                       HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderPlateScale}"
+                                                       HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpPlateScale}" />
+                        </StackPanel>
                         <TextBox AutomationProperties.AutomationId="BillboardArcsecPerPx" Text="{Binding ImageArcsecPerPxText}"
-                                 Watermark="plate scale, arcsec / image px (e.g. 0.3037)"
-                                 ToolTip.Tip="The image's plate scale in arcseconds per image pixel (dot decimals); a FITS fills it from its WCS. Empty: not set." />
+                                 Watermark="plate scale, arcsec / image px (e.g. 0.3037)" />
                         <TextBlock Text="{Binding PhysicalSizeLabel}" TextWrapping="Wrap" Opacity="0.8" />
                         <TextBlock AutomationProperties.AutomationId="BillboardConversion" Text="{Binding ConversionLabel}" TextWrapping="Wrap" Opacity="0.8"
                                    FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11"
                                    IsVisible="{Binding ConversionLabel, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                        <TextBlock Text="Nucleus pixel (image px: x right, y down, pixel centres at whole numbers)" Opacity="0.85" />
+                        <Grid ColumnDefinitions="*,4,Auto">
+                          <TextBlock Grid.Column="0" Text="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderNucleusPixel}" Opacity="0.85" TextWrapping="Wrap" />
+                          <controls:PropertyHelpButton AutomationProperties.AutomationId="BillboardNucleusPixelHelp"
+                                                       HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderNucleusPixel}"
+                                                       HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpNucleusPixel}" Grid.Column="2" FlyoutMaxWidth="300" />
+                        </Grid>
                         <Grid ColumnDefinitions="*,6,*,6,Auto">
                           <NumericUpDown Grid.Column="0" AutomationProperties.AutomationId="BillboardNucleusX" Value="{Binding NucleusX}"
-                                         Increment="0.1" FormatString="F2" Watermark="image centre"
-                                         ToolTip.Tip="Column of the comet's nucleus in the image, in image pixels from the left (the centre of the first column is 0). 'Center on comet' puts this point on the comet. Empty: the image centre." />
+                                         Increment="0.1" FormatString="F2" Watermark="image centre" />
                           <NumericUpDown Grid.Column="2" AutomationProperties.AutomationId="BillboardNucleusY" Value="{Binding NucleusY}"
-                                         Increment="0.1" FormatString="F2" Watermark="image centre"
-                                         ToolTip.Tip="Row of the comet's nucleus in the image, in image pixels from the top (the centre of the first row is 0). 'Center on comet' puts this point on the comet. Empty: the image centre." />
+                                         Increment="0.1" FormatString="F2" Watermark="image centre" />
                           <Button Grid.Column="4" AutomationProperties.AutomationId="BillboardDetectNucleus" Content="Detect"
-                                  Command="{Binding DetectNucleusCommand}"
-                                  ToolTip.Tip="Find the nucleus: the brightest 9 × 9 px spot in the central third of the image, refined to the brightness-weighted centre within 12 px (a FITS image is measured on its data, not on the stretch)." />
+                                  Command="{Binding DetectNucleusCommand}" />
                         </Grid>
                         <TextBlock AutomationProperties.AutomationId="BillboardGeometry" Text="{Binding GeometryLabel}" TextWrapping="Wrap" Opacity="0.7"
                                    FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" />
@@ -459,14 +512,11 @@
                                    Opacity="0.7" IsVisible="{Binding IsPhysicalSizeBound}" />
                         <WrapPanel Orientation="Horizontal">
                           <Button AutomationProperties.AutomationId="BillboardApplyPhysicalSize" Content="Apply physical size" Margin="0,0,6,4"
-                                  Command="{Binding ApplyPhysicalSizeCommand}"
-                                  ToolTip.Tip="Size the billboard to the sky its image covers at the Earth observer's current scale, and keep it so on zoom and resize." />
+                                  Command="{Binding ApplyPhysicalSizeCommand}" />
                           <Button AutomationProperties.AutomationId="BillboardCenterOnComet" Content="Center on comet" Margin="0,0,6,4"
-                                  Command="{Binding CenterOnCometCommand}"
-                                  ToolTip.Tip="Move the billboard so its nucleus pixel (the image centre when unset) lies on the comet as the viewport draws it, keeping its size and rotation (enabled while the comet is on screen)." />
+                                  Command="{Binding CenterOnCometCommand}" />
                           <Button AutomationProperties.AutomationId="BillboardMatchCamera" Content="Match camera to image" Margin="0,0,6,4"
-                                  Command="{Binding MatchCameraToImageCommand}"
-                                  ToolTip.Tip="Aim the Earth observer at the comet and set its field so the viewport's height shows the image's height (km, or plate scale × image height); the billboard fills the viewport's height, centred on the comet." />
+                                  Command="{Binding MatchCameraToImageCommand}" />
                         </WrapPanel>
                       </StackPanel>
 
@@ -491,9 +541,13 @@
                                     </DataTemplate>
                                   </ItemsControl.ItemTemplate>
                                 </ItemsControl>
-                                <CheckBox Content="Flip longitude sign" IsChecked="{Binding FlipSiteLon}"
-                                          IsVisible="{Binding HasSiteLon}"
-                                          ToolTip.Tip="Use the opposite sign of the site longitude: some headers say 'west' for an east-positive value (the Liverpool Telescope's LONGITUD). The header's LST settles it when present." />
+                                <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding HasSiteLon}">
+                                  <CheckBox Content="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderFlipLon}" IsChecked="{Binding FlipSiteLon}"
+                                            AutomationProperties.AutomationId="BillboardFitsFlipLon" />
+                                  <controls:PropertyHelpButton AutomationProperties.AutomationId="BillboardFitsFlipLonHelp"
+                                                               HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderFlipLon}"
+                                                               HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpFlipLon}" />
+                                </StackPanel>
 
                                 <TextBlock Text="Header" FontWeight="SemiBold" />
                                 <DataGrid x:Name="FitsHeaderGrid" ItemsSource="{Binding Cards}"
@@ -506,22 +560,23 @@
                                   </DataGrid.Columns>
                                 </DataGrid>
 
-                                <TextBlock Text="Stretch" FontWeight="SemiBold" />
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                  <TextBlock Text="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderStretch}" FontWeight="SemiBold" />
+                                  <controls:PropertyHelpButton AutomationProperties.AutomationId="BillboardFitsStretchHelp"
+                                                               HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderStretch}"
+                                                               HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpStretch}" FlyoutMaxWidth="320" />
+                                </StackPanel>
                                 <Grid ColumnDefinitions="*,6,*">
-                                  <ComboBox Grid.Column="0" HorizontalAlignment="Stretch"
-                                            ItemsSource="{Binding StretchModes}" SelectedItem="{Binding StretchMode}"
-                                            ToolTip.Tip="ZScale: IRAF zscale (the import's default). Percentile: black / white at two percentiles. Manual: black / white in data units." />
-                                  <ComboBox Grid.Column="2" HorizontalAlignment="Stretch"
-                                            ItemsSource="{Binding Transfers}" SelectedItem="{Binding Transfer}"
-                                            ToolTip.Tip="Transfer curve between black and white: linear, log or asinh (brings out faint dust)." />
+                                  <ComboBox Grid.Column="0" HorizontalAlignment="Stretch" AutomationProperties.AutomationId="BillboardFitsStretchMode"
+                                            ItemsSource="{Binding StretchModes}" SelectedItem="{Binding StretchMode}" />
+                                  <ComboBox Grid.Column="2" HorizontalAlignment="Stretch" AutomationProperties.AutomationId="BillboardFitsTransfer"
+                                            ItemsSource="{Binding Transfers}" SelectedItem="{Binding Transfer}" />
                                 </Grid>
                                 <Grid ColumnDefinitions="Auto,6,*,12,Auto,6,*" IsVisible="{Binding HasStretchParams}">
                                   <TextBlock Grid.Column="0" Text="{Binding Param0Label}" VerticalAlignment="Center" />
-                                  <TextBox Grid.Column="2" Text="{Binding Param0Text}"
-                                    ToolTip.Tip="First stretch value: low percentile in % (Percentile mode) or the black point in data units (Manual mode). Dot decimals." />
+                                  <TextBox Grid.Column="2" Text="{Binding Param0Text}" AutomationProperties.AutomationId="BillboardFitsStretchParam0" />
                                   <TextBlock Grid.Column="4" Text="{Binding Param1Label}" VerticalAlignment="Center" />
-                                  <TextBox Grid.Column="6" Text="{Binding Param1Text}"
-                                    ToolTip.Tip="Second stretch value: high percentile in % (Percentile mode) or the white point in data units (Manual mode). Dot decimals." />
+                                  <TextBox Grid.Column="6" Text="{Binding Param1Text}" AutomationProperties.AutomationId="BillboardFitsStretchParam1" />
                                 </Grid>
                                 <Grid ColumnDefinitions="*,8,Auto">
                                   <TextBlock Grid.Column="0" Text="{Binding StretchResultText}" TextWrapping="Wrap"
@@ -533,32 +588,37 @@
                                 </Grid>
                                 <ProgressBar IsIndeterminate="True" Height="4" IsVisible="{Binding IsApplyingStretch}" />
 
-                                <TextBlock Text="Compare with the simulation" FontWeight="SemiBold" />
-                                <SelectableTextBlock Text="{Binding PixelRatioText}" TextWrapping="Wrap" Opacity="0.85"
-                                                     FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11"
-                                                     AutomationProperties.AutomationId="BillboardFitsPixelRatio"
-                                                     ToolTip.Tip="{Binding PixelRatioTip}" />
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                  <TextBlock Text="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderCompare}" FontWeight="SemiBold" />
+                                  <controls:PropertyHelpButton AutomationProperties.AutomationId="BillboardFitsCompareHelp"
+                                                               HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderCompare}"
+                                                               HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpCompare}" FlyoutMaxWidth="320" />
+                                </StackPanel>
+                                <Grid ColumnDefinitions="*,4,Auto">
+                                  <SelectableTextBlock Grid.Column="0" Text="{Binding PixelRatioText}" TextWrapping="Wrap" Opacity="0.85"
+                                                       FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11"
+                                                       AutomationProperties.AutomationId="BillboardFitsPixelRatio" />
+                                  <controls:PropertyHelpButton AutomationProperties.AutomationId="BillboardFitsPixelRatioHelp"
+                                                               HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderPixelRatio}"
+                                                               HelpContent="{Binding PixelRatioTip}" Grid.Column="2" FlyoutMaxWidth="300" />
+                                </Grid>
                                 <WrapPanel Orientation="Horizontal">
                                   <Button Content="Seek to observation" Margin="0,0,6,4"
                                           Command="{Binding SeekToObservationCommand}"
                                           ToolTip.Tip="Seek the timeline to the middle of the exposure (TDB)." />
                                   <Button Content="Model range" Margin="0,0,6,4"
                                           AutomationProperties.AutomationId="BillboardFitsModelRange"
-                                          Command="{Binding RequestModelRangeCommand}"
-                                          ToolTip.Tip="Model range: puts this observation's epoch (mid-exposure, else DATE-OBS) in the Timeline tab's &quot;rotations ending at&quot; box and sets Start/End to N nucleus rotations ending there (at least 1 day). It only proposes the range: commit it in the Comet tab, or use Recommit in the Timeline tab." />
+                                          Command="{Binding RequestModelRangeCommand}" />
                                   <Button Content="Use observatory site" Margin="0,0,6,4"
                                           Command="{Binding UseObservatorySiteCommand}"
                                           ToolTip.Tip="Put the Earth observer on the header's site (topocentric, latitude, longitude, elevation)." />
-                                  <Button Content="Orient to image" Margin="0,0,6,4"
-                                          Command="{Binding OrientToImageCommand}" ToolTip.ShowOnDisabled="True"
-                                          ToolTip.Tip="Earth observer only: look at the image centre (WCS), turn the billboard like the sky in the view and move it to the viewport centre." />
-                                  <Button Content="Match camera to image" Margin="0,0,6,4"
-                                          Command="{Binding MatchCameraToImageCommand}" ToolTip.ShowOnDisabled="True"
-                                          ToolTip.Tip="Earth observer only: aim at the comet and fit the image's field (its WCS plate scale × height) to the viewport's height; the billboard fills it, centred on the comet." />
+                                  <Button Content="Orient to image" Margin="0,0,6,4" AutomationProperties.AutomationId="BillboardFitsOrientToImage"
+                                          Command="{Binding OrientToImageCommand}" />
+                                  <Button Content="Match camera to image" Margin="0,0,6,4" AutomationProperties.AutomationId="BillboardFitsMatchCamera"
+                                          Command="{Binding MatchCameraToImageCommand}" />
                                   <Button Content="Set up comparison" Margin="0,0,6,4" Classes="accent"
                                           AutomationProperties.AutomationId="BillboardSetUpComparison"
-                                          Command="{Binding SetUpComparisonCommand}"
-                                          ToolTip.Tip="Enter the Earth observer, then seek, use the site, match the field, orient, centre the billboard and lock the viewport for comparison." />
+                                          Command="{Binding SetUpComparisonCommand}" />
                                 </WrapPanel>
                                 <TextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap" Opacity="0.8"
                                            AutomationProperties.AutomationId="BillboardFitsStatus"
@@ -587,10 +647,14 @@
         <Expander Header="{Binding StrParticleRendering}" x:Name="ParticleRenderingSection">
           <StackPanel Spacing="10" Margin="12,8,12,12">
             <Grid ColumnDefinitions="Auto,16,*,12,Auto">
-              <TextBlock Grid.Column="0" Text="Quality" VerticalAlignment="Center" />
+              <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                <TextBlock Text="Quality" VerticalAlignment="Center" />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="ParticleQualitySliderHelp"
+                                             HelpHeader="{Binding StrHelpHeaderDustQuality}"
+                                             HelpContent="{Binding StrHelpDustQuality}" FlyoutMaxWidth="300" />
+              </StackPanel>
               <Slider Grid.Column="2" x:Name="ParticleQualitySlider"
                       AutomationProperties.AutomationId="ParticleQualitySlider"
-                      ToolTip.Tip="Dust drawing quality, from 1 (lowest, fastest) to 5 (ultra). Each step draws the dust finer and costs more GPU time; it presets the four detail settings below."
                       Minimum="1" Maximum="5" TickFrequency="1" IsSnapToTickEnabled="True"
                       TickPlacement="BottomRight"
                       Value="{Binding ParticleRendering.QualitySliderValue}" />
@@ -601,37 +665,53 @@
             <TextBlock Text="Lowest is the fastest; each step draws the dust finer. Editing a value below turns the quality to Custom. Saved for the next start."
                        TextWrapping="Wrap" Foreground="{DynamicResource Text.Secondary}" />
             <Grid ColumnDefinitions="Auto,16,*">
-              <TextBlock Grid.Column="0" Text="{Binding StrVolumeDetail}" />
+              <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                <TextBlock Text="{Binding StrVolumeDetail}" VerticalAlignment="Center" />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="VolumeDetailPickerHelp"
+                                             HelpHeader="{Binding StrVolumeDetail}"
+                                             HelpContent="{Binding StrHelpVolumeDetail}" FlyoutMaxWidth="300" />
+              </StackPanel>
               <ComboBox Grid.Column="2" HorizontalAlignment="Stretch"
                         x:Name="VolumeDetailPicker"
-                        ToolTip.Tip="Volumetric dust detail. Lower is faster but coarser."
                         ItemsSource="{Binding ParticleRendering.VolumeDetailOptions}"
                         SelectedIndex="{Binding ParticleRendering.VolumeDetailIndex}" />
             </Grid>
             <TextBlock Text="{Binding StrVolumeDetailHint}" TextWrapping="Wrap" />
             <Grid ColumnDefinitions="Auto,16,*">
-              <TextBlock Grid.Column="0" Text="{Binding StrPropagateDetail}" />
+              <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                <TextBlock Text="{Binding StrPropagateDetail}" VerticalAlignment="Center" />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="PropagateDetailPickerHelp"
+                                             HelpHeader="{Binding StrPropagateDetail}"
+                                             HelpContent="{Binding StrHelpPropagateDetail}" FlyoutMaxWidth="300" />
+              </StackPanel>
               <ComboBox Grid.Column="2" HorizontalAlignment="Stretch"
                         x:Name="PropagateDetailPicker"
-                        ToolTip.Tip="Size steps whose orbits are solved exactly each frame; the rest are interpolated. Lower is faster, with dust tails a little straighter."
                         ItemsSource="{Binding ParticleRendering.PropagateDetailOptions}"
                         SelectedIndex="{Binding ParticleRendering.PropagateDetailIndex}" />
             </Grid>
             <TextBlock Text="{Binding StrPropagateDetailHint}" TextWrapping="Wrap" />
             <Grid ColumnDefinitions="Auto,16,*">
-              <TextBlock Grid.Column="0" Text="{Binding StrHazeDetail}" />
+              <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                <TextBlock Text="{Binding StrHazeDetail}" VerticalAlignment="Center" />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="HazeDetailPickerHelp"
+                                             HelpHeader="{Binding StrHazeDetail}"
+                                             HelpContent="{Binding StrHelpHazeDetail}" FlyoutMaxWidth="300" />
+              </StackPanel>
               <ComboBox Grid.Column="2" HorizontalAlignment="Stretch"
                         x:Name="HazeDetailPicker"
-                        ToolTip.Tip="Packets per dust cluster when the haze is drawn at its coarsest level. Lower is faster, with the light of the haze sampled more coarsely."
                         ItemsSource="{Binding ParticleRendering.HazeDetailOptions}"
                         SelectedIndex="{Binding ParticleRendering.HazeDetailIndex}" />
             </Grid>
             <TextBlock Text="{Binding StrHazeDetailHint}" TextWrapping="Wrap" />
             <Grid ColumnDefinitions="Auto,16,*">
-              <TextBlock Grid.Column="0" Text="{Binding StrReuseTolerance}" />
+              <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                <TextBlock Text="{Binding StrReuseTolerance}" VerticalAlignment="Center" />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="ReuseTolerancePickerHelp"
+                                             HelpHeader="{Binding StrReuseTolerance}"
+                                             HelpContent="{Binding StrHelpReuseTolerance}" FlyoutMaxWidth="300" />
+              </StackPanel>
               <ComboBox Grid.Column="2" HorizontalAlignment="Stretch"
                         x:Name="ReuseTolerancePicker"
-                        ToolTip.Tip="Reuse dust that moved less than this many pixels instead of drawing it again. Off redraws every frame; higher is faster but can smear moving dust."
                         ItemsSource="{Binding ParticleRendering.ReuseToleranceOptions}"
                         SelectedIndex="{Binding ParticleRendering.ReuseToleranceIndex}" />
             </Grid>
@@ -706,42 +786,61 @@
                              Foreground="{DynamicResource Accent.Primary}"
                              FontWeight="SemiBold" />
 
-                  <CheckBox AutomationProperties.AutomationId="DiagnosticPanelsCheckBox" Content="Show diagnostic panels (all viewports)"
-                            IsChecked="{ReflectionBinding $parent[UserControl].DataContext.ShowDiagnosticPanels}"
-                            ToolTip.Tip="The camera coordinates, dust history, observer line and orbit debug panels over the viewport. For checking the engine; hidden by default." />
+                  <StackPanel Orientation="Horizontal" Spacing="4">
+                    <CheckBox AutomationProperties.AutomationId="DiagnosticPanelsCheckBox" Content="Show diagnostic panels (all viewports)"
+                              IsChecked="{ReflectionBinding $parent[UserControl].DataContext.ShowDiagnosticPanels}" />
+                    <controls:PropertyHelpButton AutomationProperties.AutomationId="DiagnosticPanelsCheckBoxHelp" VerticalAlignment="Center"
+                                                 HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderViewDiagnostics}"
+                                                 HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpViewDiagnostics}" />
+                  </StackPanel>
 
-                  <CheckBox AutomationProperties.AutomationId="ComparisonLockCheckBox" Content="Lock viewport for comparison"
-                            IsChecked="{Binding IsComparisonLocked}"
-                            ToolTip.Tip="Refuse mouse orbit, pan and zoom and grey the projection, so the view stays matched to a telescope image." />
+                  <StackPanel Orientation="Horizontal" Spacing="4">
+                    <CheckBox AutomationProperties.AutomationId="ComparisonLockCheckBox" Content="Lock viewport for comparison"
+                              IsChecked="{Binding IsComparisonLocked}" />
+                    <controls:PropertyHelpButton AutomationProperties.AutomationId="ComparisonLockCheckBoxHelp" VerticalAlignment="Center"
+                                                 HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderViewComparisonLock}"
+                                                 HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpViewComparisonLock}" />
+                  </StackPanel>
 
                   <!-- Projection type -->
                   <Grid ColumnDefinitions="Auto,16,*" IsEnabled="{Binding !IsComparisonLocked}">
-                    <TextBlock Grid.Column="0" Text="Type" />
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                      <TextBlock Text="Type" VerticalAlignment="Center" />
+                      <controls:PropertyHelpButton AutomationProperties.AutomationId="ProjectionTypeHelp"
+                                                   HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderViewProjectionType}"
+                                                   HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpViewProjectionType}" FlyoutMaxWidth="300" />
+                    </StackPanel>
                     <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="16">
-                      <RadioButton AutomationProperties.AutomationId="ProjectionPerspective"
-                        ToolTip.Tip="Perspective projection: distant objects look smaller, like a camera. The field of view sets the zoom." Content="Perspective"
+                      <RadioButton AutomationProperties.AutomationId="ProjectionPerspective" Content="Perspective"
                                    IsChecked="{Binding IsPerspective}" />
-                      <RadioButton AutomationProperties.AutomationId="ProjectionOrthographic"
-                        ToolTip.Tip="Orthographic projection: no perspective, size does not depend on distance (like a map or a flat telescope image). The half-width and half-height set what is visible." Content="Orthographic"
+                      <RadioButton AutomationProperties.AutomationId="ProjectionOrthographic" Content="Orthographic"
                                    IsChecked="{Binding IsOrthographic}" />
                     </StackPanel>
                   </Grid>
 
                   <!-- Projection sliders: advanced (Match camera to image sets the field from the image) -->
                   <Expander AutomationProperties.AutomationId="ProjectionAdvancedExpander" Margin="0,2"
-                            IsExpanded="False" HorizontalAlignment="Stretch"
-                            ToolTip.Tip="Field of view / orthographic extents, clip planes and units. A billboard's &quot;Match camera to image&quot; sets the field from the image instead.">
+                            IsExpanded="False" HorizontalAlignment="Stretch">
                     <Expander.Header>
-                      <TextBlock Text="Advanced: projection" />
+                      <StackPanel Orientation="Horizontal" Spacing="4">
+                        <TextBlock Text="Advanced: projection" VerticalAlignment="Center" />
+                        <controls:PropertyHelpButton AutomationProperties.AutomationId="ProjectionAdvancedExpanderHelp"
+                                                     HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderViewProjectionAdvanced}"
+                                                     HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpViewProjectionAdvanced}" FlyoutMaxWidth="300" />
+                      </StackPanel>
                     </Expander.Header>
                     <StackPanel Spacing="12" Margin="0,8,0,0">
                       <!-- Perspective parameters -->
                       <Grid ColumnDefinitions="Auto,16,*"
                             RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto"
                             IsVisible="{Binding IsPerspective}" IsEnabled="{Binding !IsComparisonLocked}">
-                        <TextBlock Grid.Row="0" Grid.Column="0" Text="FOV" VerticalAlignment="Center" />
+                        <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                          <TextBlock Text="FOV" VerticalAlignment="Center" />
+                          <controls:PropertyHelpButton AutomationProperties.AutomationId="FovSliderHelp"
+                                                       HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderViewFov}"
+                                                       HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpViewFov}" />
+                        </StackPanel>
                         <controls:UnboundedSlider Grid.Row="0" Grid.Column="2" AutomationProperties.AutomationId="FovSlider"
-                          ToolTip.Tip="Vertical field of view of the perspective camera, in the unit chosen below. Smaller values zoom in; telescope fields are arcminutes."
                                                   Value="{Binding PerspFovDisplay}"
                                                   HasBounds="True"
                                                   MinBound="{Binding PerspFovMin}"
@@ -750,17 +849,25 @@
                                                   DragSensitivity="5.0"
                                                   HorizontalAlignment="Stretch" />
 
-                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Units" VerticalAlignment="Center" />
+                        <StackPanel Grid.Row="2" Grid.Column="0" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                          <TextBlock Text="Units" VerticalAlignment="Center" />
+                          <controls:PropertyHelpButton AutomationProperties.AutomationId="FovUnitPickerHelp"
+                                                       HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderViewFovUnits}"
+                                                       HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpViewFovUnits}" />
+                        </StackPanel>
                         <ComboBox Grid.Row="2" Grid.Column="2" AutomationProperties.AutomationId="FovUnitPicker"
-                          ToolTip.Tip="Unit of the field of view: degrees, arcminutes (1/60 degree) or arcseconds (1/3600 degree). Only changes the display."
                                   HorizontalAlignment="Stretch"
                                   ItemsSource="{Binding FovUnits}"
                                   SelectedIndex="{Binding FovUnitIndex}" />
 
-                        <TextBlock Grid.Row="4" Grid.Column="0" Text="Near" VerticalAlignment="Center" />
+                        <StackPanel Grid.Row="4" Grid.Column="0" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                          <TextBlock Text="Near" VerticalAlignment="Center" />
+                          <controls:PropertyHelpButton AutomationProperties.AutomationId="PerspNearHelp"
+                                                       HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderViewNear}"
+                                                       HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpViewPerspNear}" />
+                        </StackPanel>
                         <controls:UnboundedSlider Grid.Row="4" Grid.Column="2"
                                                   Value="{Binding PerspNearDisplay}"
-                                                  ToolTip.Tip="Near clip plane: objects closer to the camera than this distance are not drawn. Shown in the distance units below."
                                                   HasBounds="True"
                                                   MinBound="{Binding OrthoExtentMin}"
                                                   MaxBound="{Binding OrthoExtentMax}"
@@ -770,10 +877,14 @@
                                                   DisplayFormat="G5"
                                                   HorizontalAlignment="Stretch" />
 
-                        <TextBlock Grid.Row="6" Grid.Column="0" Text="Far" VerticalAlignment="Center" />
+                        <StackPanel Grid.Row="6" Grid.Column="0" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                          <TextBlock Text="Far" VerticalAlignment="Center" />
+                          <controls:PropertyHelpButton AutomationProperties.AutomationId="PerspFarHelp"
+                                                       HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderViewFar}"
+                                                       HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpViewPerspFar}" />
+                        </StackPanel>
                         <controls:UnboundedSlider Grid.Row="6" Grid.Column="2"
                                                   Value="{Binding PerspFarDisplay}"
-                                                  ToolTip.Tip="Far clip plane: objects farther from the camera than this distance are not drawn. Shown in the distance units below."
                                                   HasBounds="True"
                                                   MinBound="{Binding OrthoExtentMin}"
                                                   MaxBound="{Binding OrthoExtentMax}"
@@ -783,21 +894,29 @@
                                                   DisplayFormat="G5"
                                                   HorizontalAlignment="Stretch" />
 
-                        <TextBlock Grid.Row="8" Grid.Column="0" Text="Distance units" VerticalAlignment="Center" />
+                        <StackPanel Grid.Row="8" Grid.Column="0" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                          <TextBlock Text="Distance units" VerticalAlignment="Center" />
+                          <controls:PropertyHelpButton AutomationProperties.AutomationId="DistanceUnitsHelp"
+                                                       HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderViewDistanceUnits}"
+                                                       HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpViewDistanceUnits}" />
+                        </StackPanel>
                         <ComboBox Grid.Row="8" Grid.Column="2"
                                   HorizontalAlignment="Stretch"
                                   ItemsSource="{Binding DistanceUnits}"
-                                  SelectedIndex="{Binding OrthoUnitIndex}"
-                                  ToolTip.Tip="Unit used to show distances (clip planes): AU, km or m. Only changes the display; values are stored in AU." />
+                                  SelectedIndex="{Binding OrthoUnitIndex}" />
                       </Grid>
 
                       <!-- Orthographic parameters -->
                       <Grid ColumnDefinitions="Auto,16,*"
                             RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto"
                             IsVisible="{Binding IsOrthographic}" IsEnabled="{Binding !IsComparisonLocked}">
-                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Half-Width" VerticalAlignment="Center" />
+                        <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                          <TextBlock Text="Half-Width" VerticalAlignment="Center" />
+                          <controls:PropertyHelpButton AutomationProperties.AutomationId="OrthoHalfWidthSliderHelp"
+                                                       HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderViewHalfWidth}"
+                                                       HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpViewHalfWidth}" />
+                        </StackPanel>
                         <controls:UnboundedSlider Grid.Row="0" Grid.Column="2" AutomationProperties.AutomationId="OrthoHalfWidthSlider"
-                          ToolTip.Tip="Half of the visible width of the orthographic view, in the chosen units: the view spans plus or minus this value around the centre."
                                                   Value="{Binding OrthoHalfWidthDisplay}"
                                                   HasBounds="True"
                                                   MinBound="{Binding OrthoExtentMin}"
@@ -808,9 +927,13 @@
                                                   DisplayFormat="G5"
                                                   HorizontalAlignment="Stretch" />
 
-                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Half-Height" VerticalAlignment="Center" />
+                        <StackPanel Grid.Row="2" Grid.Column="0" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                          <TextBlock Text="Half-Height" VerticalAlignment="Center" />
+                          <controls:PropertyHelpButton AutomationProperties.AutomationId="OrthoHalfHeightSliderHelp"
+                                                       HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderViewHalfHeight}"
+                                                       HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpViewHalfHeight}" />
+                        </StackPanel>
                         <controls:UnboundedSlider Grid.Row="2" Grid.Column="2" AutomationProperties.AutomationId="OrthoHalfHeightSlider"
-                          ToolTip.Tip="Half of the visible height of the orthographic view, in the chosen units: the view spans plus or minus this value around the centre."
                                                   Value="{Binding OrthoHalfHeightDisplay}"
                                                   HasBounds="True"
                                                   MinBound="{Binding OrthoExtentMin}"
@@ -821,17 +944,25 @@
                                                   DisplayFormat="G5"
                                                   HorizontalAlignment="Stretch" />
 
-                        <TextBlock Grid.Row="4" Grid.Column="0" Text="Units" VerticalAlignment="Center" />
+                        <StackPanel Grid.Row="4" Grid.Column="0" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                          <TextBlock Text="Units" VerticalAlignment="Center" />
+                          <controls:PropertyHelpButton AutomationProperties.AutomationId="OrthoUnitPickerHelp"
+                                                       HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderViewOrthoUnits}"
+                                                       HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpViewOrthoUnits}" />
+                        </StackPanel>
                         <ComboBox Grid.Row="4" Grid.Column="2" AutomationProperties.AutomationId="OrthoUnitPicker"
-                          ToolTip.Tip="Unit used to show the half-width, half-height and clip planes: AU, km or m. Only changes the display; values are stored in AU."
                                   HorizontalAlignment="Stretch"
                                   ItemsSource="{Binding DistanceUnits}"
                                   SelectedIndex="{Binding OrthoUnitIndex}" />
 
-                        <TextBlock Grid.Row="6" Grid.Column="0" Text="Near" VerticalAlignment="Center" />
+                        <StackPanel Grid.Row="6" Grid.Column="0" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                          <TextBlock Text="Near" VerticalAlignment="Center" />
+                          <controls:PropertyHelpButton AutomationProperties.AutomationId="OrthoNearHelp"
+                                                       HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderViewNear}"
+                                                       HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpViewOrthoNear}" />
+                        </StackPanel>
                         <controls:UnboundedSlider Grid.Row="6" Grid.Column="2"
                                                   Value="{Binding OrthoNearDisplay}"
-                                                  ToolTip.Tip="Nearest distance along the view direction that is drawn, in the chosen units."
                                                   HasBounds="True"
                                                   MinBound="{Binding OrthoExtentMin}"
                                                   MaxBound="{Binding OrthoExtentMax}"
@@ -841,10 +972,14 @@
                                                   DisplayFormat="G5"
                                                   HorizontalAlignment="Stretch" />
 
-                        <TextBlock Grid.Row="8" Grid.Column="0" Text="Far" VerticalAlignment="Center" />
+                        <StackPanel Grid.Row="8" Grid.Column="0" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                          <TextBlock Text="Far" VerticalAlignment="Center" />
+                          <controls:PropertyHelpButton AutomationProperties.AutomationId="OrthoFarHelp"
+                                                       HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderViewFar}"
+                                                       HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpViewOrthoFar}" />
+                        </StackPanel>
                         <controls:UnboundedSlider Grid.Row="8" Grid.Column="2"
                                                   Value="{Binding OrthoFarDisplay}"
-                                                  ToolTip.Tip="Farthest distance along the view direction that is drawn, in the chosen units."
                                                   HasBounds="True"
                                                   MinBound="{Binding OrthoExtentMin}"
                                                   MaxBound="{Binding OrthoExtentMax}"
@@ -855,10 +990,19 @@
                                                   HorizontalAlignment="Stretch" />
 
                         <StackPanel Grid.Row="10" Grid.Column="0" Grid.ColumnSpan="3" Orientation="Vertical" Spacing="8">
-                          <CheckBox AutomationProperties.AutomationId="OrthoProportionsLock"
-                            ToolTip.Tip="Keeps the half-width to half-height ratio equal to the viewport shape, also when the window is resized, so the image is never stretched." Content="Keep Proportions Locked" IsChecked="{Binding IsOrthoProportionsLocked}" />
-                          <CheckBox AutomationProperties.AutomationId="ShowBehindCameraCheckBox" Content="Show objects behind camera" IsChecked="{Binding ShowBehindCamera}"
-                                    ToolTip.Tip="Orthographic only: also draw the geometry behind the camera plane (within the far distance), as a telescope image does. Dust behind the camera is not drawn. A perspective view cannot show it." />
+                          <StackPanel Orientation="Horizontal" Spacing="4">
+                            <CheckBox AutomationProperties.AutomationId="OrthoProportionsLock"
+                                      Content="Keep Proportions Locked" IsChecked="{Binding IsOrthoProportionsLocked}" />
+                            <controls:PropertyHelpButton AutomationProperties.AutomationId="OrthoProportionsLockHelp" VerticalAlignment="Center"
+                                                         HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderViewProportionsLock}"
+                                                         HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpViewProportionsLock}" />
+                          </StackPanel>
+                          <StackPanel Orientation="Horizontal" Spacing="4">
+                            <CheckBox AutomationProperties.AutomationId="ShowBehindCameraCheckBox" Content="Show objects behind camera" IsChecked="{Binding ShowBehindCamera}" />
+                            <controls:PropertyHelpButton AutomationProperties.AutomationId="ShowBehindCameraCheckBoxHelp" VerticalAlignment="Center"
+                                                         HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderViewShowBehindCamera}"
+                                                         HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpViewShowBehindCamera}" />
+                          </StackPanel>
                           <Button AutomationProperties.AutomationId="RestoreOrthoProportionsButton"
                             ToolTip.Tip="Recompute the half-width from the half-height so the proportions match the viewport again." Content="Restore Proportions" Command="{Binding RestoreOrthoProportionsCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
                         </StackPanel>
@@ -867,27 +1011,38 @@
                   </Expander>
 
                   <!-- ── CometOrbiting (comet debug): physical nucleus lighting ── -->
-                  <CheckBox AutomationProperties.AutomationId="PhysicalLightingToggle"
-                            Content="Physical lighting"
-                            IsVisible="{Binding IsCometOrbitingMode}"
-                            IsChecked="{Binding IsPhysicalLighting}"
-                            ToolTip.Tip="Direct sunlight only, at the comet's heliocentric distance ((1 AU / r)², exposed so a white surface facing the Sun at 1 AU is white); no ambient fill. The surface the Sun does not reach is drawn in dark indigo." />
+                  <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding IsCometOrbitingMode}">
+                    <CheckBox AutomationProperties.AutomationId="PhysicalLightingToggle"
+                              Content="Physical lighting"
+                              IsChecked="{Binding IsPhysicalLighting}" />
+                    <controls:PropertyHelpButton AutomationProperties.AutomationId="PhysicalLightingToggleHelp" VerticalAlignment="Center"
+                                                 HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderViewPhysicalLighting}"
+                                                 HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpViewPhysicalLighting}" FlyoutMaxWidth="300" />
+                  </StackPanel>
 
-                  <Button AutomationProperties.AutomationId="ViewNucleusFromEarthButton"
-                          Content="Nucleus from Earth"
-                          Command="{Binding ViewNucleusFromEarthCommand}"
-                          HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
-                          ToolTip.Tip="The Earth observer tracking the comet, celestial north up, the field a few nucleus diameters tall: the nucleus lit by the Sun as seen from Earth" />
+                  <Grid ColumnDefinitions="*,4,Auto">
+                    <Button AutomationProperties.AutomationId="ViewNucleusFromEarthButton"
+                            Content="Nucleus from Earth"
+                            Command="{Binding ViewNucleusFromEarthCommand}"
+                            HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                    <controls:PropertyHelpButton AutomationProperties.AutomationId="ViewNucleusFromEarthButtonHelp" Grid.Column="2" VerticalAlignment="Center"
+                                                 HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderViewNucleusFromEarth}"
+                                                 HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpViewNucleusFromEarth}" />
+                  </Grid>
 
                   <!-- ── Comet / Earth observer: nucleus exposure ── -->
                   <StackPanel Spacing="4" IsVisible="{Binding !IsUpZenithMode}">
-                    <TextBlock FontWeight="SemiBold"
-                               Text="{Binding NucleusExposureEv, StringFormat='Nucleus exposure: {0:+0.0;-0.0;0} EV'}" />
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                      <TextBlock FontWeight="SemiBold" VerticalAlignment="Center"
+                                 Text="{Binding NucleusExposureEv, StringFormat='Nucleus exposure: {0:+0.0;-0.0;0} EV'}" />
+                      <controls:PropertyHelpButton AutomationProperties.AutomationId="NucleusExposureSliderHelp"
+                                                   HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderViewNucleusExposure}"
+                                                   HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpViewNucleusExposure}" />
+                    </StackPanel>
                     <Slider AutomationProperties.AutomationId="NucleusExposureSlider"
                             Minimum="{Binding MinNucleusExposureEv}" Maximum="{Binding MaxNucleusExposureEv}"
                             SmallChange="0.5" LargeChange="1" TickFrequency="0.5" IsSnapToTickEnabled="True"
-                            Value="{Binding NucleusExposureEv}"
-                            ToolTip.Tip="Brightness of the sunlit nucleus, in stops (×2 per step). 0: a white surface facing the Sun is drawn white." />
+                            Value="{Binding NucleusExposureEv}" />
                   </StackPanel>
 
                   <!-- ── UpZenith: snap above a body (animation only, no tracking) ── -->
@@ -914,21 +1069,33 @@
                                FontWeight="SemiBold"
                                Foreground="{DynamicResource Accent.Primary}" />
 
-                    <CheckBox AutomationProperties.AutomationId="ObserverTopocentricCheckBox"
-                              Content="Observer on the Earth's surface (topocentric)"
-                              IsChecked="{Binding IsEarthObserverTopocentric}"
-                              ToolTip.Tip="Topocentric: the observer stands at the telescope site on the Earth surface (latitude and longitude below) and turns with the Earth, which shifts the apparent position of nearby objects by diurnal parallax and adds a horizon. Off (geocentric): the camera is at the Earth centre and only follows its motion around the Sun. The view never rotates with the Earth. Saved with the file." />
-
-                    <CheckBox AutomationProperties.AutomationId="ObserverNorthUpCheckBox"
-                              Content="North up"
-                              IsChecked="{Binding IsEarthObserverNorthUp}"
-                              ToolTip.Tip="On: the view is levelled to celestial north (J2000), north up and east left like a telescope image. Off: levelled to the ecliptic pole (the site's side of the equator). Saved with the file." />
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                      <CheckBox AutomationProperties.AutomationId="ObserverTopocentricCheckBox"
+                                Content="Observer on the Earth's surface (topocentric)"
+                                IsChecked="{Binding IsEarthObserverTopocentric}" />
+                      <controls:PropertyHelpButton AutomationProperties.AutomationId="ObserverTopocentricCheckBoxHelp" VerticalAlignment="Center"
+                                                   HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderObserverTopocentric}"
+                                                   HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpObserverTopocentric}" FlyoutMaxWidth="320" />
+                    </StackPanel>
+                    
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                      <CheckBox AutomationProperties.AutomationId="ObserverNorthUpCheckBox"
+                                Content="North up"
+                                IsChecked="{Binding IsEarthObserverNorthUp}" />
+                      <controls:PropertyHelpButton AutomationProperties.AutomationId="ObserverNorthUpCheckBoxHelp" VerticalAlignment="Center"
+                                                   HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderObserverNorthUp}"
+                                                   HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpObserverNorthUp}" FlyoutMaxWidth="300" />
+                    </StackPanel>
 
                     <!-- Latitude -->
                     <Grid ColumnDefinitions="Auto,16,*" IsVisible="{Binding IsEarthObserverTopocentric}">
-                      <TextBlock Grid.Column="0" Text="Latitude (°N)" />
+                      <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                        <TextBlock Text="Latitude (°N)" VerticalAlignment="Center" />
+                        <controls:PropertyHelpButton AutomationProperties.AutomationId="ObserverLatSliderHelp"
+                                                     HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderObserverLatitude}"
+                                                     HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpObserverLatitude}" />
+                      </StackPanel>
                       <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="ObserverLatSlider"
-                        ToolTip.Tip="Latitude of the observing site in degrees, positive north of the equator (-90 to 90)."
                                                 Value="{Binding EarthObserverLatDeg}"
                                                 HasBounds="True" MinBound="-90" MaxBound="90"
                                                 Step="0.1"
@@ -937,9 +1104,13 @@
 
                     <!-- Longitude -->
                     <Grid ColumnDefinitions="Auto,16,*" IsVisible="{Binding IsEarthObserverTopocentric}">
-                      <TextBlock Grid.Column="0" Text="Longitude (°E)" />
+                      <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                        <TextBlock Text="Longitude (°E)" VerticalAlignment="Center" />
+                        <controls:PropertyHelpButton AutomationProperties.AutomationId="ObserverLonSliderHelp"
+                                                     HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderObserverLongitude}"
+                                                     HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpObserverLongitude}" />
+                      </StackPanel>
                       <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="ObserverLonSlider"
-                        ToolTip.Tip="Longitude of the observing site in degrees, positive east of Greenwich (-180 to 180)."
                                                 Value="{Binding EarthObserverLonDeg}"
                                                 HasBounds="True" MinBound="-180" MaxBound="180"
                                                 Step="0.1"
@@ -947,20 +1118,22 @@
                     </Grid>
 
                     <!-- Look Direction -->
-                    <TextBlock Text="Look Direction" FontWeight="SemiBold" />
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                      <TextBlock Text="Look Direction" FontWeight="SemiBold" VerticalAlignment="Center" />
+                      <controls:PropertyHelpButton AutomationProperties.AutomationId="LookDirectionHelp"
+                                                   HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderObserverLookDirection}"
+                                                   HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpObserverLookDirection}" FlyoutMaxWidth="300" />
+                    </StackPanel>
                     <Grid RowDefinitions="Auto, Auto, Auto, 8, Auto">
                       <RadioButton Grid.Row="0" AutomationProperties.AutomationId="OrientFree" Content="Free look"
-                                   ToolTip.Tip="Drag to look around; the direction stays fixed among the stars"
                                    IsChecked="{Binding EarthObserverOrientationMode,
                                    Converter={StaticResource EnumToBool},
                                    ConverterParameter=Free}" />
                       <RadioButton Grid.Row="1" AutomationProperties.AutomationId="OrientCometTracking" Content="Comet tracking"
-                                   ToolTip.Tip="Keeps the comet exactly at the centre of the view (from the surface: faces the horizon where it will rise while it is below it)"
                                    IsChecked="{Binding EarthObserverOrientationMode,
                                    Converter={StaticResource EnumToBool},
                                    ConverterParameter=CometTracking}" />
                       <RadioButton Grid.Row="2" AutomationProperties.AutomationId="OrientSunTracking" Content="Sun tracking"
-                                   ToolTip.Tip="Keeps the Sun at the centre of the view (from the surface: faces the horizon where it will rise while it is below it)"
                                    IsChecked="{Binding EarthObserverOrientationMode,
                                    Converter={StaticResource EnumToBool},
                                    ConverterParameter=SunTracking}" />
@@ -971,10 +1144,14 @@
                     </Grid>
 
                     <!-- Telescope scale of the view (physical pixels) -->
-                    <TextBlock AutomationProperties.AutomationId="EarthObserverScaleText"
-                               Text="{Binding EarthObserverScaleText}" TextWrapping="Wrap" Opacity="0.85"
-                               IsVisible="{Binding EarthObserverScaleText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
-                               ToolTip.Tip="Angle one screen pixel covers, the field of view, and at the comet's distance the kilometres per pixel and the half-width / half-height of the view" />
+                    <Grid ColumnDefinitions="*,4,Auto"
+                          IsVisible="{Binding EarthObserverScaleText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                      <TextBlock AutomationProperties.AutomationId="EarthObserverScaleText"
+                                 Text="{Binding EarthObserverScaleText}" TextWrapping="Wrap" Opacity="0.85" />
+                      <controls:PropertyHelpButton AutomationProperties.AutomationId="EarthObserverScaleTextHelp" Grid.Column="2" VerticalAlignment="Top"
+                                                   HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderObserverScale}"
+                                                   HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpObserverScale}" />
+                    </Grid>
 
                     <!-- Tracking target below the horizon: explain the hold, suggest a site -->
                     <Border IsVisible="{Binding IsObserverTargetBelowHorizon}"

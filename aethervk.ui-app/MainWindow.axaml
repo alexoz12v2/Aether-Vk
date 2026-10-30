@@ -103,7 +103,7 @@
         </Button>
         <Button Classes="mode" Classes.active="{Binding IsModelActive}"
                 AutomationProperties.AutomationId="ModeBarModelButton"
-                Command="{Binding SelectModelCommand}" ToolTip.Tip="{Binding StrModelTip}">
+                Command="{Binding SelectModelCommand}" ToolTip.Tip="{Binding StrModelShortTip}">
           <StackPanel Orientation="Horizontal" Spacing="5">
             <Viewbox Width="16" Height="16" Stretch="Uniform">
               <Canvas Width="16" Height="16">

@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="using:AetherVk.Controls"
              x:Class="AetherVk.UI.CameraMatrixDebugPanel">
 
   <StackPanel Spacing="6">
@@ -7,12 +8,16 @@
   <!-- Ephemeris at the shown epoch (reviewer docx item 15): a Horizons-style observer table,
        "—" in every row without a committed comet -->
   <Grid ColumnDefinitions="Auto,12,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto"
-        Margin="0,4,0,0" ToolTip.Tip="{ReflectionBinding StrTip}"
+        Margin="0,4,0,0"
         AutomationProperties.AutomationId="EphemerisTable">
-    <TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="3" Text="{ReflectionBinding StrTitle}"
-               FontWeight="Bold" FontSize="9"
-               Foreground="{DynamicResource Accent.Primary}"
-               Margin="0,0,0,3"/>
+    <StackPanel Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="3" Orientation="Horizontal" Spacing="4" Margin="0,0,0,3">
+      <TextBlock Text="{ReflectionBinding StrTitle}"
+                 FontWeight="Bold" FontSize="9" VerticalAlignment="Center"
+                 Foreground="{DynamicResource Accent.Primary}"/>
+      <controls:PropertyHelpButton AutomationProperties.AutomationId="EphemerisTableHelp"
+                                   HelpHeader="{ReflectionBinding StrTitle}"
+                                   HelpContent="{ReflectionBinding StrTip}" FlyoutMaxWidth="300" />
+    </StackPanel>
     <TextBlock Grid.Row="1" Grid.Column="0" Text="{ReflectionBinding StrEpoch}"
                FontFamily="Consolas,Monospace" FontSize="9"
                Foreground="{DynamicResource Text.Secondary}"/>
