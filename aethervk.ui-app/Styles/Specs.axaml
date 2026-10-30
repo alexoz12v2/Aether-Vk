@@ -190,6 +190,16 @@
     <Setter Property="BorderBrush" Value="Transparent"/>
   </Style>
 
+  <!-- Keyboard focus: full opacity plus an accent ring around the 24 px hit area -->
+  <Style Selector="Button.help-trigger:focus-visible">
+    <Setter Property="Opacity" Value="1"/>
+  </Style>
+  <Style Selector="Button.help-trigger:focus-visible /template/ ContentPresenter">
+    <Setter Property="BorderBrush"     Value="{DynamicResource Accent.Primary}"/>
+    <Setter Property="BorderThickness" Value="1.5"/>
+    <Setter Property="CornerRadius"    Value="12"/>
+  </Style>
+
   <!-- Flyout panel: matches the CommonTabHeader flyout visual language -->
   <Style Selector="Border.help-flyout-panel">
     <Setter Property="Background"      Value="{DynamicResource Bg.Surface}"/>
@@ -211,6 +221,13 @@
     <Setter Property="FontSize"   Value="12"/>
     <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}"/>
     <Setter Property="LineHeight" Value="18"/>
+  </Style>
+
+  <!-- Optional flyout footer action: compact accent-text button -->
+  <Style Selector="Button.help-flyout-action">
+    <Setter Property="FontSize"   Value="12"/>
+    <Setter Property="Padding"    Value="8,3"/>
+    <Setter Property="Foreground" Value="{DynamicResource Accent.Primary}"/>
   </Style>
 
 </Styles>

@@ -7,11 +7,19 @@
   <!--
     A small circled question-mark icon that opens an informational flyout.
     HelpHeader and HelpContent are bound by the parent view via StyledProperty.
-    The flyout is dismissed when the pointer moves away (tooltip-like UX).
+    Opened with the pointer, the flyout stays while the pointer is over the ? or the panel and
+    hides shortly after it leaves both; a click inside the panel (or opening it with the
+    keyboard) pins it until a click outside or Escape. The hover ToolTip on the ? shows the
+    header. Accessible name and AutomationId are forwarded to the inner button in code.
+  -->
+  <!--
+    Hit target: the button is 24×24 but a -3 margin keeps its layout footprint at the old
+    18×18, so existing rows do not move; the icon stays 14×14 inside.
   -->
   <Button x:Name="HelpBtn"
           Classes="help-trigger"
-          Width="18" Height="18"
+          Width="24" Height="24"
+          Margin="-3"
           Padding="0"
           VerticalAlignment="Center">
 
@@ -50,27 +58,51 @@
 
     <Button.Flyout>
       <!--
-        ShowMode=TransientWithDismissOnPointerMoveAway: tooltip-like dismiss
-        (pointer leaves → flyout hides) while still being click-triggered so
-        keyboard users can open it intentionally.
+        ShowMode=Transient: a click outside or Escape closes it. The pointer-away dismissal of
+        an unpinned flyout is done in code over the union of the ? and the panel (the built-in
+        TransientWithDismissOnPointerMoveAway closed it while the text was being read).
+        Placement is overridden from FlyoutPlacement in code.
       -->
-      <Flyout Placement="RightEdgeAlignedTop"
-              ShowMode="TransientWithDismissOnPointerMoveAway">
+      <Flyout
+              Placement="RightEdgeAlignedTop"
+              ShowMode="Transient">
         <!--
-          DataContext is inherited from Button → PropertyHelpButton (DataContext=this).
+          DataContext is pushed to this Border on Opened (DataContext = the PropertyHelpButton).
           x:DataType here tells the compiler the expected type inside this scope.
         -->
-        <Border Classes="help-flyout-panel" x:DataType="controls:PropertyHelpButton">
-          <StackPanel Spacing="5" MaxWidth="240">
+        <Border x:Name="HelpPanel"
+                Classes="help-flyout-panel"
+                x:DataType="controls:PropertyHelpButton">
+          <StackPanel Spacing="5" MaxWidth="{Binding FlyoutMaxWidth}">
 
             <!-- Header: bold label for the orbital element -->
             <TextBlock Classes="help-flyout-header"
                        Text="{Binding HelpHeader}"/>
 
-            <!-- Body: longer descriptive text, word-wrapped -->
-            <TextBlock Classes="help-flyout-body"
-                       Text="{Binding HelpContent}"
-                       TextWrapping="Wrap"/>
+            <!-- Body: one word-wrapped TextBlock per paragraph (blank-line separated) -->
+            <ItemsControl Classes="help-flyout-paragraphs"
+                          ItemsSource="{Binding Paragraphs}">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                  <StackPanel Spacing="8"/>
+                </ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="x:String">
+                  <TextBlock Classes="help-flyout-body"
+                             Text="{Binding}"
+                             TextWrapping="Wrap"/>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+            <!-- Optional footer action (hidden unless ActionText is set) -->
+            <Button x:Name="ActionBtn"
+                    Classes="help-flyout-action"
+                    HorizontalAlignment="Right"
+                    Margin="0,4,0,0"
+                    Content="{Binding ActionText}"
+                    IsVisible="{Binding ActionText, Converter={x:Static ObjectConverters.IsNotNull}}"/>
 
           </StackPanel>
         </Border>

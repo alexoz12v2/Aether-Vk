@@ -242,7 +242,7 @@ public class FitsBillboardTests
     var facts = fits.Facts.ToDictionary(x => x.Label, x => x.Value);
     Assert.Equal("67P", facts["Object"]);
     Assert.Equal("2021-12-27T00:14:37.345", facts["DATE-OBS"]);
-    Assert.Equal("2021-12-27T00:14:47.345Z · no TIMESYS: read as UTC", facts["Mid-exposure"]);
+    Assert.Equal("2021-12-27T00:14:47.345Z · no TIMESYS: read as UTC", facts["Mid-exposure UTC"]);
     Assert.Equal("Liverpool Telescope / IO:O", facts["Telescope"]);
     Assert.Equal("SDSS-G", facts["Filter"]);
     Assert.Equal("20 s", facts["Exposure"]);
@@ -258,7 +258,7 @@ public class FitsBillboardTests
     var ids = fits.Facts.Where(x => x.AutomationId is not null).ToDictionary(x => x.AutomationId!, x => x.Label);
     Assert.Equal(new Dictionary<string, string>
     {
-      ["FitsFact_DateMid"] = "Mid-exposure", ["FitsFact_Scale"] = "Plate scale",
+      ["FitsFact_DateMid"] = "Mid-exposure UTC", ["FitsFact_DateMidTdb"] = "Mid-exposure TDB", ["FitsFact_Scale"] = "Plate scale",
       ["FitsFact_Rotation"] = "Rotation", ["FitsFact_Mirrored"] = "Mirrored",
     }, ids);
 

@@ -116,8 +116,8 @@ public class CometTabRangeEntryTests
 
   private static TimeRange Range(DateTimeOffset start, DateTimeOffset end)
   {
-    var a = TimeUtils.ToTaiParts(start);
-    var b = TimeUtils.ToTaiParts(end);
+    var a = TimeUtils.ToTdbParts(start);
+    var b = TimeUtils.ToTdbParts(end);
     return new TimeRange(a.centuries, a.nanoseconds, b.centuries, b.nanoseconds);
   }
 
@@ -357,9 +357,9 @@ public class CometTabRangeEntryTests
     rig.Flush();
     var proposal = rig.Vm.ProposedRangeForCommit!;
     var (s2, e2) = SpkRequest(proposal);
-    Assert.True(s2 <= TimeUtils.FromTaiParts(proposal.StartCenturies, proposal.StartNs));
-    Assert.True(e2 >= TimeUtils.FromTaiParts(proposal.EndCenturies, proposal.EndNs));
-    Assert.Equal(new DateTimeOffset(2021, 12, 27, 0, 14, 47, TimeSpan.Zero), TimeUtils.FromTaiParts(proposal.EndCenturies, proposal.EndNs));
+    Assert.True(s2 <= TimeUtils.FromTdbParts(proposal.StartCenturies, proposal.StartNs));
+    Assert.True(e2 >= TimeUtils.FromTdbParts(proposal.EndCenturies, proposal.EndNs));
+    Assert.Equal(new DateTimeOffset(2021, 12, 27, 0, 14, 47, TimeSpan.Zero), TimeUtils.FromTdbParts(proposal.EndCenturies, proposal.EndNs));
   }
 
   [Fact]

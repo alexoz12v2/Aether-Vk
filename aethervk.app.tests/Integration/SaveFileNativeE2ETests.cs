@@ -39,12 +39,12 @@ public sealed class SaveFileNativeE2ETests(ITestOutputHelper output)
   private static EpochParts Parts(string iso)
   {
     Assert.True(TimeUtils.TryParseIso8601(iso, out var t));
-    var (c, ns) = TimeUtils.ToTaiParts(t);
+    var (c, ns) = TimeUtils.ToTdbParts(t);
     return new EpochParts(c, ns);
   }
 
   private static double SecondsBetween(EpochParts a, short c, ulong ns) =>
-    Math.Abs((TimeUtils.FromTaiParts(a.Centuries, a.Nanoseconds) - TimeUtils.FromTaiParts(c, ns)).TotalSeconds);
+    Math.Abs((TimeUtils.FromTdbParts(a.Centuries, a.Nanoseconds) - TimeUtils.FromTdbParts(c, ns)).TotalSeconds);
 
   [AvaloniaFact]
   public async Task Commit_Save_New_Open_RestoresTheSameScene_ThenExpires()

@@ -376,6 +376,30 @@ public interface INativeRuntimeService : IDisposable
   bool GetSimulationClock(out short centuries, out ulong nanoseconds);
 
   // ==========================================
+  // Time scales (UTC ↔ TDB, the core's leap-second table)
+  // ==========================================
+
+  /// <summary>UTC calendar fields → engine epoch (TDB parts), <c>avkTime_utcToTdb</c>. The parts
+  /// are written for every status but <see cref="UtcStatus.Malformed"/>. Needs no scene.</summary>
+  UtcStatus UtcToTdb(UtcFields utc, out short centuries, out ulong nanoseconds);
+
+  /// <summary>Engine epoch (TDB parts) → UTC calendar fields (second 60 on a leap second),
+  /// <c>avkTime_tdbToUtc</c>.</summary>
+  UtcStatus TdbToUtc(short centuries, ulong nanoseconds, out UtcFields utc);
+
+  /// <summary>Tells the core today's date (the leap-second validity horizon is max(last entry,
+  /// now) + 6 months), <c>avkTime_setNowUtc</c>. Called at startup; false when refused.</summary>
+  bool SetNowUtc(DateTimeOffset now);
+
+  /// <summary>Offers a NAIF LSK (<c>naif00NN.tls</c>) to the core's leap-second table,
+  /// <c>avkTime_loadLeapSecondsFile</c>: adopted only when it extends the active table without
+  /// changing an entry. Returns the status and the file's entry count (0 when it did not parse).</summary>
+  (LeapSecondsLoadStatus Status, int EntryCount) LoadLeapSecondsFile(string path);
+
+  /// <summary>The active leap-second table and its last entry, <c>avkTime_leapSecondsInfo</c>.</summary>
+  LeapSecondsInfo LeapSecondsInfo();
+
+  // ==========================================
   // Orbital Mechanics & Almanacs
   // ==========================================
 
@@ -1562,6 +1586,23 @@ internal unsafe static class PInvokeAetherVkCore
     CTime* outTime
   );
 
+  // ── UTC ↔ TDB (ffi.rs "UTC ↔ TDB (leap seconds)"); no context needed ──────────────────
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern unsafe int avkTime_utcToTdb(CUtcFields* utc, short* outCenturies, ulong* outNanoseconds);
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern unsafe int avkTime_tdbToUtc(short centuries, ulong nanoseconds, CUtcFields* outUtc);
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern unsafe int avkTime_setNowUtc(CUtcFields* utc);
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern unsafe int avkTime_loadLeapSecondsFile(byte* utf8Path, uint* outEntryCount);
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern unsafe bool avkTime_leapSecondsInfo(CLeapSecondsInfo* outInfo, byte* pathBuf, uint pathCap);
+
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   public static extern bool avkSimulationContext_cleanupParticleSystem(
     nint ctx,
@@ -2720,6 +2761,59 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     return false;
   }
 
+  // ── UTC ↔ TDB: the core's leap-second table (no scene needed) ────────────────────────────
+
+  public unsafe UtcStatus UtcToTdb(UtcFields utc, out short centuries, out ulong nanoseconds)
+  {
+    var c = CUtcFields.From(utc);
+    short cent = 0;
+    ulong ns = 0;
+    int status = PInvokeAetherVkCore.avkTime_utcToTdb(&c, &cent, &ns);
+    centuries = cent;
+    nanoseconds = ns;
+    return (UtcStatus)status;
+  }
+
+  public unsafe UtcStatus TdbToUtc(short centuries, ulong nanoseconds, out UtcFields utc)
+  {
+    CUtcFields c = default;
+    int status = PInvokeAetherVkCore.avkTime_tdbToUtc(centuries, nanoseconds, &c);
+    utc = c.ToFields();
+    return (UtcStatus)status;
+  }
+
+  public unsafe bool SetNowUtc(DateTimeOffset now)
+  {
+    var c = CUtcFields.From(UtcFields.From(now));
+    return PInvokeAetherVkCore.avkTime_setNowUtc(&c) == (int)UtcStatus.Ok;
+  }
+
+  public unsafe (LeapSecondsLoadStatus Status, int EntryCount) LoadLeapSecondsFile(string path)
+  {
+    uint count = 0;
+    int status;
+    fixed (byte* p = NullTerminatedUtf8(path))
+      status = PInvokeAetherVkCore.avkTime_loadLeapSecondsFile(p, &count);
+    return ((LeapSecondsLoadStatus)status, (int)count);
+  }
+
+  public unsafe LeapSecondsInfo LeapSecondsInfo()
+  {
+    CLeapSecondsInfo info = default;
+    var buf = new byte[1024];
+    fixed (byte* p = buf)
+    {
+      if (!PInvokeAetherVkCore.avkTime_leapSecondsInfo(&info, p, (uint)buf.Length))
+        return new LeapSecondsInfo(false, 0, 0, DateTime.MinValue, string.Empty);
+    }
+    int len = Array.IndexOf(buf, (byte)0);
+    string path = Encoding.UTF8.GetString(buf, 0, len < 0 ? buf.Length : len);
+    DateTime last;
+    try { last = new DateTime(info.LastYear, info.LastMonth, info.LastDay, 0, 0, 0, DateTimeKind.Utc); }
+    catch (ArgumentOutOfRangeException) { last = DateTime.MinValue; }
+    return new LeapSecondsInfo(info.Source == 1, (int)info.EntryCount, info.LastDeltaAt, last, path);
+  }
+
   public unsafe Task<ulong> LoadAlmanacFileAsync(string path)
   {
     int byteCount = Encoding.UTF8.GetByteCount(path);
@@ -3726,8 +3820,8 @@ internal unsafe struct CTimeRange
     if (!TimeUtils.TryParseIso8601(isoEnd, out DateTimeOffset endDateTime))
       throw new ArgumentException(nameof(isoEnd));
 
-    var (startCenturies, startNanoseconds) = TimeUtils.ToTaiParts(startDateTime);
-    var (endCenturies, endNanoseconds) = TimeUtils.ToTaiParts(endDateTime);
+    var (startCenturies, startNanoseconds) = TimeUtils.ToTdbParts(startDateTime);
+    var (endCenturies, endNanoseconds) = TimeUtils.ToTdbParts(endDateTime);
 
     var range = new CTimeRange();
     unsafe
@@ -3740,6 +3834,46 @@ internal unsafe struct CTimeRange
 
     return range;
   }
+}
+
+/// <summary>Mirrors Rust <c>CUtcFields</c> (ffi.rs), 16 bytes: a UTC calendar instant, second 60 on a leap second.</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct CUtcFields
+{
+  public int Year;
+  public uint Nanos;
+  public byte Month;
+  public byte Day;
+  public byte Hour;
+  public byte Minute;
+  public byte Second;
+  public byte Pad0, Pad1, Pad2;
+
+  public static CUtcFields From(UtcFields f) => new()
+  {
+    Year = f.Year,
+    Nanos = f.Nanos,
+    Month = (byte)f.Month,
+    Day = (byte)f.Day,
+    Hour = (byte)f.Hour,
+    Minute = (byte)f.Minute,
+    Second = (byte)f.Second,
+  };
+
+  public UtcFields ToFields() => new(Year, Month, Day, Hour, Minute, Second, Nanos);
+}
+
+/// <summary>Mirrors Rust <c>CLeapSecondsInfo</c> (ffi.rs), 16 bytes.</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct CLeapSecondsInfo
+{
+  /// <summary>0: built-in table, 1: a NAIF LSK file.</summary>
+  public uint Source;
+  public uint EntryCount;
+  public int LastDeltaAt;
+  public short LastYear;
+  public byte LastMonth;
+  public byte LastDay;
 }
 
 /// <summary>

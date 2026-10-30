@@ -47,6 +47,10 @@ public sealed class PreferencesFile
   /// <summary>Diagnostic HUD panels (camera coordinates, orbit debug) shown; missing = hidden.</summary>
   [JsonPropertyName("show_diagnostic_panels")]
   public bool? ShowDiagnosticPanels { get; set; }
+  /// <summary>The scale dates are typed and shown in (Settings › Time scale for dates): "utc" or
+  /// "tdb"; missing = utc.</summary>
+  [JsonPropertyName("time_scale")]
+  public string? TimeScale { get; set; }
 }
 
 public sealed class BindingDto
@@ -147,6 +151,10 @@ public sealed class PreferencesService
   /// <summary>Raised by <see cref="SetShowDiagnosticPanels"/> with the new value.</summary>
   public event Action<bool>? ShowDiagnosticPanelsChanged;
 
+  /// <summary>The scale dates are typed and shown in; UTC when the file has none (a telescope
+  /// image's DATE-OBS is UTC). <see cref="TimeScaleService"/> applies it.</summary>
+  public TimeScale TimeScale => TimeScaleService.Parse(_file.TimeScale, TimeScale.Utc);
+
   /// <summary>What <see cref="Load"/> did: "defaults", "loaded", "corrupt", "newer".</summary>
   public string LoadOutcome { get; private set; } = "defaults";
 
@@ -245,6 +253,12 @@ public sealed class PreferencesService
     _file.ShowDiagnosticPanels = shown;
     Save();
     ShowDiagnosticPanelsChanged?.Invoke(ShowDiagnosticPanels);
+  }
+
+  public void SetTimeScale(TimeScale scale)
+  {
+    _file.TimeScale = TimeScaleService.KeyOf(scale);
+    Save();
   }
 
   /// <summary>Moves <paramref name="saveDir"/> to the front of the recent saves.</summary>
