@@ -20,6 +20,9 @@ public partial class App : Application
 {
   public static IHost? Host { get; set; }
 
+  /// <summary>The per-second perf lines (AETHERVK_PERF_LOG=1), kept alive for the app's lifetime.</summary>
+  private static PerfLogService? _perfLog;
+
   internal static void OnRustPanic(nint messagePtr, nuint length)
   {
     string errorMsg = "Unknown Rust Panic";
@@ -146,15 +149,26 @@ public partial class App : Application
             runtimeAtStartup.SetDustPropagateDetail(preferences.DustPropagateDetail);
             runtimeAtStartup.SetDustHazeDetail(preferences.DustHazeDetail);
             runtimeAtStartup.SetDustReuseTolerance(preferences.DustReuseTolerance);
+            runtimeAtStartup.SetDustPlayPreview(preferences.DustPlayPreview);
             // leap seconds: the validity horizon starts from today; a cached newer kernel loads
             // now, the NAIF check runs in the background (never with the mock runtime)
             runtimeAtStartup.SetNowUtc(DateTimeOffset.UtcNow);
-            if (runtimeAtStartup is not MockNativeRuntimeService)
+            bool mockRuntime = false;
+#if DEBUG
+            mockRuntime = runtimeAtStartup is MockNativeRuntimeService;
+#endif
+            if (!mockRuntime)
             {
               var leapSeconds = ServiceProviderServiceExtensions.GetRequiredService<LeapSecondsUpdateService>(Host!.Services);
               leapSeconds.LoadCachedKernel();
               _ = leapSeconds.StartBackgroundUpdate(
                 ServiceProviderServiceExtensions.GetRequiredService<IHostApplicationLifetime>(Host!.Services).ApplicationStopping);
+              // the playback e2e's per-second perf lines (AETHERVK_PERF_LOG=1)
+              if (PerfLogService.Enabled)
+              {
+                _perfLog = new PerfLogService(runtimeAtStartup);
+                _perfLog.Start();
+              }
             }
 
             var mainWindowViewModel =
@@ -379,6 +393,10 @@ public class MockNativeRuntimeService : INativeRuntimeService
   public bool SetDustPropagateDetail(int detail) => true;
   public bool SetDustHazeDetail(int detail) => true;
   public bool SetDustReuseTolerance(int px) => true;
+  public bool SetDustPlayPreview(int level) => true;
+  public bool DustRenderFull() => true;
+  public bool? DustInPreview() => null;
+  public (DustRenderPhase Phase, float HoldProgress)? DustRenderState() => null;
   public bool ResetDustViewFeedback() => true;
   public bool SetDustViewFlags(uint flags) => true;
   public bool SetDustExposureEv(float ev) => true;
@@ -440,6 +458,8 @@ public class MockNativeRuntimeService : INativeRuntimeService
   public DustExposure? DustExposure(ulong presentationEngineId) => null;
 
   public DustGpuTimings? DustGpuTimings(ulong presentationEngineId) => null;
+
+  public DustGpuTimings? DustGpuTimingsDrawn(ulong presentationEngineId) => null;
 
   public bool CameraSetRotoTranslate(
     ulong cameraId,

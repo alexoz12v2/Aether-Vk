@@ -69,7 +69,8 @@ public class SettingsRenderingHelpViewTests
     AssertHelp(section, "PropagateDetailPickerHelp", "interpolated");
     AssertHelp(section, "HazeDetailPickerHelp", "coarsest level");
     AssertHelp(section, "ReuseTolerancePickerHelp", "smear");
-    Assert.Equal(5, All(section).OfType<PropertyHelpButton>().Count());
+    AssertHelp(section, "PlayPreviewPickerHelp", "visual aid");
+    Assert.Equal(6, All(section).OfType<PropertyHelpButton>().Count());
 
     Assert.All(Fields(section), c => Assert.Null(ToolTip.GetTip(c)));
     window.Close();

@@ -326,6 +326,8 @@ impl SceneConversionExt2 for Scene {
       dust_feedback_gen: 0,
       dust_sim_speed: 0.0,
       dust_play: false,
+      dust_stride_budget: None,
+      dust_drew: false,
       dust_view_flags: 0,
       dust_exposure_ev: 0.0,
       dust_nucleus_px: None,

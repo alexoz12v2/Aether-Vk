@@ -102,6 +102,174 @@ partial class TimelineTabViewModel
         }
     }
 
+    private string _strHelpHeaderEpochRange = string.Empty;
+    public string StrHelpHeaderEpochRange
+    {
+        get => _strHelpHeaderEpochRange;
+        set
+        {
+            if (_strHelpHeaderEpochRange == value) return;
+            _strHelpHeaderEpochRange = value;
+            OnPropertyChanged(nameof(StrHelpHeaderEpochRange));
+        }
+    }
+
+    private string _strHelpEpochRange = string.Empty;
+    public string StrHelpEpochRange
+    {
+        get => _strHelpEpochRange;
+        set
+        {
+            if (_strHelpEpochRange == value) return;
+            _strHelpEpochRange = value;
+            OnPropertyChanged(nameof(StrHelpEpochRange));
+        }
+    }
+
+    private string _strHelpHeaderCommittedRange = string.Empty;
+    public string StrHelpHeaderCommittedRange
+    {
+        get => _strHelpHeaderCommittedRange;
+        set
+        {
+            if (_strHelpHeaderCommittedRange == value) return;
+            _strHelpHeaderCommittedRange = value;
+            OnPropertyChanged(nameof(StrHelpHeaderCommittedRange));
+        }
+    }
+
+    private string _strHelpCommittedRange = string.Empty;
+    public string StrHelpCommittedRange
+    {
+        get => _strHelpCommittedRange;
+        set
+        {
+            if (_strHelpCommittedRange == value) return;
+            _strHelpCommittedRange = value;
+            OnPropertyChanged(nameof(StrHelpCommittedRange));
+        }
+    }
+
+    private string _strHelpHeaderSpeed = string.Empty;
+    public string StrHelpHeaderSpeed
+    {
+        get => _strHelpHeaderSpeed;
+        set
+        {
+            if (_strHelpHeaderSpeed == value) return;
+            _strHelpHeaderSpeed = value;
+            OnPropertyChanged(nameof(StrHelpHeaderSpeed));
+        }
+    }
+
+    private string _strHelpSpeed = string.Empty;
+    public string StrHelpSpeed
+    {
+        get => _strHelpSpeed;
+        set
+        {
+            if (_strHelpSpeed == value) return;
+            _strHelpSpeed = value;
+            OnPropertyChanged(nameof(StrHelpSpeed));
+        }
+    }
+
+    private string _strHelpHeaderPlayback = string.Empty;
+    public string StrHelpHeaderPlayback
+    {
+        get => _strHelpHeaderPlayback;
+        set
+        {
+            if (_strHelpHeaderPlayback == value) return;
+            _strHelpHeaderPlayback = value;
+            OnPropertyChanged(nameof(StrHelpHeaderPlayback));
+        }
+    }
+
+    private string _strHelpPlayback = string.Empty;
+    public string StrHelpPlayback
+    {
+        get => _strHelpPlayback;
+        set
+        {
+            if (_strHelpPlayback == value) return;
+            _strHelpPlayback = value;
+            OnPropertyChanged(nameof(StrHelpPlayback));
+        }
+    }
+
+    private string _strTipReset = string.Empty;
+    public string StrTipReset
+    {
+        get => _strTipReset;
+        set
+        {
+            if (_strTipReset == value) return;
+            _strTipReset = value;
+            OnPropertyChanged(nameof(StrTipReset));
+        }
+    }
+
+    private string _strTipPlayPause = string.Empty;
+    public string StrTipPlayPause
+    {
+        get => _strTipPlayPause;
+        set
+        {
+            if (_strTipPlayPause == value) return;
+            _strTipPlayPause = value;
+            OnPropertyChanged(nameof(StrTipPlayPause));
+        }
+    }
+
+    private string _strTipRunToEnd = string.Empty;
+    public string StrTipRunToEnd
+    {
+        get => _strTipRunToEnd;
+        set
+        {
+            if (_strTipRunToEnd == value) return;
+            _strTipRunToEnd = value;
+            OnPropertyChanged(nameof(StrTipRunToEnd));
+        }
+    }
+
+    private string _strTipGo = string.Empty;
+    public string StrTipGo
+    {
+        get => _strTipGo;
+        set
+        {
+            if (_strTipGo == value) return;
+            _strTipGo = value;
+            OnPropertyChanged(nameof(StrTipGo));
+        }
+    }
+
+    private string _strHelpHeaderCurrentEpoch = string.Empty;
+    public string StrHelpHeaderCurrentEpoch
+    {
+        get => _strHelpHeaderCurrentEpoch;
+        set
+        {
+            if (_strHelpHeaderCurrentEpoch == value) return;
+            _strHelpHeaderCurrentEpoch = value;
+            OnPropertyChanged(nameof(StrHelpHeaderCurrentEpoch));
+        }
+    }
+
+    private string _strHelpCurrentEpoch = string.Empty;
+    public string StrHelpCurrentEpoch
+    {
+        get => _strHelpCurrentEpoch;
+        set
+        {
+            if (_strHelpCurrentEpoch == value) return;
+            _strHelpCurrentEpoch = value;
+            OnPropertyChanged(nameof(StrHelpCurrentEpoch));
+        }
+    }
+
     /// <summary>Called once on construction and on every culture change.</summary>
     private void RefreshStrings()
     {
@@ -113,5 +281,19 @@ partial class TimelineTabViewModel
         StrSpeed3h = _translationService.GetString("Tabs_Timeline_Speed3h");
         StrSpeed1d = _translationService.GetString("Tabs_Timeline_Speed1d");
         StrSelectSpeed = _translationService.GetString("Tabs_Timeline_SelectSpeed");
+        StrHelpHeaderEpochRange = _translationService.GetString("Tabs_Timeline_HelpHeaderEpochRange");
+        StrHelpEpochRange = _translationService.GetString("Tabs_Timeline_HelpEpochRange");
+        StrHelpHeaderCommittedRange = _translationService.GetString("Tabs_Timeline_HelpHeaderCommittedRange");
+        StrHelpCommittedRange = _translationService.GetString("Tabs_Timeline_HelpCommittedRange");
+        StrHelpHeaderSpeed = _translationService.GetString("Tabs_Timeline_HelpHeaderSpeed");
+        StrHelpSpeed = _translationService.GetString("Tabs_Timeline_HelpSpeed");
+        StrHelpHeaderPlayback = _translationService.GetString("Tabs_Timeline_HelpHeaderPlayback");
+        StrHelpPlayback = _translationService.GetString("Tabs_Timeline_HelpPlayback");
+        StrTipReset = _translationService.GetString("Tabs_Timeline_TipReset");
+        StrTipPlayPause = _translationService.GetString("Tabs_Timeline_TipPlayPause");
+        StrTipRunToEnd = _translationService.GetString("Tabs_Timeline_TipRunToEnd");
+        StrTipGo = _translationService.GetString("Tabs_Timeline_TipGo");
+        StrHelpHeaderCurrentEpoch = _translationService.GetString("Tabs_Timeline_HelpHeaderCurrentEpoch");
+        StrHelpCurrentEpoch = _translationService.GetString("Tabs_Timeline_HelpCurrentEpoch");
     }
 }

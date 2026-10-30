@@ -1240,4 +1240,34 @@ Scrivi un'epoca dentro l'intervallo confermato e premi Invio, o Vai, per saltarc
   <data name="Tabs_Settings_HelpObserverScale" xml:space="preserve">
     <value>L'angolo coperto da un pixel dello schermo e il campo visivo; alla distanza della cometa anche i chilometri per pixel e la semi-larghezza e la semi-altezza della vista.</value>
   </data>
+  <data name="Tabs_Settings_PlayPreview" xml:space="preserve">
+    <value>Qualità dell'anteprima in riproduzione</value>
+  </data>
+  <data name="Tabs_Settings_PlayPreviewHint" xml:space="preserve">
+    <value>Come vengono disegnate le polveri durante la riproduzione e per 2 s dopo una pausa o uno spostamento: più grossolane e ridisegnate a ogni fotogramma, con i segni di flusso in movimento. Segue il rendering completo.</value>
+  </data>
+  <data name="Tabs_Settings_PlayPreviewOff" xml:space="preserve">
+    <value>Disattivata (rendering completo)</value>
+  </data>
+  <data name="Tabs_Settings_PlayPreviewSmooth" xml:space="preserve">
+    <value>Fluida</value>
+  </data>
+  <data name="Tabs_Settings_PlayPreviewBalanced" xml:space="preserve">
+    <value>Bilanciata</value>
+  </data>
+  <data name="Tabs_Settings_PlayPreviewQuality" xml:space="preserve">
+    <value>Qualità</value>
+  </data>
+  <data name="Tabs_Settings_HelpPlayPreview" xml:space="preserve">
+    <value>Durante la riproduzione della simulazione, e per 2 s dopo una pausa o uno spostamento, le polveri sono disegnate come anteprima: più grossolane, ridisegnate a ogni fotogramma (senza riutilizzo temporale), con i segni di flusso che si allontanano dal nucleo. I segni di flusso sono un ausilio visivo: seguono il campo di velocità reale, più veloci delle polveri alle velocità basse; le particelle restano dove le pone la fisica.&#10;&#10;Fluida è la più veloce, Qualità la più fine; Disattivata disegna il rendering completo anche in riproduzione.&#10;&#10;Al termine dell'anteprima parte il rendering completo, che si affina. "Rendering completo" sulla vista lo avvia subito. Salvata per il prossimo avvio.</value>
+  </data>
+  <data name="Overlay_DustPreview" xml:space="preserve">
+    <value>Anteprima · segni di flusso (ausilio visivo)</value>
+  </data>
+  <data name="Overlay_RenderFull" xml:space="preserve">
+    <value>Rendering completo</value>
+  </data>
+  <data name="Overlay_DustRendering" xml:space="preserve">
+    <value>Rendering dell'immagine completa…</value>
+  </data>
 </root>

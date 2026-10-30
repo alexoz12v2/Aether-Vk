@@ -43,7 +43,7 @@ public sealed class FitsModelRangeTests(ITestOutputHelper output)
       s.SelectTab("SettingsTab");
       s.Expand("BillboardsSection", "CreateBillboardButton");
       s.Expand("BillboardFitsSection", "BillboardFitsModelRange");
-      s.Find("BillboardFitsModelRange").RealClick();
+      s.ClickWhenSettled("BillboardFitsModelRange");
 
       s.OpenRangeEntry("ModelEndEpochBox");
       Ui.WaitUntil(() => s.Find("ModelEndEpochBox").Text.StartsWith(FitsComparisonSteps.DateMidUtc, StringComparison.Ordinal),
@@ -59,8 +59,8 @@ public sealed class FitsModelRangeTests(ITestOutputHelper output)
 
       // Restore: the committed range back
       s.Click("RestoreButton");
-      Ui.WaitUntil(() => s.Find("StartEpochBox").Text.StartsWith("2021-12-12", StringComparison.Ordinal)
-                         && s.Find("EndEpochBox").Text.StartsWith("2021-12-28", StringComparison.Ordinal),
+      Ui.WaitUntil(() => ReviewSave.Shows(s.Find("StartEpochBox").Text, ReviewSave.CommittedStartUtc)
+                         && ReviewSave.Shows(s.Find("EndEpochBox").Text, ReviewSave.CommittedEndUtc),
         TimeSpan.FromSeconds(10), "Restore to put the committed range back");
       Assert.DoesNotContain("Range locked", s.App.PageSource, StringComparison.Ordinal);
     }

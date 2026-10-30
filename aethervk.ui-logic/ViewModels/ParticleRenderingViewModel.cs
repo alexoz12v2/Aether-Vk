@@ -19,6 +19,10 @@ namespace AetherVk.Logic.ViewModels;
 /// is reused instead of drawn again; Off (0) draws every frame fresh, 1 up to 16 px (the default)
 /// are faster but can smear moving dust. Visual only.
 ///
+/// <b>Playback preview quality</b>: how the dust is drawn while playing and for 2 s after a pause
+/// or a seek (Off, Smooth, Balanced — the default —, Quality): coarser, without temporal reuse, with
+/// the flow marks moving out of the nucleus; the full render follows. Not part of the presets.
+///
 /// <b>Quality</b>: five presets (<see cref="Presets"/>) over those four values, 1 (lowest, where the
 /// app starts) to 5 (ultra); editing a value by hand turns it to custom (0), unless the values match
 /// a preset again.
@@ -109,6 +113,22 @@ public partial class ParticleRenderingViewModel : ObservableObject
   public const int QualityCustom = 0;
   public const int QualityMin = 1;
   public const int QualityMax = 5;
+
+  /// <summary>Playback preview levels: 0 Off, 1 Smooth, 2 Balanced (the default), 3 Quality;
+  /// mirror of <c>dust::play_quality::PlayPreview</c>.</summary>
+  public const int PlayPreviewDefault = 2;
+  public const int PlayPreviewMax = 3;
+
+  /// <summary>A level in [0, <see cref="PlayPreviewMax"/>], else the default (the native clamp).</summary>
+  public static int ClampPlayPreview(int level) => level is >= 0 and <= PlayPreviewMax ? level : PlayPreviewDefault;
+
+  /// <summary>Playback preview level, the picker's index (<see cref="PlayPreviewOptions"/>).</summary>
+  [ObservableProperty]
+  private int _playPreview = PlayPreviewDefault;
+
+  /// <summary>The localized picker items, Off … Quality (the Settings tab sets them on a culture change).</summary>
+  [ObservableProperty]
+  private IReadOnlyList<string> _playPreviewOptions = new[] { "Off", "Smooth", "Balanced", "Quality" };
   /// <summary>The app starts on the lowest preset (missing preference).</summary>
   public const int QualityDefault = QualityMin;
 
@@ -302,6 +322,7 @@ public partial class ParticleRenderingViewModel : ObservableObject
     HazeDetail = preferences?.DustHazeDetail ?? start.HazeDetail;
     ReuseTolerance = preferences?.DustReuseTolerance ?? start.ReuseTolerance;
     Quality = preferences?.ParticleQuality ?? QualityDefault;
+    PlayPreview = preferences?.DustPlayPreview ?? PlayPreviewDefault;
     if (Quality != QualityCustom)
       _lastPresetLevel = Quality;
     _suppressDispatch = false;
@@ -380,6 +401,21 @@ public partial class ParticleRenderingViewModel : ObservableObject
     _preferences?.SetDustHazeDetail(d);
     _runtimeService?.SetDustHazeDetail(d);
     OnValueEdited();
+  }
+
+  partial void OnPlayPreviewChanged(int value)
+  {
+    // a cleared picker (-1) or an unknown level: the native clamp's value
+    int level = ClampPlayPreview(value);
+    if (level != value)
+    {
+      PlayPreview = level;
+      return;
+    }
+    if (_suppressDispatch)
+      return;
+    _preferences?.SetDustPlayPreview(level);
+    _runtimeService?.SetDustPlayPreview(level);
   }
 
   partial void OnReuseToleranceChanged(int value)

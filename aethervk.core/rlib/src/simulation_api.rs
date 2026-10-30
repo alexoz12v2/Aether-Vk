@@ -161,6 +161,10 @@ impl SimulationContext {
     let start = get_monotonic_time();
     while get_monotonic_time() - start < SEEK_SYNC_TIMEOUT_US {
       if done_flag.load(core::sync::atomic::Ordering::Acquire) {
+        // the seek's frame and the scrub's next steps: in preview, the full render after the hold
+        if let Some(scene) = self.get_scene(scene_id) {
+          scene.read().hold_dust_preview();
+        }
         return succeeded.load(core::sync::atomic::Ordering::Relaxed);
       }
       core::hint::spin_loop();
@@ -249,10 +253,11 @@ impl SimulationContext {
       let scenes = self.scenes.read();
 
       if let Some(scene) = scenes.scenes.get(&scene_id) {
-        scene
-          .read()
-          .simulation_running
-          .store(false, core::sync::atomic::Ordering::Release);
+        let scene = scene.read();
+        // a pause that ends a play keeps the preview a moment (a scrub pauses at every step)
+        if scene.simulation_running.swap(false, core::sync::atomic::Ordering::AcqRel) {
+          scene.hold_dust_preview();
+        }
         // Disarm the stall-watcher; GPU submits are expected to stop.
         #[cfg(all(target_os = "linux", debug_assertions))]
         self
@@ -589,10 +594,12 @@ pub mod external_state {
     pub _padding: [u8; 4],
   }
   impl CTimeRange {
+    /// The range as TDB parts past J2000 TDB, whatever scale `start` / `end` are labelled in
+    /// (an `Epoch` difference is taken in the left side's scale: a UTC-labelled start would be
+    /// off by TDB − UTC)
     pub fn new(start: hifitime::Epoch, end: hifitime::Epoch) -> Self {
-      let j2000 = hifitime::Epoch::from_tdb_duration(hifitime::Duration::from_parts(0, 0));
-      let (start_c, start_ns) = (start - j2000).to_parts();
-      let (end_c, end_ns) = (end - j2000).to_parts();
+      let (start_c, start_ns) = start.to_tdb_duration().to_parts();
+      let (end_c, end_ns) = end.to_tdb_duration().to_parts();
       Self {
         nanoseconds: [start_ns, end_ns],
         centuries: [start_c, end_c],

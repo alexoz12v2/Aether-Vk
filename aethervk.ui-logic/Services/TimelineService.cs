@@ -155,6 +155,20 @@ public sealed class TimelineService : IDisposable
       return ok;
   }
 
+  /// <summary>
+  /// A new speed for the running playback. The core takes one only through a pause (it refuses a
+  /// start while the last physics sync is pending), so the engine pauses and starts again; the
+  /// running state stays on throughout (a "stopped" in between reads as an external stop and
+  /// ends the playback in the UI). False when the restart failed (then it reports the stop).
+  /// </summary>
+  public bool ChangeSpeed(int speed)
+  {
+      _runtimeService.PauseSimulationSync();
+      bool ok = Play(speed);
+      if (!ok) _isSimulationRunningSubject.OnNext(false);
+      return ok;
+  }
+
   public bool Reset()
   {
       bool ok = _runtimeService.ResetSimulationSync();
