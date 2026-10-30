@@ -229,6 +229,18 @@ struct Args {
   height: u32,
   pose: Pose,
   play_seconds: Option<f64>,
+  /// `--play-live SECONDS`: after the initial seek the simulation plays at `--step-hours` sim
+  /// hours per wall second and a frame is captured every `--sample-s` wall seconds WITHOUT
+  /// pausing (the reviewer's "the animation doesn't work" probe); `live_NNN.png` + `stats.jsonl`
+  play_live_seconds: Option<f64>,
+  sample_s: f64,
+  /// `--play-quality-off`: `AETHERVK_DUST_PLAY_QUALITY=0` (the A/B of the play quality, P3)
+  play_quality_off: bool,
+  /// `--play-live-paused`: the paused control of `--play-live`: the clock never runs; every
+  /// sample seeks the epoch forward by `--sample-s` × `--step-hours` hours instead (the same
+  /// sim step per frame as the play, through the paused path), so play and paused frames at
+  /// the same pose and step are compared on the same `stats.jsonl` fields
+  play_live_paused: bool,
   reemit_every: u32,
   check: bool,
   /// `--dust-budget-ms <ms>`: a frame whose dust GPU time (`DustGpuTimings::total_ms`) exceeds this
@@ -366,7 +378,7 @@ struct Args {
 fn usage() -> ! {
   eprintln!(
     "usage: dust_observer --out DIR [--days 30] [--step-hours 24] [--size 1280x800]\n\
-     \x20      [--pose up-zenith|anti-sun|earth|inside] [--play SECONDS] [--reemit-every N] [--check] [--dust-budget-ms MS]\n\
+     \x20      [--pose up-zenith|anti-sun|earth|inside] [--play SECONDS] [--play-live SECONDS --sample-s S [--play-quality-off] [--play-live-paused]] [--reemit-every N] [--check] [--dust-budget-ms MS]\n\
      \x20      [--half-height-km KM] [--fov-deg DEG] [--inside-m D | --inside-km D] [--lat DEG --lon DEG --elev M] [--sky-image-check]\n\
      \x20      [--north-up] [--earth-field-km KM] [--ortho] [--start YYYY-MM-DD[THH:MM:SS[Z]]] [--spk FILE.bsp]\n\
      \x20      [--quiet] [--settle-frames N] [--no-jet] [--hide-sun] [--no-trajectories] [--full-teardown] [--no-sheet]\n\
@@ -389,6 +401,10 @@ fn parse_args() -> Args {
     height: 800,
     pose: Pose::UpZenith,
     play_seconds: None,
+    play_live_seconds: None,
+    sample_s: 1.0,
+    play_quality_off: false,
+    play_live_paused: false,
     reemit_every: 0,
     check: false,
     dust_budget_ms: None,
@@ -476,6 +492,10 @@ fn parse_args() -> Args {
       "--inside-m" => a.inside_m = next(&mut i).parse().unwrap_or_else(|_| usage()),
       "--inside-km" => a.inside_m = next(&mut i).parse::<f64>().unwrap_or_else(|_| usage()) * 1e3,
       "--play" => a.play_seconds = Some(next(&mut i).parse().unwrap_or_else(|_| usage())),
+      "--play-live" => a.play_live_seconds = Some(next(&mut i).parse().unwrap_or_else(|_| usage())),
+      "--sample-s" => a.sample_s = next(&mut i).parse().unwrap_or_else(|_| usage()),
+      "--play-quality-off" => a.play_quality_off = true,
+      "--play-live-paused" => a.play_live_paused = true,
       "--reemit-every" => a.reemit_every = next(&mut i).parse().unwrap_or_else(|_| usage()),
       "--check" => a.check = true,
       "--dust-budget-ms" => a.dust_budget_ms = Some(next(&mut i).parse().unwrap_or_else(|_| usage())),
@@ -2010,6 +2030,359 @@ fn wait_and_download(
   Some((color, tid))
 }
 
+/// `--play-live`: luminance of a 32×32 grid of cells (mean luma per cell, 0..1) of an RGBA frame
+fn luma_grid_32(rgba: &[u8], width: u32, height: u32) -> Vec<f64> {
+  const N: usize = 32;
+  let mut sum = vec![0.0f64; N * N];
+  let mut cnt = vec![0u32; N * N];
+  for y in 0..height as usize {
+    let cy = (y * N / height as usize).min(N - 1);
+    for x in 0..width as usize {
+      let cx = (x * N / width as usize).min(N - 1);
+      let i = (y * width as usize + x) * 4;
+      let l = 0.2126 * rgba[i] as f64 + 0.7152 * rgba[i + 1] as f64 + 0.0722 * rgba[i + 2] as f64;
+      sum[cy * N + cx] += l / 255.0;
+      cnt[cy * N + cx] += 1;
+    }
+  }
+  sum.iter().zip(&cnt).map(|(s, c)| if *c > 0 { s / *c as f64 } else { 0.0 }).collect()
+}
+
+/// The per-stage GPU ms of one dust frame (`DustGpuTimings`) as a JSON object (`NaN` → null)
+fn dust_stages_json(t: &aethervk_core_rlib::gpu_backends::vulkan::device::dust::DustGpuTimings) -> String {
+  let num = |v: f64| if v.is_finite() { format!("{v:.2}") } else { String::from("null") };
+  format!(
+    "{{\"frame\":{},\"reused\":{},\"propagate_ms\":{},\"splat_ms\":{},\"splat_only_ms\":{},\"specks_ms\":{},\"queue_ms\":{},\"cadence_ms\":{},\"classify_ms\":{},\"builds_ms\":{},\"reproject_ms\":{},\"measure_ms\":{},\"composite_ms\":{},\"total_ms\":{},\"call_ms\":[{}]}}",
+    t.frame,
+    t.reused,
+    num(t.propagate_ms),
+    num(t.splat_ms),
+    num(t.splat_only_ms),
+    num(t.specks_ms),
+    num(t.queue_ms),
+    num(t.cadence_ms),
+    num(t.classify_ms),
+    num(t.builds_ms),
+    num(t.reproject_ms),
+    num(t.measure_ms),
+    num(t.composite_ms),
+    num(t.total_ms),
+    t.call_ms.iter().filter(|c| c.is_finite()).map(|c| format!("{c:.2}")).collect::<Vec<_>>().join(",")
+  )
+}
+
+/// [`dust_stages_json`] for the log line
+fn dust_stages_brief(t: &aethervk_core_rlib::gpu_backends::vulkan::device::dust::DustGpuTimings) -> String {
+  let num = |v: f64| if v.is_finite() { format!("{v:.1}") } else { String::from("-") };
+  format!(
+    "frame {} total {} = propagate {} + splat {} (fresh splat {}, specks {}, queue {}; cadence {}, classify {}, builds {}, reproject {}) + measure {} + composite {}",
+    t.frame,
+    num(t.total_ms),
+    num(t.propagate_ms),
+    num(t.splat_ms),
+    num(t.splat_only_ms),
+    num(t.specks_ms),
+    num(t.queue_ms),
+    num(t.cadence_ms),
+    num(t.classify_ms),
+    num(t.builds_ms),
+    num(t.reproject_ms),
+    num(t.measure_ms),
+    num(t.composite_ms)
+  )
+}
+
+/// `--play-live SECONDS --sample-s S`: the reviewer's "the animation doesn't work" probe. After
+/// the initial seek (done, caught up) frame 0 is captured paused; then the simulation is started
+/// at `--step-hours` sim hours per wall second and, WITHOUT pausing, a frame is captured every
+/// `S` wall seconds until `SECONDS` elapse, through the observer's usual capture path
+/// (`wait_and_download`: one fresh render generation, then the swapchain download; the render
+/// thread keeps rendering while the clock runs, the download reads the finished task's image, so
+/// no pause is needed — the app's viewport does the same). Per frame: `live_NNN.png` and one
+/// `stats.jsonl` line with the wall time, the sim epoch and its advance, the per-tier history
+/// (live/cap, caught-up, ages: the logic thread's `[Dust]` line), the host tick state, the dust
+/// frame ledger since the previous capture (drawn vs reused dust frames, the last frame's sim
+/// time) and a motion metric against the previous frame: the fraction of the 32×32 luminance
+/// grid cells that changed by more than 0.01 (`moved`: fraction > 0.02). Ends with
+/// `PLAY_LIVE moved N/M frames`; exit 0 when at least one frame moved, 7 otherwise.
+#[allow(clippy::too_many_arguments)]
+fn play_live_probe(
+  ctx: &SimulationContext,
+  scene_id: u64,
+  pe: aethervk_core_rlib::gpu::PresentationEngineHandle,
+  cam: EntityId,
+  comet_body: EntityId,
+  args: &Args,
+  live_s: f64,
+  pose_for: &dyn Fn(V3) -> (V3, Q),
+  send_inside_projection: &dyn Fn(f64),
+  inside_far_now: &mut f64,
+) -> i32 {
+  let mut stats = File::create(args.out.join("stats.jsonl")).expect("stats.jsonl");
+  let sample_s = args.sample_s.max(0.05);
+  let speed = args.step_hours * 3600.0;
+  let n_samples = (live_s / sample_s).floor() as usize + 1;
+  log_line(&format!(
+    "play-live: {live_s} s at {:.1} sim h per wall s (×{speed:.0}), a frame every {sample_s} s ({n_samples} frames)",
+    args.step_hours
+  ));
+  let epoch0 = current_epoch(ctx, scene_id);
+  let t0 = Instant::now();
+  let mut prev_grid: Option<Vec<f64>> = None;
+  let mut prev_epoch = epoch0;
+  let mut prev_wall = 0.0f64;
+  let mut moved_n = 0usize;
+  let mut captured = 0usize;
+  let mut last_seq = 0u64;
+  let mut started = false;
+  let mut exit_code = 0;
+  for i in 0..n_samples {
+    if i == 1 && args.play_live_paused {
+      started = true;
+      log_line(&format!(
+        "play-live: paused control: a seek of {:.3} sim h per sample, the clock never runs",
+        sample_s * args.step_hours
+      ));
+    } else if i == 1 {
+      // frame 0 captured paused and caught up; from here the clock runs and is never paused
+      started = ctx.start_simulation(
+        scene_id,
+        aethervk_oshal_rlib::os::time::v2::SimSpeed::Custom(speed),
+      );
+      log_line(&format!("play-live: start_simulation ×{speed:.0}: {started}"));
+      if !started {
+        exit_code = 7;
+      }
+    }
+    if i >= 1 && args.play_live_paused {
+      // the paused control: the same sim step the play would have made by this sample
+      if let Some(e0) = epoch0 {
+        let target = e0 + Duration::from_seconds(i as f64 * sample_s * args.step_hours * 3600.0);
+        let ok = ctx.seek_epoch_sync(scene_id, target);
+        let caught = wait_caught_up(ctx, scene_id, 60.0);
+        if !(ok && caught) {
+          log_line(&format!("play-live frame {i}: paused seek to {target}: ok {ok} caught up {caught}"));
+        }
+      }
+    }
+    // the sample's wall time (the capture itself takes a render generation)
+    let due = i as f64 * sample_s;
+    let wait = due - t0.elapsed().as_secs_f64();
+    if wait > 0.0 {
+      std::thread::sleep(std::time::Duration::from_secs_f64(wait));
+    }
+    if DEVICE_LOST.load(Ordering::Relaxed) {
+      log_line("play-live: GPU device lost, aborting");
+      exit_code = 7;
+      break;
+    }
+    // the camera follows the comet (as the frame loop does; the pose is the same offset)
+    let comet = comet_position_au(ctx, scene_id, comet_body).unwrap_or([0.0; 3]);
+    if args.pose == Pose::Inside {
+      let coma_km = ctx.dust_coma_radius_km(scene_id);
+      let far = {
+        // `inside_far_au` of the frame loop, inlined (the closure's arguments live in `main`)
+        let inside_d_au = args.inside_m / aethervk_core_rlib::scene::dust::AU_M;
+        (1e4 * inside_d_au).max(2.0 * coma_km / AU_KM)
+      };
+      if far != *inside_far_now {
+        *inside_far_now = far;
+        send_inside_projection(far);
+      }
+    }
+    if args.pose != Pose::Earth {
+      let (p, q) = pose_for(comet);
+      set_camera_pose(ctx, scene_id, cam, p, q);
+    }
+    let t_cap = Instant::now();
+    let wall_s = t0.elapsed().as_secs_f64();
+    let dl = wait_and_download(ctx, args.width, args.height, 1, 20_000);
+    let Some((mut buf, tid)) = dl else {
+      log_line(&format!("play-live frame {i}: no frame downloaded within 20 s"));
+      let _ = writeln!(
+        stats,
+        "{{\"frame\":{i},\"wall_s\":{wall_s:.3},\"error\":\"no frame downloaded\"}}"
+      );
+      exit_code = 7;
+      continue;
+    };
+    let capture_ms = t_cap.elapsed().as_secs_f64() * 1e3;
+    bgra_to_rgba(&mut buf);
+    let epoch = current_epoch(ctx, scene_id);
+    let sim_since_start_h = match (epoch, epoch0) {
+      (Some(e), Some(e0)) => (e - e0).to_seconds() / 3600.0,
+      _ => f64::NAN,
+    };
+    let sim_dt_h = match (epoch, prev_epoch) {
+      (Some(e), Some(p)) => (e - p).to_seconds() / 3600.0,
+      _ => f64::NAN,
+    };
+    let expected_dt_h = if i == 0 { 0.0 } else { (wall_s - prev_wall) * args.step_hours };
+    // dust history per tier (what the logic thread's `[Dust]` line prints)
+    let tiers = ctx.dust_stats(scene_id);
+    let history: Vec<String> = tiers
+      .iter()
+      .map(|t| {
+        format!(
+          "{}/{} {:.3}-{:.3} d{}{}{}",
+          t.live_clusters,
+          t.capacity,
+          t.youngest_age_s / 86400.0,
+          t.oldest_age_s / 86400.0,
+          if t.caught_up { "" } else { " (building)" },
+          if t.unlit_windows > 0 { format!(" ({} unlit)", t.unlit_windows) } else { String::new() },
+          if t.jet_unavailable { " (jet unavailable)" } else { "" }
+        )
+      })
+      .collect();
+    let tiers_json: Vec<String> = tiers
+      .iter()
+      .map(|t| {
+        format!(
+          "{{\"live_clusters\":{},\"capacity\":{},\"youngest_age_s\":{:.1},\"oldest_age_s\":{:.1},\"caught_up\":{},\"unlit_windows\":{},\"jet_unavailable\":{}}}",
+          t.live_clusters, t.capacity, t.youngest_age_s, t.oldest_age_s, t.caught_up, t.unlit_windows, t.jet_unavailable
+        )
+      })
+      .collect();
+    let (physics_busy, running) = ctx
+      .get_scene(scene_id)
+      .map(|s| {
+        let s = s.read();
+        (
+          s.active_physics_task.load(Ordering::Acquire),
+          s.simulation_running.load(Ordering::Acquire),
+        )
+      })
+      .unwrap_or((false, false));
+    // the dust frame ledger since the previous capture: drawn vs reused dust frames, and the
+    // sim time the last dust frame evaluated the clusters at (the host tick's `jet.t_s`)
+    let ledger = ctx.dust_frame_ledger(pe, last_seq);
+    let ledger_new: Vec<_> = ledger.iter().filter(|l| l.seq > last_seq || last_seq == 0).collect();
+    let n_reused = ledger_new.iter().filter(|l| l.reused).count();
+    let n_drawn = ledger_new.len() - n_reused;
+    let last = ledger.last();
+    let last_reused = last.map(|l| l.reused);
+    let last_t_now_s = last.map(|l| l.t_now_s);
+    if let Some(l) = last {
+      last_seq = l.seq;
+    }
+    let gpu_timings = ctx.dust_gpu_timings(pe);
+    let gpu_reused = gpu_timings.map(|t| t.reused);
+    // the dust GPU ms of the last frame that drew (not a reused one) and the render task's frame
+    let gpu_drawn = ctx.dust_gpu_timings_drawn(pe).or(gpu_timings);
+    let gpu_drawn_ms = gpu_drawn.map(|t| t.total_ms);
+    // the per-stage GPU ms of that drawn frame, and the budget loop / cadence telemetry (why the
+    // cadence reset, its mode, the fresh vs live clusters; a readback a few frames late)
+    let stages_json = gpu_drawn.map_or(String::from("null"), |t| dust_stages_json(&t));
+    let budget = ctx.dust_budget_telemetry(pe);
+    let budget_json = budget.as_ref().map_or(String::from("null"), |b| b.to_json());
+    let cadence_brief = budget.as_ref().map_or(String::from("cadence n/a"), |b| {
+      b.cadence.as_ref().map_or(String::from("cadence off"), |c| {
+        format!(
+          "cadence mode {:?} reset {:?} fresh {}/{} ({:.3}) images {} admitted {:?}; loop {} rung {}/{} ε {} lod {} ÷{} regime {} fb_full [d{} v{} e{}]",
+          c.mode,
+          c.reset,
+          c.fresh,
+          c.live,
+          c.fresh_fraction,
+          c.images_shown,
+          c.admitted,
+          b.state,
+          b.rung,
+          b.rungs.saturating_sub(1),
+          b.knobs.map_or(String::from("?"), |k| format!("{}", k.eps_px)),
+          b.knobs.map_or(String::from("?"), |k| format!("{}", k.lod_px)),
+          b.knobs.map_or(1, |k| 1u32 << k.budget_shift),
+          b.regime,
+          b.fb_full.split_depth,
+          b.fb_full.volume_bias,
+          b.fb_full.ewa_bias
+        )
+      })
+    });
+    let wall_dt = if i == 0 { 0.0 } else { wall_s - prev_wall };
+    let dust_fps = if wall_dt > 0.0 { n_drawn as f64 / wall_dt } else { 0.0 };
+    let play_quality = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_PLAY_QUALITY")
+      .map_or(true, |v| v.trim() != "0");
+    // the sim time of the dust frame vs the clock: a lagging dust frame is a host tick not run
+    let dust_t_lag_s = match (last_t_now_s, epoch, epoch0) {
+      (Some(t), Some(e), Some(e0)) => {
+        // the ledger's `t_now_s` is scaled sim seconds since the scenario start: compare the
+        // advance since frame 0 with the clock's
+        (e - e0).to_seconds() - (t - ledger_t0(&ledger, i))
+      }
+      _ => f64::NAN,
+    };
+    let grid = luma_grid_32(&buf, args.width, args.height);
+    let changed_fraction = prev_grid
+      .as_ref()
+      .map(|p| {
+        let n = p.iter().zip(&grid).filter(|(a, b)| (*a - *b).abs() > 0.01).count();
+        n as f64 / grid.len() as f64
+      })
+      .unwrap_or(0.0);
+    let moved = i > 0 && changed_fraction > 0.02;
+    if i > 0 {
+      captured += 1;
+      if moved {
+        moved_n += 1;
+      }
+    }
+    let mean_luma = grid.iter().sum::<f64>() / grid.len() as f64;
+    let img = image::RgbaImage::from_raw(args.width, args.height, buf).unwrap();
+    let name = format!("live_{i:03}.png");
+    if let Err(e) = img.save(args.out.join(&name)) {
+      log_line(&format!("play-live frame {i}: {name}: {e}"));
+    }
+    let epoch_str = epoch.map_or(String::from("null"), |e| format!("\"{e}\""));
+    let line = format!(
+      "{{\"frame\":{i},\"wall_s\":{wall_s:.3},\"capture_ms\":{capture_ms:.1},\"epoch\":{epoch_str},\"sim_since_start_h\":{sim_since_start_h:.4},\"sim_dt_h\":{sim_dt_h:.4},\"expected_sim_dt_h\":{expected_dt_h:.4},\"running\":{running},\"started\":{started},\"physics_busy\":{physics_busy},\"history\":[{}],\"tiers\":[{}],\"dust_frames_drawn\":{n_drawn},\"dust_frames_reused\":{n_reused},\"last_dust_reused\":{},\"last_dust_t_now_s\":{},\"dust_t_lag_s\":{dust_t_lag_s:.1},\"gpu_timings_reused\":{},\"dust_gpu_drawn_ms\":{},\"dust_gpu_stages\":{stages_json},\"dust_budget\":{budget_json},\"dust_fps\":{dust_fps:.2},\"play_quality\":{play_quality},\"render_task\":{tid},\"mean_luma\":{mean_luma:.4},\"changed_fraction\":{changed_fraction:.4},\"moved\":{moved},\"png\":\"{name}\"}}",
+      history.iter().map(|h| format!("\"{h}\"")).collect::<Vec<_>>().join(","),
+      tiers_json.join(","),
+      last_reused.map_or(String::from("null"), |b| b.to_string()),
+      last_t_now_s.map_or(String::from("null"), |t| format!("{t:.1}")),
+      gpu_reused.map_or(String::from("null"), |b| b.to_string()),
+      gpu_drawn_ms.map_or(String::from("null"), |m| format!("{m:.2}")),
+    );
+    let _ = writeln!(stats, "{line}");
+    log_line(&format!(
+      "play-live frame {i}: wall {wall_s:.2} s, sim +{sim_since_start_h:.3} h (dt {sim_dt_h:.3} h, expected {expected_dt_h:.3} h), dust frames drawn {n_drawn} reused {n_reused} ({dust_fps:.1} dust fps, {} ms), dust t lag {dust_t_lag_s:.1} s, changed {changed_fraction:.3} moved {moved}; {}",
+      gpu_drawn_ms.map_or(String::from("?"), |m| format!("{m:.1}")),
+      history.join(" | ")
+    ));
+    log_line(&format!(
+      "play-live frame {i}: stages {}; {cadence_brief}",
+      gpu_drawn.map_or(String::from("n/a"), |t| dust_stages_brief(&t))
+    ));
+    prev_grid = Some(grid);
+    prev_epoch = epoch;
+    prev_wall = wall_s;
+  }
+  let _ = ctx.pause_simulation_sync(scene_id);
+  let summary = format!(
+    "PLAY_LIVE moved {moved_n}/{captured} frames, play quality {}",
+    if aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_PLAY_QUALITY").is_some_and(|v| v.trim() == "0") { "off" } else { "on" }
+  );
+  log_line(&summary);
+  println!("{summary}");
+  let _ = writeln!(stats, "{{\"summary\":\"{summary}\",\"moved\":{moved_n},\"frames\":{captured}}}");
+  let _ = stats.flush();
+  if captured > 0 && moved_n == 0 && exit_code == 0 {
+    exit_code = 7;
+  }
+  exit_code
+}
+
+/// the ledger's dust sim time at the probe's frame 0 (the first entry's, kept across the run)
+fn ledger_t0(ledger: &[aethervk_core_rlib::gpu::frame::DustFrameLedger], i: usize) -> f64 {
+  static T0: Mutex<Option<f64>> = Mutex::new(None);
+  let mut g = T0.lock().unwrap();
+  if i == 0 || g.is_none() {
+    *g = ledger.last().map(|l| l.t_now_s);
+  }
+  g.unwrap_or(f64::NAN)
+}
+
 fn bgra_to_rgba(buf: &mut [u8]) {
   for px in buf.chunks_exact_mut(4) {
     px.swap(0, 2);
@@ -2116,6 +2489,10 @@ fn luminance_stats(
 
 fn main() {
   let args = parse_args();
+  if args.play_quality_off {
+    // before the context starts: the render thread reads it per frame (`PlayQuality::from_env`)
+    unsafe { std::env::set_var("AETHERVK_DUST_PLAY_QUALITY", "0") };
+  }
   if let Some(t) = args.lab_table_md.clone() {
     // the score table as Markdown (no GPU)
     std::process::exit(lab_table_markdown(&t));
@@ -2773,6 +3150,29 @@ fn main() {
   } else {
     let (p, q) = pose_for(comet0);
     set_camera_pose(&ctx, scene_id, cam, p, q);
+  }
+
+  // ───── --play-live: the simulation plays, frames captured without pausing ─────
+  if let Some(live_s) = args.play_live_seconds {
+    let exit_code = play_live_probe(
+      &ctx,
+      scene_id,
+      pe,
+      cam,
+      comet_body,
+      &args,
+      live_s,
+      &pose_for,
+      &send_inside_projection,
+      &mut inside_far_now,
+    );
+    if let Ok(mut g) = LOG_FILE.lock() {
+      if let Some(f) = g.as_mut() {
+        let _ = f.flush();
+      }
+    }
+    std::mem::forget(ctx);
+    unsafe { libc::_exit(exit_code) }
   }
 
   // ───── frames ─────

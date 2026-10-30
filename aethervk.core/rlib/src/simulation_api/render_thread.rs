@@ -388,6 +388,7 @@ fn process_command(
               let mut dust_reuse_px = crate::scene::dust::DUST_REUSE_PX_DEFAULT;
               let mut dust_feedback_gen = 0u32;
               let mut dust_sim_speed = 0.0f64;
+              let mut dust_play = false;
               let mut dust_view_flags = 0u32;
               let mut dust_exposure_ev = 0.0f32;
               let mut dust_flow = crate::scene::dust::DustFlowClock::default();
@@ -423,13 +424,15 @@ fn process_command(
                 dust_exposure_ev = f32::from_bits(
                   scene_context_read.dust_exposure_ev.load(core::sync::atomic::Ordering::Relaxed),
                 );
-                dust_volume_detail =
-                  scene_context_read.dust_volume_detail.load(core::sync::atomic::Ordering::Relaxed);
-                dust_propagate_detail =
-                  scene_context_read.dust_propagate_detail.load(core::sync::atomic::Ordering::Relaxed);
-                dust_haze_detail =
-                  scene_context_read.dust_haze_detail.load(core::sync::atomic::Ordering::Relaxed);
-                dust_reuse_px = scene_context_read.dust_reuse_px.load(core::sync::atomic::Ordering::Relaxed);
+                // the scene's knobs, coarsened while the simulation runs (play quality, P3)
+                {
+                  let (k, play) = scene_context_read.dust_render_knobs();
+                  dust_play = play;
+                  dust_volume_detail = k.volume_detail;
+                  dust_propagate_detail = k.propagate_detail;
+                  dust_haze_detail = k.haze_detail;
+                  dust_reuse_px = k.reuse_px;
+                }
                 dust_feedback_gen =
                   scene_context_read.dust_feedback_gen.load(core::sync::atomic::Ordering::Relaxed);
                 dust_sim_speed = scene_context_read.time_state.read().speed.scale_factor();
@@ -480,6 +483,7 @@ fn process_command(
               render_scene.dust_reuse_px = dust_reuse_px;
               render_scene.dust_feedback_gen = dust_feedback_gen;
               render_scene.dust_sim_speed = dust_sim_speed;
+              render_scene.dust_play = dust_play;
               render_scene.dust_view_flags = dust_view_flags;
               render_scene.dust_exposure_ev = dust_exposure_ev;
               render_scene.dust_flow = dust_flow;

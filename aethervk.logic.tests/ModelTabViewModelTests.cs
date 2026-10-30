@@ -52,7 +52,8 @@ public class ModelTabViewModelTests
         .Setup(s => s.Background)
         .Returns(System.Reactive.Concurrency.ImmediateScheduler.Instance);
 
-      Session = new ModelSession();
+      // the manual radius is edited in the Comet tab: the Model tab reads it from the session
+      Session = new ModelSession { ManualNucleusRadiusKm = nucleusRadiusKm };
       var sessionService = new Mock<ITabStateService<ModelSession>>();
       var sessionList = new[] { new SessionId(typeof(ModelSession), 1) };
       sessionService.Setup(s => s.ActiveSessionIds).Returns(sessionList);
@@ -112,8 +113,6 @@ public class ModelTabViewModelTests
       ); // Most tests need a committed comet — simulate commitment via the observable property.
       if (cometCommitted)
         Vm.IsCometCommitted = true;
-
-      Vm.ManualNucleusRadiusKm = nucleusRadiusKm;
     }
   }
 
@@ -158,6 +157,34 @@ public class ModelTabViewModelTests
     var restored = new ModelSession();
     AetherVk.Logic.SaveFile.SaveIndexMapping.Apply(dto, restored);
     Assert.Equal(expected, restored.SphereGizmoParts);
+  }
+
+  /// Feedback item 16: each gizmo part can be shown alone; every toggle maps to its own bit.
+  [Theory]
+  [InlineData(nameof(ModelTabViewModel.ShowGizmoGrid), AetherVk.Logic.Models.SphereGizmoPart.Grid)]
+  [InlineData(nameof(ModelTabViewModel.ShowGizmoBodyAxes), AetherVk.Logic.Models.SphereGizmoPart.BodyAxes)]
+  [InlineData(nameof(ModelTabViewModel.ShowGizmoSpinAxis), AetherVk.Logic.Models.SphereGizmoPart.SpinAxis)]
+  [InlineData(nameof(ModelTabViewModel.ShowGizmoSun), AetherVk.Logic.Models.SphereGizmoPart.Sun)]
+  [InlineData(nameof(ModelTabViewModel.ShowGizmoVelocity), AetherVk.Logic.Models.SphereGizmoPart.Velocity)]
+  public void SphereGizmoPart_EachToggle_ShowsItsPartAlone(string toggle, uint bit)
+  {
+    Assert.Equal(new uint[] { 1u, 2u, 4u, 8u, 16u },
+      new[] { AetherVk.Logic.Models.SphereGizmoPart.Grid, AetherVk.Logic.Models.SphereGizmoPart.BodyAxes,
+        AetherVk.Logic.Models.SphereGizmoPart.SpinAxis, AetherVk.Logic.Models.SphereGizmoPart.Sun,
+        AetherVk.Logic.Models.SphereGizmoPart.Velocity });
+    var s = new TestSetup();
+    var prop = typeof(ModelTabViewModel).GetProperty(toggle)!;
+    s.Vm.GizmoParts = 0;
+    s.Runtime.Invocations.Clear();
+
+    prop.SetValue(s.Vm, true);
+    Assert.Equal(bit, s.Vm.GizmoParts);
+    Assert.Equal(bit, s.Session.SphereGizmoParts);
+    s.Runtime.Verify(r => r.SetSphereGizmoParts(bit), Times.Once);
+    Assert.True((bool)prop.GetValue(s.Vm)!);
+
+    prop.SetValue(s.Vm, false);
+    Assert.Equal(0u, s.Vm.GizmoParts);
   }
 
   /// <summary>Jets with native ids 11 and 22, the first one selected.</summary>
@@ -239,7 +266,6 @@ public class ModelTabViewModelTests
     s.Session.Jets.Add(jet);
     s.Session.ManualNucleusRadiusKm = 3.5f;
     s.Session.NotifyRestored();
-    Assert.Equal(3.5f, s.Vm.ManualNucleusRadiusKm);
     Assert.Equal(1, jet.DisplayIndex);
 
     jet.NativePsId = 42;
@@ -247,9 +273,29 @@ public class ModelTabViewModelTests
     jet.LatitudeDeg = 11;
     s.Runtime.Verify(r => r.ModifyParticleSystem(42ul, It.IsAny<ParticleSystemModel>(),
       It.Is<ParticleSystemJet>(j => j.Seed == 77u), out It.Ref<ParticleSystemComputedProperties>.IsAny), Times.Once);
-    // and the tab writes its manual radius back into the session
-    s.Vm.ManualNucleusRadiusKm = 4.25f;
-    Assert.Equal(4.25f, s.Session.ManualNucleusRadiusKm);
+    // the restored manual radius is the one new jets start on
+    ParticleSystemJet? added = null;
+    ulong outId = 5;
+    s.Runtime
+      .Setup(r => r.AddParticleSystem(It.IsAny<ParticleSystemModel>(), It.IsAny<ParticleSystemJet>(), out outId))
+      .Callback((ParticleSystemModel _, ParticleSystemJet j, out ulong id) => { added = j; id = 5; })
+      .Returns(true);
+    s.Runtime
+      .Setup(r => r.AddFirstParticleSystem(It.IsAny<ParticleSystemModel>(), It.IsAny<ParticleSystemJet>(), out outId))
+      .Callback((ParticleSystemModel _, ParticleSystemJet j, out ulong id) => { added = j; id = 5; })
+      .Returns(new ParticleSystemComputedProperties(0.5f, 1.0f));
+    s.Vm.AddJetCommand.Execute(null);
+    Assert.Equal(3.5f, added!.NucleusRadiusKm);
+  }
+
+  /// Feedback item 10b: the nucleus radius moved to the Comet tab; the Model tab no longer has it.
+  [Fact]
+  public void ModelTab_NoLongerExposesTheManualRadius()
+  {
+    Assert.Null(typeof(IModelTabViewModel).GetProperty("ManualNucleusRadiusKm"));
+    Assert.Null(typeof(IModelTabViewModel).GetProperty("ManualNucleusRadiusKmNullable"));
+    Assert.Null(typeof(ModelTabViewModel).GetProperty("ManualNucleusRadiusKm"));
+    Assert.NotNull(typeof(ICometTabViewModel).GetProperty("ManualNucleusRadiusKm"));
   }
 
   /// <summary>

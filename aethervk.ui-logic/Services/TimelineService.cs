@@ -179,7 +179,7 @@ public sealed class TimelineService : IDisposable
     _seekedSubject.ObserveOn(_schedulerProvider.MainThread);
 
   /// <summary>
-  /// "Model range" requests (a FITS row's observation epoch): the Timeline tab proposes its N
+  /// "Model range" requests (a FITS row's observation epoch): the Comet tab's range section proposes its N
   /// rotations ending at the epoch (feedback #20).
   /// </summary>
   public IObservable<DateTimeOffset> ModelRangeRequests =>
@@ -188,7 +188,7 @@ public sealed class TimelineService : IDisposable
   public void RequestModelRange(DateTimeOffset endUtc) => _modelRangeRequestSubject.OnNext(endUtc);
 
   /// <summary>
-  /// "Recommit with this range" (the Timeline, while the range is locked): the Comet tab runs its
+  /// "Recommit with this range" (the Comet tab's range section, while the range is locked): the Comet tab runs its
   /// Download &amp; Commit with the proposed range (it decommits first, so the lock does not apply).
   /// </summary>
   public IObservable<System.Reactive.Unit> RecommitRequests =>

@@ -69,7 +69,7 @@ public sealed class ReviewerMailTests(ITestOutputHelper output)
 
         Step("R2: the timeline shows the committed range");
         s.SelectTab("TimelineTab");
-        var start = s.Find("StartEpochBox").Text;
+        var start = s.Find("TimelineStartEpochBox").Text;
         output.WriteLine($"start box: {start}; committed: {s.TryFind("CommittedRangeText")?.Text}");
         Assert.StartsWith("2021-12-12", start);
 
@@ -99,11 +99,11 @@ public sealed class ReviewerMailTests(ITestOutputHelper output)
         output.WriteLine($"scale: {scale}");
 
         Step("R2: editing the committed range locks it, Restore puts it back");
-        s.SelectTab("TimelineTab");
+        s.OpenRangeEntry();
         s.TypeInto(s.Find("StartEpochBox"), "2021-12-15T00:00:00", enter: false);
         Ui.WaitUntil(() => s.App.PageSource.Contains("Range locked", StringComparison.Ordinal), TimeSpan.FromSeconds(10), "the lock line");
         s.App.SaveScreenshot(Path.Combine(artifacts, "06-range-locked.png"));
-        s.App.FindElementsByName("Restore").First(e => e.Displayed).RealClick();
+        s.Click("RestoreButton");
         Ui.WaitUntil(() => s.Find("StartEpochBox").Text.StartsWith("2021-12-12", StringComparison.Ordinal),
           TimeSpan.FromSeconds(10), "Restore to put the committed start back");
 

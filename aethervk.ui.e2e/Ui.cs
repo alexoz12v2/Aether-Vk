@@ -91,8 +91,18 @@ public static partial class Ui
     ["SettingsTab"] = "ViewportSettingsSection",
     ["CometTab"] = "CometSearchBox",
     ["ImportsTab"] = "ImportButton",
-    ["TimelineTab"] = "StartEpochBox",
+    ["TimelineTab"] = "SpeedPicker",
   };
+
+  /// <summary>
+  /// The range entry (Start/End, Restore, Recommit, the model range, the dust lead): in the Comet
+  /// tab's "Simulated range" section. Selects the tab and opens the section if it is collapsed.
+  /// </summary>
+  public static void OpenRangeEntry(this AppSession s, string childId = "StartEpochBox")
+  {
+    s.SelectTab("CometTab");
+    s.Expand("SimulatedRangeSection", childId);
+  }
 
   /// <summary>Selects the tab, clicking again while its content has not appeared (a click can be lost).</summary>
   public static void SelectTab(this AppSession s, string tab)

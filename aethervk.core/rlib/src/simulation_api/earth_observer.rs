@@ -18,7 +18,9 @@
 //! height on the WGS84 ellipsoid ([`super::astrometry::wgs84_surface_point_bf`], Earth body-fixed =
 //! ITRF93, the frame of the Earth rotation the almanac commits), carried by the Earth's rotation
 //! (parallax), with the ellipsoid's tangent plane as horizon (geodetic zenith,
-//! [`EarthObserverState::zenith_bf`]). The orientation never turns with the Earth in either case.
+//! [`EarthObserverState::zenith_bf`]). The orientation never turns with the Earth in either case:
+//! a tracked target is looked at even while it is below the site's horizon (the horizon is reported
+//! in the diagnostics only; facing the horizon instead made the view swing with the Earth's spin).
 //!
 //! **Light time.** With a comet set, every pose also computes where the telescope *sees* the
 //! comet: at the retarded epoch `t_r = t − Δ/c` ([`comet_light_time`], Δ topocentric, two
@@ -49,8 +51,8 @@ type Q = [f64; 4]; // x, y, z, w
 pub enum EarthObserverMode {
   /// look direction fixed in the inertial (ecliptic) frame
   Free = 0,
-  /// re-aims at the comet every commit: the comet stays at the centre of the view (topocentric:
-  /// faces the horizon under it while it is below)
+  /// re-aims at the comet every commit: the comet stays at the centre of the view, below the
+  /// site's horizon included
   CometTracking = 2,
   SunTracking = 4,
 }
@@ -78,20 +80,22 @@ impl EarthObserverMode {
 #[repr(u32)]
 pub enum ObserverUp {
   /// right vector in the ecliptic plane, up towards the ecliptic pole on the latitude's side
-  /// (`pole(lat)`): the original view
-  #[default]
+  /// (`pole(lat)`): the original view, an explicit choice (value 0 over FFI / in saves)
   Ecliptic = 0,
   /// up towards the J2000 celestial north pole (`(0, sin ε, cos ε)` in the ecliptic world frame),
-  /// whatever the latitude: the astronomical image convention (north up, east left)
+  /// whatever the latitude or the Earth's rotation: the astronomical image convention (north up,
+  /// east left) and the default ("From Earth, celestial north up")
+  #[default]
   CelestialNorth = 1,
 }
 
 impl ObserverUp {
-  /// unknown values read as `Ecliptic` (old callers)
+  /// 0 reads as `Ecliptic`, 1 as `CelestialNorth`; unknown values read as the default
+  /// (`CelestialNorth`)
   pub fn from_u32(v: u32) -> Self {
     match v {
-      1 => Self::CelestialNorth,
-      _ => Self::Ecliptic,
+      0 => Self::Ecliptic,
+      _ => Self::CelestialNorth,
     }
   }
 }
@@ -122,8 +126,8 @@ pub struct EarthObserverState {
   pub look: Q,
   /// last applied rotation (kept when the target is straight below, at the nadir)
   pub last: Q,
-  /// diagnostics of the last pose: view-axis error to the target (rad; 0 when aimed, the elevation
-  /// below the horizon when tracking faces the horizon) and the target elevation (rad)
+  /// diagnostics of the last pose: view-axis error to the target (rad; 0 when aimed) and the
+  /// target elevation (rad; negative: below the site's horizon, still looked at)
   pub last_error: f64,
   pub last_elevation: f64,
   /// heliocentric velocity of the comet (km/s, world axes) at the last commit: the light-time
@@ -151,7 +155,7 @@ impl EarthObserverState {
   ) -> Self {
     Self {
       mode,
-      up: ObserverUp::Ecliptic,
+      up: ObserverUp::default(),
       camera,
       earth,
       comet,
@@ -440,35 +444,38 @@ pub fn observer_position(earth_pos: V3, earth_rot: Q, offset_bf_au: V3) -> V3 {
 
 /// Camera pose for the observer: `(world position, world rotation)`, from the Earth's world
 /// position / rotation and the target's world position (`None`: no target known). Mirrors
-/// `CameraService.SnapCameraToEarth`, with the geodetic zenith. The Earth's rotation moves only a
-/// topocentric site, never the look.
+/// `CameraService.SnapCameraToEarth`. The Earth's rotation moves only a topocentric site (diurnal
+/// parallax), never the look: a tracked target is looked at from the site even while it is below
+/// the site's horizon (the Earth is drawn in the way; the elevation is in the diagnostics), and
+/// the up hint ([`up_hint`]) is inertial, so nothing of the orientation turns with the Earth.
 pub fn pose(s: &EarthObserverState, earth_pos: V3, earth_rot: Q, target: Option<V3>) -> (V3, Q) {
-  let zenith = normalize(rotate(earth_rot, s.zenith_bf));
   let cam_pos = observer_position(earth_pos, earth_rot, s.offset_bf_au());
   let up_lat = s.up_lat_deg();
   let rot = if s.mode.is_tracking() {
     match target {
-      Some(t) => {
-        let to = sub(t, cam_pos);
-        if s.topocentric && below_horizon(to, zenith) {
-          // the Earth is in the way: face the horizon under the target's azimuth (where it is,
-          // and where it will rise), not whatever direction the camera had
-          let h = sub(to, scale(zenith, dot(to, zenith)));
-          if dot(h, h) > 1e-30 {
-            look_at_up(h, s.up, up_lat)
-          } else {
-            s.last
-          }
-        } else {
-          look_at_up(to, s.up, up_lat)
-        }
-      }
+      Some(t) => look_at_up(sub(t, cam_pos), s.up, up_lat),
       None => s.last,
     }
   } else {
     s.look
   };
   (cam_pos, orient_up(rot, s.up, up_lat))
+}
+
+/// Nucleus view "as seen from Earth": a camera `distance_au` from the comet on the Earth → comet
+/// line (on the Earth's side), looking at the comet along that line with the projected J2000
+/// celestial north as screen up (the Earth observer's default up, [`ObserverUp::CelestialNorth`]):
+/// the nucleus shows the face and the orientation an Earth telescope sees, north up / east left,
+/// without the 1 AU of parallax-free distance. `(world position, world rotation)`; `None` when
+/// the Earth and the comet coincide.
+pub fn nucleus_view_from_earth(earth_pos: V3, comet_pos: V3, distance_au: f64) -> Option<(V3, Q)> {
+  let line = sub(comet_pos, earth_pos);
+  if dot(line, line) <= 1e-30 {
+    return None;
+  }
+  let dir = normalize(line);
+  let pos = sub(comet_pos, scale(dir, distance_au));
+  Some((pos, look_at_up(dir, ObserverUp::CelestialNorth, 0.0)))
 }
 
 fn v3(v: Vec3f64) -> V3 {
@@ -689,20 +696,18 @@ mod tests {
       s.up = ObserverUp::CelestialNorth;
       let (p, r) = pose(&s, earth, spin(0.0), Some(comet));
       let to = normalize(sub(comet, p));
-      let zenith = normalize(rotate(spin(0.0), s.zenith_bf));
-      if topocentric && below_horizon(to, zenith) {
-        continue;
-      }
       let n_proj = normalize(sub(north, scale(to, dot(north, to))));
       assert!(angle(rotate(r, [0.0, 0.0, 1.0]), n_proj) < 1e-12, "pose: north up");
     }
     assert_eq!(ObserverUp::from_u32(0), ObserverUp::Ecliptic);
     assert_eq!(ObserverUp::from_u32(1), ObserverUp::CelestialNorth);
-    assert_eq!(ObserverUp::from_u32(7), ObserverUp::Ecliptic, "unknown reads as Ecliptic");
+    assert_eq!(ObserverUp::from_u32(7), ObserverUp::CelestialNorth, "unknown reads as the default");
+    assert_eq!(ObserverUp::default(), ObserverUp::CelestialNorth);
+    assert_eq!(topo(EarthObserverMode::Free, true).up, ObserverUp::CelestialNorth);
   }
 
-  /// `Ecliptic` (the default) is bit for bit the former `pole(lat)` formula in `look_at`, `orient`
-  /// and `pose`.
+  /// `Ecliptic` (the explicit choice, value 0) is bit for bit the former `pole(lat)` formula in
+  /// `look_at`, `orient` and `pose`.
   #[test]
   fn ecliptic_up_is_unchanged() {
     let earth = [0.98, 0.17, 0.0];
@@ -722,15 +727,11 @@ mod tests {
         assert_eq!(orient_up(q, ObserverUp::Ecliptic, lat), strip_roll(q, Some(pole(lat))));
       }
       for topocentric in [false, true] {
-        let s = topo(EarthObserverMode::CometTracking, topocentric);
-        assert_eq!(s.up, ObserverUp::Ecliptic);
+        let mut s = topo(EarthObserverMode::CometTracking, topocentric);
+        s.up = ObserverUp::Ecliptic;
         let target = add(earth, d);
         let (p, r) = pose(&s, earth, spin(1234.0), Some(target));
         let to = sub(target, p);
-        let zenith = normalize(rotate(spin(1234.0), s.zenith_bf));
-        if topocentric && below_horizon(to, zenith) {
-          continue;
-        }
         let lat = s.up_lat_deg();
         let old = strip_roll(
           look_at_origin_from(scale(normalize(to), -1.0), Some(pole(lat))),
@@ -774,13 +775,13 @@ mod tests {
   }
 
   /// Tracking: at every pose the view axis goes through the target (sub-nanoradian), whatever the
-  /// Earth's rotation, as long as it is above the horizon; below it, the last aim is held.
+  /// Earth's rotation, below the site's horizon included (the view never swings to the horizon).
   #[test]
   fn tracking_aims_exactly_at_the_target_every_pose() {
     let mut s = state(EarthObserverMode::CometTracking);
     let earth = [0.98, 0.17, 0.0];
     let comet0 = [1.3, -0.9, 0.05];
-    let mut aimed = 0;
+    let (mut above, mut below) = (0, 0);
     for k in 0..200 {
       let t = k as f64 * 431.0; // ~1 day in 200 commits
       let comet = add(comet0, scale([1.0e-4, 2.0e-4, 0.0], k as f64));
@@ -788,30 +789,132 @@ mod tests {
       let to = sub(comet, pos);
       let zenith = normalize(rotate(spin(t), s.zenith_bf));
       if below_horizon(to, zenith) {
-        // faces the horizon under the target's azimuth
-        let h = sub(to, scale(zenith, dot(to, zenith)));
-        assert!(
-          angle(forward(rot), h) < 1e-9,
-          "commit {k}: not facing the target's azimuth"
-        );
-        assert!(
-          dot(forward(rot), zenith).abs() < 1e-9,
-          "commit {k}: not level with the horizon"
-        );
+        below += 1;
       } else {
-        aimed += 1;
-        assert!(
-          angle(forward(rot), to) < 1e-9,
-          "commit {k}: {} rad off",
-          angle(forward(rot), to)
-        );
+        above += 1;
       }
+      assert!(
+        angle(forward(rot), to) < 1e-9,
+        "commit {k}: {} rad off",
+        angle(forward(rot), to)
+      );
       s.last = rot;
     }
+    assert!(above > 50 && below > 50, "the day must have both ({above} / {below})");
+  }
+
+  /// The reviewer's "the camera rotates with the Earth": over a day of 1 h steps the topocentric
+  /// view direction stays on the comet within the diurnal parallax (Earth radius / Δ), and the
+  /// screen up stays within 0.1° of the projected celestial north (the default up), the comet below
+  /// the horizon included. Nothing of the orientation follows the Earth's spin.
+  #[test]
+  fn view_and_up_do_not_turn_with_the_earth_over_a_day() {
+    let earth = [0.98, 0.17, 0.0];
+    let comet = [1.3, -0.9, 0.05];
+    let north = celestial_north();
+    for lat in [40.0, -33.0, 0.0] {
+      let mut s = EarthObserverState::new(
+        EarthObserverMode::CometTracking,
+        EntityId::default(),
+        EntityId::default(),
+        None,
+        true,
+        lat,
+        10.0,
+        350.0,
+        [0.0, 0.0, 0.0, 1.0],
+        [0.0, 0.0, 0.0, 1.0],
+      );
+      assert_eq!(s.up, ObserverUp::CelestialNorth, "default up");
+      let geo_dir = normalize(sub(comet, earth));
+      let delta = dot(sub(comet, earth), sub(comet, earth)).sqrt();
+      let parallax = s.surface_radius_au() / delta;
+      let (mut above, mut below) = (0, 0);
+      for h in 0..=24 {
+        let t = h as f64 * 3600.0;
+        let (pos, rot) = pose(&s, earth, spin(t), Some(comet));
+        let to = sub(comet, pos);
+        let zenith = normalize(rotate(spin(t), s.zenith_bf));
+        if below_horizon(to, zenith) {
+          below += 1;
+        } else {
+          above += 1;
+        }
+        // on the comet from the site, and within the parallax of the geocentric direction
+        assert!(angle(forward(rot), to) < 1e-9, "lat {lat} h {h}: off the comet");
+        assert!(
+          angle(forward(rot), geo_dir) <= parallax * 1.001,
+          "lat {lat} h {h}: {} rad from the geocentric direction, parallax {parallax}",
+          angle(forward(rot), geo_dir)
+        );
+        let n_proj = normalize(sub(north, scale(forward(rot), dot(north, forward(rot)))));
+        let up = rotate(rot, [0.0, 0.0, 1.0]);
+        assert!(
+          angle(up, n_proj) < 0.1f64.to_radians(),
+          "lat {lat} h {h}: up {} rad from projected celestial north",
+          angle(up, n_proj)
+        );
+        s.last = rot;
+      }
+      assert!(above > 0 && below > 0, "lat {lat}: both sides of the horizon ({above} / {below})");
+    }
+  }
+
+  /// The "as seen from Earth" nucleus framing: the camera is `d` from the comet on the Earth →
+  /// comet line, looks along it, north up, east left; it is what a geocentric Earth observer sees
+  /// (same view direction and up), at close range.
+  #[test]
+  fn nucleus_view_from_earth_matches_the_geocentric_observer() {
+    let earth = [0.98, 0.17, 0.0];
+    let comet = [1.3, -0.9, 0.05];
+    let d = 2.0e-7; // ~30 km
+    // comet − (comet − d·u) loses ~1e-16·|comet|/d ≈ 1e-9 rad, and acos near 0 resolves ~1e-8 rad
+    const ANGLE_EPS: f64 = 1e-6;
+    let (pos, rot) = nucleus_view_from_earth(earth, comet, d).expect("a view");
+    let to = sub(comet, pos);
+    assert!((dot(to, to).sqrt() - d).abs() < 1e-8 * d, "at distance d");
+    assert!(angle(to, sub(comet, earth)) < ANGLE_EPS, "on the Earth → comet line");
+    assert!(angle(forward(rot), to) < ANGLE_EPS, "looking at the comet");
+    let track = topo(EarthObserverMode::CometTracking, false);
+    assert_eq!(track.up, ObserverUp::CelestialNorth);
+    let (_, geo) = pose(&track, earth, spin(4321.0), Some(comet));
+    assert!(angle(forward(rot), forward(geo)) < ANGLE_EPS, "same view direction as the observer");
     assert!(
-      aimed > 50,
-      "the target must be above the horizon part of the day ({aimed})"
+      angle(rotate(rot, [0.0, 0.0, 1.0]), rotate(geo, [0.0, 0.0, 1.0])) < ANGLE_EPS,
+      "same up as the observer"
     );
+    let north = celestial_north();
+    let n_proj = normalize(sub(north, scale(forward(rot), dot(north, forward(rot)))));
+    assert!(angle(rotate(rot, [0.0, 0.0, 1.0]), n_proj) < ANGLE_EPS, "celestial north up");
+    assert!(nucleus_view_from_earth(earth, earth, d).is_none());
+  }
+
+  /// A target below the site's horizon is still looked at (the Earth is drawn in the way), the
+  /// elevation diagnostic says so.
+  #[test]
+  fn target_below_the_horizon_is_still_looked_at() {
+    let earth = [1.0, 0.0, 0.0];
+    // site at (0°N, 0°E): on the Earth's +X side at spin 0; a target towards −X is below it
+    let s = EarthObserverState::new(
+      EarthObserverMode::CometTracking,
+      EntityId::default(),
+      EntityId::default(),
+      None,
+      true,
+      0.0,
+      0.0,
+      0.0,
+      [0.0, 0.0, 0.0, 1.0],
+      [0.0, 0.0, 0.0, 1.0],
+    );
+    let target = [-1.0, 0.0, 0.2];
+    let (pos, rot) = pose(&s, earth, [0.0, 0.0, 0.0, 1.0], Some(target));
+    let to = sub(target, pos);
+    let zenith = normalize(rotate([0.0, 0.0, 0.0, 1.0], s.zenith_bf));
+    assert!(below_horizon(to, zenith), "the test target must be below the horizon");
+    assert!(angle(forward(rot), to) < 1e-12, "looked at: {} rad off", angle(forward(rot), to));
+    let (err, elev) = aim_error(&s, pos, rot, [0.0, 0.0, 0.0, 1.0], target);
+    assert!(err < 1e-12 && elev < 0.0, "err {err} elev {elev}");
   }
 
   /// Geocentric (the default): the camera is the Earth's centre whatever its rotation, and neither
@@ -823,6 +926,9 @@ mod tests {
     let mut free = topo(EarthObserverMode::Free, false);
     free.look = look_at([0.3, 1.0, -0.1], 0.0);
     let mut track = topo(EarthObserverMode::CometTracking, false);
+    // the ecliptic up (explicit): the roll assertions below are about the ecliptic pole
+    free.up = ObserverUp::Ecliptic;
+    track.up = ObserverUp::Ecliptic;
     let comet = [1.3, -0.9, 0.05];
     for k in 0..48 {
       let t = k as f64 * 1800.0; // a day, every half hour
@@ -858,12 +964,9 @@ mod tests {
     let track_topo = topo(EarthObserverMode::CometTracking, true);
     let (_, g) = pose(&track_geo, earth, spin(0.0), Some(target));
     let (pt, t) = pose(&track_topo, earth, spin(0.0), Some(target));
-    let zenith = normalize(rotate(spin(0.0), track_topo.zenith_bf));
-    if !below_horizon(sub(target, pt), zenith) {
-      let parallax = angle(forward(g), forward(t));
-      assert!(parallax > 1e-5 && parallax < track_topo.surface_radius_au() / 0.1 * 1.01, "{parallax}");
-      assert!(angle(forward(t), sub(target, pt)) < 1e-12, "topocentric aims from the site");
-    }
+    let parallax = angle(forward(g), forward(t));
+    assert!(parallax > 1e-5 && parallax < track_topo.surface_radius_au() / 0.1 * 1.01, "{parallax}");
+    assert!(angle(forward(t), sub(target, pt)) < 1e-12, "topocentric aims from the site");
   }
 
   /// The retired lock-in values read as Free over FFI (old callers, old saves).
@@ -1050,20 +1153,14 @@ mod scene_tests {
         "commit {k}: position round trip"
       );
       let to: V3 = sub(comet_pos.into(), gp);
-      let zenith = normalize(rotate(
-        qnormalize([e.rotation[0], e.rotation[1], e.rotation[2], e.rotation[3]]),
-        s.zenith_bf,
-      ));
-      if !below_horizon(to, zenith) {
-        let fwd = rotate(
-          [g.rotation[0], g.rotation[1], g.rotation[2], g.rotation[3]],
-          [0.0, -1.0, 0.0],
-        );
-        let c = cross(fwd, to);
-        let ang = dot(c, c).sqrt().atan2(dot(fwd, to));
-        assert!(ang < 1e-9, "commit {k}: comet {ang} rad off the view axis");
-        aimed += 1;
-      }
+      let fwd = rotate(
+        [g.rotation[0], g.rotation[1], g.rotation[2], g.rotation[3]],
+        [0.0, -1.0, 0.0],
+      );
+      let c = cross(fwd, to);
+      let ang = dot(c, c).sqrt().atan2(dot(fwd, to));
+      assert!(ang < 1e-9, "commit {k}: comet {ang} rad off the view axis");
+      aimed += 1;
     }
     assert!(aimed > 50, "{aimed}");
 
@@ -1103,7 +1200,7 @@ mod scene_tests {
       .expect("light-time view on the camera");
     assert_eq!(view.comet, comet);
     assert_eq!(view.delay_s, lt.delay_s);
-    if s.last_elevation > 0.0 {
+    {
       let g = scene.global_transform_f64(cam).unwrap();
       let fwd = rotate(
         [g.rotation[0], g.rotation[1], g.rotation[2], g.rotation[3]],

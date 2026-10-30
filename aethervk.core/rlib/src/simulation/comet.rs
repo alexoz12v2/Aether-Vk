@@ -644,8 +644,8 @@ pub fn load_comet_from_gltf(
 }
 
 fn finalize_comet(
-  vertices: Vec<Vertex>,
-  indices: Vec<u32>,
+  mut vertices: Vec<Vertex>,
+  mut indices: Vec<u32>,
   albedo_map: Option<Texture>,
   normal_map: Option<Texture>,
   roughness_map: Option<Texture>,
@@ -705,12 +705,17 @@ fn finalize_comet(
   }
   signed_volume /= 6.0;
 
-  if signed_volume <= 0.0 {
+  if signed_volume < 0.0 {
+    // An inward-wound import lights its night side and shows its Sun side black (the shader's
+    // Lambert term sees inward normals, and the pipeline culls back faces). Repair it here:
+    // reverse every triangle and the vertex normals ([`repair_inward_winding`]).
     oshal::log!(
-      "  ERROR: Signed volume is {} (<= 0). Winding order is inverted (normals point inwards) or mesh is degenerate.",
+      "  WARNING: Signed volume is {} (< 0): winding order inverted (normals point inwards); reversing triangles and normals.",
       signed_volume
     );
-    // return Err(CometLoadError::InvertedNormals);
+    repair_inward_winding(&mut vertices, &mut indices);
+  } else if signed_volume == 0.0 {
+    oshal::log!("  ERROR: Signed volume is 0: the mesh is degenerate (not closed, or flat).");
   } else {
     oshal::log!(
       "  Outward normals check passed (Volume: {}).",
@@ -1018,6 +1023,41 @@ pub fn load_comet_from_ply(
 }
 
 /// Area-weighted smooth vertex normals (face cross products accumulated per vertex).
+/// Signed volume of a closed triangle mesh (divergence theorem): negative when the triangles are
+/// wound clockwise seen from outside, i.e. the face normals point inwards.
+pub(crate) fn signed_volume(vertices: &[Vertex], indices: &[u32]) -> f64 {
+  let mut v6 = 0.0f64;
+  for chunk in indices.chunks_exact(3) {
+    let (Some(a), Some(b), Some(c)) = (
+      vertices.get(chunk[0] as usize),
+      vertices.get(chunk[1] as usize),
+      vertices.get(chunk[2] as usize),
+    ) else {
+      continue;
+    };
+    let (v0, v1, v2) = (a.position.map(f64::from), b.position.map(f64::from), c.position.map(f64::from));
+    let cp = [
+      v1[1] * v2[2] - v1[2] * v2[1],
+      v1[2] * v2[0] - v1[0] * v2[2],
+      v1[0] * v2[1] - v1[1] * v2[0],
+    ];
+    v6 += v0[0] * cp[0] + v0[1] * cp[1] + v0[2] * cp[2];
+  }
+  v6 / 6.0
+}
+
+/// Turns an inward-wound mesh outwards: reverses every triangle's winding and negates the vertex
+/// normals (the tangents keep their direction along the surface; the bitangent sign flips with the
+/// normal in the vertex shader's cross product).
+pub(crate) fn repair_inward_winding(vertices: &mut [Vertex], indices: &mut [u32]) {
+  for tri in indices.chunks_exact_mut(3) {
+    tri.swap(1, 2);
+  }
+  for v in vertices.iter_mut() {
+    v.normal = [-v.normal[0], -v.normal[1], -v.normal[2]];
+  }
+}
+
 pub(crate) fn generate_normals(vertices: &mut [Vertex], indices: &[u32]) {
   let mut acc = alloc::vec![[0.0f32; 3]; vertices.len()];
   for tri in indices.chunks_exact(3) {

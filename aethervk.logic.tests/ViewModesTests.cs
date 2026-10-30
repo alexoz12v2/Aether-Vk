@@ -11,10 +11,26 @@ public class ViewModesTests
   [Fact]
   public void FrameLabel_NamesTheFrameOfEachMode()
   {
-    Assert.Contains("Ecliptic", ViewportOverlayViewModel.FrameLabelFor(EarthObserverState.UpZenith, ObserverUp.Ecliptic));
-    Assert.Contains("body frame", ViewportOverlayViewModel.FrameLabelFor(EarthObserverState.CometOrbiting, ObserverUp.CelestialNorth));
-    Assert.Contains("celestial north", ViewportOverlayViewModel.FrameLabelFor(EarthObserverState.EarthPositioning, ObserverUp.CelestialNorth));
-    Assert.Contains("ecliptic north", ViewportOverlayViewModel.FrameLabelFor(EarthObserverState.EarthPositioning, ObserverUp.Ecliptic));
+    Assert.StartsWith("Orbit-plane frame", ViewportOverlayViewModel.FrameLabelFor(EarthObserverState.UpZenith, ObserverUp.Ecliptic));
+    Assert.StartsWith("Body-fixed frame", ViewportOverlayViewModel.FrameLabelFor(EarthObserverState.CometOrbiting, ObserverUp.CelestialNorth));
+    Assert.StartsWith("From Earth, celestial north up", ViewportOverlayViewModel.FrameLabelFor(EarthObserverState.EarthPositioning, ObserverUp.CelestialNorth));
+    Assert.StartsWith("From Earth, ecliptic north up", ViewportOverlayViewModel.FrameLabelFor(EarthObserverState.EarthPositioning, ObserverUp.Ecliptic));
+  }
+
+  /// Feedback #16: the label states at which date the view is drawn (the epoch the overlay shows).
+  [Theory]
+  [InlineData(EarthObserverState.UpZenith, ObserverUp.Ecliptic, "Orbit-plane frame")]
+  [InlineData(EarthObserverState.CometOrbiting, ObserverUp.Ecliptic, "Body-fixed frame")]
+  [InlineData(EarthObserverState.EarthPositioning, ObserverUp.CelestialNorth, "From Earth, celestial north up")]
+  [InlineData(EarthObserverState.EarthPositioning, ObserverUp.Ecliptic, "From Earth, ecliptic north up")]
+  public void FrameLabel_EndsWithTheShownEpoch(EarthObserverState mode, ObserverUp up, string frame)
+  {
+    const string epoch = "2021-12-27 00:14:47 UTC";
+    string label = ViewportOverlayViewModel.FrameLabelFor(mode, up, epoch);
+    Assert.StartsWith(frame, label);
+    Assert.EndsWith(" · " + epoch, label);
+    // no epoch yet: the frame alone, no dangling separator
+    Assert.DoesNotContain("·", ViewportOverlayViewModel.FrameLabelFor(mode, up, ""));
   }
 
   [Fact]

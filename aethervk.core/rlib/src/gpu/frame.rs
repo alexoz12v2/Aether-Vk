@@ -1101,6 +1101,14 @@ pub fn prepare_dust(
   // a discontinuity since the last frame (restored save, seek): the feedback restarts cold and
   // this frame draws, so it measures the settled view
   device.dust_sync_feedback_gen(pe, render_scene.dust_feedback_gen);
+  // the play pin (handoff P3b): while the simulation runs with the play quality on, the frame's
+  // feedback biases are the play set at once (split 0, top-only volume bias, EWA 3) instead of
+  // the adaptive walk (4–5 readbacks of a 2.4 s frame inside 100 km); `None` on a paused frame
+  // leaves the pin and restores the paused feedback state
+  device.dust_set_play_feedback(
+    pe,
+    if render_scene.dust_play { crate::scene::dust::play_quality::PlayFeedback::from_env() } else { None },
+  );
   // an unchanged frame keeps the last frame's image (`cmd_dust_frame_begin_reusable`): no
   // propagate, splat or specks; a traced frame always draws
   let (view, reuse) = if dust_debug_skip("zero") {
@@ -1900,6 +1908,11 @@ pub struct RenderScene {
   /// the simulation speed (`SimSpeed::scale_factor`, 0 paused) the frame is drawn at, for the
   /// cadence's speed reset (`FrameMeta::speed`, round 9 step R)
   pub dust_sim_speed: f64,
+  /// the play quality is on for this frame (the simulation runs and `PlayQuality::from_env` is
+  /// some, `SceneContext::dust_render_knobs`): the view's feedback biases are pinned to the play
+  /// set (`play_quality::PlayFeedback`, `Device::dust_set_play_feedback`); false on every paused
+  /// frame (the pin is left and the paused feedback state restored)
+  pub dust_play: bool,
   /// dust trajectory detail of the scene (`SceneContext::dust_propagate_detail`: 17 / 9 / 5
   /// solved size-polyline edges), stamped on the device before the propagates (`prepare_dust`)
   pub dust_propagate_detail: u32,
@@ -1947,6 +1960,7 @@ impl RenderScene {
       dust_reuse_px: crate::scene::dust::dust_reuse_px_default(),
       dust_feedback_gen: 0,
       dust_sim_speed: 0.0,
+      dust_play: false,
       dust_propagate_detail: crate::scene::dust::DUST_PROPAGATE_DETAIL_DEFAULT,
       dust_view_flags: 0,
       dust_exposure_ev: 0.0,
@@ -2675,6 +2689,58 @@ pub fn render_frame(
   Ok(())
 }
 
+/// The directional sunlight of one mesh draw (`physical_mesh2.frag`, `sunColor.w ≥ 1`): the unit
+/// direction from the mesh centre to the Sun (`None` when they coincide), and `sunColor`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MeshSunLight {
+  /// mesh → Sun, unit, in the layer's RTE axes (body-fixed for the shader: both ends are RTE)
+  pub direction: Option<[f32; 3]>,
+  /// `sunColor`: rgb the light factor (display: the exposure; physical: the irradiance (1 AU / r)²
+  /// times the exposure), w the shading kind (1 display, 2 physical)
+  pub color: [f32; 4],
+}
+
+impl MeshSunLight {
+  /// Lambert factor a surface of unit normal `normal` (same axes) receives: `max(n · l, 0)` times
+  /// the light factor; the CPU mirror of the shader's direct term (no albedo).
+  pub fn lambert(&self, normal: [f32; 3]) -> f32 {
+    let Some(l) = self.direction else { return 0.0 };
+    (normal[0] * l[0] + normal[1] * l[1] + normal[2] * l[2]).max(0.0) * self.color[0]
+  }
+}
+
+/// Sunlight of a mesh whose RTE centre is `center` (layer units, f64) lit by a Sun at `sun` (same
+/// units; both relative to the camera, so their difference is camera-independent). `physical`
+/// (`CAMERA_SHADING_PHYSICAL`): the irradiance of the heliocentric distance relative to 1 AU (the
+/// layer's `frame_scale` converts km to AU on micro layers). `exposure` scales the sunlight of
+/// either shading (never the shader's ambient fill). `base_color`: the display `sunColor`.
+pub fn mesh_sun_light(
+  sun: [f64; 3],
+  center: [f64; 3],
+  frame_scale: f32,
+  layer_index: u32,
+  physical: bool,
+  exposure: f32,
+  base_color: [f32; 4],
+) -> MeshSunLight {
+  let dx = sun[0] - center[0];
+  let dy = sun[1] - center[1];
+  let dz = sun[2] - center[2];
+  let len = (dx * dx + dy * dy + dz * dz).sqrt();
+  let mut color = base_color;
+  if physical && len > 1e-30 {
+    let fs = frame_scale as f64;
+    let r_au = if layer_index > 0 && fs > 0.0 && fs < 1.0 { len * fs } else { len };
+    let irradiance = (1.0 / (r_au * r_au)) as f32;
+    color = [irradiance, irradiance, irradiance, 2.0];
+  }
+  for channel in &mut color[..3] {
+    *channel *= exposure;
+  }
+  let direction = (len > 1e-30).then(|| [(dx / len) as f32, (dy / len) as f32, (dz / len) as f32]);
+  MeshSunLight { direction, color }
+}
+
 /// Draws the content of a single depth layer (all draw calls, gizmos, particles, etc).
 /// Extracted to avoid duplicating layer drawing logic between single-subpass and compositing modes.
 fn draw_layer_content(
@@ -2778,31 +2844,23 @@ fn draw_layer_content(
     // direction from sunPos − inWorldPos as before.
     // Physical shading (`CAMERA_SHADING_PHYSICAL`): sunColor.w = 2 and the irradiance of the
     // mesh's heliocentric distance relative to 1 AU, (1 AU / r)², in sunColor.rgb.
-    let mut draw_sun_color = sun_color;
-    let effective_sun_pos = match &sun_pos_f64_km {
+    let (effective_sun_pos, draw_sun_color) = match &sun_pos_f64_km {
       Some(sun_km) => {
-        let c = &draw_call.center_rte_f64;
-        let dx = sun_km[0] - c[0];
-        let dy = sun_km[1] - c[1];
-        let dz = sun_km[2] - c[2];
-        let len = (dx * dx + dy * dy + dz * dz).sqrt();
-        if render_scene.mesh_shading & crate::scene::CAMERA_SHADING_PHYSICAL != 0 && len > 1e-30 {
-          let fs = layer.frame_scale as f64;
-          let r_au = if layer.layer_index > 0 && fs > 0.0 && fs < 1.0 { len * fs } else { len };
-          let irradiance = (1.0 / (r_au * r_au)) as f32;
-          draw_sun_color = [irradiance, irradiance, irradiance, 2.0];
-        }
-        // the view's exposure scales the sunlight of either shading (not the ambient fill)
-        for channel in &mut draw_sun_color[..3] {
-          *channel *= render_scene.mesh_exposure;
-        }
-        if len > 1e-30 {
-          Vec3f32::from_components((dx / len) as f32, (dy / len) as f32, (dz / len) as f32)
-        } else {
-          sun_pos // degenerate: sun at comet center, fall back
+        let light = mesh_sun_light(
+          *sun_km,
+          draw_call.center_rte_f64,
+          layer.frame_scale,
+          layer.layer_index,
+          render_scene.mesh_shading & crate::scene::CAMERA_SHADING_PHYSICAL != 0,
+          render_scene.mesh_exposure,
+          sun_color,
+        );
+        match light.direction {
+          Some(d) => (Vec3f32::from_components(d[0], d[1], d[2]), light.color),
+          None => (sun_pos, light.color), // degenerate: sun at comet center, fall back
         }
       }
-      None => sun_pos, // point light: shader computes direction per-fragment
+      None => (sun_pos, sun_color), // point light: shader computes direction per-fragment
     };
 
     do_draw_call2(
@@ -2907,6 +2965,44 @@ fn draw_layer_content(
 
   Ok(())
 }
+#[cfg(test)]
+mod mesh_sun_light_tests {
+  use super::*;
+
+  const KM_PER_AU: f64 = 149_597_870.7;
+
+  /// The nucleus on a micro layer (km, `frame_scale` = AU/km), the Sun 1.2 AU away on its +X side:
+  /// the light direction is mesh → Sun, the Sun-facing hemisphere receives a positive Lambert term
+  /// and the night side none, for both shadings; the exposure scales it, the physical irradiance is
+  /// (1 AU / r)².
+  #[test]
+  fn sun_facing_side_is_lit() {
+    let fs = (1.0 / KM_PER_AU) as f32;
+    let center = [-350.0, 120.0, 40.0]; // km from the camera
+    let sun = [center[0] + 1.2 * KM_PER_AU, center[1], center[2]];
+    for (physical, exposure) in [(false, 1.0f32), (false, core::f32::consts::PI), (true, 1.0), (true, 4.0)] {
+      let l = mesh_sun_light(sun, center, fs, 1, physical, exposure, [1.0, 1.0, 1.0, 1.0]);
+      let d = l.direction.expect("a direction");
+      assert!((d[0] - 1.0).abs() < 1e-6 && d[1].abs() < 1e-6 && d[2].abs() < 1e-6, "{d:?}");
+      assert_eq!(l.color[3], if physical { 2.0 } else { 1.0 });
+      let expected = if physical { exposure / (1.2f32 * 1.2) } else { exposure };
+      assert!((l.color[0] - expected).abs() < 1e-5 * expected, "{} vs {expected}", l.color[0]);
+      assert!(l.lambert([1.0, 0.0, 0.0]) > 0.0, "subsolar point lit");
+      assert!((l.lambert([1.0, 0.0, 0.0]) - expected).abs() < 1e-5 * expected);
+      let n45 = [core::f32::consts::FRAC_1_SQRT_2, core::f32::consts::FRAC_1_SQRT_2, 0.0];
+      assert!((l.lambert(n45) - expected * core::f32::consts::FRAC_1_SQRT_2).abs() < 1e-5 * expected);
+      assert_eq!(l.lambert([0.0, 1.0, 0.0]), 0.0, "terminator");
+      assert_eq!(l.lambert([-1.0, 0.0, 0.0]), 0.0, "night side");
+    }
+    // the macro layer (AU, frame_scale 1): the same at AU distances
+    let l = mesh_sun_light([0.0, 0.0, 0.0], [-2.0, 0.0, 0.0], 1.0, 0, true, 1.0, [1.0; 4]);
+    assert_eq!(l.direction, Some([1.0, 0.0, 0.0]));
+    assert!((l.color[0] - 0.25).abs() < 1e-6);
+    // degenerate: Sun at the centre
+    assert_eq!(mesh_sun_light([1.0; 3], [1.0; 3], 1.0, 0, false, 1.0, [1.0; 4]).direction, None);
+  }
+}
+
 #[cfg(test)]
 mod camera_render_data_tests {
   use super::*;

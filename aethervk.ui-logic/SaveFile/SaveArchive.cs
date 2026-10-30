@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -148,15 +149,99 @@ public static class SaveArchive
     }
   }
 
+  /// <summary>The in-use marker of a work folder: <c>&lt;dir&gt;.lock</c> beside it (never inside, so
+  /// it is not packed), holding the owner's pid and start time.</summary>
+  public static string InUseMarker(string dir) => Path.GetFullPath(dir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + ".lock";
+
+  /// <summary>Marks <paramref name="dir"/> as open in this process, so another instance's
+  /// <see cref="CleanWorkRoot"/> leaves it alone however old its files are.</summary>
+  public static void MarkInUse(string dir)
+  {
+    using var self = Process.GetCurrentProcess();
+    MarkInUse(dir, self.Id, ProcessStartTicks(self));
+  }
+
+  private static readonly int SelfPid = Process.GetCurrentProcess().Id;
+
+  internal static void MarkInUse(string dir, int pid, long startTicks)
+  {
+    try
+    {
+      File.WriteAllText(InUseMarker(dir), $"{pid} {startTicks}");
+    }
+    catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+    {
+      // best effort: without the marker the folder is protected only while recent
+    }
+  }
+
+  /// <summary>Removes this process's marker of <paramref name="dir"/>.</summary>
+  public static void ReleaseInUse(string dir)
+  {
+    var marker = InUseMarker(dir);
+    if (OwnerAlive(marker) is { } pid && pid == SelfPid)
+    {
+      try { File.Delete(marker); }
+      catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+    }
+  }
+
+  /// <summary>The pid named by a marker if that process still runs (same start time), else null.</summary>
+  internal static int? OwnerAlive(string marker)
+  {
+    string[] parts;
+    try
+    {
+      if (!File.Exists(marker)) return null;
+      parts = File.ReadAllText(marker).Split(' ');
+    }
+    catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+    {
+      return null;
+    }
+    if (parts.Length < 1 || !int.TryParse(parts[0], out var pid)) return null;
+    try
+    {
+      using var p = Process.GetProcessById(pid);
+      if (p.HasExited) return null;
+      // a reused pid has another start time; an unreadable one counts as alive
+      if (parts.Length >= 2 && long.TryParse(parts[1], out var ticks) && ticks != 0
+          && ProcessStartTicks(p) is var now && now != 0 && Math.Abs(now - ticks) > TimeSpan.TicksPerSecond)
+        return null;
+      return pid;
+    }
+    catch (Exception e) when (e is ArgumentException or InvalidOperationException)
+    {
+      return null;
+    }
+  }
+
+  private static long ProcessStartTicks(Process p)
+  {
+    try { return p.StartTime.ToUniversalTime().Ticks; }
+    catch (Exception e) when (e is InvalidOperationException or NotSupportedException or System.ComponentModel.Win32Exception) { return 0; }
+  }
+
   /// <summary>Removes work folders untouched for <see cref="WorkFolderExpiry"/>, except
-  /// <paramref name="keep"/> (the open save's). A folder in use (files held open) stays.</summary>
+  /// <paramref name="keep"/> (the open save's) and folders whose in-use marker names a live process
+  /// (another instance's open save). A folder in use (files held open) stays. Markers of
+  /// folders that are gone or whose owner exited are removed.</summary>
   public static int CleanWorkRoot(string workRoot, DateTime now, string? keep = null)
   {
     if (!Directory.Exists(workRoot)) return 0;
     int removed = 0;
+    foreach (var marker in Directory.GetFiles(workRoot, "*.lock"))
+    {
+      var dir = marker.Substring(0, marker.Length - ".lock".Length);
+      if (Directory.Exists(dir) && OwnerAlive(marker) is not null) continue;
+      try { File.Delete(marker); }
+      catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+    }
     foreach (var dir in Directory.GetDirectories(workRoot))
     {
       if (keep is not null && string.Equals(Path.GetFullPath(dir), Path.GetFullPath(keep), StringComparison.Ordinal))
+        continue;
+      if (OwnerAlive(InUseMarker(dir)) is not null)
         continue;
       DateTime last;
       try
