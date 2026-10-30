@@ -27,22 +27,47 @@ namespace AetherVk.Logic.ViewModels.Debug
             }
         }
 
-        /// <inheritdoc cref="_isShown"/>
+        /// <inheritdoc cref="_showDiagnostics"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-        public bool IsShown
+        public bool ShowDiagnostics
         {
-            get => _isShown;
+            get => _showDiagnostics;
             set
             {
-                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_isShown, value))
+                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_showDiagnostics, value))
                 {
-                    OnIsShownChanging(value);
-                    OnIsShownChanging(default, value);
+                    OnShowDiagnosticsChanging(value);
+                    OnShowDiagnosticsChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.ShowDiagnostics);
                     OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsShown);
-                    _isShown = value;
-                    OnIsShownChanged(value);
-                    OnIsShownChanged(default, value);
+                    _showDiagnostics = value;
+                    OnShowDiagnosticsChanged(value);
+                    OnShowDiagnosticsChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.ShowDiagnostics);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsShown);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_hasEphemeris"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public bool HasEphemeris
+        {
+            get => _hasEphemeris;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_hasEphemeris, value))
+                {
+                    OnHasEphemerisChanging(value);
+                    OnHasEphemerisChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.HasEphemeris);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsShown);
+                    _hasEphemeris = value;
+                    OnHasEphemerisChanged(value);
+                    OnHasEphemerisChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.HasEphemeris);
                     OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsShown);
                 }
             }
@@ -86,6 +111,195 @@ namespace AetherVk.Logic.ViewModels.Debug
                     OnEarthObserverChanged(value);
                     OnEarthObserverChanged(default, value);
                     OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.EarthObserver);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_isDebugExpanded"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public bool IsDebugExpanded
+        {
+            get => _isDebugExpanded;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_isDebugExpanded, value))
+                {
+                    OnIsDebugExpandedChanging(value);
+                    OnIsDebugExpandedChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsDebugExpanded);
+                    _isDebugExpanded = value;
+                    OnIsDebugExpandedChanged(value);
+                    OnIsDebugExpandedChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsDebugExpanded);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_ephemerisEpoch"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public string EphemerisEpoch
+        {
+            get => _ephemerisEpoch;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<string>.Default.Equals(_ephemerisEpoch, value))
+                {
+                    OnEphemerisEpochChanging(value);
+                    OnEphemerisEpochChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.EphemerisEpoch);
+                    _ephemerisEpoch = value;
+                    OnEphemerisEpochChanged(value);
+                    OnEphemerisEpochChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.EphemerisEpoch);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_ephemerisRa"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public string EphemerisRa
+        {
+            get => _ephemerisRa;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<string>.Default.Equals(_ephemerisRa, value))
+                {
+                    OnEphemerisRaChanging(value);
+                    OnEphemerisRaChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.EphemerisRa);
+                    _ephemerisRa = value;
+                    OnEphemerisRaChanged(value);
+                    OnEphemerisRaChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.EphemerisRa);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_ephemerisDec"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public string EphemerisDec
+        {
+            get => _ephemerisDec;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<string>.Default.Equals(_ephemerisDec, value))
+                {
+                    OnEphemerisDecChanging(value);
+                    OnEphemerisDecChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.EphemerisDec);
+                    _ephemerisDec = value;
+                    OnEphemerisDecChanged(value);
+                    OnEphemerisDecChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.EphemerisDec);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_ephemerisR"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public string EphemerisR
+        {
+            get => _ephemerisR;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<string>.Default.Equals(_ephemerisR, value))
+                {
+                    OnEphemerisRChanging(value);
+                    OnEphemerisRChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.EphemerisR);
+                    _ephemerisR = value;
+                    OnEphemerisRChanged(value);
+                    OnEphemerisRChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.EphemerisR);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_ephemerisDelta"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public string EphemerisDelta
+        {
+            get => _ephemerisDelta;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<string>.Default.Equals(_ephemerisDelta, value))
+                {
+                    OnEphemerisDeltaChanging(value);
+                    OnEphemerisDeltaChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.EphemerisDelta);
+                    _ephemerisDelta = value;
+                    OnEphemerisDeltaChanged(value);
+                    OnEphemerisDeltaChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.EphemerisDelta);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_ephemerisPhase"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public string EphemerisPhase
+        {
+            get => _ephemerisPhase;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<string>.Default.Equals(_ephemerisPhase, value))
+                {
+                    OnEphemerisPhaseChanging(value);
+                    OnEphemerisPhaseChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.EphemerisPhase);
+                    _ephemerisPhase = value;
+                    OnEphemerisPhaseChanged(value);
+                    OnEphemerisPhaseChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.EphemerisPhase);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_ephemerisElongation"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public string EphemerisElongation
+        {
+            get => _ephemerisElongation;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<string>.Default.Equals(_ephemerisElongation, value))
+                {
+                    OnEphemerisElongationChanging(value);
+                    OnEphemerisElongationChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.EphemerisElongation);
+                    _ephemerisElongation = value;
+                    OnEphemerisElongationChanged(value);
+                    OnEphemerisElongationChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.EphemerisElongation);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_ephemerisSunPa"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public string EphemerisSunPa
+        {
+            get => _ephemerisSunPa;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<string>.Default.Equals(_ephemerisSunPa, value))
+                {
+                    OnEphemerisSunPaChanging(value);
+                    OnEphemerisSunPaChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.EphemerisSunPa);
+                    _ephemerisSunPa = value;
+                    OnEphemerisSunPaChanged(value);
+                    OnEphemerisSunPaChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.EphemerisSunPa);
                 }
             }
         }
@@ -259,28 +473,50 @@ namespace AetherVk.Logic.ViewModels.Debug
         /// <remarks>This method is invoked right after the value of <see cref="IsExpanded"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnIsExpandedChanged(bool oldValue, bool newValue);
-        /// <summary>Executes the logic for when <see cref="IsShown"/> is changing.</summary>
+        /// <summary>Executes the logic for when <see cref="ShowDiagnostics"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="IsShown"/> is changed.</remarks>
+        /// <remarks>This method is invoked right before the value of <see cref="ShowDiagnostics"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnIsShownChanging(bool value);
-        /// <summary>Executes the logic for when <see cref="IsShown"/> is changing.</summary>
+        partial void OnShowDiagnosticsChanging(bool value);
+        /// <summary>Executes the logic for when <see cref="ShowDiagnostics"/> is changing.</summary>
         /// <param name="oldValue">The previous property value that is being replaced.</param>
         /// <param name="newValue">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="IsShown"/> is changed.</remarks>
+        /// <remarks>This method is invoked right before the value of <see cref="ShowDiagnostics"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnIsShownChanging(bool oldValue, bool newValue);
-        /// <summary>Executes the logic for when <see cref="IsShown"/> just changed.</summary>
+        partial void OnShowDiagnosticsChanging(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="ShowDiagnostics"/> just changed.</summary>
         /// <param name="value">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="IsShown"/> is changed.</remarks>
+        /// <remarks>This method is invoked right after the value of <see cref="ShowDiagnostics"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnIsShownChanged(bool value);
-        /// <summary>Executes the logic for when <see cref="IsShown"/> just changed.</summary>
+        partial void OnShowDiagnosticsChanged(bool value);
+        /// <summary>Executes the logic for when <see cref="ShowDiagnostics"/> just changed.</summary>
         /// <param name="oldValue">The previous property value that was replaced.</param>
         /// <param name="newValue">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="IsShown"/> is changed.</remarks>
+        /// <remarks>This method is invoked right after the value of <see cref="ShowDiagnostics"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnIsShownChanged(bool oldValue, bool newValue);
+        partial void OnShowDiagnosticsChanged(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="HasEphemeris"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="HasEphemeris"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnHasEphemerisChanging(bool value);
+        /// <summary>Executes the logic for when <see cref="HasEphemeris"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="HasEphemeris"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnHasEphemerisChanging(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="HasEphemeris"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="HasEphemeris"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnHasEphemerisChanged(bool value);
+        /// <summary>Executes the logic for when <see cref="HasEphemeris"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="HasEphemeris"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnHasEphemerisChanged(bool oldValue, bool newValue);
         /// <summary>Executes the logic for when <see cref="DustHistory"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="DustHistory"/> is changed.</remarks>
@@ -325,6 +561,204 @@ namespace AetherVk.Logic.ViewModels.Debug
         /// <remarks>This method is invoked right after the value of <see cref="EarthObserver"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnEarthObserverChanged(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="IsDebugExpanded"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="IsDebugExpanded"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsDebugExpandedChanging(bool value);
+        /// <summary>Executes the logic for when <see cref="IsDebugExpanded"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="IsDebugExpanded"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsDebugExpandedChanging(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="IsDebugExpanded"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="IsDebugExpanded"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsDebugExpandedChanged(bool value);
+        /// <summary>Executes the logic for when <see cref="IsDebugExpanded"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="IsDebugExpanded"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsDebugExpandedChanged(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="EphemerisEpoch"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="EphemerisEpoch"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisEpochChanging(string value);
+        /// <summary>Executes the logic for when <see cref="EphemerisEpoch"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="EphemerisEpoch"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisEpochChanging(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="EphemerisEpoch"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="EphemerisEpoch"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisEpochChanged(string value);
+        /// <summary>Executes the logic for when <see cref="EphemerisEpoch"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="EphemerisEpoch"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisEpochChanged(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="EphemerisRa"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="EphemerisRa"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisRaChanging(string value);
+        /// <summary>Executes the logic for when <see cref="EphemerisRa"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="EphemerisRa"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisRaChanging(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="EphemerisRa"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="EphemerisRa"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisRaChanged(string value);
+        /// <summary>Executes the logic for when <see cref="EphemerisRa"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="EphemerisRa"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisRaChanged(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="EphemerisDec"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="EphemerisDec"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisDecChanging(string value);
+        /// <summary>Executes the logic for when <see cref="EphemerisDec"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="EphemerisDec"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisDecChanging(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="EphemerisDec"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="EphemerisDec"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisDecChanged(string value);
+        /// <summary>Executes the logic for when <see cref="EphemerisDec"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="EphemerisDec"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisDecChanged(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="EphemerisR"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="EphemerisR"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisRChanging(string value);
+        /// <summary>Executes the logic for when <see cref="EphemerisR"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="EphemerisR"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisRChanging(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="EphemerisR"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="EphemerisR"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisRChanged(string value);
+        /// <summary>Executes the logic for when <see cref="EphemerisR"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="EphemerisR"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisRChanged(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="EphemerisDelta"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="EphemerisDelta"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisDeltaChanging(string value);
+        /// <summary>Executes the logic for when <see cref="EphemerisDelta"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="EphemerisDelta"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisDeltaChanging(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="EphemerisDelta"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="EphemerisDelta"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisDeltaChanged(string value);
+        /// <summary>Executes the logic for when <see cref="EphemerisDelta"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="EphemerisDelta"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisDeltaChanged(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="EphemerisPhase"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="EphemerisPhase"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisPhaseChanging(string value);
+        /// <summary>Executes the logic for when <see cref="EphemerisPhase"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="EphemerisPhase"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisPhaseChanging(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="EphemerisPhase"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="EphemerisPhase"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisPhaseChanged(string value);
+        /// <summary>Executes the logic for when <see cref="EphemerisPhase"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="EphemerisPhase"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisPhaseChanged(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="EphemerisElongation"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="EphemerisElongation"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisElongationChanging(string value);
+        /// <summary>Executes the logic for when <see cref="EphemerisElongation"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="EphemerisElongation"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisElongationChanging(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="EphemerisElongation"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="EphemerisElongation"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisElongationChanged(string value);
+        /// <summary>Executes the logic for when <see cref="EphemerisElongation"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="EphemerisElongation"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisElongationChanged(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="EphemerisSunPa"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="EphemerisSunPa"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisSunPaChanging(string value);
+        /// <summary>Executes the logic for when <see cref="EphemerisSunPa"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="EphemerisSunPa"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisSunPaChanging(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="EphemerisSunPa"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="EphemerisSunPa"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisSunPaChanged(string value);
+        /// <summary>Executes the logic for when <see cref="EphemerisSunPa"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="EphemerisSunPa"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisSunPaChanged(string? oldValue, string newValue);
         /// <summary>Executes the logic for when <see cref="PosX"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="PosX"/> is changed.</remarks>

@@ -716,6 +716,20 @@
                         SelectedIndex="{Binding ParticleRendering.ReuseToleranceIndex}" />
             </Grid>
             <TextBlock Text="{Binding StrReuseToleranceHint}" TextWrapping="Wrap" />
+            <Grid ColumnDefinitions="Auto,16,*">
+              <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                <TextBlock Text="{Binding StrPlayPreview}" VerticalAlignment="Center" />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="PlayPreviewPickerHelp"
+                                             HelpHeader="{Binding StrPlayPreview}"
+                                             HelpContent="{Binding StrHelpPlayPreview}" FlyoutMaxWidth="300" />
+              </StackPanel>
+              <ComboBox Grid.Column="2" HorizontalAlignment="Stretch"
+                        x:Name="PlayPreviewPicker"
+                        AutomationProperties.AutomationId="PlayPreviewPicker"
+                        ItemsSource="{Binding ParticleRendering.PlayPreviewOptions}"
+                        SelectedIndex="{Binding ParticleRendering.PlayPreview}" />
+            </Grid>
+            <TextBlock Text="{Binding StrPlayPreviewHint}" TextWrapping="Wrap" />
           </StackPanel>
         </Expander>
       </Border>

@@ -13,4 +13,18 @@ public partial interface ITimelineTabViewModel
     string StrSpeed3h { get; set; }
     string StrSpeed1d { get; set; }
     string StrSelectSpeed { get; set; }
+    string StrHelpHeaderEpochRange { get; set; }
+    string StrHelpEpochRange { get; set; }
+    string StrHelpHeaderCommittedRange { get; set; }
+    string StrHelpCommittedRange { get; set; }
+    string StrHelpHeaderSpeed { get; set; }
+    string StrHelpSpeed { get; set; }
+    string StrHelpHeaderPlayback { get; set; }
+    string StrHelpPlayback { get; set; }
+    string StrTipReset { get; set; }
+    string StrTipPlayPause { get; set; }
+    string StrTipRunToEnd { get; set; }
+    string StrTipGo { get; set; }
+    string StrHelpHeaderCurrentEpoch { get; set; }
+    string StrHelpCurrentEpoch { get; set; }
 }

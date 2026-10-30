@@ -154,6 +154,37 @@ public class TimeScaleTests
     Assert.Equal(UtcStatus.Ok, svc.StatusOf("2030-01-01T00:00:00")); // TDB never warns
   }
 
+  /// <summary>The 2026-10-30 e2e: a seek to 00:00:00 UTC landed a fraction of a µs short (the sim
+  /// clock counts whole µs) and the box read 23:59:59. A text without a fraction shows the nearest
+  /// ms; one with a fraction keeps the exact instant.</summary>
+  [Fact]
+  public void Service_AHairShortOfASecond_ShowsThatSecond()
+  {
+    var fake = new FakeTimeScaleConverter();
+    var svc = new TimeScaleService(fake) { Now = () => fake.Now };
+    var (c, ns) = FakeTimeScaleConverter.Parts(MidUtc);
+    Assert.Equal(MidUtcText, svc.Format(c, ns - 700, TimeScaleService.IsoSecondsFormat));
+    Assert.Equal("2021-12-27T00:15:56", svc.Format(c, ns - 700, TimeScaleService.IsoSecondsFormat, TimeScale.Tdb));
+    Assert.NotEqual(MidUtcText, svc.Format(c, ns - 700, TimeScaleService.IsoSecondsFormat + ".fffffff"));
+    // across a century: the carry
+    Assert.Equal(((short)1, 499_999UL), TimeScaleService.HalfMsLater(0, 36525UL * 86400UL * 1_000_000_000UL - 1));
+  }
+
+  [Fact]
+  public void Service_AHairShortOfASecond_WithASubMsOffset_ShowsThatSecond()
+  {
+    // the real TDB - UTC on 2021-12-14 is 69.1834 s: the seek lands up to 1 us short of the typed
+    // UTC second; the text must still read that second (e2e SeekWhilePaused read 23:59:59)
+    var fake = new FakeTimeScaleConverter { UtcOffset = TimeSpan.FromTicks(691_834_128) };
+    var svc = new TimeScaleService(fake) { Now = () => fake.Now };
+    var second = new DateTimeOffset(2021, 12, 14, 0, 0, 0, TimeSpan.Zero);
+    var (c, ns) = TimeUtils.ToTdbParts(second + fake.UtcOffset);
+    Assert.Equal("2021-12-14T00:00:00", svc.Format(c, ns - 1_000, TimeScaleService.IsoSecondsFormat));
+    Assert.Equal("2021-12-14T00:00:00", svc.Format(c, ns, TimeScaleService.IsoSecondsFormat));
+    // a whole ms short is a different instant: the second before
+    Assert.Equal("2021-12-13T23:59:59", svc.Format(c, ns - 1_000_000, TimeScaleService.IsoSecondsFormat));
+  }
+
   [Fact]
   public void Service_WithoutAConverter_IsTdbOnly()
   {
@@ -161,9 +192,21 @@ public class TimeScaleTests
     Assert.Equal(TimeScale.Tdb, svc.Scale);
     Assert.True(svc.TryParse(MidUtcText, out short c, out ulong ns, out _));
     Assert.Equal(TimeUtils.ToTdbParts(MidUtc), (c, ns));
-    Assert.Equal(TimeUtils.ToTdbParts(MidUtc), svc.FromUtc(MidUtc));
     Assert.Equal(string.Empty, svc.OffsetText());
     Assert.Equal(MidUtcText, svc.Reformat(MidUtcText, TimeScale.Utc, TimeScale.Tdb));
+  }
+
+  [Fact]
+  public void Service_WithoutAConverter_NeverReadsUtcAsTdb()
+  {
+    var svc = TimeScaleService.TdbOnly();
+    // a UTC text is refused, not taken as TDB digits (69 s off)
+    Assert.False(svc.TryParse(MidUtcText, TimeScale.Utc, out _, out _, out var status));
+    Assert.Equal(UtcStatus.Malformed, status);
+    Assert.Throws<InvalidOperationException>(() => svc.FromUtc(MidUtc));
+    // a UTC display it cannot give is labelled TDB
+    var (c, ns) = TimeUtils.ToTdbParts(MidUtc);
+    Assert.EndsWith(" TDB", svc.Format(c, ns, TimeScaleService.IsoSecondsFormat, TimeScale.Utc));
   }
 
   [Fact]

@@ -29,6 +29,8 @@ namespace AetherVk.Views
         [global::System.CodeDom.Compiler.GeneratedCode("Avalonia.Generators.NameGenerator.InitializeComponentCodeGenerator", "11.3.12.0")]
         internal global::Avalonia.Controls.ComboBox ReuseTolerancePicker;
         [global::System.CodeDom.Compiler.GeneratedCode("Avalonia.Generators.NameGenerator.InitializeComponentCodeGenerator", "11.3.12.0")]
+        internal global::Avalonia.Controls.ComboBox PlayPreviewPicker;
+        [global::System.CodeDom.Compiler.GeneratedCode("Avalonia.Generators.NameGenerator.InitializeComponentCodeGenerator", "11.3.12.0")]
         internal global::Avalonia.Controls.Expander InputBindingsSection;
 
         /// <summary>
@@ -56,6 +58,7 @@ namespace AetherVk.Views
             PropagateDetailPicker = __thisNameScope__?.Find<global::Avalonia.Controls.ComboBox>("PropagateDetailPicker");
             HazeDetailPicker = __thisNameScope__?.Find<global::Avalonia.Controls.ComboBox>("HazeDetailPicker");
             ReuseTolerancePicker = __thisNameScope__?.Find<global::Avalonia.Controls.ComboBox>("ReuseTolerancePicker");
+            PlayPreviewPicker = __thisNameScope__?.Find<global::Avalonia.Controls.ComboBox>("PlayPreviewPicker");
             InputBindingsSection = __thisNameScope__?.Find<global::Avalonia.Controls.Expander>("InputBindingsSection");
         }
     }

@@ -95,7 +95,8 @@ public sealed class TimeScaleService
 
   /// <summary>
   /// Parses an ISO-8601 <paramref name="text"/> read in <paramref name="scale"/> to TDB parts.
-  /// False when it is no date; <paramref name="status"/> reports a UTC date outside the
+  /// False when it is no date, or a UTC date without a converter (<see cref="UtcStatus.Malformed"/>:
+  /// never read as TDB, 69 s off); <paramref name="status"/> reports a UTC date outside the
   /// leap-second table (the value is still converted: the date is never refused).
   /// </summary>
   public bool TryParse(string text, TimeScale scale, out short centuries, out ulong nanoseconds, out UtcStatus status)
@@ -105,10 +106,15 @@ public sealed class TimeScaleService
     nanoseconds = 0;
     if (!TimeUtils.TryParseIso8601(text, out var dt))
       return false;
-    if (scale == TimeScale.Tdb || Converter is null)
+    if (scale == TimeScale.Tdb)
     {
       (centuries, nanoseconds) = TimeUtils.ToTdbParts(dt);
       return true;
+    }
+    if (Converter is null)
+    {
+      status = UtcStatus.Malformed;
+      return false;
     }
     status = Converter.UtcToTdbParts(dt, out centuries, out nanoseconds);
     return status != UtcStatus.Malformed;
@@ -122,11 +128,16 @@ public sealed class TimeScaleService
     return ok;
   }
 
-  /// <summary>UTC instant → TDB parts (the FITS observation epoch); plain TDB parts without a converter.</summary>
+  /// <summary>
+  /// UTC instant → TDB parts (the FITS observation epoch). Throws without a converter or when the
+  /// core refuses the instant: taking the UTC digits as TDB would put it 69 s off.
+  /// </summary>
   public (short Centuries, ulong Nanoseconds) FromUtc(DateTimeOffset utc)
   {
-    if (Converter is null || Converter.UtcToTdbParts(utc, out short c, out ulong ns) == UtcStatus.Malformed)
-      return TimeUtils.ToTdbParts(utc);
+    if (Converter is null)
+      throw new InvalidOperationException($"UTC {utc:O} → TDB needs the leap-second converter (a TDB-only service)");
+    if (Converter.UtcToTdbParts(utc, out short c, out ulong ns) == UtcStatus.Malformed)
+      throw new ArgumentOutOfRangeException(nameof(utc), utc, "the leap-second table refused this UTC instant");
     return (c, ns);
   }
 
@@ -135,14 +146,34 @@ public sealed class TimeScaleService
   /// <summary><paramref name="format"/> of the TDB parts in the current scale.</summary>
   public string Format(short centuries, ulong nanoseconds, string format) => Format(centuries, nanoseconds, format, _scale);
 
-  /// <summary><paramref name="format"/> (invariant) of the TDB parts shown in <paramref name="scale"/>.</summary>
+  /// <summary>
+  /// <paramref name="format"/> (invariant) of the TDB parts shown in <paramref name="scale"/>. A UTC
+  /// text the converter cannot give (none, or refused) is the TDB text labelled " TDB", never
+  /// passed off as UTC.
+  /// </summary>
   public string Format(short centuries, ulong nanoseconds, string format, TimeScale scale)
   {
-    if (scale == TimeScale.Tdb || Converter is null)
+    // the simulation clock counts whole µs from the start: a seek to a whole second can land up
+    // to 1 µs short of it, which a text without a fraction showed as the second before
+    // ("2021-12-14 00:00:00" read back as 23:59:59). Such a text shows the instant half a ms
+    // later (the nearest ms in the shown scale, truncated). Rounding the TDB parts is not enough:
+    // TDB - UTC has a sub-ms part (69.1834 s), so a TDB rounded to .183 is UTC 0.4 ms short.
+    if (format.IndexOf('f') < 0 && format.IndexOf('F') < 0)
+      (centuries, nanoseconds) = HalfMsLater(centuries, nanoseconds);
+    if (scale == TimeScale.Tdb)
       return TimeUtils.FormatTdbEpoch(centuries, nanoseconds, format);
-    if (Converter.TdbPartsToUtc(centuries, nanoseconds, out UtcFields f) == UtcStatus.Malformed)
-      return TimeUtils.FormatTdbEpoch(centuries, nanoseconds, format);
+    if (Converter is null || Converter.TdbPartsToUtc(centuries, nanoseconds, out UtcFields f) == UtcStatus.Malformed)
+      return TimeUtils.FormatTdbEpoch(centuries, nanoseconds, format) + " TDB";
     return f.ToString(format);
+  }
+
+  private const ulong NanosecondsPerCentury = 36525UL * 86400UL * 1_000_000_000UL;
+
+  /// <summary>The parts 0.5 ms later (carried into the next century).</summary>
+  internal static (short Centuries, ulong Nanoseconds) HalfMsLater(short centuries, ulong nanoseconds)
+  {
+    ulong ns = nanoseconds + 500_000UL;
+    return ns >= NanosecondsPerCentury ? ((short)(centuries + 1), ns - NanosecondsPerCentury) : (centuries, ns);
   }
 
   /// <summary>

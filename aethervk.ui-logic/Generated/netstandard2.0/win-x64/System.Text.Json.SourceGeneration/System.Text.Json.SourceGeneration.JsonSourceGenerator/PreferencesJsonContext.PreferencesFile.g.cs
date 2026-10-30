@@ -46,7 +46,7 @@ namespace AetherVk.Logic.Services
 
         private static global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[] PreferencesFilePropInit(global::System.Text.Json.JsonSerializerOptions options)
         {
-            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[12];
+            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[14];
 
             var info0 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<int>
             {
@@ -219,6 +219,26 @@ namespace AetherVk.Logic.Services
                 IsVirtual = false,
                 DeclaringType = typeof(global::AetherVk.Logic.Services.PreferencesFile),
                 Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.Services.PreferencesFile)obj).DustPlayPreview,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.Services.PreferencesFile)obj).DustPlayPreview = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "DustPlayPreview",
+                JsonPropertyName = "dust_play_preview",
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.Services.PreferencesFile).GetProperty("DustPlayPreview", InstanceMemberBindingFlags, null, typeof(int?), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[8] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<int?>(options, info8);
+
+            var info9 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<int?>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.Services.PreferencesFile),
+                Converter = null,
                 Getter = static obj => ((global::AetherVk.Logic.Services.PreferencesFile)obj).ParticleQuality,
                 Setter = static (obj, value) => ((global::AetherVk.Logic.Services.PreferencesFile)obj).ParticleQuality = value!,
                 IgnoreCondition = null,
@@ -230,9 +250,9 @@ namespace AetherVk.Logic.Services
                 AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.Services.PreferencesFile).GetProperty("ParticleQuality", InstanceMemberBindingFlags, null, typeof(int?), global::System.Array.Empty<global::System.Type>(), null),
             };
             
-            properties[8] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<int?>(options, info8);
+            properties[9] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<int?>(options, info9);
 
-            var info9 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<bool?>
+            var info10 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<bool?>
             {
                 IsProperty = true,
                 IsPublic = true,
@@ -250,9 +270,9 @@ namespace AetherVk.Logic.Services
                 AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.Services.PreferencesFile).GetProperty("HudCameraExpanded", InstanceMemberBindingFlags, null, typeof(bool?), global::System.Array.Empty<global::System.Type>(), null),
             };
             
-            properties[9] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<bool?>(options, info9);
+            properties[10] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<bool?>(options, info10);
 
-            var info10 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<bool?>
+            var info11 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<bool?>
             {
                 IsProperty = true,
                 IsPublic = true,
@@ -270,9 +290,9 @@ namespace AetherVk.Logic.Services
                 AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.Services.PreferencesFile).GetProperty("HudOrbitExpanded", InstanceMemberBindingFlags, null, typeof(bool?), global::System.Array.Empty<global::System.Type>(), null),
             };
             
-            properties[10] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<bool?>(options, info10);
+            properties[11] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<bool?>(options, info11);
 
-            var info11 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<bool?>
+            var info12 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<bool?>
             {
                 IsProperty = true,
                 IsPublic = true,
@@ -290,7 +310,27 @@ namespace AetherVk.Logic.Services
                 AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.Services.PreferencesFile).GetProperty("ShowDiagnosticPanels", InstanceMemberBindingFlags, null, typeof(bool?), global::System.Array.Empty<global::System.Type>(), null),
             };
             
-            properties[11] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<bool?>(options, info11);
+            properties[12] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<bool?>(options, info12);
+
+            var info13 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<string>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.Services.PreferencesFile),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.Services.PreferencesFile)obj).TimeScale,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.Services.PreferencesFile)obj).TimeScale = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "TimeScale",
+                JsonPropertyName = "time_scale",
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.Services.PreferencesFile).GetProperty("TimeScale", InstanceMemberBindingFlags, null, typeof(string), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[13] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<string>(options, info13);
 
             return properties;
         }
@@ -321,6 +361,8 @@ namespace AetherVk.Logic.Services
             global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.Services.PreferencesFile)value).DustHazeDetail, NullableInt32);
             writer.WritePropertyName(PropName_dust_reuse_px);
             global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.Services.PreferencesFile)value).DustReuseTolerance, NullableInt32);
+            writer.WritePropertyName(PropName_dust_play_preview);
+            global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.Services.PreferencesFile)value).DustPlayPreview, NullableInt32);
             writer.WritePropertyName(PropName_particle_quality);
             global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.Services.PreferencesFile)value).ParticleQuality, NullableInt32);
             writer.WritePropertyName(PropName_hud_camera_expanded);
@@ -329,6 +371,7 @@ namespace AetherVk.Logic.Services
             global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.Services.PreferencesFile)value).HudOrbitExpanded, NullableBoolean);
             writer.WritePropertyName(PropName_show_diagnostic_panels);
             global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.Services.PreferencesFile)value).ShowDiagnosticPanels, NullableBoolean);
+            writer.WriteString(PropName_time_scale, ((global::AetherVk.Logic.Services.PreferencesFile)value).TimeScale);
 
             writer.WriteEndObject();
         }

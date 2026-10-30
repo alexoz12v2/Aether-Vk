@@ -66,14 +66,14 @@ public sealed partial class ReviewerMailTests(ReviewerMailFixture fixture, ITest
       s.SelectTab("TimelineTab");
       var start = s.Find("TimelineStartEpochBox").Text;
       output.WriteLine($"start box: {start}; committed: {s.TryFind("CommittedRangeText")?.Text}");
-      Assert.StartsWith("2021-12-12", start);
+      Assert.True(ReviewSave.Shows(start, ReviewSave.CommittedStartUtc), $"start box {start}, expected {ReviewSave.CommittedStartUtc:yyyy-MM-ddTHH:mm:ss}Z (2021-12-12 TDB)");
 
       s.OpenRangeEntry();
       s.TypeInto(s.Find("StartEpochBox"), "2021-12-15T00:00:00", enter: false);
       Ui.WaitUntil(() => s.App.PageSource.Contains("Range locked", StringComparison.Ordinal), TimeSpan.FromSeconds(10), "the lock line");
       fixture.Screenshot("r2-range-locked.png");
       s.Click("RestoreButton");
-      Ui.WaitUntil(() => s.Find("StartEpochBox").Text.StartsWith("2021-12-12", StringComparison.Ordinal),
+      Ui.WaitUntil(() => ReviewSave.Shows(s.Find("StartEpochBox").Text, ReviewSave.CommittedStartUtc),
         TimeSpan.FromSeconds(10), "Restore to put the committed start back");
     });
   }

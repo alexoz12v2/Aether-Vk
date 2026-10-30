@@ -433,6 +433,22 @@ pub const FLOW_I0_KAPPA: f32 = 11.301_922;
 pub const FLOW_SPEED_DEFAULT: f64 = 1.0;
 pub const FLOW_SPEED_MIN: f64 = 1.0;
 pub const FLOW_SPEED_MAX: f64 = 10_000.0;
+/// The flow clock's pace (sim s per wall s) the preview keeps at least ([`preview_flow_speed`]):
+/// marks spaced like their dust's age (a day-old stream: a crest per ~day of emission epochs)
+/// then pass about one crest per ten wall seconds, so a 10 s/s play visibly streams out of the
+/// nucleus; at 1 d/s and above the marks ride the dust (`K` = 1)
+pub const PREVIEW_FLOW_PACE_S_PER_S: f64 = 10_000.0;
+
+/// The time-lapse factor `K` of the flow marks while the dust is drawn in preview, at a play
+/// speed of `sim_speed` sim s per wall s: `PREVIEW_FLOW_PACE_S_PER_S / sim_speed`, within
+/// `[FLOW_SPEED_MIN, FLOW_SPEED_MAX]`. A visual aid only: the marks move `K ×` faster than the
+/// dust, along its real velocity field; the particles themselves stay where the physics puts them.
+pub fn preview_flow_speed(sim_speed: f64) -> f64 {
+  if !(sim_speed > 0.0) || !sim_speed.is_finite() {
+    return FLOW_SPEED_DEFAULT;
+  }
+  (PREVIEW_FLOW_PACE_S_PER_S / sim_speed).clamp(FLOW_SPEED_MIN, FLOW_SPEED_MAX)
+}
 
 /// Whether the cluster with child-pattern id `id` carries a tracer (stable: the id comes from the
 /// emission record). Mirror of `dust_is_tracer`.
@@ -470,11 +486,22 @@ impl DustFlowClock {
   /// Advances to the frame stamped `wall_us` (unscaled) / `sim_us` (scaled). Several viewports
   /// rendering the same frame (same wall stamp) advance it once.
   pub fn sync(&mut self, wall_us: i64, sim_us: i64) {
+    self.sync_at(wall_us, sim_us, None);
+  }
+
+  /// [`Self::sync`] at the pace `k` instead of [`Self::speed`] for this step (the preview's
+  /// [`preview_flow_speed`]); the user's `K` stays as set
+  pub fn sync_at(&mut self, wall_us: i64, sim_us: i64, k: Option<f64>) {
     if let Some((w, s)) = self.last_us {
       if wall_us <= w {
         return;
       }
-      self.advance((sim_us - s) as f64 * 1e-6);
+      let sim_dt_s = (sim_us - s) as f64 * 1e-6;
+      match k {
+        Some(k) if sim_dt_s != 0.0 && sim_dt_s.is_finite() => self.offset_s += (k - 1.0) * sim_dt_s,
+        Some(_) => {}
+        None => self.advance(sim_dt_s),
+      }
     }
     self.last_us = Some((wall_us, sim_us));
   }
