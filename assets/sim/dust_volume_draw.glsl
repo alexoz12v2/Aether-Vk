@@ -1,6 +1,6 @@
 // @assets/sim/dust_volume_draw.glsl
 //
-// The volumetric packet draw of dust_draw_volume.comp (perf9_O: a workgroup of 64 lanes draws its
+// The volumetric packet draw of dust_draw_volume.comp (a workgroup of 64 lanes draws its
 // 64 records one after another, the lanes cooperating on each; dust_split.comp never draws a
 // volumetric packet itself), on the packet and seed the splitter emitted, so the pyramid is the
 // same word for word whichever queue held the record. The shader declares the push-constant block
@@ -68,7 +68,7 @@ uint dust_volume_class_code(DustVolumePiece q, uvec2 ck, uint kb, uint lev) {
 uint dust_volume_texels_at(DustVolumePiece q, uint lev) {
     return dust_volume_texels(q, lev, pc.pyramid.v[DUST_PYR_TABLE + 3u * lev + 1u], pc.pyramid.v[DUST_PYR_TABLE + 3u * lev + 2u]);
 }
-// a piece's level (dust::volume_piece_level, steps F8 / F10): its own lp plus the bias (the cap's
+// a piece's level (dust::volume_piece_level): its own lp plus the bias (the cap's
 // uniform extra included), at most the last level
 uint dust_volume_piece_level(DustVolumePiece q, uint bias, uint levels) {
     return min(q.lp + bias, levels - 1u);
@@ -104,7 +104,7 @@ uvec2 dust_volume_class_k(DustVolumePiece q, uvec2 ck, uint K, uint kb) {
 // the frame's top-level regime (frame-uniform, from the pyramid header): the bias puts every piece
 // on the last level and that level is 1 x 1 (topOnly); known to every path unless the reference
 // mode DUST_FRAME_TOP_PASS_A asks for pass A in full (topKnown; dust_draw_volume.comp main sets the
-// accumulate mode from it: round 8 step F2)
+// accumulate mode from it)
 bool dust_volume_top_only(uint levels, uint bias) {
     uint topW = pc.pyramid.v[DUST_PYR_TABLE + 3u * (levels - 1u) + 1u];
     uint topH = pc.pyramid.v[DUST_PYR_TABLE + 3u * (levels - 1u) + 2u];
@@ -1608,7 +1608,7 @@ void dust_vw_deposit(uint lane, uint par) {
     vec3 color = vec3(DUST_VRF(20u), DUST_VRF(21u), DUST_VRF(22u));
     uint depthBits = dust_v_st[DUST_VS_DEPTH];
 #ifdef DUST_SUBGROUP
-    // (perf9_O fix3) where the top-level path's and pass A's deposits share one cw: the accumulate
+    // where the top-level path's and pass A's deposits share one cw: the accumulate
     // mode (dust_volume_deposit's acc branch, the sums in the scratch words) and dust_t_vdeposit's
     // writes in one loop, c and cw computed once before the branch, as dust_volume_deposit did (two
     // copies of the expression were contracted differently: the top texel's r, g off by a few)

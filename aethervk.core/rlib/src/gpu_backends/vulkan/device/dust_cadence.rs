@@ -1,4 +1,4 @@
-//! The GPU mirror of the cadence classes (temporal reuse, plan step 3; track 5, increment I1).
+//! The GPU mirror of the cadence classes (temporal reuse).
 //!
 //! The CPU mirror [`crate::scene::dust::cadence`] is the specification: the same decisions in the
 //! same order. The per-slot work (the owner bytes, the lists, the cursors and steps, the aborts'
@@ -110,7 +110,7 @@ pub const CADM_MARK_CHUNK: u32 = 3;
 pub const CADM_CHUNK: u32 = 4;
 pub const CADM_CLEAR: u32 = 5;
 pub const CADM_DEBUG: u32 = 6;
-/// perf9_O: dust_classify.comp's stage modes (`DUST_CAD_STAGES`): the slot's evaluation, each stage
+/// dust_classify.comp's stage modes (`DUST_CAD_STAGES`): the slot's evaluation, each stage
 /// its own dispatch writing the slot's row (`CadenceSysLayout::rows0`, dust_cadence.glsl's
 /// `DUST_CADR_*`), a barrier between, in the order PREP (CLASSIFY) or PREP_DEBUG (DEBUG), LAM, SHELL,
 /// EXTENT, NEAR, JAC, STEP, RATE, FOOT; then CLASSIFY or DEBUG reads the row. CHUNK_FOOT before
@@ -208,7 +208,7 @@ impl CadenceSysLayout {
   pub fn incoming0(&self) -> u32 {
     self.blocks0() + 6 * self.nc * self.np * (self.ring / CMP_BLOCK + CAD_MAX_TIERS as u32)
   }
-  /// perf9_O: the classify stages' rows (`dust_cad_rows0`: `CADR_WORDS` words per ring index,
+  /// the classify stages' rows (`dust_cad_rows0`: `CADR_WORDS` words per ring index,
   /// rewritten by PREP / PREP_DEBUG each classify; never cleared, never read back)
   pub fn rows0(&self) -> u32 {
     self.incoming0() + self.ring / 4
@@ -476,7 +476,7 @@ impl DustCadenceGpu {
         let e = [d[0] - cur[0], d[1] - cur[1], d[2] - cur[2]];
         a = a.max((e[0] * e[0] + e[1] * e[1] + e[2] * e[2]).sqrt());
       }
-      // (round 14) fewer than 2N frames of history: the deviation over the span L − 1 extrapolated
+      // fewer than 2N frames of history: the deviation over the span L − 1 extrapolated
       // to 2N − 1; one frame: unknown, not admitted
       let span = self.de_hist.len().min(2 * n as usize);
       if span < 2 * n as usize {
@@ -572,7 +572,7 @@ impl DustCadenceGpu {
     if f.speed.to_bits() != prev.speed.to_bits() {
       return Some(CadenceReset::Speed);
     }
-    // round 15's time reset (`DustCadenceState::reset_reason`): a negative step, a positive one after
+    // the time reset (`DustCadenceState::reset_reason`): a negative step, a positive one after
     // a non-positive one, or one beyond the jump factor × the previous step
     let dt = f.t_now_s - prev.t;
     if dt < 0.0 {
@@ -1403,7 +1403,7 @@ impl Device {
       ring_mask: th.capacity.wrapping_sub(1),
       tier_mode: th.t as u32 | CADM_CLASSIFY << 8,
     };
-    // perf9_O: the slot's evaluation into its row (the stage modes, a barrier after each), then
+    // the slot's evaluation into its row (the stage modes, a barrier after each), then
     // CLASSIFY reads the row
     self.cad_classify_dispatch(cmd, &cad_pc_mode(&pc, CADM_PREP), th.live_count);
     for mode in CAD_EVAL_STAGES {
@@ -1420,8 +1420,9 @@ impl Device {
     Ok(())
   }
 
-  /// One tier's chunk pre-pass (the CPU's F3 before its draws: the draw lists, the walk-mask
-  /// lanes cleared, D3, IN_IMAGE), after the classify; the draws are increment I3's
+  /// One tier's chunk pre-pass (the CPU's build-chunk step before its draws: the draw lists, the
+  /// walk-mask lanes cleared, the footprint rule, IN_IMAGE), after the classify; the draws are
+  /// [`Self::cmd_dust_cadence_builds`]'s
   pub fn cmd_dust_cadence_chunks(
     &self,
     cmd: vk::CommandBuffer,
@@ -1466,7 +1467,7 @@ impl Device {
           ring_mask: th.capacity.wrapping_sub(1),
           tier_mode: th.t as u32 | CADM_CHUNK << 8 | (k as u32 | (p as u32) << 4) << 16,
         };
-        // perf9_O: the footprint rule into the draw-list words first (CHUNK reads them)
+        // the footprint rule into the draw-list words first (CHUNK reads them)
         self.cad_classify_dispatch(cmd, &cad_pc_mode(&pc, CADM_CHUNK_FOOT), su);
         self.cad_classify_dispatch(cmd, &pc, su);
       }
@@ -1589,7 +1590,7 @@ impl Device {
         vk::BufferUsageFlags::TRANSFER_DST,
         "DustCadenceDebug",
       )?;
-      // perf9_O: the stage modes' rows (a scratch system buffer: PREP_DEBUG reads no owner byte)
+      // the stage modes' rows (a scratch system buffer: PREP_DEBUG reads no owner byte)
       let nc = classes.len().min(DUST_CADENCE_MAX_CLASSES) as u32;
       let sys_words = CadenceSysLayout { ring: capacity, nc, np: 1 }.words();
       let (sys, _) = self.dust_create_buffer(&allocator, sys_words as u64 * 4, DustMem::Device, false, vk::BufferUsageFlags::TRANSFER_DST, "DustCadenceDebugSys")?;
@@ -1641,7 +1642,7 @@ impl Device {
         self.device.cmd_fill_buffer(cmd, sys.buffer, 0, vk::WHOLE_SIZE, 0);
       }
       self.cmd_dust_pre_splat_barrier(cmd);
-      // perf9_O: the stage modes into the rows, then DEBUG reads them
+      // the stage modes into the rows, then DEBUG reads them
       self.cad_classify_dispatch(cmd, &cad_pc_mode(&pc, CADM_PREP_DEBUG), live_count);
       for mode in CAD_EVAL_STAGES {
         self.cad_classify_dispatch(cmd, &cad_pc_mode(&pc, mode), live_count);
@@ -1943,7 +1944,7 @@ impl Device {
       Some(p) if crate::gpu_backends::vulkan::physics::dust_profile_requested() => p,
       _ => self.kernels.pipelines.dust_draw_queue,
     };
-    // (perf9_K) the mono draw family's queue draw (the pre-perf9_O blob; the same dispatch)
+    // the mono draw family's queue draw (the monolithic blob; the same dispatch)
     let pipeline = if self.dust_draw_staged() {
       pipeline
     } else {
@@ -2312,7 +2313,7 @@ pub struct CadenceTelemetry {
   pub images_shown: u32,
   /// aborted lists by reason (`cadence::ABORT_RATE`, `_BUDGET`, `_PREDICTION`) and the coverage drops
   pub aborts: [u32; 4],
-  /// entries refused by D3 at the build and at the classify (no margin only), stale slots without
+  /// entries refused by the footprint rule at the build and at the classify (no margin only), stale slots without
   /// an anchor, classify candidates refused by the shell rule, the admissible-class histogram
   pub d3_rejected: u32,
   pub d3_at_classify: u32,

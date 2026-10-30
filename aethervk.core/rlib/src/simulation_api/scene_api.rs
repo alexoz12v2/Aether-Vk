@@ -722,7 +722,7 @@ impl SimulationContext {
   /// the haze is drawn on the coarsest level, 16 = every sub-packet, the default), clamped to the
   /// largest power of two `≤ detail` in `[DUST_HAZE_DETAIL_MIN, DUST_HAZE_DETAIL_MAX]`. Returns
   /// the value applied, or `None` without the scene. Visual only: picked up by the next rendered
-  /// frame (round 8 step G).
+  /// frame.
   pub fn set_dust_haze_detail(&self, scene_id: u64, detail: u32) -> Option<u32> {
     let scene_arc = self.scenes.read().get_scene(scene_id)?;
     let d = crate::scene::dust::clamp_haze_detail(detail);
@@ -1215,9 +1215,9 @@ impl SimulationContext {
       })
       .ok()
   }
-  /// The deferred edge pieces of `pe`'s last drawn frame (track 9A, t9a2d;
-  /// `dust::DUST_VEDGE_DRAWN` / `_LOST` / `_DEMOTED`): small pieces the edge pass drew, pieces a
-  /// full region refused (lost, not drawn), and of the drawn those it demoted (t9a2e); `None`
+  /// The deferred edge pieces of `pe`'s last drawn frame
+  /// (`dust::DUST_VEDGE_DRAWN` / `_LOST` / `_DEMOTED`): small pieces the edge pass drew, pieces a
+  /// full region refused (lost, not drawn), and of the drawn those it demoted; `None`
   /// without a view or a device. Waits for the GPU (diagnostics).
   pub fn dust_vedge_counts(&self, pe: crate::gpu::PresentationEngineHandle) -> Option<(u32, u32, u32)> {
     use crate::gpu::WeakRenderFrontendExt;

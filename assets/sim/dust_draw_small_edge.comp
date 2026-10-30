@@ -1,11 +1,11 @@
 // @assets/sim/dust_draw_small_edge.comp
 //
-// Track 9A (t9a2d), the edge pass: one lane per small piece the volume consumer deferred
+// The edge pass: one lane per small piece the volume consumer deferred
 // (dust_draw_volume.comp: a piece of the small class whose centre slice's 3 sigma crosses the
 // frame, dust_small_edge_put), dispatched indirectly beside the next chunk's producer
 // (Device::cmd_dust_splat; the last chunk's after its consumer). Every lane is an edge piece, so
 // the demotion's prediction and the sigma points run in coherent warps in a pipeline of their own,
-// and the consumer holds neither. The piece is drawn as the consumer drew it before t9a2d: its one
+// and the consumer holds neither. The piece is drawn as the consumer would draw it in place: its one
 // projections from the same inputs, then the demoted (corrected one projection) or the sigma
 // points' slices (dust_volume_small_edge_points), its covered texels' rectangle integrals with its
 // own rounding seed (dust_volume_segment_small), the peak and the level into the frame words. The
@@ -78,7 +78,7 @@ layout(push_constant, std430) uniform PushConstants {
     vec4  eyeLocal;             // 112
 } pc;                           // 128 bytes
 
-// perf9_O: the pass in rounds of DUST_E_ROUND pieces (DESIGN.md), each in two phases. Phase A,
+// The pass in rounds of DUST_E_ROUND pieces (DESIGN.md), each in two phases. Phase A,
 // four lanes a piece (lane = 4 p + k), stages between barriers: the slices' fast projections
 // (dust_volume_small_fast, lane k < 3 slice k: its mass; the demotion gate), the slices' demotion
 // terms and errors (dust_small_demote_slice, lane k < 3 slice (k + 2) mod 3; the corrected point's
@@ -656,7 +656,7 @@ void main() {
             // texel outside the frame or past its segment's end is NaN, skipped by the walk
             {
                 uint sg = lane / DUST_SEGMENT_TEXELS;
-                // (perf9_O fix) a lane of a segment not taken (dust_t_n[sg] == 0: its key and piece are
+                // a lane of a segment not taken (dust_t_n[sg] == 0: its key and piece are
                 // stale or never written) holds 0, no deposit (the walk visits taken segments only)
                 float tauPx = uintBitsToFloat(dust_t_n[sg] != 0u ? 0x7FC00000u : 0u);
                 if (lane % DUST_SEGMENT_TEXELS < dust_t_n[sg]) {

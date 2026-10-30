@@ -701,7 +701,7 @@ impl Instance {
         if want_checkpoints && has_ext(ash::nv::device_diagnostic_checkpoints::NAME) {
           optional_extensions.insert(utils::OptionalExtensionSupportFlags::DIAGNOSTIC_CHECKPOINTS);
         }
-        // (PARTICLES_PERF round 8 step F2) compute subgroup basic + arithmetic operations
+        // compute subgroup basic + arithmetic operations
         // (Vulkan 1.1 core, the arithmetic optional on the baseline devices) on subgroups of at
         // least 32 lanes: the volume consumer's `.sg` blob reduces its top-level deposits over the
         // subgroup (GTX 1070: −6 % at the far pose, exact). Narrow subgroups get the plain blob:

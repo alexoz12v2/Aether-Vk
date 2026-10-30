@@ -144,7 +144,7 @@ fn gpu_dust_specks_match_reference() {
     .with_device(handle, |dyn_device| {
       let device: &Device = dyn_device.as_any().downcast_ref().unwrap();
       device.create_particle_system(id)?;
-      // (perf9_K) in both split families: the pre-split splitter, then the staged leaf path (each
+      // in both split families: the pre-split splitter, then the staged leaf path (each
       // run emits the batch again and discards its view at the end)
       for split in [false, true] {
         device.dust_set_split_staged(Some(split));
@@ -350,7 +350,7 @@ fn run_specks_parity(device: &Device, id: u64) {
   }
   let word = |p: &[u32], k: u32| p[k as usize];
   {
-    // the breadth-first walk's region after the passes (round 9 step O): its counts against the
+    // the breadth-first walk's region after the passes: its counts against the
     // capacities, the walks truncated by a cap, the frontier per step
     let h = device.download_dust_spill_header(pe).unwrap();
     let r = device.download_dust_walk_region_header(pe).unwrap();
@@ -857,7 +857,7 @@ fn run_specks_parity(device: &Device, id: u64) {
   }
   device.dust_set_specks_trace(pe, false);
   let records = device.download_dust_specks_trace_records(pe).unwrap();
-  // the breadth-first walk (round 9 step O) keeps no stack and claims no spill slot: the spill
+  // the breadth-first walk keeps no stack and claims no spill slot: the spill
   // header carries the walk region (words 9-13) and the trace stays under its capacity
   {
     let header = device.download_dust_spill_header(pe).unwrap();
@@ -1422,7 +1422,7 @@ fn walk_mask_frame(
   skipped
 }
 
-/// The speck pass's walk mask follows the eye when the propagate is cached (track 5, I0b; found
+/// The speck pass's walk mask follows the eye when the propagate is cached (found
 /// 2026-10-18): with the simulation paused and the eye moved, `cmd_dust_propagate_cached` skips
 /// the dispatch, so the lane (`DustMoments::specks_mask`, `edges[15].w`, zeroed only by the
 /// propagate) must still end the frame holding this frame's walked bins only — as after an

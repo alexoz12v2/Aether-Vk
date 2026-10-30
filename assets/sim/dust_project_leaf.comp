@@ -1,6 +1,6 @@
 // @assets/sim/dust_project_leaf.comp
 //
-// The project stage (round 9 step Z3): a lane per candidate of the chunk's candidate buffer
+// The project stage: a lane per candidate of the chunk's candidate buffer
 // (dust_scatter.glsl DUST_CQUEUE_*, the walk stage's; indirect from its header), dispatched
 // between the walk and the sequencer (Device::dust_splat_impl). An EWA candidate is projected
 // (dust_project_packet, with its record's exposure: the same call the splitter made) and its screen

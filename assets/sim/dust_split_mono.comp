@@ -1,7 +1,7 @@
 // @assets/sim/dust_split_mono.comp
 //
-// perf9_K (the split path knob, AETHERVK_DUST_SPLIT_STAGED=0, the GTX 1070 default): the splitter as it
-// was before the split family (perf9 steps Z / O), the old dust_split.comp verbatim against the
+// The split path knob ( AETHERVK_DUST_SPLIT_STAGED=0, the GTX 1070 default): the splitter as it
+// was before the split family, the old dust_split.comp verbatim against the
 // current includes; its leaf path is dust_leaf_mono.glsl (the old dust_leaf.glsl). One dispatch per
 // chunk, no prep / walk / project / sequencer stages, no leaf / candidate queues; it reads the
 // sub-packet record words 0-32 only. Equivalence: its spirv-opt -O blob equals the old blob built
@@ -23,7 +23,7 @@
 // mirror: dust::splat_tier is the same drawing.
 #version 450 core
 #extension GL_GOOGLE_include_directive : require
-// (perf9_K) the old projection is dust_project_packet_mono below
+// the old projection is dust_project_packet_mono below
 #define DUST_NO_PROJECT_PACKET 1
 #ifdef DUST_PROFILE
 #extension GL_ARB_shader_clock : require
@@ -31,7 +31,7 @@
 #extension GL_KHR_shader_subgroup_arithmetic : require
 #endif
 #include "dust_common.glsl"
-// (perf9_K) the old dust_common.glsl dust_project_packet, verbatim but for its name (see the header)
+// the old dust_common.glsl dust_project_packet, verbatim but for its name (see the header)
 bool dust_project_packet_mono(vec3 mean, float S[6], vec3 d, float flux, float exposure, mat4 mvp,
                          float W, float H, vec3 eyeLocal, bool openStart, bool openEnd, vec2 rho,
                          out DustScreenPacket P) {
@@ -218,8 +218,8 @@ void main() {
     // the serial reference (DUST_FRAME_SPLIT_SERIAL): lane 0 walks the records in order, the
     // ordinal running on as the per-cluster thread's did; otherwise the counting pass (the seeds
     // each record draws), the exclusive prefix in record order (lane 0), the drawing pass.
-    // (round 9 step C4: one call site for the leaf path — the serial, counting and drawing
-    // copies each had their own frame; a pass loop, pass 0 counting, pass 1 drawing)
+    // (one call site for the leaf path, not a frame per serial, counting and drawing
+    // copy: a pass loop, pass 0 counting, pass 1 drawing)
     bool serial = (pc.pyramid.v[DUST_PYR_FLAGS] & DUST_FRAME_SPLIT_SERIAL) != 0u;
     bool ran = false;
     uint ord = 0u;

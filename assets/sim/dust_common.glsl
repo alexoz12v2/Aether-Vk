@@ -62,7 +62,7 @@ const uint  DUST_FLAGS_VOLUME_DETAIL_SHIFT = 8u;  // diagnostics: one time sampl
 const uint  DUST_FLAGS_HAZE_DETAIL_SHIFT = 11u;
 // host-internal (dust::DUST_VIEW_VOLUME_SPILL): dust_draw_volume.comp drains the volume spill
 const uint  DUST_VIEW_VOLUME_SPILL = 1u << 28u;
-// host-internal (dust::DUST_VIEW_EDGE_ODD, track 9A t9a2d): the chunk's parity, the deferred edge
+// host-internal (dust::DUST_VIEW_EDGE_ODD): the chunk's parity, the deferred edge
 // pieces' region the consumer appends to and dust_draw_small_edge.comp drains
 const uint  DUST_VIEW_EDGE_ODD = 1u << 29u;
 const uint  DUST_TRACER_EVERY        = 256u;
@@ -245,7 +245,7 @@ vec2 df_add(vec2 a, vec2 b) {
     vec2 t = df_two_sum(a.y, b.y);
     precise float e1 = s.y + t.x;
 #ifdef DUST_COMMON_MONO
-    // (perf9_K: the pre-perf9_O body, for dust_propagate_mono.comp / dust_emit_mono.comp: their
+    // (the monolithic body, for dust_propagate_mono.comp / dust_emit_mono.comp: their
     // blobs equal the pre-package blobs byte for byte; the same arithmetic)
     s = df_quick_two_sum(s.x, e1);
     precise float e2 = s.y + t.y;
@@ -399,7 +399,7 @@ layout(buffer_reference, std430, buffer_reference_align = 16) buffer DustMoments
 // moments by index through it (dust_mom.m[mi]), never a by-value copy of its 80 floats
 // (an address, not a Private buffer_reference: Adreno 619 drivers assert on a pointer global
 // loaded outside main)
-// a loop the includer may keep rolled (perf9_O: the splat defines it as [[dont_unroll]]; the
+// a loop the includer may keep rolled (the splat defines it as [[dont_unroll]]; the
 // iterations, their order and arithmetic are the same)
 #ifndef DUST_NOUNROLL
 #define DUST_NOUNROLL
@@ -1004,7 +1004,7 @@ const float DUST_SUPPORT_MASS_MIN = 0.05;
 const float DUST_SUPPORT_CUT_MIN = 1.0e-3;
 bool dust_has_support(vec4 s) { return s.x != 0.0 || s.y != 0.0 || s.z != 0.0; }
 // the mass of the 3-sigma ball of a 3-D standard normal (dust::DUST_BALL3_MASS): a volumetric
-// piece's density is its Gaussian inside its 3-sigma ellipsoid over this (step F)
+// piece's density is its Gaussian inside its 3-sigma ellipsoid over this
 const float DUST_BALL3_MASS = 0.9707094;
 const float DUST_BOUND_R2 = 9.0;
 const float DUST_BOUND_VAR = 0.91781;   // dust::DUST_BOUND_VAR
@@ -1309,7 +1309,7 @@ int dust_split_step(DustPacket p, bool clipped, uint level, uint depthMax, vec3 
     float spanS = dot(p.seg, fwd);
     float span = abs(spanS);
     if (depth + 3.0 * sigmaV + max(spanS, 0.0) < 0.0) return DUST_SPLIT_DROP;
-    // (2b) before the clip (step F3): the eye inside or near the packet — the exact ray integral
+    // (2b) before the clip: the eye inside or near the packet — the exact ray integral
     // cuts each ray at the eye itself, so a chord across the eye plane is drawn whole (the clip's
     // closed end ramped the density in front of the eye down over the pieces' sigma: a chord along
     // the view with the eye inside drew 0.79 of its light)
@@ -1366,8 +1366,8 @@ int dust_split_step(DustPacket p, bool clipped, uint level, uint depthMax, vec3 
     return DUST_SPLIT_KEEP;
 }
 
-// dust_split_step with the chosen child built in place (round 9 step C1: one packet live on the
-// split walk instead of p, a and b — 1 112 B of spill per lane on Mali): p becomes a (or b, the
+// dust_split_step with the chosen child built in place (one packet live on the
+// split walk, not p, a and b: those spill 1 112 B per lane on Mali): p becomes a (or b, the
 // second child, when `second`) on DUST_SPLIT_CLIP / DUST_SPLIT_SPLIT, and is untouched otherwise;
 // the same tests and arithmetic as dust_split_step, in the same order
 int dust_split_step_one(inout DustPacket p, bool clipped, uint level, uint depthMax, vec3 eye, vec3 fwd, bool perspective, bool force, bool keepClip, bool second) {
@@ -1580,7 +1580,7 @@ bool dust_project_packet(vec3 mean, float S[6], vec3 d, float flux, float exposu
     return true;
 }
 #endif  // DUST_NO_PROJECT_PACKET (a blob that never projects: its precise cone, even uncalled, marks the blob's
-// buffer-reference stores NoContraction in glslang — perf9_O split/LOG.md)
+// buffer-reference stores NoContraction in glslang)
 
 // Optical depth per px^2 of the capsule at pixel x (dust::capsule_tau)
 // exp(x) - 1 without the cancellation at small x (mirror of dust::expm1_f32: the same polynomial
@@ -1792,7 +1792,7 @@ void dust_rotate_cov(inout float S[6], vec3 axis, float angle) {
     for (int k = 0; k < 6; ++k) S[k] = dust_rot_o[L][k];
 }
 #elif defined(DUST_ROT_SCALAR)
-// (the splat, perf9_O: no locals indexed at all — element (a, b) of R^T S R from the columns'
+// (the splat: no locals indexed at all — element (a, b) of R^T S R from the columns'
 // components, the products and the sum in the loop's order: i outer, j inner, acc from 0)
 float dust_rot_ab(float x0, float x1, float x2, float y0, float y1, float y2,
                   float S0, float S1, float S2, float S3, float S4, float S5) {
@@ -1838,7 +1838,7 @@ void dust_rotate_cov(inout float S[6], vec3 axis, float angle) {
 // the spiral of a rigidly rotating emitter (dust::spiral_point): the two samples (ages ageO,
 // ageP) un-spun by R(+omega age) are linear in age, interpolated, and re-spun by R(-omega age(u));
 // the straight segment when omega = 0
-// (perf9_O: its lerp and its turn back as two functions; the splat stores the lerp's f32 between)
+// (its lerp and its turn back as two functions; the splat stores the lerp's f32 between)
 vec3 dust_spiral_lerp(vec3 own, vec3 pred, float ageO, float ageP, vec3 axis, float omega, float u) {
     vec3 lO = dust_rotate3(own, axis, omega * ageO);
     vec3 lP = dust_rotate3(pred, axis, omega * ageP);
@@ -1896,7 +1896,7 @@ vec4 dust_piece_support(bool pieces, bool lineM, bool lineP, vec3 oM, vec3 cM, v
 }
 // dust_piece_support with the cell origin along the plane's normal (dust::subpackets_cells:
 // has = the plane is set, wO = n.o): the own cell's (ownSup, ownHas, ownO) when not a piece
-// (the cell line at the piece's centre age: perf9_O, the splat computes it once per piece)
+// (the cell line at the piece's centre age: the splat computes it once per piece)
 void dust_piece_line(bool spiral, vec3 oM, vec3 cM, vec3 oP, vec3 cP, vec3 axis, float omega, float ageO, float ageP,
                      float uc, out vec3 o, out vec3 c) {
     float ageU = ageO + uc * (ageP - ageO);
@@ -2180,8 +2180,7 @@ uint dust_time_pieces_lod(uint nT, bool hasT, float tPx, float lodPx, uint depth
     return clamp(max(c, depthMin), 1u, max(nT, 1u));
 }
 
-// ─── The haze detail (mirror of dust::haze_*: the splat's flags bits 11-13; round 8 step G,
-// round 9 step A) ───
+// ─── The haze detail (mirror of dust::haze_*: the splat's flags bits 11-13) ───
 // At a frame whose volume bias puts every volumetric piece on the 1 x 1 top level, a cluster the
 // exact ray integral draws whatever its grouping (dust_haze_volumetric: a single bin, or the finest
 // time piece, already deeper than the split tolerates — at the frames' split depth 0 such a packet
@@ -2189,8 +2188,8 @@ uint dust_time_pieces_lod(uint nT, bool hasT, float tPx, float lodPx, uint depth
 // volume packets: 16 bins x up to 8 time pieces, 45 per cluster at 1 km, 1 d/s) is drawn with at
 // most ~detail sub-packets: its chord groups no smaller than 16 / detail bins and its time pieces
 // no more than detail, the depth rules lifted. 16 changes nothing. Off the top level, for a cluster
-// some grouping of which the EWA draws (the far, narrow clusters of the fine levels: step G's
-// frame-wide rule coarsened them into 1-4 Gaussians, p99 10x at 1 km) and under the frame's
+// some grouping of which the EWA draws (the far, narrow clusters of the fine levels: a
+// frame-wide rule would coarsen them into 1-4 Gaussians, p99 10x at 1 km) and under the frame's
 // deep-chord bit (a deep chord KEPT and EWA-drawn: the 40 % loss of dust::deep_chord_factors)
 // nothing changes.
 // the frame's haze detail of a splat's flags word: the knob's value at the top level
@@ -2226,7 +2225,7 @@ int dust_split_kind(DustPacket p, uint depthMax, vec3 eye, vec3 fwd, bool perspe
     }
     return DUST_SPLIT_KEEP;
 }
-// whether a cluster is haze (dust::haze_volumetric; round 9 step A2): the probes of the detail
+// whether a cluster is haze (dust::haze_volumetric): the probes of the detail
 // 16's sub-packets - for each size bin, the slow end's sub-bins too (dust_bin_subbins), the
 // first and the last of its nT time pieces (the count after the level of detail, at the width
 // ratio: dust_piece_bound), each as the splat draws the sub-bin: a chord-major bin (its chord
@@ -2239,16 +2238,16 @@ int dust_split_kind(DustPacket p, uint depthMax, vec3 eye, vec3 fwd, bool perspe
 // detail 1 draws it as. Perspective views only; a cluster with one probe the splitter would keep
 // (EWA-drawn), clip or bisect keeps its level of detail whatever the knob (the pooled packet
 // alone is volumetric for nearly every cluster even 5000 km out - the pooled Gaussians are
-// coma-sized - and pooled the EWA clusters there into volume packets: perf9b/perf9b2). The
+// coma-sized - and would pool the EWA clusters there into volume packets). The
 // probes stand in for the packets (capsules, sweeps, cone pieces; fewer pieces are longer): the
 // CPU test measures the kept share they let through
 // The probes, numbered for the splat's lanes (dust_splat.comp: probe k on lane k & 31): sub-bin
 // k >> 1 (the slow end bin's sub-bins first, then a bin each: dust_bin_subbins), its first piece
 // (k even) or its last (k odd); dust_haze_probes of them, a k past the list passes
 uint dust_haze_probes() { return 2u * (dust_bin_subbins(0u) + DUST_SIZE_BINS - 1u); }
-// (the probe's packet: false for a k past the list, which passes; perf9_O: the splat builds and
+// (the probe's packet: false for a k past the list, which passes; the splat builds and
 // judges it in two dispatches)
-// (perf9_O: the probe's sub-bin; false past the list)
+// (the probe's sub-bin; false past the list)
 bool dust_haze_probe_bin(uint k, out uint b, out uint j, out uint nj) {
     uint nj0 = dust_bin_subbins(0u);
     b = 0u; j = 0u; nj = 1u;
@@ -2259,7 +2258,7 @@ bool dust_haze_probe_bin(uint k, out uint b, out uint j, out uint nj) {
     nj = s < nj0 ? nj0 : 1u;
     return true;
 }
-// (perf9_O: the probe's packet from its sub-bin's edges)
+// (the probe's packet from its sub-bin's edges)
 void dust_haze_probe_packet_at(uint mi, vec3 seg, float ratio, uint nT, uint k, uint b, uint j, uint nj,
                                vec3 a, vec3 c, float fa, float fc, out DustPacket p) {
     bool last = (k & 1u) != 0u;
@@ -2398,7 +2397,7 @@ void dust_kepler(Df3 r0, Df3 v0, vec2 mu, vec2 dt, out Df3 r, out Df3 v) {
     if (mu.x > 0.0 && alpha.x > 0.0) {
         vec2 period = df_div(df_mul(DF_TWO_PI, mu), df_mul(alpha, df_sqrt(alpha)));
 #ifdef DUST_COMMON_MONO
-        // (perf9_K: the pre-perf9_O form, see df_add)
+        // (the monolithic form, see df_add)
         vec2 k = df_div(t, period);
         k = k.x >= 0.0 ? df_floor(k) : -df_floor(-k);
 #else
@@ -2453,7 +2452,7 @@ void dust_kepler(Df3 r0, Df3 v0, vec2 mu, vec2 dt, out Df3 r, out Df3 v) {
     v = df3_add(df3_scale(r0, fd), df3_scale(v0, gd));
 }
 
-// Round 9 step Z: the same solve as its Lagrange coefficients (f, g, fdot, gdot; `still` the early
+// The same solve as its Lagrange coefficients (f, g, fdot, gdot; `still` the early
 // exit's identity) and their application, so a caller can load (r0, v0) again from its buffer for
 // the application instead of keeping the twelve words live across the solve (Mali-G52: that was
 // the whole 52 B spill of a lone solve). dust_kepler_apply(r0, v0, dust_kepler_coef(r0, v0, ...))

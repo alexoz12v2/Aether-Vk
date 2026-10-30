@@ -83,7 +83,7 @@ public partial class ParticleRenderingViewModel : ObservableObject
     return p;
   }
 
-  /// <summary>Default reuse tolerance: 16 px (round 9 step R; Off draws every frame fresh).</summary>
+  /// <summary>Default reuse tolerance: 16 px (Off draws every frame fresh).</summary>
   public const int ReuseToleranceDefault = 16;
   public const int ReuseToleranceMax = 16;
 

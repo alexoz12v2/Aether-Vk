@@ -1,6 +1,6 @@
 // @assets/sim/dust_draw_volume_mono.comp
 //
-// (perf9_K) the pre-perf9_O volume consumer (a lane per record), kept for the mono draw family
+// the monolithic volume consumer (a lane per record), kept for the mono draw family
 // (AETHERVK_DUST_DRAW_STAGED=0, the GTX 1070 default; dust_draw_volume.comp is the staged one).
 //
 // The volume packet queue's consumer: one lane per record of the chunk's queue
@@ -14,7 +14,7 @@
 // is the same drawing.
 #version 450 core
 #extension GL_GOOGLE_include_directive : require
-// (round 8 step F2) the `.sg` blob (-DDUST_SUBGROUP=1, the `.prof` one too) reduces the top-level
+// the `.sg` blob (-DDUST_SUBGROUP=1, the `.prof` one too) reduces the top-level
 // deposits over the subgroup (GL_KHR_shader_subgroup_arithmetic: optional on the baseline devices,
 // so the host picks the blob by the device's subgroup operations: PhysicsPipelines dust_draw_volume);
 // the plain blob deposits as before, word for word the same pyramid
@@ -92,13 +92,13 @@ bool dust_draw_volume_record(uint r) {
     uint volumeBias = (dust_pyr_split_word >> 8u) & 0xFFu;
     uint volumeAxis = (dust_pyr_split_word >> 16u) & 0x3u;
     // (the record's address and column stride as DUST_VQUEUE_GET's: pass B re-reads the packet's
-    // seed, colour, segments, flux and photometry there at each piece, step 9C)
+    // seed, colour, segments, flux and photometry there at each piece)
     dust_volume_draw(p, base + DUST_VQUEUE_HEADER_WORDS + r, cap, exposure, levels, W, H, volumeBias, volumeAxis);
     return true;
 }
 
 #ifdef DUST_SUBGROUP
-// (round 8 step F2) one word of the subgroup's top-texel sum: the 16-bit halves summed (each
+// one word of the subgroup's top-texel sum: the 16-bit halves summed (each
 // < 2^21 for 32 lanes) and recombined with carries, as dust_prof_add64; the word saturates when
 // the total passed 2^32 in a lane (wrapped), over the subgroup (the carry) or in the running sum
 // (the add's wrap), as dust_atomic_add_sat's adds would have; the probe plain_add never saturates
@@ -153,7 +153,7 @@ void main() {
     DUST_PROF_BEGIN(thread)
 #endif
 #ifdef DUST_SUBGROUP
-    // (round 8 step F2) the accumulate mode, frame-uniform: the top texel's words
+    // the accumulate mode, frame-uniform: the top texel's words
     {
         uint levels = pc.pyramid.v[DUST_PYR_LEVELS];
         uint bias = (pc.pyramid.v[DUST_PYR_SPLIT_DEPTH] >> 8u) & 0xFFu;

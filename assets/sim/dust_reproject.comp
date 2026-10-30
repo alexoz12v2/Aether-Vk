@@ -192,7 +192,7 @@ float dust_rpt_texel(uvec2 tb, uint n, uint gid, uint ch) {
     if (ch != 0u) return 0.0;
     uint dm = s_depth[t64];
     pc.frame.v[fi + 4u] = dm == 0xFFFFFFFFu ? 0u : dm + 1u;
-    // (round 14: a level's light is Σ its counts — a count is τ · area / unit already)
+    // (a level's light is Σ its counts — a count is τ · area / unit already)
     return float(pc.frame.v[fi]);
 }
 
@@ -212,7 +212,7 @@ void main() {
             for (uint l = 0u; l < lv; ++l) {
                 uint w = pc.frame.v[DUST_PYR_TABLE + 3u * l + 1u], h = pc.frame.v[DUST_PYR_TABLE + 3u * l + 2u];
                 if (ix < w * h) {
-                    // (round 14's pyramid_light: Σ counts over the levels in PYR_LEVEL_MASK)
+                    // (pyramid_light: Σ counts over the levels in PYR_LEVEL_MASK)
                     if (((pc.frame.v[DUST_PYR_LEVEL_MASK] >> l) & 1u) != 0u)
                         mine = float(pc.frame.v[pc.frame.v[DUST_PYR_TABLE + 3u * l] + ix * DUST_PYRAMID_TEXEL_WORDS]);
                     break;

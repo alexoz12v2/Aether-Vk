@@ -44,7 +44,7 @@ layout(push_constant, std430) uniform PushConstants {
 // queues every one, to the volume queue or its spill, for dust_draw_volume.comp)
 #include "dust_frame_gates.glsl"
 // the speck shell's radius word (dust_splat.comp defines it too; the include guards keep it out
-// of dust_common.glsl; perf9_O: before dust_leaf.glsl, whose prep reads it)
+// of dust_common.glsl; before dust_leaf.glsl, whose prep reads it)
 const uint DUST_PYR_SPECKS_DMAX = 252u;
 #include "dust_leaf.glsl"
 
@@ -53,7 +53,7 @@ shared uint dust_rec_seeds[DUST_SQUEUE_PER_CLUSTER];
 // the walk stage: the cluster's run in the candidate buffer (its first slot; ~0u refused)
 shared uint dust_cand_run;
 
-// (perf9_O: the sequencer has its own mains below; this frame is the hard-axis diagnostic's)
+// (the sequencer has its own mains below; this frame is the hard-axis diagnostic's)
 #if !defined(DUST_SPLIT_PREP) && !defined(DUST_SPLIT_SEQ) && defined(DUST_HARD_AXIS)
 // record r of the cluster (its index in the chunk's queue `recs + r`) through the leaf path:
 // counting (dust_counting) or drawing from the ordinal `ord`
@@ -107,11 +107,11 @@ void dust_split_record(uint recs, uint r, uint ord, uint levels, float W, float 
 #endif  // !DUST_SPLIT_PREP && (SEQ || HARD)
 
 #ifdef DUST_SPLIT_PREP
-// the prep stage (round 9 step Z; blob dust_split_prep, dispatched like the splitter between the
+// the prep stage (blob dust_split_prep, dispatched like the splitter between the
 // enumerator and it): a lane per record of the cluster decides its cut (dust_leaf_prep) and
 // writes the record's cone words; no seeds, no drawing, no shared memory
 void main() {
-    // (perf9_O) a lane per record, the record's word index the loop's one value: the record through
+    // a lane per record, the record's word index the loop's one value: the record through
     // dust_leaf_prep_p (its words, the cone words and the frame words read at their uses), the
     // cluster's end re-derived from the queue words at each test (dust_p_end)
     uint sbase = dust_squeue_base_o(uvec2(pc.pyramid));
@@ -130,7 +130,7 @@ void main() {
 #endif
 }
 #elif !defined(DUST_SPLIT_SEQ) && !defined(DUST_HARD_AXIS)
-// the walk stage (perf9_O): main's loops as dust_split.comp's walk variant (the counting pass
+// the walk stage: main's loops as dust_split.comp's walk variant (the counting pass
 // lane-parallel, the prefix and the reservation by lane 0, the writing pass, lane 0 alone in
 // record order when serial), its record step dust_walk_record: the record's pointer the only
 // per-lane value over the walk (the lane's record index derived from it after), the counter
@@ -166,7 +166,7 @@ void main() {
         dust_w_rb = rb; dust_w_n = n;
     }
     barrier();
-    // the two passes as two loops (perf9_O: not one loop over the passes, whose control, the serial
+    // the two passes as two loops (not one loop over the passes, whose control, the serial
     // stride and the reservation between, the compiler keeps live over the walk): the counting
     // pass, every lane its records, the count each leaves in its word 46 to the shared prefix
     bool ran = false;
@@ -208,7 +208,7 @@ void main() {
 #endif
 }
 #elif defined(DUST_SPLIT_SEQ) && defined(DUST_SEQ_DRAW)
-// (perf9_O) the sequencer's draw stage: a lane per candidate of the candidate buffer (indirect from
+// the sequencer's draw stage: a lane per candidate of the candidate buffer (indirect from
 // its header word 0, as dust_project_leaf.comp), the reserved runs [0, word 3 - DUST_CQUEUE_LOST)
 // (dust_cqueue_reserve grants a prefix of the reservations: every one after the first refused is
 // refused, each refused one adds its n to both words), dust_s_draw keeping the records' runs
@@ -229,7 +229,7 @@ void main() {
 #endif
 }
 #elif defined(DUST_SPLIT_SEQ)
-// (perf9_O) the sequencer's order stage: the cluster's candidate run (its first record's run start,
+// the sequencer's order stage: the cluster's candidate run (its first record's run start,
 // the records' counts summed), a chunk of 64 candidates at a time: each lane counts its candidate's
 // seeds (dust_s_count), lane 0 turns the chunk's counts into ordinals (the exclusive prefix, the
 // running total carried in shared memory), each lane writes its candidate's ordinal into word 15
@@ -321,13 +321,13 @@ void main() {
     // the serial reference (DUST_FRAME_SPLIT_SERIAL): lane 0 walks the records in order, the
     // ordinal running on as the per-cluster thread's did; otherwise the counting pass (the seeds
     // each record draws), the exclusive prefix in record order (lane 0), the drawing pass.
-    // (round 9 step C4: one call site for the leaf path — the serial, counting and drawing
-    // copies each had their own frame; a pass loop, pass 0 counting, pass 1 drawing)
+    // (one call site for the leaf path, not a frame per serial, counting and drawing
+    // copy: a pass loop, pass 0 counting, pass 1 drawing)
     bool serial = (pc.pyramid.v[DUST_PYR_FLAGS] & DUST_FRAME_SPLIT_SERIAL) != 0u;
     bool ran = false;
     uint ord = 0u;
 #ifndef DUST_SPLIT_SEQ
-    // the walk stage (round 9 step Z2): the counting pass always and lane-parallel (the
+    // the walk stage: the counting pass always and lane-parallel (the
     // candidates each record writes; no side effect), the prefix, lane 0 reserving the cluster's
     // run (dust_cqueue_reserve), the writing pass — lane 0 alone in record order under
     // DUST_FRAME_SPLIT_SERIAL, so the children gate's order is the serial reference's

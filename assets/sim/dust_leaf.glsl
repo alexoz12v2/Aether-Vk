@@ -10,11 +10,11 @@
 
 // the volume packet queue is on this frame (PYR_FLAGS bit DUST_FRAME_VQUEUE_OFF clear; set in main)
 bool dust_vqueue_on = false;
-// the sub-packet record (recs + r) of the leaf being drawn (round 9 step Z: the leaf record's
+// the sub-packet record (recs + r) of the leaf being drawn (the leaf record's
 // index to the exposure, colour and photometry; set per record by dust_project_split_scatter)
 uint dust_leaf_rec = 0u;
 
-// ── The prep stage (round 9 step Z; dust_split.comp -DDUST_SPLIT_PREP, a lane per record) ─────
+// ── The prep stage (dust_split.comp -DDUST_SPLIT_PREP, a lane per record) ─────────────────────
 // A perspective packet its support cuts (dust::project_split_scatter; not with a speck shell, the
 // split's hand-over): drawn whole by the exact ray integral over the half-space when the eye is
 // near it (DUST_SQUEUE_KIND_VOLUME), else as its cone of grains when its cell has an origin
@@ -23,7 +23,7 @@ uint dust_leaf_rec = 0u;
 // The same tests in the same order as the walk's former preamble; the kind and the pieces'
 // derived state go to the record's cone words (DUST_SQUEUE_PUT_CONE) for the walk stage, whose
 // lanes then carry no root and no cone state (the walk's spill on Mali).
-// (perf9_O) The prep stage on the record (a lane per record): the root packet's words and the cone
+// The prep stage on the record (a lane per record): the root packet's words and the cone
 // words read from the record at each use through one per-lane pointer (volatile: no load merged
 // with an earlier one or hoisted, nothing of the packet kept in registers across the pieces), the
 // cone words written as they are decided (DUST_SQUEUE_PUT_CONE's words and values) and re-read by
@@ -49,7 +49,7 @@ uvec2 dust_p_addr(uint word) { uvec2 a = uvec2(pc.pyramid); uint o = word * 4u; 
 #define P_SEG vec3(PRF(9u), PRF(10u), PRF(11u))
 #define P_N vec3(PRF(23u), PRF(24u), PRF(25u))
 #define P_SN vec3(PRF(34u), PRF(35u), PRF(36u))
-// (perf9_O) the frame values the prep reads per record, re-derived at their uses (nothing of them
+// the frame values the prep reads per record, re-derived at their uses (nothing of them
 // kept in registers over the pieces): the view's perspective flag (dust_view_forward's test on the
 // push constants), the speck shell's radius for this record (the main's former recShell), and the
 // end of the cluster's records (main's recs + recBase + n, from the queue words, volatile)
@@ -281,8 +281,8 @@ void dust_volume_emit(DustPacket p, float exposure, vec3 color, uint levels, flo
 }
 
 
-// dust_volume_emit for a candidate slot (round 9 step Z3): the seed first, then the volume record
-// written word by word (perf9_O): each word loaded from the candidate slot or the sub-packet record
+// dust_volume_emit for a candidate slot: the seed first, then the volume record
+// written word by word: each word loaded from the candidate slot or the sub-packet record
 // and stored at once (DUST_VQUEUE_PUT of DUST_CQUEUE_GET's packet: the packet's fields are bit
 // copies, segT the get's 0; the photometry words the record's, as this function set
 // dust_phot_sun / _rh / _support, which nothing else in the sequencer reads). No packet held.
@@ -295,7 +295,7 @@ uvec2 dust_s_slot;
 #endif
 uvec2 dust_s_addr(uint word) { uvec2 a = uvec2(pc.pyramid); uint o = word * 4u; uint lo = a.x + o; return uvec2(lo, a.y + (lo < o ? 1u : 0u)); }
 void dust_vqueue_put_slot(uint base, uint cap, uint r, uint cslot, uint seed) {
-    // (perf9_O) one loop over the volume record's 32 words in word order, each word's source picked
+    // one loop over the volume record's 32 words in word order, each word's source picked
     // by its index: the candidate slot and the sub-packet record each through one pointer, the
     // destination word's address formed per iteration (one address live, not one per word)
 #if defined(DUST_SEQ_DRAW)
@@ -371,12 +371,12 @@ void dust_widen_screen_packet(inout DustScreenPacket P, float v) {
     P.sigmaMin = sqrt(max(det / lamMax, DUST_PIXEL_FILTER_VAR * 0.5));
 }
 
-// (round 9 step Z: the leaf packet q rides along for the leaf record)
-// (round 9 step Z3: the leaf's screen packet is in its candidate slot, dust_project_leaf.comp's;
+// (the leaf packet q rides along for the leaf record)
+// (the leaf's screen packet is in its candidate slot, dust_project_leaf.comp's;
 // every statement reads the fields it needs from there — dust_pq_get, the rest dead loads — so no
 // packet is live across the band; the widening and the closing of short open ends are written back
 // for the consumer, which draws the slot as it is)
-// (perf9_O) the candidate's screen packet slot through one per-lane pointer (consecutive words at
+// the candidate's screen packet slot through one per-lane pointer (consecutive words at
 // constant offsets: one address pair, not one per word), as dust_pq_get reads it
 #define SQF(k) uintBitsToFloat(DUST_O_SL(k))
 #if defined(DUST_SEQ_DRAW)
@@ -415,7 +415,7 @@ DustScreenPacket dust_s_get() {
 }
 void scatter(uint cslot, vec3 color, uint levels) {
     DUST_PROF_BEGIN(scprep)
-    // (perf9_O) the slot through one pointer to its word 0, the fields at constant offsets
+    // the slot through one pointer to its word 0, the fields at constant offsets
     dust_s_slot = dust_s_addr(dust_pqueue_base_o(uvec2(pc.pyramid)) + cslot * DUST_PQUEUE_RECORD_WORDS);
 #if defined(DUST_SEQ_DRAW)
     dust_s_w = dust_pqueue_base_o(uvec2(pc.pyramid)) + cslot * DUST_PQUEUE_RECORD_WORDS;
@@ -489,7 +489,7 @@ void scatter(uint cslot, vec3 color, uint levels) {
     if (!dust_band_rows(B, s, h, y0, y1)) { DUST_PROF_END(scprep) return; }
     if (dust_counting) { dust_seed_count++; DUST_PROF_END(scprep) return; }
     uint seed = dust_next_packet_seed();
-    // round 9 step Z: the splitter draws no texel. The leaf, found on its band, goes to the leaf
+    // the splitter draws no texel. The leaf, found on its band, goes to the leaf
     // queue with its seed and levels (dust_scatter.glsl DUST_LQUEUE_*; a large one, its band over
     // DUST_QUEUE_MIN_TEXELS texels, listed for dust_draw_leaf.comp's workgroup blob, a small one
     // drawn by its lane blob). DUST_FRAME_QUEUE_ALL: every leaf large; DUST_FRAME_QUEUE_OFF: every
@@ -506,7 +506,7 @@ void scatter(uint cslot, vec3 color, uint levels) {
     // (the level mask: the consumer sets it for the texels it writes)
 }
 
-// ── The sequencer stage (round 9 step Z2; dust_split.comp -DDUST_SPLIT_SEQ) ──────────────────
+// ── The sequencer stage (dust_split.comp -DDUST_SPLIT_SEQ) ───────────────────────────────────
 // Record `recs + r`'s run of candidates (the walk stage's, DUST_CQUEUE_*) in its walk order
 // through the leaf path as the walk drew it: a volumetric packet to dust_volume_emit, an EWA leaf
 // projected (dust_project_packet) and, on screen, through scatter — the same calls with the same
@@ -514,7 +514,7 @@ void scatter(uint cslot, vec3 color, uint levels) {
 // are the per-cluster thread's
 float dust_seq_exposure() { return uintBitsToFloat(pc.pyramid.v[dust_leaf_rec + 13u * DUST_SQUEUE_CAPACITY]); }
 vec3 dust_seq_color() { return vec3(uintBitsToFloat(pc.pyramid.v[dust_leaf_rec + 20u * DUST_SQUEUE_CAPACITY]), uintBitsToFloat(pc.pyramid.v[dust_leaf_rec + 21u * DUST_SQUEUE_CAPACITY]), uintBitsToFloat(pc.pyramid.v[dust_leaf_rec + 22u * DUST_SQUEUE_CAPACITY])); }
-// ── The sequencer in two stages (perf9_O) ────────────────────────────────────────────────────────
+// ── The sequencer in two stages ──────────────────────────────────────────────────────────────────
 // The order stage (dust_split.comp -DDUST_SPLIT_SEQ, a workgroup per cluster as before) decides for
 // every candidate of the cluster's run whether it draws a seed (the counting pass: dust_s_count) and
 // writes each candidate's seed ordinal — the cluster-wide exclusive prefix of those counts in
@@ -600,9 +600,9 @@ void dust_s_draw(uint c) {
     }
 }
 
-#else  // the walk stage (round 9 step Z2): no projection, no seed, no drawing — candidates
+#else  // the walk stage: no projection, no seed, no drawing — candidates
 
-// ── The walk's node in the record (round 9 step Z3 kept it in shared memory; perf9_O) ─────────
+// ── The walk's node in the record (not in shared memory) ──────────────────────────────────────
 // Each lane's node q as 20 words (mean, S, seg, flux, openStart, openEnd, rho, segT): the walking
 // record's words 48-67 (WQ(k) = record word 48 + k, structure-of-arrays at DUST_SQUEUE_CAPACITY),
 // written by the piece load and by the step, read word by word at each use through the record's
@@ -613,7 +613,7 @@ uvec2 dust_w_row;
 uvec2 dust_w_addr(uint word) { uvec2 a = uvec2(pc.pyramid); uint o = word * 4u; uint lo = a.x + o; return uvec2(lo, a.y + (lo < o ? 1u : 0u)); }
 // the record's words through one per-lane pointer to its word 0 and constant indices k * capacity:
 // one address register pair, the stride an immediate / scalar offset (GCN soffset), never a 64-bit
-// address per word (perf9_O)
+// address per word
 shared uint dust_w_lri[64];
 #define DUST_O_WRL() { memoryBarrierShared(); dust_w_row = dust_w_addr(dust_w_lri[gl_LocalInvocationID.x]); }
 #ifndef DUST_O_WRL
@@ -626,7 +626,7 @@ shared uint dust_w_lri[64];
 #define DUST_O_CP(k) DustWRow(cp).v[k]
 #define WQ_W(k) WQ(k)
 #define REC_W(k) DUST_REC(k)
-// the row's words read volatile (perf9_O): a reload the compiler neither merges with an earlier
+// the row's words read volatile: a reload the compiler neither merges with an earlier
 // load of the word nor hoists; where a word's value would otherwise be kept from its first use to a
 // later one, the later use reads it again (the same bits)
 layout(buffer_reference, std430, buffer_reference_align = 4) volatile buffer DustWState { uint v[]; };
@@ -642,13 +642,13 @@ void dust_w_store(DustPacket q) {
     WQ_W(15u) = floatBitsToUint(q.rho.x); WQ_W(16u) = floatBitsToUint(q.rho.y);
     WQ_W(17u) = floatBitsToUint(q.segT.x); WQ_W(18u) = floatBitsToUint(q.segT.y); WQ_W(19u) = floatBitsToUint(q.segT.z);
 }
-// (perf9_O round 5) a block boundary inside a pass: a branch on a fresh (volatile) read of the
+// a block boundary inside a pass: a branch on a fresh (volatile) read of the
 // walk's state word that always holds (its counting and candidate bits are never both set), so
 // the code after it is a block of its own, never merged with the one before: the Adreno
 // compiler's per-block word-offset constants are then the words each half touches
 #define DUST_W_CUT if ((DustWState(dust_w_row).v[47u * DUST_SQUEUE_CAPACITY] >> 30u) != 3u)
 
-// (perf9_O round 5) the row as a packet with only the words its reader uses loaded (the row's
+// the row as a packet with only the words its reader uses loaded (the row's
 // words are volatile: v/G's dust_w_load read all 20 at every use); the other fields 0, never read by
 // these readers: S alone (dust_var_along), mean S seg (dust_shell_classify,
 // dust_shell_outside_fraction)
@@ -686,7 +686,7 @@ void dust_sub_chord_w(float u0, float u1, bool openStart, bool openEnd) {
     WQ_W(15u) = floatBitsToUint(ra / rm); WQ_W(16u) = floatBitsToUint(rb / rm);
 }
 // dust_is_volumetric on the row, its words read volatile (a fresh read of each, only those it uses)
-// (perf9_O round 6) the trace's words read in a block of their own (DUST_W_CUT), after dot(r, r)
+// the trace's words read in a block of their own (DUST_W_CUT), after dot(r, r)
 bool dust_w_is_volumetric(vec3 eye) {
     vec3 seg = vec3(WQVF(9u), WQVF(10u), WQVF(11u));
     vec3 q = eye - vec3(WQVF(0u), WQVF(1u), WQVF(2u));
@@ -702,7 +702,7 @@ bool dust_w_is_volumetric(vec3 eye) {
 // dust_split_step_one on the row (generated from it: p.* read from and written to the row)
 #ifdef DUST_W_VIEW_SHARED
 // the frame's view direction (dust_view_forward, xyz) and its perspective flag (w: 1 or 0), found
-// once per workgroup by the walk stage's main (perf9_O): read where it is used, never a value the
+// once per workgroup by the walk stage's main: read where it is used, never a value the
 // compiler keeps (or re-derives from the matrix, with its temporaries) over the walk
 // (w: bit 0 the perspective flag, bit 1 the frame's deep-chord bit, dust_deep_chord, as a float)
 shared vec4 dust_w_view;
@@ -779,7 +779,7 @@ int dust_split_step_one_w(bool clipped, uint level, uint depthMax, vec3 eye, vec
     return DUST_SPLIT_KEEP;
 }
 #ifdef DUST_W_VIEW_SHARED
-// (perf9_O) dust_split_step_one_w's decision alone (the walk stage): the step it takes, the
+// dust_split_step_one_w's decision alone (the walk stage): the step it takes, the
 // sub-chord of a clip or of a chord split not applied here but named (DUST_SPLIT_CLIP_APPLY,
 // DUST_SPLIT_CHORD_APPLY) for the walk's next pass, dust_w_chord_apply, which applies it with the
 // same expressions (the row is unchanged in between); the decision the same, branch for branch
@@ -843,7 +843,7 @@ int dust_w_chord_apply(int code, vec3 eye, bool second) {
 }
 #endif
 
-// ── The piece builders on the row (round 9 step Z3, lever c) ─────────────────────────────────
+// ── The piece builders on the row ────────────────────────────────────────────────────────────
 // The record's root and cut are read where they are used (RQ: the record's word k) and the piece
 // is the row (q): dust_support_trunc_piece / dust_conic_piece expression for expression
 #define RQ(k) DUST_REC(k)
@@ -853,7 +853,7 @@ int dust_w_chord_apply(int code, vec3 eye, bool second) {
 #define RQVF(k) uintBitsToFloat(RQV(k))
 #define RSN vec3(RQVF(34u), RQVF(35u), RQVF(36u))
 #define RN vec3(RQVF(23u), RQVF(24u), RQVF(25u))
-// ── The piece in stages (perf9_O round 5) ─────────────────────────────────────────────────────
+// ── The piece in stages ───────────────────────────────────────────────────────────────────────
 // v/G's dust_w_load_record / dust_support_trunc_piece_w / dust_conic_piece_w cut at their values, one
 // stage per pass of the walk loop (the stage number in the state word's pending field while the
 // load flag is set), each stage reading and writing a few of the record's and the row's words: the
@@ -1086,7 +1086,7 @@ void dust_wc_5() {
     pyr.v[b_ + 16u * c_] = (rec); \
 }
 
-// ── The walk stage's leaf (round 9 step Z2): a candidate, not a drawing ──────────────────────
+// ── The walk stage's leaf: a candidate, not a drawing ────────────────────────────────────────
 // The run's next slot (dust_packet_ord, the walk-order index the seed ordinal was; the record's
 // first slot set by dust_split_record), or none when the cluster's run was refused
 bool dust_cand_on = false;
@@ -1216,8 +1216,8 @@ void dust_project_split_scatter_one(vec3 mean, float S[6], vec3 d, float flux, f
     // the in-frame gate (dust::split_packet_with): once a split of this thread finds the frame's
     // children past DUST_FRAME_HARD_FACTOR budgets, its packets split no further (depth 0)
     uint dMax = depthMax;
-    // Each item's split tree walked depth first without a stack (track 9D, option (b); the stack
-    // was the splitter's local memory): the node in registers; a split goes on with its first
+    // Each item's split tree walked depth first without a stack (a stack would
+    // be the splitter's local memory): the node in registers; a split goes on with its first
     // child a, and its second child b is recomputed when its turn comes, from the item's root
     // along the path code (bit L: the child taken at the split from level L, 1 = b). The turn
     // order is the stack's: a node done, the next is the b of the deepest split on the path whose
@@ -1257,7 +1257,7 @@ void dust_project_split_scatter_one(vec3 mean, float S[6], vec3 d, float flux, f
             DUST_PROF_BEGIN(split)
             bool first = !((wf & 2u) != 0u) && !((wf & 4u) != 0u);
             DUST_PROF_COUNT(nodes, first ? 1u : 0u)
-            // (step C1: q becomes the child the walk takes — the second on a ((wf & 2u) != 0u) whose path
+            // (q becomes the child the walk takes — the second on a ((wf & 2u) != 0u) whose path
             // bit is set — on a clip or a split, and stays itself otherwise)
             bool persp_;
             vec3 fwd_ = dust_view_forward(pc.mvp, pc.eyeLocal.xyz, persp_);
@@ -1314,7 +1314,7 @@ void dust_project_split_scatter_one(vec3 mean, float S[6], vec3 d, float flux, f
                 path &= ~(1u << level);
                 level++; wf &= ~8u;
             }
-            // (round 9 step Z2: the leaf is a candidate for the sequencer stage, which projects
+            // (the leaf is a candidate for the sequencer stage, which projects
             // and draws it — dust_volume_emit or dust_project_packet + scatter — in this order)
             if (draw) dust_cand_emit_w(drawAs == DUST_SPLIT_VOLUME);
             if (done) {
@@ -1341,7 +1341,7 @@ void dust_project_split_scatter_one(vec3 mean, float S[6], vec3 d, float flux, f
 }
 #endif  // DUST_HARD_AXIS (its walk body; the production walk below)
 #ifndef DUST_HARD_AXIS
-// ── The production walk (perf9_O): the record's words through the record pointer dust_w_row
+// ── The production walk: the record's words through the record pointer dust_w_row
 // (DUST_REC), the node in the record's row (WQ), the walk's state in one packed word, one counter ──
 // The walk state of dust_project_split_scatter (it, path, level, dMax, the flags, target, natural)
 // packed in one word `ws` (DUST_SPLIT_DEPTH_MAX = 4: level, target, dMax <= 4, path 4 bits): bits
@@ -1387,7 +1387,7 @@ uint dust_w_rec() { return (dust_w_row.x - uvec2(pc.pyramid).x) >> 2u; }
 // the walk's one counter (dust_packet_ord): the candidates counted from 0 by the counting pass,
 // the run's next slot in the writing pass (dust_cand_emit / dust_cand_emit_w: dust_seed_count and
 // dust_packet_ord, one of which each pass moves)
-// (perf9_O round 6) the speck shell's tests on the row (dust_shell_classify,
+// the speck shell's tests on the row (dust_shell_classify,
 // dust_shell_outside_fraction: the same expressions in the same order), each row word read volatile
 // where it is used, the words of a group of expressions read together and the groups cut into
 // blocks of their own (DUST_W_CUT): the Adreno compiler materialises a block's word offsets and
@@ -1686,7 +1686,7 @@ void dust_project_split_scatter(vec3 mean, float S[6], vec3 d, float flux, float
                                 float shellDMax, uint volumeAxis) {
     uint n = (pc.pyramid.v[DUST_PYR_SPLIT_DEPTH] >> 24u) & 0xFu;
     vec3 h = 0.5 * segT;
-    // one call site of dust_project_split_scatter_one (track 9D): the driver inlines every call
+    // one call site of dust_project_split_scatter_one: the driver inlines every call
     // site with its own copy of the function's locals, and two sites held two split stacks; the
     // whole leaf (n <= 1) is the loop's single pass with its arguments passed unchanged
     bool whole = n <= 1u || !(dot(h, h) > 0.0);

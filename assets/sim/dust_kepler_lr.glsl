@@ -1,6 +1,6 @@
 // @assets/sim/dust_kepler_lr.glsl
 //
-// Round 9 step O: dust_kepler_coef (dust_common.glsl) at a small register budget: the same solve,
+// dust_kepler_coef (dust_common.glsl) at a small register budget: the same solve,
 // expression for expression and in the same order of evaluation per value, with its df64 state in
 // the lane's stash (memory words, the including shader's kp_put/kp_get) instead of registers. A
 // lone solve kept r0n, eta, zeta, alpha, t, sd and the four Stumpff values (each multiplied value

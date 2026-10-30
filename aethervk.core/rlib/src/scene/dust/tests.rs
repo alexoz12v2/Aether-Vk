@@ -1115,9 +1115,9 @@ fn phase_lut_rides_in_the_pyramid_header() {
   );
 }
 
-/// The profiler's counter block (round 8 step E): the K1c parts and the small-path words fit the
-/// queue header, and the GLSL mirror's constants are the Rust ones (dust_profile.glsl's offsets,
-/// dust_scatter.glsl's header size)
+/// The profiler's counter block: the texel-integral parts (`DUST_PROF_K1C*`) and the small-path
+/// words fit the queue header, and the GLSL mirror's constants are the Rust ones
+/// (dust_profile.glsl's offsets, dust_scatter.glsl's header size)
 #[test]
 fn profile_counter_layout_fits_the_queue_header() {
   assert_eq!(DUST_PROF_K1C0 + 2 * DUST_PROF_K1C_NAMES.len(), DUST_PROF_SMALL_PATHS);
@@ -1194,7 +1194,7 @@ fn photometry_helpers_are_consistent() {
   );
 }
 
-/// Round 8 step D, the trajectory detail: the clamp (17 / 9 / 5), the edge stride (1 / 2 / 4) and
+/// The trajectory detail: the clamp (17 / 9 / 5), the edge stride (1 / 2 / 4) and
 /// the push constants' bits round-trip
 #[test]
 fn propagate_detail_clamps_to_its_steps_and_the_stride_bits_round_trip() {
@@ -7745,7 +7745,7 @@ fn erf64(x: f64) -> f64 {
 }
 
 /// The optical depth of a Gaussian cloud `N(μ, Σ)` of cross-section `flux`, **bounded at its 3σ
-/// ellipsoid** (the model's convention since step F: the kernel's, the EWA leaves' and the
+/// ellipsoid** (the model's convention: the kernel's, the EWA leaves' and the
 /// Monte-Carlo's packets stop at 3σ; the density inside over [`DUST_BALL3_MASS`]), along the ray
 /// `eye + s u` (`u` unit), `s ≥ 0`: with `M = Σ⁻¹`, `a = uᵀMu`, `b = uᵀM(eye − μ)`,
 /// `c = (eye − μ)ᵀM(eye − μ)`, `s* = −b/a`, `r² = c − b²/a`: `flux · N_⊥(r²) · [Φ]` over the ray's
@@ -7852,7 +7852,7 @@ fn perspective_split_converges_to_the_truth() {
   let view = SplitView::of(&mvp, eye);
   assert!(view.perspective);
   assert_eq!(view.fwd, [0.0, 0.0, -1.0]);
-  // the analytic truth: bounded at 3σ (the volume path's and the Monte-Carlo's convention, step F)
+  // the analytic truth: bounded at 3σ (the volume path's and the Monte-Carlo's convention)
   // or unbounded (the EWA leaves': their capsule integral is the untruncated Gaussian's)
   let truth = |cov: [f64; 3], flux: f64, bounded: bool| -> alloc::vec::Vec<f32> {
     let m = [
@@ -8208,7 +8208,7 @@ fn volumetric_packet_matches_the_ray_integral() {
   }
 }
 
-/// The volume path's 3σ bound against the bounded Monte-Carlo's support (step F2, the old band's
+/// The volume path's 3σ bound against the bounded Monte-Carlo's support (the old band's
 /// −9 % and the young band's +6 % at 10 m): the observer's grain draw for a packet is a point
 /// uniform along its chord (the density ramp's inverse CDF) plus a kick `L·g`, `L L^T = Σ` (the
 /// packet's covariance, its Gaussianised time axis included), `g` standard normal redrawn until
@@ -8357,7 +8357,7 @@ fn bounded_chords_match_the_bounded_monte_carlo() {
     if (si9 / se - 1.0).abs() >= s9_bound {
       failures.push(alloc::format!("{name}: bias-9 Σ {:.4} (bound {s9_bound}: {s9_why})", si9 / se));
     }
-    // diagnostics (printed, step F5): where the drawing differs
+    // diagnostics (printed): where the drawing differs
     {
       // 5 × 5-px boxes: the worst ten by their share of the light's error
       let nb = px / 5;
@@ -8462,8 +8462,8 @@ fn bounded_chords_match_the_bounded_monte_carlo() {
 /// case (b), a 2 km chord along the view through the eye's neighbourhood, the eye 0.3 σ off its
 /// axis): two readings, separated by drawing it three ways at bias 0 against the same truth (the
 /// bounded Monte-Carlo's model, 600 points). (i) The packet's one level (`set_volume_packet_level`,
-/// the rule before step F8). (ii) Each piece at its own level (production since F8). Measured
-/// 2026-10-17 before F8: (i) rms 0.399, annuli 0.25 … 1.14; (ii) rms 0.002, annuli 0.997 … 1.002 — the
+/// the former rule). (ii) Each piece at its own level (production). Measured
+/// 2026-10-17: (i) rms 0.399, annuli 0.25 … 1.14; (ii) rms 0.002, annuli 0.997 … 1.002 — the
 /// packet's single level was the cause (its 32-px texels spread the few-px core over ±32 px). (iii) The chord as 4 sub-chords (open inner ends), each
 /// planned on its own: ~13 uncapped pieces each instead of 16 capped ones over the whole chord (4×
 /// finer along it) — if the hole closes, the pieces' decomposition near the eye is the cause (their
@@ -8613,7 +8613,7 @@ fn chord_along_the_view_hole_readings() {
 
 /// `split_step`'s rule (1) — a packet is dropped when `depth + 3σ_v + max(0, span) < 0`, `depth`
 /// the chord's start along the view, `σ_v = √(fᵀΣf)` the full covariance's spread along it, `span`
-/// the signed depth of the segment — drops no in-view light of the 3σ-bounded dust (step F, the
+/// the signed depth of the segment — drops no in-view light of the 3σ-bounded dust (the
 /// user's "fix the dropped chords too"): the support function of the 3σ capsule along `f` is
 /// exactly `depth + max(0, span) + 3σ_v`, so a dropped capsule lies wholly behind the eye plane.
 /// Against the bounded ray integral (`gaussian_ray_tau`, the texel test's reference), with the
@@ -8621,7 +8621,7 @@ fn chord_along_the_view_hole_readings() {
 /// front of the eye plane (its 3σ cap of 0.2 m depth across the whole field) is drawn with its
 /// in-view light, Σ within 2 %; (ii) one ending 1 % behind is dropped and draws exactly nothing;
 /// (iii) a chord whose start is 50 m behind the eye and whose end is 250 m in front, beside the eye
-/// (near enough to be volumetric: drawn whole, each ray cut at the eye — step F3; a far one is
+/// (near enough to be volumetric: drawn whole, each ray cut at the eye; a far one is
 /// clipped to its in-front part), keeps its in-view light, Σ within 2 % of the chord's
 /// bounded ray integral (600 exact-moment pieces); (iv) the same chord pointing towards the eye
 /// (start in front, end behind: `span` negative) likewise. The view's forward axis is the
@@ -8812,7 +8812,7 @@ fn support_cut_matches_the_truncated_ray_integral() {
               q += dd[a] * inv[a][b] * dd[b];
             }
           }
-          // bounded at 3σ (step F)
+          // bounded at 3σ
           if q <= 9.0 {
             acc += (-0.5 * q).exp() * dt / DUST_BALL3_MASS as f64;
           }
@@ -8882,7 +8882,7 @@ fn volumetric_and_ewa_agree_for_a_far_packet() {
     let (vol, _) = packets_image(&[p], &mvp, eye, px, unit, Draw::Volume);
     let sum = |v: &[f32]| v.iter().map(|&x| x as f64).sum::<f64>();
     let (ratio, rms) = (sum(&vol) / sum(&ewa), image_rel_rms(&vol, &ewa, px));
-    // the conventions' own difference (step F: the volume path is bounded at 3σ, the EWA leaf's
+    // the conventions' own difference (the volume path is bounded at 3σ, the EWA leaf's
     // capsule integral is not), measured on the exact images of a single Gaussian: the two draws
     // may differ by it and by `limit` more (a chord is compared at the same floor)
     let g = Packet { seg: [0.0; 3], ..p };
@@ -9073,7 +9073,7 @@ fn classification_is_continuous() {
   );
 }
 
-/// K1c, the texel's integral: what a volumetric piece puts on a texel is its ray integral averaged
+/// The texel's integral: what a volumetric piece puts on a texel is its ray integral averaged
 /// over the texel's in-frame part × the texel's area (the composite divides a texel by its whole
 /// area and shows it on the in-frame pixels, so an edge texel holds its in-frame mean), not the
 /// centre ray × the area. On the 480 × 300 lab layout (10 levels; the gate level 7 is a 4 × 3 grid
@@ -9091,10 +9091,10 @@ fn classification_is_continuous() {
 /// (of the texel's reference or a tenth of the largest one's), Σ within 1 % — except the band that
 /// ends at its vanishing point inside the texel, whose own stated bound (10 %) and reason are in
 /// its case. A band whose mean is behind the eye (only its front flank in view) is drawn by lines
-/// too. The centre ray × area of step A put ~0 for the small pieces and sampled the eye-inside one
+/// too. A centre ray × area puts ~0 for the small pieces and samples the eye-inside one
 /// off the field (y = 320).
-/// The volume detail (`SplitView::volume_detail`, from `DustSplatPushConstants::flags` bits 8–10,
-/// PARTICLES_PERF round 2): when the frame's bias puts every piece on the 1 × 1 last level, a packet
+/// The volume detail (`SplitView::volume_detail`, from `DustSplatPushConstants::flags` bits 8–10):
+/// when the frame's bias puts every piece on the 1 × 1 last level, a packet
 /// is cut into at most `detail` pieces (fewer along `seg_t` first, as the evaluation cap). At 16
 /// the plan is unchanged; lower details keep the flux in the top texel (a chord far ahead, no
 /// photometry: within 1 %); below the top level the detail changes nothing.
@@ -9155,7 +9155,7 @@ fn volume_detail_caps_the_pieces_on_the_top_level() {
 
 /// The haze detail's flag bits (11–13) round trip, clamp to powers of two and leave the volume
 /// detail's bits (8–10) alone; `volume_top_only` is true exactly at a bias that reaches a 1 × 1
-/// last level (round 8 step G)
+/// last level
 #[test]
 fn haze_detail_clamps_and_round_trips_through_the_flags() {
   for d in [16u32, 8, 4, 2, 1] {
@@ -9190,8 +9190,7 @@ fn haze_detail_clamps_and_round_trips_through_the_flags() {
 /// (at most `H` chord groups of `H` time pieces, the depth rules lifted), 1 one packet per cluster,
 /// the flux conserved at every value. Without a view (orthographic) and from a far eye (the finest
 /// grouping passes the depth rule: an EWA cluster) every value draws the untouched packets; the
-/// young cone (time pieces), the month-old polyline and a cluster without a predecessor (round 8
-/// step G, round 9 step A)
+/// young cone (time pieces), the month-old polyline and a cluster without a predecessor
 #[test]
 fn haze_detail_caps_the_subpackets_on_the_top_level() {
   let moments_aged = haze_test_cluster;
@@ -9290,7 +9289,6 @@ fn haze_detail_caps_the_subpackets_on_the_top_level() {
 
 /// `volume_top_only_header` reads from a layout's header what `volume_top_only` reads from the
 /// layout, `volume_top_min` is its first true bias; a header without levels is never top-only
-/// (round 9 step B)
 #[test]
 fn volume_top_only_header_agrees_with_the_layout() {
   for (w, h) in [(480u32, 300u32), (1280, 800), (33, 7)] {
@@ -9311,7 +9309,7 @@ fn volume_top_only_header_agrees_with_the_layout() {
 }
 
 /// The clusters of the haze tests: a spinning site's cluster at `age` (a month-long history,
-/// the comet moving), as `packet_moments` leaves it (round 8 step G, round 9 step A)
+/// the comet moving), as `packet_moments` leaves it
 fn haze_test_cluster(age: f64) -> DustMoments {
   let axis = unit([0.2, 0.1, 0.97]);
   let axis_f = [axis[0] as f32, axis[1] as f32, axis[2] as f32];
@@ -9339,7 +9337,7 @@ fn haze_test_cluster(age: f64) -> DustMoments {
   m
 }
 
-/// `haze_volumetric` is the splitter's rule on every sub-packet (round 9 step A2): for random
+/// `haze_volumetric` is the splitter's rule on every sub-packet: for random
 /// eyes about the haze clusters (a hundredth to a thousand extents off, looking roughly at them)
 /// wherever it is true the pooled packet goes whole to the exact integral and — the guarantee
 /// the knob rests on — the haze detail 1 emits one packet that the splitter sends whole to the
@@ -9571,7 +9569,7 @@ fn volume_texel_integral_matches_the_subray_integral() {
     let (mean, eye64) = (p.mean.map(|v| v as f64), eye.map(|v| v as f64));
     let (off, lw, lh) = layout.levels[level as usize];
     let sz = (1u32 << level) as f64;
-    // 256 × 256 midpoints: the 64 × 64 grid of step A was itself ~0.5 % off at a frame edge on
+    // 256 × 256 midpoints: a 64 × 64 grid is itself ~0.5 % off at a frame edge on
     // the top level (rows of 4.7 px against a 6-px σ: the midpoint rule's h²/24·f′ at the cut)
     let nx = 256usize;
     let mut reference = alloc::vec![0.0f64; (lw * lh) as usize];
@@ -10915,7 +10913,7 @@ fn conic_slabs_scale_the_width_with_the_distance() {
   }
 }
 
-/// perf9_O C2 v5: the staged volume consumer's placement. The unstaged offsets are unchanged; the
+/// The staged volume consumer's placement. The unstaged offsets are unchanged; the
 /// scratch rows start where the unstaged layout ends, the main drain's rows come first and the
 /// spill's after them, and the staged end is the spill's last row (a row per record of either drain).
 #[test]
@@ -10965,7 +10963,7 @@ fn dust_queue_offsets_and_dispatch_are_portable() {
       let last = o.vqueue + DUST_VQUEUE_HEADER_WORDS + (DUST_VQUEUE_RECORD_WORDS - 1) * cap + cap - 1;
       assert!(last < o.squeue, "{records}/{cap}");
     }
-    // the sub-packet records, then the chunk clusters' plan rows (round 9 step O), before the spill
+    // the sub-packet records, then the chunk clusters' plan rows, before the spill
     let srec = o.squeue + DUST_SQUEUE_HEADER_WORDS + DUST_SQUEUE_CLUSTERS * DUST_SQUEUE_TABLE_WORDS;
     let splan = srec + DUST_SQUEUE_CAPACITY * DUST_SQUEUE_RECORD_WORDS;
     assert_eq!(splan + DUST_SQUEUE_CLUSTERS * DUST_SPLAN_WORDS, o.spill);
@@ -10988,9 +10986,9 @@ fn dust_queue_offsets_and_dispatch_are_portable() {
       assert!(last < o.vedge[0], "{records}: spill {cap}");
     }
     assert_eq!(o.vedge[0], o.vspill + DUST_VQUEUE_HEADER_WORDS + o.vspill_records * DUST_VQUEUE_RECORD_WORDS);
-    // track 9A (t9a2d): the edge regions, placed as dust_vedge_base computes them from word 15 and
+    // the edge regions, placed as dust_vedge_base computes them from word 15 and
     // word 9 (the spill's records and a region's: n / 4 and n / 2, at least 64), each record's
-    // last word (array-of-structures since perf9_O: record cap - 1's word DUST_VEDGE_RECORD_WORDS - 1,
+    // last word (array-of-structures: record cap - 1's word DUST_VEDGE_RECORD_WORDS - 1,
     // the same word as the structure-of-arrays' last; at most the region's records)
     // before the next region or the allocation's end
     let glsl_vedge = |word9: u32, odd: bool| {
@@ -11009,7 +11007,7 @@ fn dust_queue_offsets_and_dispatch_are_portable() {
         assert!(last < next, "{records}: edge region {k} at {cap}");
       }
     }
-    // the splitter family's regions (perf9 steps Z / O) after edge region 1, the slots last
+    // the splitter family's regions after edge region 1, the slots last
     assert_eq!(o.lqueue, o.vedge[1] + DUST_VQUEUE_HEADER_WORDS + o.vedge_records * DUST_VEDGE_RECORD_WORDS);
     assert_eq!(o.lqueue_records, records.clamp(64, DUST_LQUEUE_CAPACITY), "{records}");
     assert_eq!(o.lqueue_records, dust_lqueue_records(records), "{records}");
@@ -11217,7 +11215,7 @@ fn cad_pc(view: &super::cadence::CadenceView, anchor: V3, live: u32, inv_unit: f
 /// function of the frame's running counters (past `DUST_FRAME_HARD_FACTOR` budgets a packet goes
 /// to the gate level), so they depend on what was drawn before in that pyramid: a cadenced frame
 /// counts only its fresh and build draws, a parallel draw's partial pyramids start their counters
-/// at zero (round 4: the serial draw of the 128-px scene tripped one and drew at level 5, the gate
+/// at zero (the serial draw of the 128-px scene once tripped one and drew at level 5, the gate
 /// level `levels − 3`, what the parallel draw did not). Word-identity holds with the gates off.
 fn cad_header(layout: &PyramidLayout) -> [u32; PYRAMID_HEADER_WORDS as usize] {
   let mut h = layout.header();
@@ -11239,7 +11237,7 @@ fn cad_draw(
     match only {
       Some((t, list)) if t == ti => splat_tier_list(m, r, &pc, &Default::default(), 0, layout, &mut pyr, list),
       Some(_) => {}
-            // parallel (round 5: word-identical to `splat_tier` with the gates off, `cad_header`)
+            // parallel (word-identical to `splat_tier` with the gates off, `cad_header`)
       None => cad_splat_parallel(m, r, &pc, layout, &mut pyr, test_threads()),
     }
   }
@@ -11250,7 +11248,7 @@ fn cad_draw(
 /// off, `cad_header`): blocks of 8 clusters instead of 64 handed out dynamically (a frame of
 /// ~3 300 clusters is 52 blocks of 64 for 16 threads: the last block alone set the wall), each
 /// thread into its own partial with the counters zeroed, merged by `merge_pyramid` — the same
-/// order-free scheme, so word-identical to `splat_tier` (2026-10-18, track 8)
+/// order-free scheme, so word-identical to `splat_tier` (2026-10-18)
 fn cad_splat_parallel(
   m: &[DustMoments],
   r: &[DustRenderCluster],
@@ -11437,7 +11435,7 @@ fn reprojection_is_exact_for_a_rotation() {
     let b = cad_image(&layout, &redraw, unit_v);
     // the region: pixels within 0.45 W of the centre whose composite taps, at every level either
     // pyramid holds, sit on texels whose centres map inside the frozen level's grid (the
-    // reprojection takes nothing beyond it); the level-0 rule of round 1 (the pre-image ≥ 4 px
+    // reprojection takes nothing beyond it); a level-0 rule (the pre-image ≥ 4 px
     // inside the frozen frame) is counted for comparison
     let mask = img[PYR_LEVEL_MASK as usize] | redraw[PYR_LEVEL_MASK as usize];
     let mut region = alloc::vec![false; (px * px) as usize];
@@ -11739,7 +11737,7 @@ fn reprojection_error_follows_the_rate_rule() {
         }
       }
     }
-    // no light within 4 px of the border (round 4: a 1e-3 share there still let an 85-px cluster's
+    // no light within 4 px of the border (a 1e-3 share there still let an 85-px cluster's
     // clipped light move its centroid without parallax)
     (s > 0.0 && edge <= 1e-6 * s).then(|| ([sx / s, sy / s], s))
   };
@@ -11776,7 +11774,7 @@ fn reprojection_error_follows_the_rate_rule() {
   // the frozen draw (its image's centroid, its nearest depth word, work, level shares), the yawed
   // draw's centroid and the two shifted draws (work, level shares, centroid) — stopping where the
   // loop below stops; the loop then reads them in its own order, so every sum, maximum and
-  // first-wins outlier is formed as before (2026-10-18, track 8: same printed lines)
+  // first-wins outlier is formed as before (2026-10-18: same printed lines)
   struct LoneDraw {
     key: (usize, usize),
     inv: Option<f32>,
@@ -11970,7 +11968,7 @@ fn reprojection_error_follows_the_rate_rule() {
       for (si, shift_m) in [1.0f32, 0.2f32].into_iter().enumerate() {
         let (wb, shares_b, cb) = &lone.shifts[si];
         let (wa, wb) = (lone.work_a, *wb);
-        // same pieces: equal split children, level mask, volume evaluations and EWA units (round 7:
+        // same pieces: equal split children, level mask, volume evaluations and EWA units (a mismatch:
         // one EWA packet more in one draw — a packet at a visibility or budget threshold —
         // moved the centroid with no parallax)
         let same_pieces = wa == wb;
@@ -12007,7 +12005,7 @@ fn reprojection_error_follows_the_rate_rule() {
         tested += 1;
         let shift = ((ca[0] - cb[0]).powi(2) + (ca[1] - cb[1]).powi(2)).sqrt();
         let pred_px = rate.delta_px[0] as f64;
-        // the 3σ near point (round 2) as a printed control
+        // the 3σ near point as a printed control
         let r0 = cadence_rate_near(&m[i], pred, &pc.mvp, eye, px, px, &[8], &inputs(dd), 3.0);
         let p0 = r0.delta_px[0] as f64;
         worst0 = worst0.max(shift - p0);
@@ -12348,7 +12346,7 @@ fn cad_life(host: &DustHostState, slot: u32) -> Option<u64> {
 /// 2N frames, every drawn cluster and its predecessor were propagated this frame (a lazy,
 /// slot-indexed propagate driven by the plan: the shown clusters keep stale moments), and
 /// Σ frame / Σ full draw is within 1 % + the ghost light's share; each class receives ≥ 1 % of
-/// the classified clusters. Prints per frame the fresh / shown counts, the D3 rejections, the Σ
+/// the classified clusters. Prints per frame the fresh / shown counts, the footprint rule's rejections, the Σ
 /// ratio and the ghost share.
 #[test]
 fn cadence_keeps_the_light() {
@@ -12398,7 +12396,7 @@ fn cadence_keeps_the_light() {
     }
     assert!(swaps_with_content >= 4, "run A: the classes never showed an image ({swaps_with_content})");
   }
-  // ── Run B at 3 R: the light and the coverage (the coma fills the frame: D3 rejects most build
+  // ── Run B at 3 R: the light and the coverage (the coma fills the frame: the footprint rule rejects most build
   // entries, so the scenario asserts are evaluated at 6 R, `cadence_keeps_the_light_whole_clusters`)
   cad_run_b(3.0, 270, false, "B");
 }
@@ -13015,7 +13013,7 @@ fn specks_n_eye_counts_every_cluster() {
   let (mut tiers, radius) = cad_scene();
   let anchor = tiers[0].0.anchor_m;
   let t = tiers[0].0.frame.ps_r_t_hi[3] as f64;
-  // the eye 0.02 R from the nucleus (round 3 at 0.3 R read n_eye 0 on both passes: vacuous)
+  // the eye 0.02 R from the nucleus (at 0.3 R n_eye read 0 on both passes: vacuous)
   let view = cad_static_view(anchor, radius, px, 0.02);
   let inv_unit = cad_inv_unit(&tiers, &view, &layout, None, 1e-2).expect("τ_max");
   let unit_v = 1.0 / inv_unit;
@@ -13090,7 +13088,7 @@ fn specks_n_eye_counts_every_cluster() {
   assert_eq!(frame[PYR_N_EYE_HI as usize], plain[PYR_N_EYE_HI as usize], "n_eye (high word)");
 }
 
-/// The bisect of the cadence's fresh pass against the full draw (round 3: the first cadenced frame,
+/// The bisect of the cadence's fresh pass against the full draw (the first cadenced frame,
 /// nothing shown, differed from the tests' reference by 976 words): one static frame of the
 /// cadence scene drawn by `splat_tier` (serial, the reference), `splat_tier_parallel` (the tests'
 /// `cad_draw`), `splat_tier_list` over the identity list, and the cadence's first frame
@@ -13228,7 +13226,7 @@ fn cadence_fresh_pass_matches_the_full_draw() {
 /// composite τ ≤ 2 %, Σ within 0.5 %). Not texel for texel per level: a volume piece's level is the
 /// finest at which its in-frame range fits its texel share (`volume_share_level`), and a piece cut by
 /// the viewport's edge has fewer in-frame texels there than in the larger image, so the two draws put
-/// the same light on different levels (round 14: 0.35 % vs 10 % of the light on L3). The per-level
+/// the same light on different levels (0.35 % vs 10 % of the light on L3). The per-level
 /// rel rms, Σ ratios and light shares are printed. The map to the image of an unchanged view is the
 /// exact translation by the margin.
 #[test]
@@ -13329,7 +13327,7 @@ fn cadence_image_projection_offsets_the_viewport() {
   assert!((ratio - 1.0).abs() <= 5e-3, "the image view's composite Σ differs by {:.3e}", ratio - 1.0);
 }
 
-/// The class images keep the frame's level count (round 15). The 48-frame lab path at 480 × 300
+/// The class images keep the frame's level count. The 48-frame lab path at 480 × 300
 /// lost a constant light per shown set (2.8·10⁷, 5.6·10⁷, 9.8·10⁷ counts·px²; Σ ratio 0.997 →
 /// 0.985, its per-frame "drift" only the full draw's Σ falling 1 % a frame): its 736 × 428 class
 /// images had 11 levels against the frame's 10, the volume bias took the eye-inside clouds to the
@@ -13821,7 +13819,7 @@ fn budget_loop_skips_pinned_knobs() {
 /// near-eye slab of the coma; the nucleus sits mid-depth); with a camera following the comet δ
 /// ranks the motion relative to the nucleus (the 2 m/s ejection against the old dust's radiation
 /// drift and extent growth). Both left the youngest 1 % and the 1 % nearest the nucleus at 0 %
-/// fresh (track 7's first run; printed here as the θ = 0 control). Under the fallback the class
+/// fresh (the first run; printed here as the θ = 0 control). Under the fallback the class
 /// rule keeps the shape bound θ = `DUST_CADENCE_FALLBACK_SHAPE`: class `k` also needs
 /// `2N_k · Δt ≤ θ · age`, so every cluster younger than `2N₀ Δt / θ` (25.6 h at Δt 1 440 s, N₀ 8)
 /// is fresh — the protected set P. Checked cluster by cluster at 1 day per second (Δt = 1 440 s
@@ -14101,7 +14099,7 @@ fn cadence_resets_on_a_time_jump() {
   assert_eq!(plan.reset, Some(CadenceReset::Time), "a resume after a pause");
 }
 
-/// Retention (round 5): class 8 is admitted before class 16 (M = 0.2 at 128 px: budget 32 px; a
+/// Retention: class 8 is admitted before class 16 (M = 0.2 at 128 px: budget 32 px; a
 /// yaw of 1.5 px per frame admits 2·8·1.5 = 24 px, not 2·16·1.5 = 48), so the still scene's
 /// members fill class 8; the view then stops, and class 16 is admitted once its 32-frame window
 /// is still. With retention the members stay in class 8 (fresh after class 16's admission stays at
@@ -14374,7 +14372,7 @@ fn cadence_handover_timeline_is_exactly_once() {
   std::println!("handover timeline: {cases} cases exactly once");
 }
 
-/// The handover (round 7) on the retention test's scene: class 8 fills while the view yaws,
+/// The handover on the retention test's scene: class 8 fills while the view yaws,
 /// class 16 is admitted once the view is still. With the handover the members move to class 16
 /// with no fresh gap (fresh after the admission stays within 10 % of its level before it), class 16
 /// ends with ≥ 90 % of them, the per-frame builds fall to class 16's rate, the owner and incoming
@@ -14407,8 +14405,8 @@ fn cadence_hands_members_over_without_a_gap() {
 /// class 64 after 128, so the members move 8 → 16 → 64 (the 16 → 64 step overlaps class 16's
 /// builds for 48 frames). Fresh never rises at an admission, class 64 ends with ≥ 90 % of the
 /// members, no collapse is dropped, the builds fall to class 64's rate, and every live cluster is
-/// drawn exactly once per frame through two class-64 windows after the handover (the observer's
-/// perf7a/perf7c: the GPU's light fell 0.8 % per class-16 window there).
+/// drawn exactly once per frame through two class-64 windows after the handover (in the observer
+/// the GPU's light fell 0.8 % per class-16 window there).
 #[test]
 fn cadence_hands_members_over_through_three_classes() {
   let r = cad_handover_scene(alloc::vec![8, 16, 64], 448, None);
@@ -14627,7 +14625,7 @@ fn cad_handover_scene(classes: alloc::vec::Vec<u32>, still_frames: usize, light:
   CadHandoverRun { st, class8, stills, builds, admitted_at, members_end }
 }
 
-/// The in-frame gates per target on the CPU mirror (brief 07, the decision of 2026-10-18 in
+/// The in-frame gates per target on the CPU mirror (the decision of 2026-10-18 in
 /// records/budget-loop.md): a class image's build draws read the frame's running counters (the
 /// header routing of `DustCadenceState::finish`: every word but the image's own copied frame →
 /// image before its draws and back after), so a cadenced frame trips each hard gate at the

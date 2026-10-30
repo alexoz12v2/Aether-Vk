@@ -1655,7 +1655,7 @@ fn dust_profile_report(
       }
     ));
   }
-  // K1c's parts of the volumetric draw (all shaders): pass A's per-class sums, a small piece's
+  // the texel integral's parts of the volumetric draw (all shaders): pass A's per-class sums, a small piece's
   // depth points, its texels' rectangle integrals, the sub-ray and line texels
   let k1c: Vec<u64> = (0..d::DUST_PROF_K1C_NAMES.len()).map(|k| p.u64_at(d::DUST_PROF_K1C0 + 2 * k)).collect();
   if k1c.iter().any(|&c| c > 0) {
@@ -2815,13 +2815,13 @@ fn main() {
     log_line(&format!("[observer] volume detail {v} requested, set {got:?}"));
   }
   // lab knob: the scene's trajectory detail (solved size-polyline edges 17 / 9 / 5,
-  // `set_dust_propagate_detail`; round 8 step D)
+  // `set_dust_propagate_detail`)
   if let Some(v) = std::env::var("OBSERVER_PROPAGATE_DETAIL").ok().and_then(|v| v.trim().parse::<u32>().ok()) {
     let got = ctx.set_dust_propagate_detail(scene_id, v);
     log_line(&format!("[observer] trajectory detail {v} requested, set {got:?}"));
   }
   // lab knob: the scene's haze detail (sub-packets per cluster at the top level,
-  // `set_dust_haze_detail`; round 8 step G)
+  // `set_dust_haze_detail`)
   if let Some(v) = std::env::var("OBSERVER_HAZE_DETAIL").ok().and_then(|v| v.trim().parse::<u32>().ok()) {
     let got = ctx.set_dust_haze_detail(scene_id, v);
     log_line(&format!("[observer] haze detail {v} requested, set {got:?}"));
@@ -3506,7 +3506,7 @@ fn main() {
         "[observer] dust volume queue: {drawn} packets drawn by the consumer, {overflowed} overflowed → {spilled} spilled / {lost} lost, {chunks} chunks; {} volume deposits split above the per-add cap",
         ctx.dust_volume_split_adds(pe).map_or("?".to_string(), |n| n.to_string())
       ));
-      // track 9A (t9a2d): the small edge pieces the consumer deferred to the edge pass, and (t9a2e)
+      // the small edge pieces the consumer deferred to the edge pass, and
       // those the pass demoted (one projection a slice with the predicted terms, not the sigma
       // points: the demotion firing in this frame)
       let (edge_drawn, edge_lost, edge_demoted) = ctx.dust_vedge_counts(pe).map_or(

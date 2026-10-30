@@ -95,7 +95,7 @@ pub struct ThreadTxContainer<T> {
   /// Raised by [`Self::close`] next to dropping `tx`; the thread treats an empty channel with
   /// this flag set as closed. thingbuf's `Core::close` is a no-op while the dropping thread is
   /// panicking, so a context dropped during unwinding never closes the channel by itself and the
-  /// join would hang (cp_perf7: a test that panicked on a failed SPK download).
+  /// join would hang (e.g. a test that panicked on a failed SPK download).
   closing: Arc<core::sync::atomic::AtomicBool>,
 }
 
@@ -1386,7 +1386,7 @@ pub struct SceneContext {
   pub dust_propagate_detail: Arc<core::sync::atomic::AtomicU32>,
   /// dust haze detail (sub-packets per cluster at the top level, `dust::clamp_haze_detail`), see
   /// `SimulationContext::set_dust_haze_detail` ("Haze detail" setting, `AETHERVK_DUST_HAZE_DETAIL`
-  /// default override; round 8 step G)
+  /// default override)
   pub dust_haze_detail: Arc<core::sync::atomic::AtomicU32>,
   /// dust temporal reuse tolerance in px (0 = off, `dust::clamp_reuse_px`), see
   /// `SimulationContext::set_dust_reuse_px` ("Temporal reuse tolerance" setting,

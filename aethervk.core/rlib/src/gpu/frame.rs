@@ -892,7 +892,7 @@ pub struct DustDrawCall {
   pub volume_detail: u32,
   /// the haze detail this call draws with (`dust::DUST_HAZE_DETAIL_*`, 16 = every sub-packet):
   /// the scene's setting ([`RenderScene::set_dust_haze_detail`]); [`dust_splat_pc`] puts it in
-  /// the flags' bits 11–13 (round 8 step G)
+  /// the flags' bits 11–13
   pub haze_detail: u32,
 }
 
@@ -1150,7 +1150,7 @@ pub fn prepare_dust(
     CameraProjectionParams::Orthographic { .. } => 0.0,
   };
   device.dust_set_shell_camera(pe, omega_px_sr);
-  // the scene's trajectory detail (round 8 step D): every propagate of this frame at its stride
+  // the scene's trajectory detail: every propagate of this frame at its stride
   device.dust_set_propagate_detail(render_scene.dust_propagate_detail);
   for &id in &systems {
     if let Err(e) = device.cmd_dust_system_begin(id, flags, flow) {
@@ -1897,7 +1897,7 @@ pub struct RenderScene {
   /// call by [`Self::set_dust_volume_detail`]
   pub dust_volume_detail: u32,
   /// dust haze detail of the scene (`SceneContext::dust_haze_detail`), stamped on every dust call
-  /// by [`Self::set_dust_haze_detail`] (round 8 step G)
+  /// by [`Self::set_dust_haze_detail`]
   pub dust_haze_detail: u32,
   /// dust temporal reuse tolerance of the scene in px (`SceneContext::dust_reuse_px`, 0 = off):
   /// ε > 0 runs the view's cadence with that ε (`Device::dust_cadence_auto`)
@@ -1906,7 +1906,7 @@ pub struct RenderScene {
   /// the view's adaptive quality feedback cold (`Device::dust_sync_feedback_gen`)
   pub dust_feedback_gen: u32,
   /// the simulation speed (`SimSpeed::scale_factor`, 0 paused) the frame is drawn at, for the
-  /// cadence's speed reset (`FrameMeta::speed`, round 9 step R)
+  /// cadence's speed reset (`FrameMeta::speed`)
   pub dust_sim_speed: f64,
   /// the play quality is on for this frame (the simulation runs and `PlayQuality::from_env` is
   /// some, `SceneContext::dust_render_knobs`): the view's feedback biases are pinned to the play
@@ -1984,7 +1984,7 @@ impl RenderScene {
   }
 
   /// Sets the scene's dust haze detail (clamped, `dust::clamp_haze_detail`) and stamps it on
-  /// every dust call (round 8 step G)
+  /// every dust call
   pub fn set_dust_haze_detail(&mut self, detail: u32) {
     let d = crate::scene::dust::clamp_haze_detail(detail);
     self.dust_haze_detail = d;
@@ -3108,7 +3108,7 @@ mod dust_volume_detail_tests {
   }
 
   /// The call's haze detail reaches the push constants' flags (bits 11–13) and nothing else; the
-  /// volume detail's bits beside it are untouched (round 8 step G)
+  /// volume detail's bits beside it are untouched
   #[test]
   fn dust_splat_pc_carries_the_haze_detail_in_bits_11_to_13() {
     let camera = CameraRenderData::new(&TransformComponent::default(), &CameraComponent::default(), 1.0, [800, 600]);
@@ -3134,7 +3134,7 @@ mod dust_volume_detail_tests {
   }
 
   /// The render scene stamps its haze detail on every dust call, and both frame fingerprints
-  /// change with it (round 8 step G)
+  /// change with it
   #[test]
   fn render_scene_stamps_the_haze_detail_and_the_fingerprints_see_it() {
     let mut rs = RenderScene::new((TransformComponent::default(), CameraComponent::default()), 0, 0, [800, 600]);

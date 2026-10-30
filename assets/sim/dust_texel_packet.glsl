@@ -1,6 +1,6 @@
 // @assets/sim/dust_texel_packet.glsl
 //
-// perf9_O: included by a texel-lane consumer after it defines DUST_SP_F(k) / DUST_SP_U(k), which may
+// Included by a texel-lane consumer after it defines DUST_SP_F(k) / DUST_SP_U(k), which may
 // read the buffer at `pyr` (the functions' first parameter: the address, uvec2(pc.pyramid); no
 // buffer reference is a parameter of a helper: the Adreno 619 compiler puts one in private memory).
 // ---- the screen packet's texel functions with the packet's words read at their use -----------

@@ -94,7 +94,7 @@ bool dust_scatter_rows(DustUintBuffer pyr, float invUnit, DustScreenPacket P, ve
 #ifdef DUST_QUEUE_WORKGROUP
 float dust_queue_get_f(DustUintBuffer pyr, uint at);
 DustScreenPacket dust_queue_get_screen_packet(DustUintBuffer pyr, uint k);
-// Round 9 step Z: the workgroup consumer's segment in two passes over its texels, the capsule's
+// The workgroup consumer's segment in two passes over its texels, the capsule's
 // tau of each texel into the lane's row of dust_q_tau, then the photometry and the deposit
 // (dust_scatter_segment's texel arithmetic in its order: capsule x area x invUnit, x the weight
 // when lit, the rounding with the carry). The record's packet is read from the queue at each pass
@@ -156,7 +156,7 @@ bool dust_scatter_segment_wg(DustUintBuffer pyr, uint at, float s, uint off, uin
     return any_;
 }
 #endif  // !DUST_DRAW_LEAF
-// (perf9_O) a blob may set the chunk's rows lower (dust_draw_leaf.comp's workgroup blob: its shared
+// a blob may set the chunk's rows lower (dust_draw_leaf.comp's workgroup blob: its shared
 // budget); the rows, segments and carries are the same at any chunk size
 #ifndef DUST_QUEUE_ROW_CHUNK_N
 #define DUST_QUEUE_ROW_CHUNK_N 256u
@@ -270,7 +270,7 @@ vec2 dust_volume_screen_at(float Lk[6], vec3 x, float w, vec3 g, float gg, vec3 
 // The covariance every piece of a packet has (dust::volume_pieces: the base S plus the spacing
 // terms of the axes, the same for every piece k; only the mean and the flux depend on k), its
 // Cholesky factor Lk and its diagonal skd = (Sk[0], Sk[3], Sk[5]). Split out of
-// dust_volume_piece (step 9C) so that the volume consumer's pass B builds it once and keeps it in
+// dust_volume_piece so that the volume consumer's pass B builds it once and keeps it in
 // the lane's workgroup slots; dust_volume_piece = dust_volume_piece_cov + dust_volume_piece_at,
 // the same operations in the same order
 void dust_volume_piece_cov(float S[6], vec3 segA, uint nA, float cvarA, vec3 segB, uint nB, float cvarB, bool hasB,
@@ -340,7 +340,7 @@ DustVolumePiece dust_volume_piece_at(uint k, float flux, vec2 rho, float exposur
     q.full = full;
     q.on = full || !(x1 < 0.0 || y1 < 0.0 || x0 > W || y0 > H || !(x0 <= x1) || !(y0 <= y1));
     // a piece whose 3-sigma ellipsoid lies wholly behind the eye plane draws nothing
-    // (dust::volume_pieces, step F5)
+    // (dust::volume_pieces)
     {
         vec3 lt30 = dust_lt_mul(Lk, r3);
         if (dot(r3, meanK) + t3 + DUST_VOLUME_SIGMAS * sqrt(dot(lt30, lt30)) < 0.0) { q.on = false; full = false; q.full = false; }
@@ -444,7 +444,7 @@ uvec2 dust_volume_class(DustVolumePiece q, uint level, uint levels) {
     if (q.full && q.line != 0u && lsOk && level >= q.ls + DUST_VOLUME_LINE_LEVELS
         && dot(q.qw, q.qw) >= DUST_VOLUME_SIGMAS * DUST_VOLUME_SIGMAS)
         return uvec2(DUST_VOLUME_CLASS_LINE, DUST_VOLUME_SUBRAY_ORDER_MAX);
-    // the order min(c, 4) (dust::volume_class: the step-D caps 3 / 2 cost 14 % of the 1-10 d
+    // the order min(c, 4) (dust::volume_class: the caps 3 / 2 cost 14 % of the 1-10 d
     // volume class's light and are off in production, dust::DUST_K1C_D_PRODUCTION)
     return uvec2(DUST_VOLUME_CLASS_SUBRAY, min(c, DUST_VOLUME_SUBRAY_ORDER_MAX));
 }
@@ -477,7 +477,7 @@ vec2 dust_gl_node(uint k, uint i) {
     return vec2(0.0, 1.0);
 }
 
-// The 3-sigma bound of a volumetric packet (dust::VolumeBound, step F2): its capsule (the segment
+// The 3-sigma bound of a volumetric packet (dust::VolumeBound): its capsule (the segment
 // start + u seg, u in [0, 1], plus the 3-sigma ellipsoid of its base covariance) whitened by that
 // covariance's Cholesky factor l (qe = L^-1 (eye - start), g = L^-1 seg): the support of the
 // bounded Monte-Carlo's grains
@@ -563,7 +563,7 @@ float dust_volume_ray_tau(DustVolumePiece pc_, DustVolumeBound bd_, float renorm
     float a = dot(uw, uw);
     float b = dot(uw, pc_.qw);
     precise vec3 rr = pc_.qw - uw * (b / a);
-    // the capsule only for the pieces at the chord's ends (dust::volume_ray_tau, step F5)
+    // the capsule only for the pieces at the chord's ends (dust::volume_ray_tau)
     vec2 cap = pc_.cap ? dust_capsule_interval(bd_, u) : vec2(-3.4e38, 3.4e38);
     if (!(cap.y > max(cap.x, 0.0))) return 0.0;
     float rr2 = dot(rr, rr);
@@ -622,7 +622,7 @@ float dust_volume_line_integral(DustVolumePiece pc_, DustVolumeBound bd_, float 
     }
     float sg = sqrt(2.0 / d2);
     float t = mid + ts;
-    // the band's rays reach the piece's 3-sigma ellipsoid where their distance^2 <= 9 (step F)
+    // the band's rays reach the piece's 3-sigma ellipsoid where their distance^2 <= 9
     float atS = a0 + 2.0 * a1 * ts + a2 * ts * ts;
     float btS = b0 + b1 * ts;
     float r2 = dot(pc_.qw, pc_.qw) - btS * btS / atS;
@@ -749,7 +749,7 @@ DustSmallPoint dust_small_finish(bool ok, float wq, float massW, float wr, float
 // covariance (dust::volume_small_points' fast_point; mean, g, the lateral axes' dots x1 = r0.lat1,
 // x2 = r0.lat2, y1 = r1.lat1, y2 = r1.lat2, w1 = r3.lat1, w2 = r3.lat2, the mass and the slice's
 // radiance weight wr precomputed by the caller): the columns (W / 2w) (r0.lat_i - ndx r3.lat_i),
-// (H / 2w) (r1.lat_i - ndy r3.lat_i); one reciprocal of w a slice (round 3); branch-free
+// (H / 2w) (r1.lat_i - ndy r3.lat_i); one reciprocal of w a slice; branch-free
 DustSmallPoint dust_volume_small_fast(uint q, bool five, vec3 mean, vec3 g, float x1, float x2, float y1, float y2,
                                       float w1, float w2, float massW, float wr, vec3 r0, vec3 r1, vec3 r3, vec3 t,
                                       float W, float H) {
@@ -815,7 +815,7 @@ DustSmallPoint dust_volume_small_edge(uint q, bool five, vec3 mean, vec3 g, floa
     return dust_small_finish(ok, nw.y, massW, wr, tj, ox + dx, oy + dy, cxx, cyy, rhoRaw);
 }
 
-// Track 9A, the edge-piece demotion (dust::DUST_SMALL_DEMOTE_EPS, dust::volume_small_demote_err):
+// The edge-piece demotion (dust::DUST_SMALL_DEMOTE_EPS, dust::volume_small_demote_err):
 // an edge piece keeps its one projection a slice (with its predicted second-order terms,
 // dust_small_demote_slice) when its gate (dust_small_demote_gate) is under DUST_SMALL_DEMOTE_GATE x
 // the constant and its predicted in-frame light change, sigma
@@ -840,7 +840,7 @@ void dust_small_demote_edge(float tv, float u, float al, out float dP, out float
     pu = tv < -1.0 ? DUST_SMALL_INV_SQRT_2PI * ea / -tv : 1.0;
 }
 
-// Track 9A (t9a2c): the demotion's gate (dust::small_demote_gate): from the centre slice's one
+// The demotion's gate (dust::small_demote_gate): from the centre slice's one
 // projection c and its sigma points' relative depth spread kap = sqrt2 max|r3.lat_i| / w (the first
 // order of every predicted term), the in-frame light an edge of the frame can carry over
 // (kap / sqrt(2 pi)) (e^(-ax^2/2) py + px e^(-ay^2/2)), ax, ay the signed distances (sigma) from the
@@ -866,7 +866,7 @@ float dust_small_demote_gate(DustSmallPoint c, vec3 mean, vec3 r3, float t3, flo
     return kap * DUST_SMALL_INV_SQRT_2PI * (ex * pyu + pxu * ey);
 }
 
-// Track 9A: one predicted slice's second-order terms (dust::SmallDemoteTerms): the mass term mu,
+// One predicted slice's second-order terms (dust::SmallDemoteTerms): the mass term mu,
 // the J3-weighted mean shift dx, dy (px), the one projection's lateral covariance cxx, cyy, cxy
 // (px^2) and the sigma points' change of it dcxx, dcyy, dcxy, the one projection's mean mx, my (px)
 struct DustSmallTerms {
@@ -964,7 +964,7 @@ DustSmallPoint dust_small_none() {
     return o;
 }
 
-// Track 9A (t9a2): a demoted slice's one projection of mass mq (> 0) with its predicted second-order
+// A demoted slice's one projection of mass mq (> 0) with its predicted second-order
 // terms k applied (dust::volume_small_demote_fix): mass x (1 + mu), mean + delta, covariance + its
 // change (the variances floored at 1e-6 px^2, rho clamped as dust_small_finish): the sigma points'
 // moments to second order. k.mx, k.my are the one projection's mean, bit for bit the fast point's
@@ -985,7 +985,7 @@ DustSmallPoint dust_small_demote_fix_of(DustSmallTerms k, float mq) {
     return o;
 }
 
-// Track 9A (t9a2b): slice q's prediction and its corrected one projection from one evaluation of its
+// Slice q's prediction and its corrected one projection from one evaluation of its
 // terms (dust::volume_small_demote_err and dust::volume_small_demote_fix on the same terms, which
 // die here: nothing of the slice but p and the returned change outlives the call). Returns the
 // predicted change as a fraction of the slice's mass (-1 when not predicted, p then none); p the
@@ -1000,7 +1000,7 @@ float dust_small_demote_slice(uint q, bool five, vec3 mean, vec3 g, float x1, fl
     return dust_small_demote_err_of(k, W, H);
 }
 
-// Track 9A (t9a2d): an edge small piece's inputs as the consumer computed them, the record the edge
+// An edge small piece's inputs as the consumer computed them, the record the edge
 // pass (dust_draw_small_edge.comp) draws it from (dust_small_edge_put / _get): its centre, its depth
 // axis g (3 sigma bounded), the lateral axes' six dots against the projection's rows, its mass and
 // its slices' radiance weights
@@ -1014,9 +1014,9 @@ struct DustSmallEdge {
 
 // The three depth points of a small volumetric piece (dust::volume_small_points), as three
 // values (no array). Live across the slices: mean, g, the lateral axes' six dots, the mass and the
-// slices' weights. Round 3: the weights and the fast projections of every slice as one
+// slices' weights. The weights and the fast projections of every slice as one
 // straight-line block (independent chains the scheduler overlaps), then the edge decision on s0
-// as before. Track 9A (t9a2d): the consumer never draws an edge piece: it returns true with the
+// as before. The consumer never draws an edge piece: it returns true with the
 // piece's inputs in ed (s0..s4 then unused), and the consumer defers it to the edge pass
 // (dust_small_edge_put), which draws it by dust_volume_small_edge_points (the demotion or the
 // sigma points); so neither the predictor nor the sigma points are code of the consumer.
@@ -1041,7 +1041,7 @@ bool dust_volume_small_points(DustVolumePiece pc_, vec3 eye, vec3 r0, vec3 r1, v
     float sgn = z.z >= 0.0 ? 1.0 : -1.0;
     float ia = -1.0 / (sgn + z.z);
     float ib = z.x * z.y * ia;
-    // bounded at 3 sigma (dust::volume_small_points, step F2): the spread narrowed to the 3-sigma
+    // bounded at 3 sigma (dust::volume_small_points): the spread narrowed to the 3-sigma
     // ball's second moment
     float sb = sqrt(DUST_BOUND_VAR);
     g = g * sb;
@@ -1061,12 +1061,12 @@ bool dust_volume_small_points(DustVolumePiece pc_, vec3 eye, vec3 r0, vec3 r1, v
     }
     float mass = 2.0 * DUST_PI_F32 * pc_.k * (pc_.l[0] * pc_.l[3] * pc_.l[5]) * renorm * kept;
     float massW = mass;
-    // (the 5-point depth rule of step F5 is off in production: dust::DUST_K1C_D_GH5)
+    // (the 5-point depth rule is off in production: dust::DUST_K1C_D_GH5)
     bool five = false;
     DUST_PROF_END(vsmprep)
     // every slice's weight and one projection, then the decision: when the centre slice's 3 sigma
     // crosses the frame's edge (or it has none), the 4 lateral sigma points a slice
-    // (dust::volume_small_points, step D3); the weights serve both paths
+    // (dust::volume_small_points); the weights serve both paths
     DUST_PROF_BEGIN(vsmfast)
     float wr0, wr1, wr2;
     vec3 sun0;
@@ -1096,7 +1096,7 @@ bool dust_volume_small_points(DustVolumePiece pc_, vec3 eye, vec3 r0, vec3 r1, v
         edge = s0.mx - ex < 0.0 || s0.mx + ex > W || s0.my - ey < 0.0 || s0.my + ey > H;
     }
     DUST_PROF_END(vsmfast)
-    // (t9a2d: the edge piece's record; dead in the caller unless edge)
+    // (the edge piece's record; dead in the caller unless edge)
     ed.mean = mean;
     ed.g = g;
     ed.x1 = x1; ed.x2 = x2; ed.y1 = y1; ed.y2 = y2; ed.w1 = w1; ed.w2 = w2;
@@ -1108,14 +1108,14 @@ bool dust_volume_small_points(DustVolumePiece pc_, vec3 eye, vec3 r0, vec3 r1, v
     return edge;
 }
 
-// Track 9A (t9a2d): an edge small piece's depth points in the edge pass (dust_draw_small_edge.comp;
+// An edge small piece's depth points in the edge pass (dust_draw_small_edge.comp;
 // dust::volume_small_points' edge branch), from the inputs the consumer recorded: the one projection
 // of every slice again (dust_volume_small_fast on the same inputs: the consumer's points), then the
 // demotion (the slices' predictions in order against DUST_SMALL_DEMOTE_EPS, each demoted slice
-// corrected in place: t9a2b's sequential prefix) or the 4 lateral sigma points a slice. The 5-point
+// corrected in place: the sequential prefix) or the 4 lateral sigma points a slice. The 5-point
 // depth rule is off in production (dust::DUST_K1C_D_GH5), as in the consumer. Profile parts: vsmfast
 // the one projections, vsmedge the demotion and the sigma points; the piece counted by its path.
-// Returns whether the piece was demoted (t9a2e: the pass counts them, DUST_VEDGE_DEMOTED)
+// Returns whether the piece was demoted (the pass counts them, DUST_VEDGE_DEMOTED)
 bool dust_volume_small_edge_points(DustSmallEdge ed, vec3 r0, vec3 r1, vec3 r3, vec3 t, float W, float H,
                                    out DustSmallPoint s0, out DustSmallPoint s1, out DustSmallPoint s2,
                                    out DustSmallPoint s3, out DustSmallPoint s4) {
@@ -1131,11 +1131,11 @@ bool dust_volume_small_edge_points(DustSmallEdge ed, vec3 r0, vec3 r1, vec3 r3, 
     s2 = dust_volume_small_fast(2u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr2, r0, r1, r3, t, W, H);
     DUST_PROF_END(vsmfast)
     DUST_PROF_BEGIN(vsmedge)
-    // track 9A: the demotion (dust::volume_small_points: the gate (t9a2c, on the fast centre slice:
+    // the demotion (dust::volume_small_points: the gate (on the fast centre slice:
     // a few operations, so most edge pieces that keep the sigma points never reach the predictor),
     // then the slices' predictions in order, the mass-weighted mean against DUST_SMALL_DEMOTE_EPS,
     // strict); vsmedge holds its cost.
-    // t9a2b: the fast points' masses are kept and the fast points die; each slice is predicted
+    // The fast points' masses are kept and the fast points die; each slice is predicted
     // and corrected from one evaluation of its terms (dust_small_demote_slice, its corrected
     // point written in place: an edge piece that is not demoted overwrites every slice below),
     // and the next slice is evaluated only while the running sum acc / ms is under the constant.
@@ -1193,12 +1193,12 @@ bool dust_volume_small_edge_points(DustSmallEdge ed, vec3 r0, vec3 r1, vec3 r3, 
     } else {
         DUST_PROF_COUNT(small_edge, 1u)
     }
-    // t9a2e: whether the piece was demoted (the edge pass counts them, DUST_VEDGE_DEMOTED)
+    // whether the piece was demoted (the edge pass counts them, DUST_VEDGE_DEMOTED)
     return demote;
 }
 
 #ifdef DUST_EDGE_PASS
-// Round 9 step Z, the edge pass: the small segment in two passes over its texels, the points'
+// The edge pass: the small segment in two passes over its texels, the points'
 // rectangle integrals (tau per px^2) into the lane's row of dust_e_tau, then the deposits
 // (dust_volume_segment_small's texel arithmetic in its order; the frame test of a texel made
 // again in the second pass, the same expressions)
@@ -1275,11 +1275,11 @@ bool dust_volume_small_edge_points_st(DustUintBuffer pyr, uint ebase, uint cap, 
     s2 = dust_volume_small_fast(2u, five, mean, g, x1, x2, y1, y2, w1, w2, massW, wr2, r0, r1, r3, t, W, H);
     DUST_PROF_END(vsmfast)
     DUST_PROF_BEGIN(vsmedge)
-    // track 9A: the demotion (dust::volume_small_points: the gate (t9a2c, on the fast centre slice:
+    // the demotion (dust::volume_small_points: the gate (on the fast centre slice:
     // a few operations, so most edge pieces that keep the sigma points never reach the predictor),
     // then the slices' predictions in order, the mass-weighted mean against DUST_SMALL_DEMOTE_EPS,
     // strict); vsmedge holds its cost.
-    // t9a2b: the fast points' masses are kept and the fast points die; each slice is predicted
+    // The fast points' masses are kept and the fast points die; each slice is predicted
     // and corrected from one evaluation of its terms (dust_small_demote_slice, its corrected
     // point written in place: an edge piece that is not demoted overwrites every slice below),
     // and the next slice is evaluated only while the running sum acc / ms is under the constant.
@@ -1347,7 +1347,7 @@ bool dust_volume_small_edge_points_st(DustUintBuffer pyr, uint ebase, uint cap, 
     } else {
         DUST_PROF_COUNT(small_edge, 1u)
     }
-    // t9a2e: whether the piece was demoted (the edge pass counts them, DUST_VEDGE_DEMOTED)
+    // whether the piece was demoted (the edge pass counts them, DUST_VEDGE_DEMOTED)
     return demote;
 }
 #endif
@@ -1392,7 +1392,7 @@ float dust_small_rect(DustSmallPoint q, float xa, float xb, float ya, float yb) 
 const float DUST_COUNT_TEXEL_MAX = 4.0e9;
 const uint DUST_VQUEUE_SPLIT_ADDS = 12u;
 uint dust_vqueue_base(DustUintBuffer pyr);
-// (round 8 step F2) the accumulate mode of the volume consumer's top-level path: the frame's bias
+// the accumulate mode of the volume consumer's top-level path: the frame's bias
 // puts every piece on the 1 x 1 top texel (dust_volume_draw topKnown, frame-uniform, set by
 // dust_draw_volume.comp main with the texel's word dust_vacc_off), so each lane sums its deposits
 // here and main writes the subgroup's sums with one atomic per word (dust_volume_flush_top).
@@ -1410,8 +1410,8 @@ bool dust_volume_deposit(DustUintBuffer pyr, float tauPx, float area, float invU
     if (!(tauPx >= 0.0) || isinf(tauPx)) return false;
     peak = max(peak, tauPx);
     float tau = tauPx * area * invUnit;
-    // the counts, split into adds of at most DUST_COUNT_MAX_PER_ADD (step F4: a bright piece on a
-    // coarse texel was clipped at one add; below the cap one add, as before)
+    // the counts, split into adds of at most DUST_COUNT_MAX_PER_ADD (a bright piece on a
+    // coarse texel would clip at one add; below the cap one add)
     float tauC = tau + carry;
     float counts = min(floor(tauC + 0.5), DUST_COUNT_TEXEL_MAX);
     carry = tauC - counts;
@@ -1453,7 +1453,7 @@ bool dust_volume_deposit(DustUintBuffer pyr, float tauPx, float area, float invU
 // One row segment [xa, xb] of row ty of a volumetric piece at one level (dust::volume_scatter,
 // DUST_SEGMENT_TEXELS), from the segment's own dither phase; renorm = the support's flux over its
 // kept mass, meanRef = the packet's mean (the photometry), sz = the texel size (px). One function
-// per class (step D: the class is decided once per piece, no branch per texel, the small points
+// per class (the class is decided once per piece, no branch per texel, the small points
 // live only in their own loop). The centre class: the exact ray integral at each texel centre.
 // The texels written; the largest tau per px^2 into peak. Timing probe 2 (no_volume_writes)
 // evaluates without writing.
@@ -1676,7 +1676,7 @@ bool dust_volume_plan_axes(DustPacket p, vec3 r0, vec3 r1, vec3 r3, vec3 eye, fl
     pl.cvarB = cvarB;
     pl.level = level;
     pl.fPx = fPx;
-    // the packet's 3-sigma capsule (dust::volume_plan_pieces, step F2)
+    // the packet's 3-sigma capsule (dust::volume_plan_pieces)
     if (mode == DUST_VOLUME_AXIS_TIME) {
         pl.bound = dust_volume_bound(axS, axMean - segB * 0.5, segB, eye);
     } else if (mode == DUST_VOLUME_AXIS_GRID) {
@@ -1836,18 +1836,18 @@ uint dust_vspill_base_o(uvec2 pyr) {
 // end). Macros: a struct argument would be copied per call.
 #define DUST_VQUEUE_WORD(base, cap, r, w) ((base) + DUST_VQUEUE_HEADER_WORDS + (w) * (cap) + (r))
 
-// ── Track 9A (t9a2d): the deferred edge pieces (dust::DUST_VEDGE_*) ───────────────────────────────
+// ── The deferred edge pieces (dust::DUST_VEDGE_*) ─────────────────────────────────────────────────
 // Two regions after the volume spill's records (dust::dust_queue_offsets' vedge), each a header in
 // the volume queue's format (words 0-2 the edge pass's indirect dispatch, 3 the raw append counter,
 // 4 the capacity: dust_vqueue_append and dust_vqueue_capacity serve it; 5 the frame's pieces drawn,
 // 6 those refused) and dust::dust_vedge_records records of DUST_VEDGE_RECORD_WORDS words,
 // array-of-structures (word w of record i at the records' base + i * DUST_VEDGE_RECORD_WORDS + w:
-// the edge pass reads a piece's words together; perf9_O). A chunk's consumer (both drains) appends its edge
+// the edge pass reads a piece's words together). A chunk's consumer (both drains) appends its edge
 // small pieces to the region of the chunk's parity (DUST_VIEW_EDGE_ODD), and dust_draw_small_edge.comp
 // draws them beside the next chunk's producer (Device::cmd_dust_splat), so the pass costs no extra
 // serialisation; the deposits are the consumer's order-free atomics, so the pyramid is the same
 // wherever a piece is drawn. A piece the region refuses is dropped and counted (word 6, the pass's
-// raw - held; logged by the host); word 7 counts the pieces the pass demoted (t9a2e: one projection
+// raw - held; logged by the host); word 7 counts the pieces the pass demoted (one projection
 // a slice with the predicted terms, DUST_VEDGE_DEMOTED). Words: 0-2 mean, 3-5 g, 6-11 x1 x2 y1 y2 w1 w2, 12 mass, 13-15
 // the slices' weights, 16 the range's x0 | x1 << 16, 17 its y0 | y1 << 16 (texels of its level,
 // each < 2^16), 18 the level, 19-21 colour, 22 the depth bits, 23 the piece's rounding seed.
@@ -1984,7 +1984,7 @@ uint dust_squeue_table(uint base) { return base + DUST_SQUEUE_HEADER_WORDS; }
 // the speck walk's spill after the sub-packet queue (dust::DUST_SPILL_*): a header (word 0 the
 // slots claimed this pass, word 1 the slots the view has), then the slots of DUST_SPILL_NODES
 // nodes of DUST_SPILL_NODE_WORDS words each
-// the splat's plan rows after the records (perf9_O: dust_splat.comp's stages, a row per chunk cluster)
+// the splat's plan rows after the records (dust_splat.comp's stages, a row per chunk cluster)
 const uint DUST_SPLAN_WORDS = 384u;
 const uint DUST_SQUEUE_WORDS = DUST_SQUEUE_HEADER_WORDS + DUST_SQUEUE_CLUSTERS * DUST_SQUEUE_TABLE_WORDS + DUST_SQUEUE_CAPACITY * DUST_SQUEUE_RECORD_WORDS
                              + DUST_SQUEUE_CLUSTERS * DUST_SPLAN_WORDS;
@@ -2041,7 +2041,7 @@ uint dust_splan_base(uint base) { return dust_squeue_records(base) + DUST_SQUEUE
     rh_ = uintBitsToFloat(pyr.v[a_ + 31u * c_]); \
     i_ = pyr.v[a_ + 32u * c_]; \
 }
-// the record's cone words (round 9 step Z; written by the splitter's prep stage, dust_split.comp
+// the record's cone words (written by the splitter's prep stage, dust_split.comp
 // -DDUST_SPLIT_PREP, dust_leaf_prep, after the enumerator): 33 the kind (DUST_SQUEUE_KIND_*: the
 // packet drawn whole, its truncation's moments, its cone of grains, or whole by the volume path),
 // 34-36 the support plane's covariance column S n, 37 v0 = n.S n, 38 the cone's apex depth dC,
@@ -2192,7 +2192,7 @@ DustScreenPacket dust_queue_get_screen_packet(DustUintBuffer pyr, uint k) {
     return P;
 }
 
-// ── Round 9 step Z: the leaf queue ───────────────────────────────────────────────────────────────
+// ── The leaf queue ───────────────────────────────────────────────────────────────────────────────
 // The splitter draws no texel and stores no screen packet (both were the lanes' spill on Mali):
 // every EWA leaf of the split walk goes to the leaf queue as the leaf packet itself — the split's
 // q (16 words) and its sub-packet record's index (the consumer re-reads the exposure, colour and
@@ -2324,7 +2324,7 @@ void dust_leaf_emit_o(uvec2 pyr, uint cslot, uint rec, uint seed, uint level, ui
     }
 }
 
-// ── The candidate leaves (round 9 step Z2: the walk stage's output, the sequencer's input) ───
+// ── The candidate leaves (the walk stage's output, the sequencer's input) ────────────────────
 // The walk stage (dust_split.comp) draws nothing and seeds nothing: every leaf its walk reaches —
 // a volumetric packet or an EWA leaf still unprojected — is written as a candidate, the record's
 // candidates contiguous in the walk's order (the walk's counting pass sizes the record, the
@@ -2337,8 +2337,8 @@ void dust_leaf_emit_o(uvec2 pyr, uint cslot, uint rec, uint seed, uint level, ui
 // cannot hold whole is refused whole and counted (word 5, DUST_CQUEUE_LOST: the host logs it and
 // sizes the chunk; the sequencer sees a run of 0). Header as the leaf queue's (word 3 the raw
 // reservation counter, 4 a capacity override), then DUST_CQUEUE_RECORD_WORDS-word records
-// as consecutive words, a record per DUST_CQUEUE_RECORD_WORDS (perf9_O: the walk writes through one
-// pointer to the slot, the project stage reads it through one; the capacity no longer strides the
+// as consecutive words, a record per DUST_CQUEUE_RECORD_WORDS (the walk writes through one
+// pointer to the slot, the project stage reads it through one; the capacity does not stride the
 // words, it only bounds the slots). The buffer lies where word 6 of the leaf queue's
 // header says (host-written per frame, words from the EWA queue base).
 const uint DUST_LQUEUE_CQUEUE_OFFSET = 6u;
@@ -2402,7 +2402,7 @@ uint dust_cqueue_reserve_o(uvec2 pyr, uint base, uint n) {
     rec = pyr.v[b_ + 16u * c_]; \
 }
 
-// ── The screen packets (round 9 step Z3: the project stage's output, a slot per candidate) ───
+// ── The screen packets (the project stage's output, a slot per candidate) ────────────────────
 // dust_project_leaf.comp (a lane per candidate, indirect from the candidate header) projects every
 // EWA candidate (dust_project_packet) and writes its screen packet here, at the candidate's slot
 // (consecutive words, DUST_PQUEUE_RECORD_WORDS a slot); the sequencer reads its fields at each use (never
@@ -2410,10 +2410,10 @@ uint dust_cqueue_reserve_o(uvec2 pyr, uint base, uint n) {
 // dust_draw_leaf.comp draws from it, a pass of the segment at a time. Words: 0-1 mu, 2-4 cov, 5-6
 // seg, 7 amp, 8 sigmaMin, 9 det, 10 depthAu, 11 open ends (bit 0 start, 1 end) and bit 2 on
 // screen, 12-13 rho, 14-16 mean, 17-19 kx, 20-22 ky, 23-25 sun, 26 rhAu, 27-30 eye, 31 albedo, 32
-// wMean; (perf9_O) 33-42 the leaf consumer's walk words (dust_draw_leaf.comp writes and reads them,
+// wMean; 33-42 the leaf consumer's walk words (dust_draw_leaf.comp writes and reads them,
 // nothing else does): 33 the record, 34 the seed, 35 the level's pyramid offset, 36 its width, 37 the
 // lane walk's carry, 38 its drawn flag, 39 the level, 40-41 the open row's columns x0, x1, 42 the
-// last row y1; (round 4) 43-46 the lane walk's staged texel (dust_l_t1/t2/t3, dust_l_ph_weight /
+// last row y1; 43-46 the lane walk's staged texel (dust_l_t1/t2/t3, dust_l_ph_weight /
 // _deposit; each texel in passes, its carried state here): 43 tau, 44 a, 45 b / a, 46 i0.
 // Lies where word 7 of the leaf queue's header says (host-written, words from the EWA
 // queue base); no header of its own.
@@ -2476,7 +2476,7 @@ bool dust_pq_on(DustUintBuffer pyr, uint base, uint cap, uint slot) { return (du
 bool dust_pq_on_o(uvec2 pyr, uint base, uint cap, uint slot) { return (dust_pq_u_o(pyr, base, cap, slot, 11u) & 4u) != 0u; }
 
 #ifdef DUST_DRAW_LEAF
-// (perf9_O) The leaf consumer (dust_draw_leaf.comp, which defines DUST_DRAW_LEAF): a leaf's texels
+// The leaf consumer (dust_draw_leaf.comp, which defines DUST_DRAW_LEAF): a leaf's texels
 // drawn as one flat walk, dust_scatter_segment's texel arithmetic in its order (capsule x area x
 // invUnit, x the weight when lit, the rounding with the carry, the colour words, the depth
 // minimum) on the texels of dust_scatter_rows in its order (rows y0..y1, texels x0..x1, the carry
@@ -2537,7 +2537,7 @@ uint dust_lv(uint k) { return DustLRowV(dust_l_slot).v[k]; }
 #endif
 void dust_lv_set(uint k, uint v) { DustLRowV(dust_l_slot).v[k] = v; }
 // (every call site has the push-constant buffer's address as `pyr`, a uvec2)
-// (perf9_O fix 3) through a function: a store to DustUintBuffer(pyr) in the caller has no symbol
+// through a function: a store to DustUintBuffer(pyr) in the caller has no symbol
 // root, so glslang's precise propagation gave every such store of the shader one object and
 // spread NoContraction over the whole lane walk (the tree's set is dust_capsule_tau's cone only)
 #ifdef DUST_LEAF_WG
@@ -2807,7 +2807,7 @@ bool dust_scatter_rows_pq(uvec2 pyr, float invUnit, uint pbase, uint pcap, uint 
     return DUST_LS(38u) != 0u;
 }
 #ifdef DUST_QUEUE_WORKGROUP
-// (perf9_O) the workgroup's carries and flags, a word per lane (the texel step reads and writes them
+// the workgroup's carries and flags, a word per lane (the texel step reads and writes them
 // where it uses them: no carry is held over the texel's tau)
 shared float dust_l_carry[64];
 shared uint dust_l_anyf[64];

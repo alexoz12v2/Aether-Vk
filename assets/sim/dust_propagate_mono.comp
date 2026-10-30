@@ -1,10 +1,10 @@
 // @assets/sim/dust_propagate_mono.comp
 //
-// perf9_K (K4, the propagate / emit family knob): the pre-perf9_O dust_propagate.comp verbatim, the
+// The propagate / emit family knob: the monolithic dust_propagate.comp verbatim, the
 // GTX 1070 default (AETHERVK_DUST_PROP_STAGED=0; Device::dust_prop_staged). The only addition is
-// DUST_COMMON_MONO below: dust_common.glsl then keeps its pre-perf9_O df_add / dust_kepler bodies
-// (the perf9_O "new local" rewrites for glslang's PropagateNoContraction), so this blob is the
-// pre-package dust_propagate.comp blob byte for byte (apply/perf9_K/prop_mono_equiv.sh).
+// DUST_COMMON_MONO below: dust_common.glsl then keeps its monolithic df_add / dust_kepler bodies
+// (not the "new local" rewrites for glslang's PropagateNoContraction), so this blob is the
+// monolithic dust_propagate.comp blob byte for byte (the lab's prop_mono_equiv.sh).
 //
 //
 // Dust v3/v4 per-frame evaluation: one thread per live cluster. Closed-form Kepler propagation
@@ -109,8 +109,8 @@ void main() {
     pc.render.c[slot].age_id_dbeta_flux = R.age_id_dbeta_flux;
 
     // the moments in a private record, stored whole at the end: buffer stores inside the edge
-    // loop were 7 % (Mali-G52) to 14 % (Adreno 619) slower, neutral on the GTX 1070
-    // (perf8_prop_h1). Everything that needs the mean (r, v) or the secants before the edge
+    // loop were 7 % (Mali-G52) to 14 % (Adreno 619) slower, neutral on the GTX 1070.
+    // Everything that needs the mean (r, v) or the secants before the edge
     // loop, so only the loop's own inputs stay live across it
     DustMoments M;
     if (inBand && flux > 0.0 && hasMoments) {
@@ -156,7 +156,7 @@ void main() {
         // the speck pass's walk mask lane (dust_specks_mask): nothing walked until it runs
         M.edges[15].w = 0.0;
         // the size polyline: every bin edge at its own beta and speed (v ~ s^-1/2). The
-        // trajectory detail (round 8 step D, dust::propagate_edge_stride; pc.skip.x bits 1-2):
+        // trajectory detail (dust::propagate_edge_stride; pc.skip.x bits 1-2):
         // every stride-th edge solved, the others placed linearly between their solved
         // neighbours below; the speed factors exact for every edge (linear in k anyway).
         // The stride is uniform

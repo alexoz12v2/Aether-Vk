@@ -53,7 +53,7 @@ bitflags! {
     /// (registers, local memory; `AETHERVK_DUST_PROFILE=1`, `physics::log_pipeline_statistics`)
     const PIPELINE_EXECUTABLE_PROPERTIES = 1 << 8;
     /// compute subgroup basic + arithmetic operations (Vulkan 1.1 core; the arithmetic is
-    /// optional on the baseline devices): the volume consumer's `.sg` blob (round 8 step F2)
+    /// optional on the baseline devices): the volume consumer's `.sg` blob
     const SUBGROUP_ARITHMETIC = 1 << 9;
   }
 }

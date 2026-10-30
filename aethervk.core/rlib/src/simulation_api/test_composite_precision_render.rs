@@ -20,7 +20,7 @@
 //! and a sky pixel the (−1, −1) sentinel. Printed: the counts, the max |Δz| among the misordered.
 //! Before the precision fix the ordering floor is ~60 km·(D/AU) (§1.2): the test fails.
 //!
-//! The oblique cases (track 9F) repeat the scene along forward = (−1, −1, 0)/√2 from (1, 1.5, 0)
+//! The oblique cases repeat the scene along forward = (−1, −1, 0)/√2 from (1, 1.5, 0)
 //! AU (off the hidden Sun's diagonal) with screen up = (−1/2, 1/2, 1/√2) (a 45° roll), camera
 //! rotation in f64. On the axis-aligned view the f32 cast error of the camera-relative track
 //! points (~(0, −D, 0) AU) lies along the view and the row check cannot see it; here the x and y
@@ -491,7 +491,7 @@ fn run_composite_precision(d_au: f64, oblique: bool) {
     // The camera is a child of root. (Without a common ancestor
     // `get_relative_transform_f64(camera, frame)` used to return the difference of the global
     // positions *not divided by the frame scale* (AU read as km): a frame 1 AU away put the
-    // camera 1 km from the nucleus, inside the sphere. Fixed in scene.rs (track 9E), test
+    // camera 1 km from the nucleus, inside the sphere. Fixed in scene.rs, test
     // `scene::tests::relative_transform_f64_without_common_ancestor_is_in_frame_units`.)
     {
       let scene_ctx = ctx.get_scene(scene_id).unwrap();

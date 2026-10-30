@@ -17,7 +17,7 @@
 #extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_control_flow_attributes : require
 #extension GL_EXT_buffer_reference : require
-// (round 8 step F2; perf9_O) the `.sg` blob (-DDUST_SUBGROUP=1, the `.prof` one too) sums the
+// the `.sg` blob (-DDUST_SUBGROUP=1, the `.prof` one too) sums the
 // top-level deposits of the workgroup into its scratch words and writes them once (the accumulate
 // mode; no subgroup operation now: the host's choice of blob by the device's subgroup operations
 // stays, the plain blob deposits as before, word for word the same pyramid)

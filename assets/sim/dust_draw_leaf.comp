@@ -1,6 +1,6 @@
 // @assets/sim/dust_draw_leaf.comp
 //
-// The leaf queues' consumer (round 9 step Z; dust_scatter.glsl DUST_LQUEUE_*): the EWA leaves the
+// The leaf queues' consumer (dust_scatter.glsl DUST_LQUEUE_*): the EWA leaves the
 // sequencer stage (dust_split.comp -DDUST_SPLIT_SEQ) found on their bands. A leaf record is its
 // seed, its sub-packet record, its levels and its candidate slot, whose screen packet
 // (dust_project_leaf.comp's, widened and closed by the sequencer as the splitter's was) is drawn
@@ -22,7 +22,7 @@
 #endif
 #ifdef DUST_LEAF_WG
 #define DUST_QUEUE_WORKGROUP 1
-// (perf9_O) 64-row chunks: the workgroup's shared words within 2048 B
+// 64-row chunks: the workgroup's shared words within 2048 B
 #define DUST_QUEUE_ROW_CHUNK_N 64u
 #endif
 #define DUST_DRAW_LEAF 1
@@ -97,7 +97,7 @@ void main() {
         uint h = pc.pyramid.v[DUST_PYR_TABLE + 3u * level + 2u];
         float s = float(1u << level);
 #ifdef DUST_LEAF_WG
-        // (perf9_O) the level into the walk word 39 (the walk's s reads it), a shared word here
+        // the level into the walk word 39 (the walk's s reads it), a shared word here
         // (dust_scatter.glsl dust_l_ws: published by lane 0 before the walk's first barrier)
         if (gl_LocalInvocationID.x == 0u) dust_l_ws[39u - 33u] = level;
         bool any_ = dust_scatter_rows_wg_pq(uvec2(pc.pyramid), pc.invUnit, pbase, pcap, cslot, rec, s, off, w, h, seed, 0, int(h) - 1, 64u, gl_LocalInvocationID.x);

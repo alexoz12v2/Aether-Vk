@@ -1,10 +1,10 @@
 // @assets/sim/dust_emit_mono.comp
 //
-// perf9_K (K4, the propagate / emit family knob): the pre-perf9_O dust_emit.comp verbatim, the
+// The propagate / emit family knob: the monolithic dust_emit.comp verbatim, the
 // GTX 1070 default (AETHERVK_DUST_PROP_STAGED=0; Device::dust_prop_staged). The only addition is
-// DUST_COMMON_MONO below: dust_common.glsl then keeps its pre-perf9_O df_add / dust_kepler bodies
-// (the perf9_O "new local" rewrites for glslang's PropagateNoContraction), so this blob is the
-// pre-package dust_emit.comp blob byte for byte (apply/perf9_K/prop_mono_equiv.sh).
+// DUST_COMMON_MONO below: dust_common.glsl then keeps its monolithic df_add / dust_kepler bodies
+// (not the "new local" rewrites for glslang's PropagateNoContraction), so this blob is the
+// monolithic dust_emit.comp blob byte for byte (the lab's prop_mono_equiv.sh).
 //
 //
 // Dust v3 emission: one thread per cluster of the batch. Writes immutable `DustCluster` records

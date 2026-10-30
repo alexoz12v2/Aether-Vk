@@ -43,7 +43,7 @@ const uint DUST_PROF_CMAX          = 105u; // its slowest lane's cycles
 const uint DUST_PROF_STHREAD       = 106u; // (lo, hi) the splitter's lane cycles (dust_split.comp)
 const uint DUST_PROF_SLANES        = 108u; // its lanes with a record
 const uint DUST_PROF_SMAX          = 109u; // its slowest lane's cycles
-const uint DUST_PROF_K1C0          = 110u; // 12 x (lo, hi), K1c's parts of vplan / vdraw (every volumetric draw, in-thread and consumer): vclass (pass A's per-class sums), vsmallpts (a small piece's depth points), vsmall (its texels' rectangle integrals), vsubline (sub-ray and line texels), vcentre (the centre class's rows), 110..119; vsmallpts' parts: vsmprep (its prelude: the depth axis, the lateral axes' dots, the mass), vsmfast (the centre slice by one projection and the edge decision, every piece; the other slices of an interior piece), vsmedge (the slices of an edge piece by 4 sigma points each), 120..125; the consumer's pass B parts (round 8 step E): vhead (the piece loop's head: the control word, the record's words, the covariance slots), vbuild (dust_volume_piece_at), vdecide (the level table, the range, the class and order under K), vdeposit (dust_volume_deposit: the counts' atomics and the depth), 126..133
+const uint DUST_PROF_K1C0          = 110u; // 12 x (lo, hi), K1c's parts of vplan / vdraw (every volumetric draw, in-thread and consumer): vclass (pass A's per-class sums), vsmallpts (a small piece's depth points), vsmall (its texels' rectangle integrals), vsubline (sub-ray and line texels), vcentre (the centre class's rows), 110..119; vsmallpts' parts: vsmprep (its prelude: the depth axis, the lateral axes' dots, the mass), vsmfast (the centre slice by one projection and the edge decision, every piece; the other slices of an interior piece), vsmedge (the slices of an edge piece by 4 sigma points each), 120..125; the consumer's pass B parts: vhead (the piece loop's head: the control word, the record's words, the covariance slots), vbuild (dust_volume_piece_at), vdecide (the level table, the range, the class and order under K), vdeposit (dust_volume_deposit: the counts' atomics and the depth), 126..133
 const uint DUST_PROF_SMALL_PATHS   = 134u; // 2 words (add32): the small pieces drawn by one projection a slice (126) and by 4 sigma points a slice (127) (dust::DUST_PROF_SMALL_PATHS)
 const uint DUST_PROF_WORDS_END     = 144u; // (DUST_QUEUE_HEADER_WORDS = 144)
 
@@ -239,7 +239,7 @@ void dust_prof_flush_volume(DustUintBuffer pyr, uint base, bool ran) {
     dust_prof_flush_k1c(pyr, base);
     dust_prof_max32(pyr, base + DUST_PROF_CMAX, ran ? dust_prof_thread : 0u);
 }
-// track 9A (t9a2d): the edge pass (dust_draw_small_edge.comp): its pieces' K1c parts and paths and
+// the edge pass (dust_draw_small_edge.comp): its pieces' K1c parts and paths and
 // their texels with the consumer's (its lanes' own cycles in the K1c words only); every lane of the
 // subgroup must reach this
 void dust_prof_flush_edge(DustUintBuffer pyr, uint base) {

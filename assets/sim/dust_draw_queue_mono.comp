@@ -1,6 +1,6 @@
 // @assets/sim/dust_draw_queue_mono.comp
 //
-// (perf9_K) the pre-perf9_O queue draw (dust_scatter_rows_wg), kept for the mono draw family
+// the monolithic queue draw (dust_scatter_rows_wg), kept for the mono draw family
 // (AETHERVK_DUST_DRAW_STAGED=0, the GTX 1070 default).
 //
 // Dust packet queue: one workgroup per record of the view's queue (dust_scatter.glsl, filled by

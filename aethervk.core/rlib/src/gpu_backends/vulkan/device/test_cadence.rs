@@ -1,4 +1,4 @@
-//! GPU parity of the cadence (track 5, I1): `dust_classify.comp`'s rate against
+//! GPU parity of the cadence: `dust_classify.comp`'s rate against
 //! `cadence::cadence_rate`, and the GPU state machine (owner bytes, lists, cursors, steps, swaps,
 //! aborts, the propagate set) against `cadence::DustCadenceState` frame by frame. Needs a Vulkan
 //! device and the compiled shaders. The setup helpers are minimal copies of `test_specks.rs`'s.
@@ -377,7 +377,7 @@ fn gpu_dust_cadence_classify_matches_reference() {
 /// coverage drops; the exists flags; the classify histogram, the shell count, the chunk entries
 /// drawn; the propagate set. g_max within 10⁻⁵ relative. Preconditions: an image shown, a budget
 /// or prediction abort after it, at least one rate abort and two classes over the run. Drawing is the
-/// CPU's only (state only, I1).
+/// CPU's only (state only).
 #[test]
 fn gpu_dust_cadence_state_matches_reference() {
   let id = 9032u64;
@@ -772,11 +772,11 @@ fn gpu_dust_cadence_state_matches_reference() {
   });
 }
 
-/// The handover's GPU parity (round 7): `gpu_dust_cadence_state_matches_reference`'s scene and
+/// The handover's GPU parity: `gpu_dust_cadence_state_matches_reference`'s scene and
 /// per-frame comparisons (mode, swaps, every owner and incoming byte, the lists, steps, cursors,
 /// aborts, histogram, chunk entries, the propagate set, the build/shown images and the frame), with
 /// the eye fixed and a yaw over frames 1–24 that admits class 8 only, then 446 still frames: class 16
-/// and class 64 are admitted and the members move 8 → 16 → 64 (the observer's perf7c: the GPU's
+/// and class 64 are admitted and the members move 8 → 16 → 64 (in the observer the GPU's
 /// light fell 0.8 % per class-16 window in the first two class-64 windows). The collapse and drop
 /// counts match the CPU's every frame.
 #[test]
@@ -2055,7 +2055,7 @@ fn the_full_frame_estimate_scales_the_builds() {
   assert_eq!(full_frame_estimate([0, 0, 1], &big, in0(4))[2], u32::MAX);
 }
 
-/// each class's rate spans its own cycle (round 7): class 16 builds 9 580 members every frame but
+/// each class's rate spans its own cycle: class 16 builds 9 580 members every frame but
 /// its EWA work comes in bursts (the lists' order: 3 of every 16 frames carry it all, as at 1 km
 /// orbit). Over one cycle the estimate is the same every frame (within 0.1 %); the old decayed
 /// 8-frame sum swung by more than 2× with the same input.
@@ -2089,7 +2089,7 @@ fn the_build_rate_spans_each_class_cycle() {
   assert_eq!(r8.built[0], 8_000.0);
 }
 
-/// the estimate weighs the classes apart (round 7): class 8 shows 10 000 members at a cost of 1
+/// the estimate weighs the classes apart: class 8 shows 10 000 members at a cost of 1
 /// each and builds 1 250 a frame, class 16 shows 150 000 at a cost of 3 and builds 9 375. The true
 /// full draw is 10 000 + 450 000 = 460 000; the pooled `Σ shown / Σ built` gives
 /// (1 250 + 28 125) · 160 000 / 10 625 = 442 353 (4 % low, the orbit's early EWA switch); per
@@ -2353,8 +2353,8 @@ fn static_refinement_steps_within_its_factor() {
   assert_eq!(host.refine, 0);
 }
 
-/// the feedback's memory (round 8 step B): the 5000 km, 1 d/s, volume detail 1 oscillation
-/// (`perf8e_5000km_vd1`: 97 M evaluations at bias 10 → 11, 7.3 M at 11 < budget / 8 → 10, every
+/// the feedback's memory: the 5000 km, 1 d/s, volume detail 1 oscillation
+/// (97 M evaluations at bias 10 → 11, 7.3 M at 11 < budget / 8 → 10, every
 /// four frames). After the raise the memory holds the measured step (13.3×), so 7.3 M at 11 is
 /// refused (7.3 M × 13.3 > the budget); a drift down to 4 M (× 13.3 ≤ the budget) is lowered.
 /// Without a measured step the default 4× keeps today's rule (`the_feedback_band_keeps_the_state`).
@@ -2413,7 +2413,7 @@ fn the_feedback_refuses_a_lower_that_would_raise_again() {
 }
 
 /// a feedback header with `levels` levels, the last 1 × 1 (the top-only predicate live), the EWA
-/// side in its band and the split in its band (round 9 step B)
+/// side in its band and the split in its band
 fn feedback_header(levels: u32, vol_bias: u32, evals: u32) -> alloc::vec::Vec<u32> {
   use crate::scene::dust::{DUST_EWA_FRAME_BUDGET, DUST_EWA_TEXEL_UNIT, EwaStats};
   let mut h = alloc::vec![0u32; dust::PYRAMID_HEADER_WORDS as usize];
@@ -2433,7 +2433,7 @@ fn feedback_header(levels: u32, vol_bias: u32, evals: u32) -> alloc::vec::Vec<u3
 }
 
 /// with the haze knob below 16 a raise onto the top plateau lands on its lowest bias (`levels − 1`:
-/// every bias from it on draws the same frame), at 16 the raise is today's (round 9 step B)
+/// every bias from it on draws the same frame), at 16 the raise is today's
 #[test]
 fn the_feedback_raises_into_the_lowest_top_bias() {
   let level = alloc::vec![0u32; 16];
@@ -2464,7 +2464,7 @@ fn the_feedback_raises_into_the_lowest_top_bias() {
 /// with the haze engaged (the knob below 16 at a top-only bias) the feedback remembers the plateau's
 /// edge (the raise's full ratio) and refuses a lower off the plateau while `work × edge > budget`;
 /// a drift under it is lowered one step off the plateau only after the hold, and an in-band readback
-/// off the plateau keeps the state (round 9 step B)
+/// off the plateau keeps the state
 #[test]
 fn the_feedback_holds_the_top_bias_while_the_haze_is_engaged() {
   use crate::scene::dust::DUST_VOLUME_FRAME_BUDGET;
@@ -2505,7 +2505,7 @@ fn the_feedback_holds_the_top_bias_while_the_haze_is_engaged() {
 }
 
 /// with the knob at 16 the memory keeps today's per-step (geometric) ratio and no edge: the raise
-/// 7 → 9 by 300 M records √300 at 9, and 1 M at 9 is lowered as before (round 9 step B)
+/// 7 → 9 by 300 M records √300 at 9, and 1 M at 9 is lowered as before
 #[test]
 fn the_feedback_memory_keeps_the_haze_edge_apart_from_the_steps() {
   let level = alloc::vec![0u32; 16];
@@ -2544,7 +2544,7 @@ fn cads_work_members_reads_the_cursors() {
   assert_eq!(cads_work_members(&st, 1, 2, 2), ([120, 0, 0], [1500, 0, 0]));
 }
 
-// ── temporal reuse step 5, B2 (brief 07; records/budget-loop.md "Unfinished" 1): the GPU tests of
+// ── temporal reuse, the budget loop (records/budget-loop.md "Unfinished" 1): the GPU tests of
 // the budget loop's host wiring — the frame kind restores the full-draw biases, the target probe
 // splits the counters, the gate counters route through the frame, the loop moves its knobs in the
 // ladder's order on real timings. Every frame is recorded in `frame.rs`'s order
@@ -2718,7 +2718,7 @@ fn budget_bias_bits(w: u32) -> (u32, u32, u32) {
 }
 
 /// A frame the cadence draws in full (a reset) begins with the full-draw regime's biases
-/// (`Device::dust_budget_frame_kind`, brief 07's two regimes): after twelve cadenced frames, the
+/// (`Device::dust_budget_frame_kind`, the budget loop's two regimes): after twelve cadenced frames, the
 /// full regime is set by hand to values distinct from the cadenced regime's (the hook runs after
 /// the frame begin, which wrote the cadenced biases into the header), the next frame changes the
 /// fingerprint (a reset): its header carries the forced full-draw split depth / volume / EWA bias,
@@ -2789,7 +2789,7 @@ fn gpu_dust_budget_probe_splits_the_counters() {
   with_device(id, |device, capacity, _render_buf, moments_buf| {
     let (sc, eye, proj, step) = budget_small_scene(device, id, capacity, moments_buf);
     let pe = crate::gpu::PresentationEngineHandle(u64::MAX - 41);
-    // one class of 8 frames in two phases (perf9_T fix 1): with `full()` a near-still eye folds
+    // one class of 8 frames in two phases: with `full()` a near-still eye folds
     // every cluster into class 16 / 64, first classified at frame 16..64, and the builds came too late
     let cfg = cad::CadenceConfig { classes: alloc::vec![8], phases: 2, eps_px: 1.0, margin_frac: 0.2, retain: true, handover: true, light_tol: 0.0 };
     device.dust_cadence_enable(pe, Some(cfg)).unwrap();
@@ -2895,7 +2895,7 @@ fn budget_loop_run(tag: &str, id: u64, pe_off: u64, orbit_deg: f64, frames: u32)
   out
 }
 
-/// The budget loop's verdict run (brief 07): paused and orbiting (10°/s at 60 fps), 240 frames
+/// The budget loop's verdict run: paused and orbiting (10°/s at 60 fps), 240 frames
 /// each, the ladder's order asserted every frame (`budget_loop_run`); a frame over the budget at
 /// the end must have moved the loop (moves ≥ 1). The verdict line per case: fits, or over at the
 /// state the loop reached (the "saturated" state is the brief's verdict: the next plan is the
@@ -2920,7 +2920,7 @@ fn gpu_dust_budget_loop_keeps_the_ladder_order() {
 }
 
 /// The dust frame fits `test_dust::DUST_FRAME_BUDGET_MS` with the cadence and the
-/// budget loop, paused and orbiting at 1280 × 800 (brief 07's un-ignored case; 600 frames each:
+/// budget loop, paused and orbiting at 1280 × 800 (the un-ignored case; 600 frames each:
 /// the ladder's ≤ 36 moves × 7 frames and two cycles of the longest class). Ignored like
 /// `dust_frame_fits_the_budget`: the loop saturates at 172–179 ms (2026-10-19, CP2 budget runs).
 #[test]
@@ -2935,7 +2935,7 @@ fn dust_frame_fits_the_budget_with_the_cadence() {
   }
 }
 
-/// The in-frame gates per target (brief 07, decided 2026-10-18 in records/budget-loop.md): the hard
+/// The in-frame gates per target (decided 2026-10-18 in records/budget-loop.md): the hard
 /// gates read the frame's running counters across both targets because the build draws' headers
 /// route the gate counters frame → image → frame. The routed ranges hold every probed counter
 /// (split children, EWA texels, volume evaluations) and the gate word (`PYR_SPLIT_DEPTH`, its

@@ -258,7 +258,7 @@ pub struct DustGpuSystem {
   pub render: Option<DustBuffer>,
   pub moments: Option<DustBuffer>,
   pub batches: Option<DustBuffer>,
-  /// the propagate's solve rows (round 9 step O): one chunk of `DUST_PROP_CHUNK_WGS` workgroups,
+  /// the propagate's solve rows: one chunk of `DUST_PROP_CHUNK_WGS` workgroups,
   /// 64 rows of `DUST_PROP_ROW_WORDS` words each; the chunks are serialised by barriers
   pub rows: Option<DustBuffer>,
   batches_mapped: *mut u8,
@@ -434,7 +434,7 @@ pub struct DustViewHost {
   /// per readback slot: the unit when it was recorded
   slot_unit: [f32; DUST_READBACK_SLOTS],
   slot_valid: [bool; DUST_READBACK_SLOTS],
-  /// per readback slot: the haze detail of the frame's flags (round 9 step B), and the one of the
+  /// per readback slot: the haze detail of the frame's flags, and the one of the
   /// readback being absorbed ([`DustViewHost::absorb`]: the haze engaged at a top-only bias)
   slot_haze: [u32; DUST_READBACK_SLOTS],
   pub readback_haze: u32,
@@ -497,14 +497,14 @@ pub struct DustViewHost {
   /// last frame read back's spill: (records drawn from it, records lost: refused by it too)
   pub vqueue_mode: Option<u32>,
   pub vqueue_off: bool,
-  /// the plain consumer blob instead of the `.sg` one (test hook, round 8 step F2)
+  /// the plain consumer blob instead of the `.sg` one (test hook)
   pub volume_plain: bool,
   pub vqueue_capacity: u32,
   pub vspill_capacity: u32,
   pub vspill_counts: (u32, u32),
   pub vqueue_chunk: u32,
   pub vqueue_ppc: f32,
-  /// the splitter family's chunk feedback (perf9 steps Z / O): the leaves and the candidates per
+  /// the splitter family's chunk feedback: the leaves and the candidates per
   /// cluster (EMAs of the leaf queue header's frame-wide words 8 / 9 of the frames read back);
   /// the auto chunk fits the leaf queue and the candidate buffer twice over (`dust_split_auto_chunk`)
   pub lqueue_lpc: f32,
@@ -586,7 +586,7 @@ pub struct FeedbackSet {
   pub split_depth_over: u32,
   pub volume_bias: u32,
   pub ewa_bias: u32,
-  /// the feedback's memory (round 8 step B): per bias, the work ratio of one step measured at
+  /// the feedback's memory: per bias, the work ratio of one step measured at
   /// the last raise into it (8.8 fixed point, 0 = unknown), and the previous readback's (bias,
   /// work) that measures the next raise. A lower is refused while `work × ratio` would pass the
   /// budget: one volume step changes the work up to ~13×, one EWA step up to 25×, both past the
@@ -596,7 +596,7 @@ pub struct FeedbackSet {
   pub ewa_step_q8: [u32; dust::DUST_EWA_BIAS_MAX as usize + 1],
   pub volume_prev: (u32, u64),
   pub ewa_prev: (u32, u64),
-  /// the top plateau's edge (round 9 step B): the work ratio of the raise that engaged the haze
+  /// the top plateau's edge: the work ratio of the raise that engaged the haze
   /// (the last sub-top readback's work over the first top-only one's, 8.8 fixed point, 0 =
   /// unknown), kept apart from the per-bias steps: a raise of k levels into the plateau would
   /// spread the one-off haze-off ↔ haze-on jump (45–200×) over k steps as its k-th root, and the
@@ -703,7 +703,7 @@ pub const DUST_PROBE_HEADER_WORDS: [u32; 3] = [dust::PYR_SPLIT_CHILDREN, dust::P
 /// once, at its build, at about the rate of its class's build members). Per class because the
 /// classes sample their members at different rates (class k builds each once per N_k frames): a
 /// pooled `Σ shown / Σ built` weighs the faster classes' members N_slow / N_fast times too much
-/// (round 7, 1 km orbit after the handover: 4 % low, the EWA 1 → 0 switch at f96 against the full
+/// (1 km orbit after the handover: 4 % low, the EWA 1 → 0 switch at f96 against the full
 /// draw's f144). A class with shown members and no builds in the window takes the pooled rate.
 ///
 /// The scale `shown / built` is capped at [`DUST_ESTIMATE_SCALE_SLACK`] `· N_k / w` (`w` the
@@ -1329,7 +1329,7 @@ impl DustViewHost {
     }
     self.split_depth = next;
     let vol = dust::VolumeStats::load(header);
-    // the haze knob (round 9 step B): below 16 and without the frame's deep-chord bit it engages
+    // the haze knob: below 16 and without the frame's deep-chord bit it engages
     // at a top-only bias (`dust_haze_detail_of`), where it cuts the evaluations by the plateau's
     // edge; the plateau (every bias from `volume_top_min` on draws the same frame) is one state
     let haze_on = self.readback_haze < dust::DUST_HAZE_DETAIL_DEFAULT && !dust::deep_chord(header);
@@ -1607,7 +1607,7 @@ impl DustView {
       + w * h * dust::PYRAMID_TEXEL_WORDS
       + dust::DUST_QUEUE_HEADER_WORDS
       + dust::DUST_VQUEUE_HEADER_WORDS
-      // the splitter family (perf9 steps Z / O): the leaf queue's and the candidate buffer's headers
+      // the splitter family : the leaf queue's and the candidate buffer's headers
       + 2 * dust::DUST_VQUEUE_HEADER_WORDS
   }
   /// `(level, offset, width, height)` of the measurement grid
@@ -2036,7 +2036,7 @@ impl Device {
       );
       self.device.cmd_dispatch(cmd, batch.count.div_ceil(DUST_WG), 1, 1);
     };
-    // (perf9_K) the pre-package emission (`dust_emit_mono.comp`, the GTX 1070 default): one
+    // the monolithic emission (`dust_emit_mono.comp`, the GTX 1070 default): one
     // dispatch, the same push constants and grid
     if !self.dust_prop_staged() {
       if let Some(m) = pipelines.dust_emit_mono {
@@ -2046,7 +2046,7 @@ impl Device {
       }
     }
     match pipelines.dust_emit_passes {
-      // round 9 step O, the staged emission: 1, (2, 3) × DUST_KEPLER_ITERS_DF, 6, 4, 5r, 5v, 71,
+      // the staged emission: 1, (2, 3) × DUST_KEPLER_ITERS_DF, 6, 4, 5r, 5v, 71,
       // 72 over the same threads, a barrier between passes (each reads the record words the
       // previous one wrote)
       Some(passes) => {
@@ -2102,7 +2102,7 @@ impl Device {
     unsafe { self.device.synchronization2.cmd_pipeline_barrier2(cmd, &dep) };
   }
 
-  /// perf9_K: whether the splat runs the stage chain ([`Self::cmd_dust_splat_chain`]) or the
+  /// Whether the splat runs the stage chain ([`Self::cmd_dust_splat_chain`]) or the
   /// monolithic enumerator (`dust_splat_mono.comp`): the override of
   /// [`Self::dust_set_splat_staged`], else the vendor rule
   /// (`physics::dust_splat_staged_default`, env `AETHERVK_DUST_SPLAT_STAGED`); the chain
@@ -2120,18 +2120,18 @@ impl Device {
     }
   }
 
-  /// perf9_K: the splat path of this device from now on (true: the stage chain, false: the
+  /// The splat path of this device from now on (true: the stage chain, false: the
   /// monolith, where built), overriding the vendor rule and the env (the parity tests run both)
   pub fn dust_set_splat_staged(&self, staged: bool) {
     self.kernels.pipelines.dust_splat_mode.store(if staged { 1 } else { 2 }, core::sync::atomic::Ordering::Relaxed);
   }
 
-  /// perf9_K: back to the vendor rule and the env
+  /// Back to the vendor rule and the env
   pub fn dust_reset_splat_staged(&self) {
     self.kernels.pipelines.dust_splat_mode.store(0, core::sync::atomic::Ordering::Relaxed);
   }
 
-  /// perf9_K: logs the splat path once per change (the byte gate's and the observer's logs say
+  /// Logs the splat path once per change (the byte gate's and the observer's logs say
   /// which path ran), with the other staged switches beside it
   fn dust_splat_log_path(&self, mono: bool) {
     let v = if mono { 2u8 } else { 1u8 };
@@ -2151,7 +2151,7 @@ impl Device {
     }
   }
 
-  /// The enumerator as a stage chain (round 9 step O, `dust_splat.comp` stages): over a chunk's
+  /// The enumerator as a stage chain (`dust_splat.comp` stages): over a chunk's
   /// `n` clusters LIVE, PRE, LOD, with the haze knob engaged HAZE_E, HAZE_A, HAZE_B (the stages
   /// return at once on the clusters without the haze, so the host skips them at the default
   /// detail), then SHAPE, GEO, SUBW, COUNT at [`dust::DUST_SPLAT_STAGE_LANES`] lanes per cluster,
@@ -2226,7 +2226,7 @@ impl Device {
     }
   }
 
-  /// Barrier between the speck walk's passes (round 9 step O): compute writes → compute reads
+  /// Barrier between the speck walk's passes: compute writes → compute reads
   /// and atomics, and the indirect args the region holds.
   pub fn cmd_dust_walk_barrier(&self, cmd: vk::CommandBuffer) {
     let b = vk::MemoryBarrier2::default()
@@ -2492,7 +2492,7 @@ impl Device {
       // then the sub-packet queue and the speck walk's spill (its slots in proportion to the
       // volume queue's records), placed after the records this view has: the shaders read them
       // from the volume header's `DUST_VQUEUE_RECORDS` word (`dust_squeue_base`)
-      // (perf9_O C2 v5) the staged consumer's scratch rows, when its pipelines are built
+      // the staged consumer's scratch rows, when its pipelines are built
       let staged = self.kernels.pipelines.dust_draw_volume_stages.is_some();
       let offsets = dust::dust_queue_offsets_for(vqueue_records, staged);
       let spill_slots = offsets.spill_slots;
@@ -2744,7 +2744,7 @@ impl Device {
           );
         }
         let clusters = host.slot_clusters[slot];
-        // the splitter family (perf9 steps Z / O), never silent: a leaf the leaf queue and its spill
+        // the splitter family, never silent: a leaf the leaf queue and its spill
         // refused (the frame's count) was not drawn; nor were the candidates of a cluster the
         // candidate buffer refused (its header is reset per chunk: the last chunk's count)
         let llost = lqueue_hdr[dust::DUST_LQUEUE_LOST];
@@ -3129,7 +3129,7 @@ impl Device {
         q[1] = 1;
         q[2] = 1;
         q[4] = queue_capacity;
-        // the splitter family (perf9 steps Z / O): the leaf queue, the leaf spill and the large
+        // the splitter family : the leaf queue, the leaf spill and the large
         // leaves' list, in words from this header (`dust_lqueue_base` and the others)
         let split_offsets = dust::dust_queue_offsets(view.vqueue_records);
         q[dust::DUST_QUEUE_LQUEUE_OFFSET] = split_offsets.lqueue;
@@ -3158,7 +3158,7 @@ impl Device {
           (view.queue_word() + dust::DUST_QUEUE_WORDS) as u64 * 4,
           bytemuck::cast_slice(&vq),
         );
-        // track 9A (t9a2d): the deferred edge pieces' two regions: empty, their dispatch (0, 1, 1),
+        // the deferred edge pieces' two regions: empty, their dispatch (0, 1, 1),
         // their capacity, the frame's counts (words 5-6) zero (words 0-4 again per chunk)
         let mut ve = [0u32; dust::DUST_VQUEUE_HEADER_WORDS as usize];
         ve[1] = 1;
@@ -3172,7 +3172,7 @@ impl Device {
             bytemuck::cast_slice(&ve),
           );
         }
-        // the splitter family (perf9 steps Z / O): the leaf queue, its spill and the large-leaf
+        // the splitter family : the leaf queue, its spill and the large-leaf
         // list empty, their lost counts (word 5) zero for the frame; the leaf queue's words 6-7 the
         // candidate buffer's and the screen-packet slots' places (words from the EWA queue base);
         // the candidate buffer empty, its word 0 (the indirect x) and word 3 zero (again per chunk)
@@ -3481,7 +3481,7 @@ impl Device {
       return Ok(());
     }
     // the gate pass (a thread per cluster × bin: the density at the eye, the walk gate, the
-    // cluster's walk mask), then the breadth-first walk (round 9 step O): setup1 (a thread per
+    // cluster's walk mask), then the breadth-first walk: setup1 (a thread per
     // marked (cluster, bin): its record in the walk region), setup2a / 2b / 3 / 4 / 5 (a thread
     // per record, indirect from the region header), a step pass per tree level (indirect from
     // the level's args; push word 24 = the level), the many- and single-speck leaves (indirect),
@@ -3776,7 +3776,7 @@ impl Device {
       _ => &self.kernels.pipelines.dust_splat_stages,
     };
     let producer = stages[0];
-    // perf9_K: the splat path (`Self::dust_splat_staged`): `Some` the monolithic enumerator
+    // the splat path (`Self::dust_splat_staged`): `Some` the monolithic enumerator
     // (its profiler variant while the request is on), `None` the stage chain above
     let splat_mono = if self.dust_splat_staged() {
       None
@@ -3796,7 +3796,7 @@ impl Device {
       (_, Some(p)) if volume_plain => p,
       _ => self.kernels.pipelines.dust_draw_volume,
     };
-    // (perf9_O C2 v5) the staged consumer, unless the consumer above is the profiler's or the plain
+    // the staged consumer, unless the consumer above is the profiler's or the plain
     // blob (the same conditions as that match)
     let staged_stages = if (profiling && self.kernels.pipelines.dust_draw_volume_prof.is_some())
       || (volume_plain && self.kernels.pipelines.dust_draw_volume_plain.is_some())
@@ -3809,7 +3809,7 @@ impl Device {
       Some(p) if profiling => p,
       _ => self.kernels.pipelines.dust_split,
     };
-    // (perf9_K) the split family (`dust_split_staged`): `Some` the pre-split splitter (its profiler
+    // the split family (`dust_split_staged`): `Some` the pre-split splitter (its profiler
     // variant while the request is on; the GTX 1070 default), `None` the staged chain below
     let split_mono = if self.dust_split_staged() {
       None
@@ -3819,7 +3819,7 @@ impl Device {
         _ => self.kernels.pipelines.dust_split_mono,
       }
     };
-    // the splitter family (perf9 steps Z / O): PREP → walk → project passes 1-3 → SEQ order →
+    // the splitter family : PREP → walk → project passes 1-3 → SEQ order →
     // SEQ draw (`cmd_dust_split_chain`), then the leaf consumers beside the volume consumer
     let hard_axis = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_HARD_AXIS")
       .and_then(|v| v.trim().parse::<u32>().ok())
@@ -3877,8 +3877,8 @@ impl Device {
       _ => self.kernels.pipelines.dust_draw_small_edge,
     };
     self.kernels.pipelines.assert_pc_size(producer, core::mem::size_of_val(&pc));
-    // (perf9_K) the mono draw family (`dust_draw_staged` false, the GTX 1070 default): the
-    // pre-perf9_O consumer (the profiler's, the plain or the default blob, chosen as above) and edge
+    // the mono draw family (`dust_draw_staged` false, the GTX 1070 default): the
+    // monolithic consumer (the profiler's, the plain or the default blob, chosen as above) and edge
     // pass, never the staged consumer's stages. Their dispatches are the staged family's single
     // blobs' (the same indirect headers, push constants and barriers)
     let (consumer, staged_stages, edge_pass) = if self.dust_draw_staged() {
@@ -3946,10 +3946,10 @@ impl Device {
       let spill_records = dust::dust_vspill_records(view.vqueue_records);
       let spill_capacity =
         if host.vspill_capacity > 0 { host.vspill_capacity.min(spill_records) } else { spill_records };
-      // the splitter family (perf9 steps Z / O): the auto chunk also fits the leaf queue and the
+      // the splitter family : the auto chunk also fits the leaf queue and the
       // candidate buffer twice over at the frame-wide estimates (a refused candidate run loses
       // its cluster's leaves; a refused leaf goes to the spill, then is lost)
-      // (perf9_K: the pre-split splitter keeps the volume queue's chunk, as before the family)
+      // (the pre-split splitter keeps the volume queue's chunk)
       let chunk = if host.vqueue_chunk > 0 || split_mono.is_some() {
         chunk
       } else {
@@ -3970,12 +3970,12 @@ impl Device {
     let vbase = (view.queue_word() + offsets.vqueue) as u64 * 4;
     let sbase = (view.queue_word() + offsets.squeue) as u64 * 4;
     let vsbase = (view.queue_word() + offsets.vspill) as u64 * 4;
-    // track 9A (t9a2d): the deferred edge pieces' regions, by chunk parity
+    // the deferred edge pieces' regions, by chunk parity
     let vebase = [
       (view.queue_word() + offsets.vedge[0]) as u64 * 4,
       (view.queue_word() + offsets.vedge[1]) as u64 * 4,
     ];
-    // the splitter family's regions (perf9 steps Z / O): the leaf queue, the leaf spill, the large
+    // the splitter family's regions : the leaf queue, the leaf spill, the large
     // leaves' list (the leaf consumers' indirect dispatches) and the candidate buffer (the project
     // passes' and the SEQ draw stage's); the leaf consumer's second dispatch drains the leaf spill
     let lqbase = (view.queue_word() + offsets.lqueue) as u64 * 4;
@@ -4002,7 +4002,7 @@ impl Device {
       .src_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE | vk::AccessFlags2::SHADER_STORAGE_READ)
       .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
       .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE);
-    // the header update → the producer's reads and writes; and (track 9A, t9a2d) the previous
+    // the header update → the producer's reads and writes; and the previous
     // chunk's consumer → the edge pass beside this producer: its records and indirect dispatch
     // (the consumer's writes already ordered before the update by `to_update`; named here too)
     let to_producer = vk::MemoryBarrier2::default()
@@ -4024,7 +4024,7 @@ impl Device {
           | vk::AccessFlags2::SHADER_STORAGE_READ
           | vk::AccessFlags2::SHADER_STORAGE_WRITE,
       );
-    // (perf9_O C2 v5) between two stages of the staged consumer: a stage's writes (its scratch rows,
+    // between two stages of the staged consumer: a stage's writes (its scratch rows,
     // records and pyramid) → the next stage's reads and writes
     let stage_to_stage = vk::MemoryBarrier2::default()
       .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
@@ -4037,7 +4037,7 @@ impl Device {
       let end = first.saturating_add(chunk).min(count);
       let hdr = [0u32, 1, 1, 0, vqueue_capacity, first, end];
       unsafe {
-        // (track 9A, t9a2d: at the first chunk too: the previous call's last edge pass and
+        // (at the first chunk too: the previous call's last edge pass and
         // consumer, recorded back to back with this call by the frame's tier loop with no barrier
         // between, read the headers and regions this update rewrites)
         self.device.synchronization2.cmd_pipeline_barrier2(
@@ -4054,7 +4054,7 @@ impl Device {
           bytemuck::cast_slice(&ring),
         );
         // the sub-packet queue: empty (its record counter and overflow count)
-        // (words 4-5 the list, 6-7 the owner bytes: dust_splat.comp; round 9 step O: words 8-10
+        // (words 4-5 the list, 6-7 the owner bytes: dust_splat.comp; words 8-10
         // and 11-13 the record stages' indirect args, x 0 and y = z = 1, COUNT atomicMaxes x)
         let shdr = [
           0u32,
@@ -4077,19 +4077,19 @@ impl Device {
         // `to_update` / `to_producer` barriers as the main header)
         let vshdr = [0u32, 1, 1, 0, vspill_capacity];
         self.device.cmd_update_buffer(cmd, pyramid.buffer, vsbase, bytemuck::cast_slice(&vshdr));
-        // track 9A (t9a2d): this chunk's edge region (its parity's): empty, its dispatch (0, 1, 1),
+        // this chunk's edge region (its parity's): empty, its dispatch (0, 1, 1),
         // its capacity (words 5-6, the frame's counts, kept). The other region holds the previous
         // chunk's edge pieces, drained below beside the producer; the chunk before that one's
         // pass, which read this region, finished before `to_update`
         let odd = chunks & 1 == 1;
         let vehdr = [0u32, 1, 1, 0, offsets.vedge_records];
         self.device.cmd_update_buffer(cmd, pyramid.buffer, vebase[odd as usize], bytemuck::cast_slice(&vehdr));
-        // the splitter family (perf9 steps Z / O): the leaf queue, its spill and the large-leaf list
+        // the splitter family : the leaf queue, its spill and the large-leaf list
         // empty, their dispatch (0, 1, 1), their capacities (words 5-7, the lost count and the
         // offsets, kept for the frame); the candidate buffer empty (word 0 the project passes' and
         // the SEQ draw stage's x, word 3 the reservations, word 5 the refused: the draw stage's
         // granted range is [0, word 3 − word 5) of this chunk). The same barriers as the headers above
-        // (perf9_K) not with the pre-split splitter: it feeds none of them
+        // not with the pre-split splitter: it feeds none of them
         if split_mono.is_none() {
           let lqhdr = [0u32, 1, 1, 0, leaf_capacity];
           self.device.cmd_update_buffer(cmd, pyramid.buffer, lqbase, bytemuck::cast_slice(&lqhdr));
@@ -4119,10 +4119,10 @@ impl Device {
           );
           self.device.cmd_dispatch_indirect(cmd, pyramid.buffer, vebase[!odd as usize]);
         }
-        // the enumerator: the stage chain over the chunk's clusters (`dust_splat.comp`, round 9
-        // step O; `cmd_dust_splat_chain`)
+        // the enumerator: the stage chain over the chunk's clusters (`dust_splat.comp`,
+        // `cmd_dust_splat_chain`)
         if let Some(mono) = splat_mono {
-          // perf9_K: the monolithic enumerator as before step O: a warp per cluster, a lane per
+          // the monolithic enumerator: a warp per cluster, a lane per
           // sub-packet (`dust_splat_mono.comp`); the same barriers around it as the chain (the
           // header update before, the splitter's below); the header's words 8-13 (the chain's
           // indirect args) and the plan rows are not read
@@ -4143,9 +4143,9 @@ impl Device {
           cmd,
           &vk::DependencyInfo::default().memory_barriers(core::slice::from_ref(&to_consumer)),
         );
-        // (perf9 steps Z / O) PREP → walk → project passes 1-3 → SEQ order → SEQ draw
+        // the splitter family: PREP → walk → project passes 1-3 → SEQ order → SEQ draw
         if let Some(mono) = split_mono {
-          // perf9_K: the pre-split splitter (`dust_split_mono.comp`): a workgroup per cluster of the
+          // the pre-split splitter (`dust_split_mono.comp`): a workgroup per cluster of the
           // chunk over its records, EWA leaves drawn in-thread or put on the EWA queue (drained at
           // the frame end), volumetric packets to the volume queue / spill; the same barriers
           self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, mono);
@@ -4165,7 +4165,7 @@ impl Device {
             cmd,
             &vk::DependencyInfo::default().memory_barriers(core::slice::from_ref(&to_consumer)),
           );
-          // (perf9_K) not with the pre-split splitter (no leaf queue)
+          // not with the pre-split splitter (no leaf queue)
           if split_mono.is_none() {
             // the leaf consumers (`dust_draw_leaf.comp`): a lane per record of the leaf queue, again
             // over the leaf spill (host-internal flag), a workgroup per entry of the large-leaf list
@@ -4197,7 +4197,7 @@ impl Device {
             self.device.cmd_dispatch_indirect(cmd, pyramid.buffer, blbase);
           }
           if let Some(stages) = staged_stages {
-            // (perf9_O C2 v5) the seven stages in order (s1 s2 s3a s3b s4a s4b s5), each a main drain
+            // the seven stages in order (s1 s2 s3a s3b s4a s4b s5), each a main drain
             // then its spill drain, with no barrier between the two drains (their rows and records
             // are per drain); a compute barrier between the stages (6)
             for (k, stage) in stages.into_iter().enumerate() {
@@ -4257,7 +4257,7 @@ impl Device {
         break;
       }
     }
-    // the last chunk's edge pieces, after its consumer (track 9A, t9a2d)
+    // the last chunk's edge pieces, after its consumer
     if !nodraw {
       let odd = (chunks - 1) & 1 == 1;
       unsafe {
@@ -4280,8 +4280,7 @@ impl Device {
     Ok(())
   }
 
-  /// The splitter family over a chunk's `n` clusters (perf9 steps Z / O; Z DESIGN §4 item 5, §7
-  /// item 11, §8.3 item 18, O DESIGN §3 items 3 and 3b): PREP (`stages[0]`; `None` with the
+  /// The splitter family over a chunk's `n` clusters: PREP (`stages[0]`; `None` with the
   /// hard-axis walk, which builds its cut itself) and the walk (`stages[1]`), a workgroup per
   /// cluster; the project stage's passes 1, 2, 3 (`stages[2..5]`), a lane per candidate, indirect
   /// from the candidate header's word 0 (`cqbase`, maintained by `dust_cqueue_reserve`); the SEQ
@@ -4430,7 +4429,7 @@ impl Device {
         Some(p) if crate::gpu_backends::vulkan::physics::dust_profile_requested() => p,
         _ => self.kernels.pipelines.dust_draw_queue,
       };
-      // (perf9_K) the mono draw family's queue draw (the pre-perf9_O blob; the same dispatch)
+      // the mono draw family's queue draw (the monolithic blob; the same dispatch)
       let pipeline = if self.dust_draw_staged() {
         pipeline
       } else {
@@ -4553,7 +4552,7 @@ impl Device {
         .src_offset((view.queue_word() + dust::DUST_QUEUE_WORDS) as u64 * 4)
         .dst_offset((slot as u64 + 1) * rb_words * 4 - 3 * dust::DUST_VQUEUE_HEADER_WORDS as u64 * 4)
         .size(dust::DUST_VQUEUE_HEADER_WORDS as u64 * 4),
-      // the splitter family (perf9 steps Z / O): the leaf queue's and the candidate buffer's headers
+      // the splitter family : the leaf queue's and the candidate buffer's headers
       vk::BufferCopy::default()
         .src_offset((view.queue_word() + split_offsets.lqueue) as u64 * 4)
         .dst_offset((slot as u64 + 1) * rb_words * 4 - 2 * dust::DUST_VQUEUE_HEADER_WORDS as u64 * 4)
@@ -4636,7 +4635,7 @@ impl Device {
     let res = self.res.read();
     if let Some(view) = res.dust_manager.as_ref().and_then(|m| m.views.get(&pe)) {
       let mut host = view.host.lock();
-      // a released pin continues from the pinned bias (round 9 step B): the feedback's own state
+      // a released pin continues from the pinned bias: the feedback's own state
       // did not run while the frames drew at the pin, and the plateau hold starts afresh
       if let (Some(b), None) = (host.volume_bias_override, bias) {
         host.volume_bias = b;
@@ -4826,7 +4825,7 @@ impl Device {
     Ok((w[dust::DUST_LQUEUE_FRAME_REFUSED], w[dust::DUST_LQUEUE_FRAME_CPC_MAX]))
   }
 
-  /// `pe`'s last frame's leaf queue (the splitter family, perf9 steps Z / O; diagnostics, waits
+  /// `pe`'s last frame's leaf queue (the splitter family; diagnostics, waits
   /// for the GPU): the leaves the sequencer queued, the large ones listed for the workgroup blob,
   /// the ones the queue refused (sent to the leaf spill), the ones the spill refused too (lost)
   pub fn dust_leaf_counts(&self, pe: gpu::PresentationEngineHandle) -> GpuResult<(u32, u32, u32, u32)> {
@@ -4878,7 +4877,7 @@ impl Device {
     } else {
       dust::DUST_VQUEUE_CAPACITY / 16
     };
-    // (perf9_O C2 v5) the staged consumer's scratch rows (`DUST_VW_SX_WORDS` words each, for the
+    // the staged consumer's scratch rows (`DUST_VW_SX_WORDS` words each, for the
     // main and the spill drains): at most a sixteenth of the queue (at full capacity 1.03 GB)
     if self.kernels.pipelines.dust_draw_volume_stages.is_some() {
       records.min(dust::DUST_VQUEUE_CAPACITY / 16)
@@ -4898,9 +4897,9 @@ impl Device {
     }
   }
 
-  /// perf9_K: the draw family's vendor rule. The staged family (perf9_O: the workgroup-per-record
+  /// The draw family's vendor rule. The staged family (the workgroup-per-record
   /// volume consumer, the texel-lane queue draw, the grouped edge pass; the zero-spill design) on
-  /// Qualcomm (0x5143) and ARM (0x13B5), the mono family (the pre-perf9_O blobs, `*_mono.comp`:
+  /// Qualcomm (0x5143) and ARM (0x13B5), the mono family (the monolithic blobs, `*_mono.comp`:
   /// ~14x faster on the GTX 1070) on NVIDIA (0x10DE) and the others. `AETHERVK_DUST_DRAW_STAGED=1`
   /// / `0` overrides it.
   pub fn dust_draw_staged_wanted(vendor_id: u32) -> bool {
@@ -4911,7 +4910,7 @@ impl Device {
     }
   }
 
-  /// perf9_K: whether this device's frames draw with the staged family (the test hook's choice,
+  /// Whether this device's frames draw with the staged family (the test hook's choice,
   /// else [`Self::dust_draw_staged_wanted`], resolved once and logged); always the staged family
   /// where the mono pipelines are not built
   pub fn dust_draw_staged(&self) -> bool {
@@ -4928,7 +4927,7 @@ impl Device {
         let _ = mode.compare_exchange(0, if staged { 4 } else { 3 }, Ordering::Relaxed, Ordering::Relaxed);
         aethervk_oshal_rlib::log!(
           "[dust] draw family: {} (vendor {vendor:#X}, AETHERVK_DUST_DRAW_STAGED={:?}, mono built {built})",
-          if staged { "staged (perf9_O)" } else { "mono (pre-perf9_O)" },
+          if staged { "staged" } else { "mono" },
           aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_DRAW_STAGED")
         );
         staged
@@ -4936,7 +4935,7 @@ impl Device {
     }
   }
 
-  /// perf9_K test hook: `Some(true)` / `Some(false)` draws with the staged / mono family from the
+  /// Test hook: `Some(true)` / `Some(false)` draws with the staged / mono family from the
   /// next recorded frame on (every view of the device), `None` returns to the vendor rule
   pub fn dust_set_draw_staged(&self, staged: Option<bool>) {
     let m = match staged {
@@ -4947,10 +4946,10 @@ impl Device {
     self.kernels.pipelines.dust_draw_mode.store(m, core::sync::atomic::Ordering::Relaxed);
   }
 
-  /// perf9_K (K4): the propagate / emit family's vendor rule. The perf9_O package (the propagate's
+  /// The propagate / emit family's vendor rule. The package (the propagate's
   /// lanes-per-cluster solve over the rows buffer and its moments stage, the emission's record-stash
   /// solve; the staged passes where `AETHERVK_DUST_STAGED` picks them) on Qualcomm (0x5143) and ARM
-  /// (0x13B5), the pre-package monoliths (`dust_propagate_mono.comp`, `dust_emit_mono.comp`: the
+  /// (0x13B5), the monoliths (`dust_propagate_mono.comp`, `dust_emit_mono.comp`: the
   /// GTX 1070's propagate 12.7 ms against 22.4 ms with the package) on NVIDIA (0x10DE) and the
   /// others. `AETHERVK_DUST_PROP_STAGED=1` / `0` overrides it.
   pub fn dust_prop_staged_wanted(vendor_id: u32) -> bool {
@@ -4961,7 +4960,7 @@ impl Device {
     }
   }
 
-  /// perf9_K (K4): whether this device propagates and emits with the perf9_O package (the test
+  /// Whether this device propagates and emits with the package (the test
   /// hook's choice, else [`Self::dust_prop_staged_wanted`], resolved once and logged); always the
   /// package where the mono pipelines are not built
   pub fn dust_prop_staged(&self) -> bool {
@@ -4978,7 +4977,7 @@ impl Device {
         let _ = mode.compare_exchange(0, if staged { 4 } else { 3 }, Ordering::Relaxed, Ordering::Relaxed);
         aethervk_oshal_rlib::log!(
           "[dust] propagate/emit family: {} (vendor {vendor:#X}, AETHERVK_DUST_PROP_STAGED={:?}, mono built {built})",
-          if staged { "staged (perf9_O package)" } else { "mono (pre-package monoliths)" },
+          if staged { "staged package" } else { "mono (monoliths)" },
           aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_PROP_STAGED")
         );
         staged
@@ -4986,7 +4985,7 @@ impl Device {
     }
   }
 
-  /// perf9_K (K4) test hook: `Some(true)` / `Some(false)` propagates and emits with the package /
+  /// Test hook: `Some(true)` / `Some(false)` propagates and emits with the package /
   /// the mono pipelines (where built) from the next recorded command on, `None` returns to the
   /// vendor rule
   pub fn dust_set_prop_staged(&self, staged: Option<bool>) {
@@ -4998,10 +4997,10 @@ impl Device {
     self.kernels.pipelines.dust_prop_mode.store(m, core::sync::atomic::Ordering::Relaxed);
   }
 
-  /// perf9_K: the split family's vendor rule. The staged leaf path (perf9 steps Z / O: prep, walk,
+  /// The split family's vendor rule. The staged leaf path (prep, walk,
   /// project passes 1-3, sequencer, leaf consumers; the zero-spill design) on Qualcomm (0x5143) and
   /// ARM (0x13B5), the pre-split splitter (`dust_split_mono.comp`, one dispatch per chunk: the 1 km
-  /// still ~0.3 s against several seconds with the family on the GTX 1070, byte gate perf9b_split2)
+  /// still ~0.3 s against several seconds with the family on the GTX 1070)
   /// on NVIDIA (0x10DE) and the others. `AETHERVK_DUST_SPLIT_STAGED=1` / `0` overrides it.
   pub fn dust_split_staged_wanted(vendor_id: u32) -> bool {
     match aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_SPLIT_STAGED").as_deref().map(str::trim) {
@@ -5011,7 +5010,7 @@ impl Device {
     }
   }
 
-  /// perf9_K: whether this device's frames split with the staged family (the test hook's choice,
+  /// Whether this device's frames split with the staged family (the test hook's choice,
   /// else [`Self::dust_split_staged_wanted`], resolved once and logged); always the staged family
   /// where the pre-split splitter is not built
   pub fn dust_split_staged(&self) -> bool {
@@ -5027,7 +5026,7 @@ impl Device {
         let _ = mode.compare_exchange(0, if staged { 4 } else { 3 }, Ordering::Relaxed, Ordering::Relaxed);
         aethervk_oshal_rlib::log!(
           "[dust] split family: {} (vendor {vendor:#X}, AETHERVK_DUST_SPLIT_STAGED={:?}, mono built {built})",
-          if staged { "staged (perf9 Z/O leaf queue)" } else { "mono (pre-split splitter)" },
+          if staged { "staged (leaf queue)" } else { "mono (pre-split splitter)" },
           aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_SPLIT_STAGED")
         );
         staged
@@ -5035,7 +5034,7 @@ impl Device {
     }
   }
 
-  /// perf9_K test hook: `Some(true)` / `Some(false)` splits with the staged / mono family from the
+  /// Test hook: `Some(true)` / `Some(false)` splits with the staged / mono family from the
   /// next recorded frame on (every view of the device), `None` returns to the vendor rule
   pub fn dust_set_split_staged(&self, staged: Option<bool>) {
     let m = match staged {
@@ -5047,7 +5046,7 @@ impl Device {
   }
 
   /// Runs `pe`'s volume consumer with the plain blob instead of the `.sg` one from the next
-  /// frame on (round 8 step F2; a test hook: the baseline devices' path on a device that has
+  /// frame on (a test hook: the baseline devices' path on a device that has
   /// both; a no-op where the plain blob is the only one, or without a view)
   pub fn dust_set_volume_plain(&self, pe: gpu::PresentationEngineHandle, plain: bool) {
     let res = self.res.read();
@@ -5150,9 +5149,9 @@ impl Device {
     Ok((w[dust::DUST_VQUEUE_SPILL_DRAWN], w[dust::DUST_VQUEUE_LOST]))
   }
 
-  /// `pe`'s last frame's deferred edge pieces (track 9A, t9a2d; diagnostics, waits for the GPU):
+  /// `pe`'s last frame's deferred edge pieces (diagnostics, waits for the GPU):
   /// the small pieces the edge pass drew, those a full region refused (lost: not drawn) and, of
-  /// the drawn, those it demoted (t9a2e), both regions summed ([`dust::DUST_VEDGE_DRAWN`] /
+  /// the drawn, those it demoted, both regions summed ([`dust::DUST_VEDGE_DRAWN`] /
   /// [`dust::DUST_VEDGE_LOST`] / [`dust::DUST_VEDGE_DEMOTED`])
   pub fn dust_vedge_counts(&self, pe: gpu::PresentationEngineHandle) -> GpuResult<(u32, u32, u32)> {
     let (buffer, bases) = {
@@ -5601,7 +5600,7 @@ impl Device {
     }
     let live_count = live_count.min(capacity);
     let mask = capacity - 1;
-    // the trajectory detail's edge stride (round 8 step D): the same on both mirrors
+    // the trajectory detail's edge stride: the same on both mirrors
     let stride = dust::propagate_edge_stride(mgr.propagate_detail.load(core::sync::atomic::Ordering::Relaxed));
     if let Some(ring) = sys.cpu_ring.as_ref() {
       // CPU mode: evaluate on the host; cmd_dust_splat scatters the result
@@ -5676,11 +5675,11 @@ impl Device {
       }
       e.1
     };
-    // (perf9_K) the propagate family (`dust_prop_staged`): `Some` the pre-package monolith (the
+    // the propagate family (`dust_prop_staged`): `Some` the monolith (the
     // GTX 1070 default), `None` the package below
     let prop_mono = if self.dust_prop_staged() { None } else { self.kernels.pipelines.dust_propagate_mono };
     if let (Some(mono), true) = (prop_mono, live_count > 0 && !skipped) {
-      // perf9_K: the pre-package dispatch (`dust_propagate_mono.comp`): a thread per live slot, one
+      // the monolithic dispatch (`dust_propagate_mono.comp`): a thread per live slot, one
       // dispatch, no rows buffer, no moments stage; push word 8 is the ring mask (the package's
       // `rows_lo`), skip.x only the flag and the stride bits
       let pc = DustPropagatePushConstants {
@@ -5719,7 +5718,7 @@ impl Device {
         self.device.cmd_dispatch(cmd, live_count.div_ceil(DUST_WG), 1, 1);
       }
     } else if live_count > 0 && !skipped {
-      // round 9 step O: 3 clusters per workgroup, each lane's df64 solve state in its row of the
+      // 3 clusters per workgroup, each lane's df64 solve state in its row of the
       // rows buffer (one chunk of `DUST_PROP_CHUNK_WGS` workgroups at a time): per chunk the solve
       // stage (the monolith, or the staged passes 1, (2, 3) × iters, 6, 4, 5m, 5s where the
       // monolith does not compile), a barrier, the moments stage over the same groups, a barrier
