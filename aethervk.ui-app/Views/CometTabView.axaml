@@ -48,6 +48,37 @@
       <Setter Property="HorizontalAlignment" Value="Stretch" />
       <Setter Property="Padding" Value="0,4,0,0" />
     </Style>
+    <Style Selector="Border.step">
+      <Setter Property="Background" Value="{DynamicResource Bg.Subtle}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Bg.Outline}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="4" />
+      <Setter Property="Padding" Value="6,4" />
+      <Setter Property="Margin" Value="0,0,4,4" />
+    </Style>
+    <Style Selector="Border.step.current">
+      <Setter Property="Background" Value="{DynamicResource Accent.Subtle}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Accent.Primary}" />
+    </Style>
+    <Style Selector="Border.step.done">
+      <Setter Property="BorderBrush" Value="{DynamicResource Sem.Success}" />
+    </Style>
+    <Style Selector="Border.step TextBlock.step-number">
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}" />
+    </Style>
+    <Style Selector="Border.step.done TextBlock.step-number">
+      <Setter Property="Foreground" Value="{DynamicResource Sem.Success}" />
+    </Style>
+    <Style Selector="Border.step TextBlock.step-label">
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}" />
+    </Style>
+    <Style Selector="Border.step.current TextBlock.step-label">
+      <Setter Property="Foreground" Value="{DynamicResource Text.Primary}" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
     <Style Selector="TextBlock.unit-of-measurement">
       <Setter Property="Foreground" Value="{DynamicResource Text.Disabled}" />
       <Setter Property="Margin" Value="4,0,8,0" />
@@ -60,48 +91,64 @@
       <StackPanel Spacing="8" Margin="12,12,12,24" IsEnabled="{Binding !IsSimulationRunning}">
 
         <!-- ═══════════════════════════════════════════════════════════════
-        SECTION 1: PROPOSED TIMELINE (read-only display)
+        GUIDED FLOW (reviewer feedback item 3): what to enter, in order
         ═══════════════════════════════════════════════════════════════ -->
-        <Expander Header="Proposed Timeline" IsExpanded="True">
-          <StackPanel Spacing="6" Margin="4,4,4,4">
-
-            <!-- No timeline warning -->
-            <Border Background="{DynamicResource Bg.Canvas.Alt}"
-                    BorderBrush="{DynamicResource Sem.Warning}"
-                    BorderThickness="1" CornerRadius="4" Padding="8,6"
-                    IsVisible="{Binding !HasProposedTimeline}">
-              <TextBlock TextWrapping="Wrap" FontSize="11"
-                         Foreground="{DynamicResource Sem.Warning}"
-                         Text="No timeline committed yet. Go to the Timeline tab to set start and end epochs before selecting a comet." />
+        <StackPanel AutomationProperties.AutomationId="GuidedSteps" Spacing="2">
+          <WrapPanel Orientation="Horizontal">
+            <Border Classes="step" Classes.current="{Binding IsStep1Current}" Classes.done="{Binding IsStep1Done}"
+                    AutomationProperties.AutomationId="GuidedStep1"
+                    ToolTip.Tip="{Binding StrStep1Help}">
+              <StackPanel Orientation="Horizontal" Spacing="4">
+                <Panel>
+                  <TextBlock Classes="step-number" Text="1" IsVisible="{Binding !IsStep1Done}" />
+                  <TextBlock Classes="step-number" Text="✓" IsVisible="{Binding IsStep1Done}" />
+                </Panel>
+                <TextBlock Classes="step-label" Text="{Binding StrStep1}" />
+              </StackPanel>
             </Border>
-
-            <!-- Timeline display (visible when set) -->
-            <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto"
-                  RowSpacing="4" ColumnSpacing="8"
-                  IsVisible="{Binding HasProposedTimeline}">
-              <TextBlock Grid.Row="0" Grid.Column="0" Classes="label" Text="Start:" />
-              <TextBox Grid.Row="0" Grid.Column="1" Classes="computed"
-                       Text="{Binding ProposedStartEpoch, Mode=OneWay}"
-                       IsReadOnly="True"
-                       FontFamily="Cascadia Mono, Consolas, monospace"
-                       FontSize="11"
-                       ToolTip.Tip="Go to the Timeline tab to change the epoch range"
-                       ToolTip.ShowDelay="500" />
-              <TextBlock Grid.Row="1" Grid.Column="0" Classes="label" Text="End:" />
-              <TextBox Grid.Row="1" Grid.Column="1" Classes="computed"
-                       Text="{Binding ProposedEndEpoch, Mode=OneWay}"
-                       IsReadOnly="True"
-                       FontFamily="Cascadia Mono, Consolas, monospace"
-                       FontSize="11"
-                       ToolTip.Tip="Go to the Timeline tab to change the epoch range"
-                       ToolTip.ShowDelay="500" />
-            </Grid>
-
-          </StackPanel>
-        </Expander>
+            <TextBlock Text="→" FontSize="11" Foreground="{DynamicResource Text.Disabled}" Margin="0,0,4,4" />
+            <Border Classes="step" Classes.current="{Binding IsStep2Current}" Classes.done="{Binding IsStep2Done}"
+                    AutomationProperties.AutomationId="GuidedStep2"
+                    ToolTip.Tip="{Binding StrStep2Help}">
+              <StackPanel Orientation="Horizontal" Spacing="4">
+                <Panel>
+                  <TextBlock Classes="step-number" Text="2" IsVisible="{Binding !IsStep2Done}" />
+                  <TextBlock Classes="step-number" Text="✓" IsVisible="{Binding IsStep2Done}" />
+                </Panel>
+                <TextBlock Classes="step-label" Text="{Binding StrStep2}" />
+              </StackPanel>
+            </Border>
+            <TextBlock Text="→" FontSize="11" Foreground="{DynamicResource Text.Disabled}" Margin="0,0,4,4" />
+            <Border Classes="step" Classes.current="{Binding IsStep3Current}" Classes.done="{Binding IsStep3Done}"
+                    AutomationProperties.AutomationId="GuidedStep3"
+                    ToolTip.Tip="{Binding StrStep3Help}">
+              <StackPanel Orientation="Horizontal" Spacing="4">
+                <Panel>
+                  <TextBlock Classes="step-number" Text="3" IsVisible="{Binding !IsStep3Done}" />
+                  <TextBlock Classes="step-number" Text="✓" IsVisible="{Binding IsStep3Done}" />
+                </Panel>
+                <TextBlock Classes="step-label" Text="{Binding StrStep3}" />
+              </StackPanel>
+            </Border>
+            <TextBlock Text="→" FontSize="11" Foreground="{DynamicResource Text.Disabled}" Margin="0,0,4,4" />
+            <Border Classes="step" Classes.current="{Binding IsStep4Current}" Classes.done="{Binding IsStep4Done}"
+                    AutomationProperties.AutomationId="GuidedStep4"
+                    ToolTip.Tip="{Binding StrStep4Help}">
+              <StackPanel Orientation="Horizontal" Spacing="4">
+                <Panel>
+                  <TextBlock Classes="step-number" Text="4" IsVisible="{Binding !IsStep4Done}" />
+                  <TextBlock Classes="step-number" Text="✓" IsVisible="{Binding IsStep4Done}" />
+                </Panel>
+                <TextBlock Classes="step-label" Text="{Binding StrStep4}" />
+              </StackPanel>
+            </Border>
+          </WrapPanel>
+          <TextBlock AutomationProperties.AutomationId="GuidedStepHelpText" Text="{Binding CurrentStepHelp}"
+                     FontSize="11" TextWrapping="Wrap" Foreground="{DynamicResource Text.Secondary}" />
+        </StackPanel>
 
         <!-- ═══════════════════════════════════════════════════════════════
-        SECTION 2: COMET SELECTION
+        SECTION 1: COMET SELECTION (steps 1 and 2)
         ═══════════════════════════════════════════════════════════════ -->
         <Expander Header="Comet Selection" IsExpanded="True">
           <StackPanel Spacing="8" Margin="4,4,4,4">
@@ -127,16 +174,6 @@
                         ToolTip.Tip="Detach comet SPK from simulation and reset to default"
                         ToolTip.ShowDelay="500" />
               </Grid>
-            </Border>
-
-            <!-- Timeline-changed-after-commit warning -->
-            <Border Background="{DynamicResource Bg.Canvas.Alt}"
-                    BorderBrush="{DynamicResource Sem.Warning}"
-                    BorderThickness="1" CornerRadius="4" Padding="8,6"
-                    IsVisible="{Binding HasTimelineChangedAfterCommit}">
-              <TextBlock TextWrapping="Wrap" FontSize="11"
-                         Foreground="{DynamicResource Sem.Warning}"
-                         Text="⚠ Timeline has changed since last commit. Re-commit to update the comet trajectory." />
             </Border>
 
             <!-- Search row -->
@@ -245,6 +282,89 @@
               </ListBox>
             </StackPanel>
 
+          </StackPanel>
+        </Expander>
+
+        <!-- ═══════════════════════════════════════════════════════════════
+        SECTION 2: SIMULATED RANGE (step 3; reviewer feedback item 7: entered here, the
+        Timeline tab only shows it and the progress)
+        ═══════════════════════════════════════════════════════════════ -->
+        <Expander Header="{Binding StrSimulatedRange}" AutomationProperties.AutomationId="SimulatedRangeSection" IsExpanded="True">
+          <StackPanel Spacing="6" Margin="4,4,4,4">
+            <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" RowSpacing="4" ColumnSpacing="8">
+              <TextBlock Grid.Row="0" Grid.Column="0" Classes="label" Text="Start (TDB):" />
+              <TextBox Grid.Row="0" Grid.Column="1" AutomationProperties.AutomationId="StartEpochBox"
+                       Text="{Binding Range.StartEpoch}" Watermark="e.g. 2000-01-01T12:00:00Z"
+                       FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11"
+                       ToolTip.Tip="Start of the simulated period (ISO 8601, e.g. 2000-01-01T12:00:00Z). Typing here only proposes a range; Download &amp; Commit applies it. The period must be at least 1 day long." />
+              <TextBlock Grid.Row="1" Grid.Column="0" Classes="label" Text="End (TDB):" />
+              <TextBox Grid.Row="1" Grid.Column="1" AutomationProperties.AutomationId="EndEpochBox"
+                       Text="{Binding Range.EndEpoch}" Watermark="e.g. 2000-02-01T12:00:00Z"
+                       FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11"
+                       ToolTip.Tip="End of the simulated period (ISO 8601). It must be at least 1 day after the start. Typing here only proposes a range; Download &amp; Commit applies it." />
+            </Grid>
+
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Button AutomationProperties.AutomationId="RestoreButton" Content="Restore" Command="{Binding Range.RestoreCommand}" IsEnabled="{Binding Range.CanRestore}"
+                      ToolTip.Tip="Puts the committed range (the one the simulation runs) back in the Start/End boxes and drops the edit." ToolTip.ShowDelay="1000" />
+              <!-- Indicator: proposed range differs from committed -->
+              <TextBlock Text="●" Foreground="{DynamicResource Sem.Warning}" IsVisible="{Binding Range.IsRangeLocked}" ToolTip.Tip="Proposed range differs from committed" />
+            </StackPanel>
+
+            <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding Range.HasProposedState}">
+              <TextBlock Text="Proposed:" FontWeight="SemiBold" FontSize="11" Foreground="{DynamicResource Text.Secondary}" />
+              <TextBlock AutomationProperties.AutomationId="ProposedRangeText" Text="{Binding Range.DisplayProposedRange}" TextWrapping="Wrap"
+                         ToolTip.Tip="The range in the boxes: what the next Download &amp; Commit or Recommit will use. It does not change the running simulation."
+                         FontSize="11" FontFamily="Cascadia Mono, Consolas, monospace" />
+            </StackPanel>
+
+            <!-- Error Message -->
+            <TextBlock AutomationProperties.AutomationId="TimelineErrorText" Text="{Binding Range.ErrorMessage}" Foreground="{DynamicResource Sem.Error}"
+                       IsVisible="{Binding Range.HasError}" FontSize="11" TextWrapping="Wrap" />
+
+            <!-- Edited after a commit: the engine keeps the committed range until a recommit -->
+            <StackPanel AutomationProperties.AutomationId="RangeLockedPanel" Spacing="4" IsVisible="{Binding Range.IsRangeLocked}">
+              <TextBlock Text="{x:Static vm:RangeEntryViewModel.RangeLockedText}" Foreground="{DynamicResource Sem.Warning}" FontSize="11" TextWrapping="Wrap" />
+              <Button AutomationProperties.AutomationId="RecommitWithRangeButton" Content="Recommit with this range" Command="{Binding Range.RecommitWithRangeCommand}"
+                      ToolTip.Tip="Commits the comet again (as Download &amp; Commit) with the range in the boxes. The dust restarts from the new start." />
+            </StackPanel>
+
+            <!-- "Model" preset (feedback #20): N nucleus rotations ending at the image epoch -->
+            <WrapPanel Orientation="Horizontal">
+              <TextBlock Classes="label" Text="Model range:" Margin="0,0,6,4" />
+              <TextBox AutomationProperties.AutomationId="ModelRotationsBox" Margin="0,0,6,4"
+                       ToolTip.Tip="Number of full nucleus rotations (a whole number, at least 1) that the model range should span. One rotation lasts the rotation period (Rotational Model: 360 deg divided by the rotation rate)." Text="{Binding Range.ModelRotations}" Width="48" />
+              <TextBlock Classes="label" Text="rotations ending at" Margin="0,0,6,4" />
+              <TextBox AutomationProperties.AutomationId="ModelEndEpochBox" Margin="0,0,6,4"
+                       ToolTip.Tip="End of the model range, normally the epoch of your telescope image (the FITS &quot;Model range&quot; button fills it with the observation epoch). Leave empty to use the End box." Text="{Binding Range.ModelEndEpoch}" Width="170" Watermark="image epoch (empty: End)" />
+              <Button AutomationProperties.AutomationId="ApplyModelRangeButton" Content="Set range" Command="{Binding Range.ApplyModelRangeCommand}" Margin="0,0,0,4"
+                      ToolTip.Tip="Sets Start and End so the range ends at the image epoch and starts N nucleus rotation periods earlier (N x period, never less than 1 day). The simulated dust history then covers N full spins before the image. It only proposes the range: Download &amp; Commit applies it." />
+            </WrapPanel>
+
+            <!-- R3: jets ignite this long before the committed start, so the tail exists when play starts -->
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <TextBlock Classes="label" Text="Dust lead time:" />
+              <TextBox AutomationProperties.AutomationId="DustLeadDaysBox"
+                       ToolTip.Tip="Days the jets start emitting before the start epoch (0 to 30; 30 = one dust lifetime, the default). With 30 the tail is already fully formed when the timeline starts; with 0 the jets switch on at the start and the tail grows from nothing. Used the next time the comet is committed." Text="{Binding Range.DustLeadDays}" Width="56" />
+              <TextBlock Classes="label" Text="days before the start" />
+            </StackPanel>
+          </StackPanel>
+        </Expander>
+
+        <!-- ═══════════════════════════════════════════════════════════════
+        SECTION 3: COMMIT (step 4)
+        ═══════════════════════════════════════════════════════════════ -->
+        <StackPanel Spacing="8" Margin="4,0,4,0">
+            <!-- Timeline-changed-after-commit warning -->
+            <Border Background="{DynamicResource Bg.Canvas.Alt}"
+                    BorderBrush="{DynamicResource Sem.Warning}"
+                    BorderThickness="1" CornerRadius="4" Padding="8,6"
+                    IsVisible="{Binding HasTimelineChangedAfterCommit}">
+              <TextBlock TextWrapping="Wrap" FontSize="11"
+                         Foreground="{DynamicResource Sem.Warning}"
+                         Text="⚠ Timeline has changed since last commit. Re-commit to update the comet trajectory." />
+            </Border>
+
             <!-- Reference orbit (required before the first commit, locked while committed) -->
             <StackPanel Spacing="4">
               <StackPanel Orientation="Horizontal" Spacing="4">
@@ -254,6 +374,7 @@
                   HelpContent="The red track is a two-body (Keplerian) reference next to the true SPK path.&#x0A;&#x0A;SBDB solution: the elements JPL publishes, osculating at the solution epoch, which can be years away from your window (67P: 2015-10-10, about 0.12 AU off its 2025 path because of Jupiter).&#x0A;&#x0A;Osculating at start epoch: elements recomputed from the SPK position and velocity at your start epoch. Exact there, and within about 10³ km over a month (planetary perturbations and outgassing forces).&#x0A;&#x0A;Cannot be changed while a comet is committed." />
               </StackPanel>
               <ComboBox AutomationProperties.AutomationId="ReferenceOrbitPicker" SelectedIndex="{Binding ReferenceOrbitIndex}"
+                        ToolTip.Tip="{Binding StrTipReferenceOrbit}"
                         IsEnabled="{Binding IsReferenceOrbitSelectable}"
                         PlaceholderText="Choose a reference orbit…"
                         HorizontalAlignment="Stretch">
@@ -281,6 +402,32 @@
                        Foreground="{DynamicResource Text.Secondary}" />
 
           </StackPanel>
+
+        <!-- ═══════════════════════════════════════════════════════════════
+        NUCLEUS: physical parameters (feedback item 10b; editable before a commit)
+        ═══════════════════════════════════════════════════════════════ -->
+        <Expander Header="{Binding StrNucleus}" AutomationProperties.AutomationId="NucleusSection" IsExpanded="True">
+          <StackPanel Spacing="6" Margin="4,4,4,4">
+            <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
+              <TextBlock Grid.Column="0" Classes="label" Text="{Binding StrNucleusRadius}" VerticalAlignment="Center" />
+              <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="NucleusRadiusSlider"
+                                        Value="{Binding ManualNucleusRadiusKmNullable}"
+                                        HasBounds="True"
+                                        MinBound="0.1"
+                                        MaxBound="100.0"
+                                        ToolTip.Tip="Bounding-sphere radius of the comet nucleus in km; jets start on this sphere.&#x0A;Auto-filled from Horizons when a comet is committed. Override here if needed.&#x0A;An edit after Play returns the simulation to the snapshot taken at Play.">
+                <controls:UnboundedSlider.InnerRightContent>
+                  <TextBlock Classes="unit-of-measurement" Text="km" />
+                </controls:UnboundedSlider.InnerRightContent>
+              </controls:UnboundedSlider>
+            </Grid>
+            <TextBlock Margin="4,0,4,2"
+                       IsVisible="{Binding IsNucleusRadiusUnknown}"
+                       Text="⚠ Enter a radius or commit a comet to enable jet creation."
+                       Foreground="{DynamicResource Text.Tertiary}"
+                       FontSize="11"
+                       TextWrapping="Wrap" />
+          </StackPanel>
         </Expander>
 
         <!-- ═══════════════════════════════════════════════════════════════
@@ -302,7 +449,7 @@
                 <controls:PropertyHelpButton AutomationProperties.AutomationId="PoleRaHelp" HelpHeader="Pole RA"
                                              HelpContent="Where the spin axis points on the sky (J2000). These are not rotations: the nucleus rotates only about its own axis, and the axis stays fixed in space. RA/Dec only orient it." />
               </StackPanel>
-              <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="PoleRaSlider" Value="{Binding PoleRaDeg}" Step="0.1">
+              <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="PoleRaSlider" ToolTip.Tip="{Binding StrTipPoleRa}" Value="{Binding PoleRaDeg}" Step="0.1">
                 <controls:UnboundedSlider.InnerRightContent>
                   <TextBlock Classes="unit-of-measurement" Text="°" />
                 </controls:UnboundedSlider.InnerRightContent>
@@ -316,7 +463,7 @@
                 <controls:PropertyHelpButton AutomationProperties.AutomationId="PoleDecHelp" HelpHeader="Pole Dec"
                                              HelpContent="Where the spin axis points on the sky (J2000). These are not rotations: the nucleus rotates only about its own axis, and the axis stays fixed in space. RA/Dec only orient it." />
               </StackPanel>
-              <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="PoleDecSlider" Value="{Binding PoleDecDeg}" Step="0.1">
+              <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="PoleDecSlider" ToolTip.Tip="{Binding StrTipPoleDec}" Value="{Binding PoleDecDeg}" Step="0.1">
                 <controls:UnboundedSlider.InnerRightContent>
                   <TextBlock Classes="unit-of-measurement" Text="°" />
                 </controls:UnboundedSlider.InnerRightContent>
@@ -330,7 +477,7 @@
                 <controls:PropertyHelpButton AutomationProperties.AutomationId="PrimeMeridianHelp" HelpHeader="Prime Meridian"
                                              HelpContent="The nucleus' rotation angle at the reference date J2000 (where longitude 0 faces). It sets which side faces where at a given time, i.e. the timing of the jet spirals, not the outline of the fan." />
               </StackPanel>
-              <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="PrimeMeridianSlider" Value="{Binding PrimeMeridianDeg}" Step="0.1">
+              <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="PrimeMeridianSlider" ToolTip.Tip="{Binding StrTipPrimeMeridian}" Value="{Binding PrimeMeridianDeg}" Step="0.1">
                 <controls:UnboundedSlider.InnerRightContent>
                   <TextBlock Classes="unit-of-measurement" Text="°" />
                 </controls:UnboundedSlider.InnerRightContent>
@@ -344,7 +491,7 @@
                 <controls:PropertyHelpButton AutomationProperties.AutomationId="RotPeriodHelp" HelpHeader="Rotation Period (h)"
                                              HelpContent="Sidereal spin period. Edits the rate in the Advanced expander (°/day); the sign (prograde/retrograde) is kept. Example: 718 °/day = 12.03 h." />
               </StackPanel>
-              <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="RotPeriodSlider" Value="{Binding RotationPeriodHours}" Step="0.01">
+              <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="RotPeriodSlider" ToolTip.Tip="{Binding StrTipRotPeriod}" Value="{Binding RotationPeriodHours}" Step="0.01">
                 <controls:UnboundedSlider.InnerRightContent>
                   <TextBlock Classes="unit-of-measurement" Text="h" />
                 </controls:UnboundedSlider.InnerRightContent>

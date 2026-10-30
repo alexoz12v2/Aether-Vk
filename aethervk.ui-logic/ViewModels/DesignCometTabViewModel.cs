@@ -18,6 +18,19 @@ public partial class DesignCometTabViewModel
   public string ProposedEndEpoch   { get; } = "2016-01-01 00:00";
   public bool   HasProposedTimeline { get; } = true;
   public int    ReferenceOrbitIndex { get; set; } = -1;
+
+  // ── Range entry + guided flow ─────────────────────────────────────────────
+  public RangeEntryViewModel Range { get; } = new();
+  public int  CurrentGuidedStep { get; } = 3;
+  public bool IsStep1Done { get; } = true;
+  public bool IsStep2Done { get; } = true;
+  public bool IsStep3Done { get; } = false;
+  public bool IsStep4Done { get; } = false;
+  public bool IsStep1Current { get; } = false;
+  public bool IsStep2Current { get; } = false;
+  public bool IsStep3Current { get; } = true;
+  public bool IsStep4Current { get; } = false;
+  public string CurrentStepHelp => StrStep3Help;
   public bool   IsReferenceOrbitSelectable { get; } = true;
 
   // ── Search ────────────────────────────────────────────────────────────────
@@ -77,6 +90,9 @@ public partial class DesignCometTabViewModel
   public double RotRateDegDay    { get; set; } = 696.0;
   public double RotationPeriodHours { get; set; } = 12.41;
   public int BodyFixedOrientationIndex { get; set; } = 0;
+  public float ManualNucleusRadiusKm { get; set; } = 2.0f;
+  public float? ManualNucleusRadiusKmNullable { get; set; } = 2.0f;
+  public bool IsNucleusRadiusUnknown => false;
 
   // ── Commands (no-ops for design time) ────────────────────────────────────
   public IAsyncRelayCommand SearchCometsCommand    => new AsyncRelayCommand(async () => { });

@@ -103,40 +103,44 @@ public class SnapshotRestoreTests
         _runtimeServiceMock.Verify(r => r.RestoreSnapshotSync(), Times.Once); // Still 1
     }
     
+    /// The nucleus radius moved to the Comet tab (feedback item 10b): an edit after Play still
+    /// restores the snapshot, once.
     [Fact]
-    public void ChangingModelSettings_WhilePaused_TriggersSnapshotRestore()
+    public void ChangingNucleusRadius_InCometTab_WhilePaused_TriggersSnapshotRestore()
     {
-        var vm = new ModelTabViewModel(
+        var vm = new CometTabViewModel(
             _translationServiceMock.Object,
             _schedulerProvider,
-            _modelSessionServiceMock.Object,
             _cometSessionServiceMock.Object,
+            _jpl,
             _cometConfig,
+            _timelineService,
+            _breadcrumbService,
+            _storageMock.Object,
             _runtimeServiceMock.Object,
-            _dispatcherMock.Object,
+            _modelSessionServiceMock.Object,
             _cometMessengerMock.Object,
-            _platformWindowServiceMock.Object,
-            _timelineService);
+            _tabFactoryMock.Object);
 
         // Simulate Play
         _runtimeServiceMock.Setup(r => r.StartSimulation(It.IsAny<int>())).Returns(true);
         _runtimeServiceMock.Setup(r => r.SnapshotSceneSync()).Returns(true);
         _timelineService.Play(1);
         _schedulerProvider.MainThread.Start();
-        
+
         // Simulate Pause
         _runtimeServiceMock.Setup(r => r.PauseSimulationSync()).Returns(true);
         _timelineService.Pause();
         _schedulerProvider.MainThread.Start();
-        
-        // At this point, _snapshotExists = true, IsSimulationRunning = false.
-        
+
         _runtimeServiceMock.Setup(r => r.RestoreSnapshotSync()).Returns(true);
-        
+
         // Trigger a setting change
         vm.ManualNucleusRadiusKm = 15f;
-        
+
         // Assert
+        _runtimeServiceMock.Verify(r => r.RestoreSnapshotSync(), Times.Once);
+        vm.ManualNucleusRadiusKm = 16f;
         _runtimeServiceMock.Verify(r => r.RestoreSnapshotSync(), Times.Once);
     }
 
@@ -169,7 +173,7 @@ public class SnapshotRestoreTests
             .Returns(true);
         // deliver the initial "not committed" emission first (it would reset NativePsId later)
         _schedulerProvider.MainThread.Start();
-        vm.ManualNucleusRadiusKm = 2f;
+        // the model session's default manual radius (2 km, edited in the Comet tab) places the jet
         vm.IsCometCommitted = true;
         vm.AddJetCommand.Execute(null);
         var jet = Assert.Single(vm.Jets!);

@@ -70,7 +70,8 @@ public partial class SettingsTabViewModel
     Input.InputRegistry inputRegistry,
     PreferencesService preferences,
     IFileDialogService? fileDialogService = null,
-    FitsImageService? fitsImageService = null
+    FitsImageService? fitsImageService = null,
+    ViewModeBarViewModel? modeBar = null
   )
     : base("Settings", sessionService)
   {
@@ -93,7 +94,10 @@ public partial class SettingsTabViewModel
       schedulerProvider,
       fitsImageService,
       timelineService.SeekAsync,
-      timelineService.RequestModelRange);
+      timelineService.RequestModelRange,
+      translationService);
+    // the main window's Model button runs the FITS comparison through these rows
+    modeBar?.AttachBillboards(Billboards).AddDisposableTo(_disposables);
 
     Icon = "⚙";
 

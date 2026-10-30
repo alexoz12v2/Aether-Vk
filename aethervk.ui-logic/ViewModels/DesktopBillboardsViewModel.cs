@@ -44,6 +44,14 @@ public interface IBillboardViewportProbe
   /// <summary>The viewport's height, physical px.</summary>
   double ViewportHeightPx { get; }
 
+  /// <summary>The viewport's vertical field of view (rad) while its projection is perspective;
+  /// null in orthographic or before the first projection.</summary>
+  double? VerticalFovRad { get; }
+
+  /// <summary>The viewport's projection is orthographic: it has no field of view, so an angle per
+  /// px exists only at a distance (<see cref="ArcsecPerPx"/>, at the comet's).</summary>
+  bool IsOrthographic { get; }
+
   /// <summary>
   /// "Match camera to image": the viewport's height shows a field <paramref name="heightKm"/> tall
   /// at the comet (orthographic; NaN when unknown) subtending <paramref name="angleRad"/>
@@ -94,6 +102,11 @@ public sealed class CameraBillboardProbe(CameraService camera) : IBillboardViewp
   public double? CometDistanceKm => camera.GetEarthObserverCometDistanceKm();
 
   public double ViewportHeightPx => camera.ViewportHeightPx;
+
+  public double? VerticalFovRad =>
+    camera.LastConfirmedProjection is { IsPerspective: true } p && p.Fov > 0f ? p.Fov : null;
+
+  public bool IsOrthographic => camera.LastConfirmedProjection is { IsPerspective: false };
 
   public bool MatchField(double heightKm, double angleRad) => camera.SetEarthObserverField(heightKm, angleRad);
 
@@ -159,6 +172,7 @@ public partial class DesktopBillboardsViewModel : ObservableObject, IDisposable
   private IDisposable? _probeTimer;
   private readonly Func<short, ulong, Task<bool>>? _seekTdb;
   private readonly Action<DateTimeOffset>? _requestModelRange;
+  private static ITranslationService? _englishStrings;
 
   /// <summary>How often the viewport's scale and the comet's position are read.</summary>
   public static readonly TimeSpan ProbeInterval = TimeSpan.FromMilliseconds(250);
@@ -191,8 +205,10 @@ public partial class DesktopBillboardsViewModel : ObservableObject, IDisposable
     ISchedulerProvider schedulerProvider,
     FitsImageService? fits = null,
     Func<short, ulong, Task<bool>>? seekTdb = null,
-    Action<DateTimeOffset>? requestModelRange = null)
+    Action<DateTimeOffset>? requestModelRange = null,
+    ITranslationService? translation = null)
   {
+    Translation = translation;
     _service = service;
     _screens = screens;
     _schedulerProvider = schedulerProvider;
@@ -218,6 +234,14 @@ public partial class DesktopBillboardsViewModel : ObservableObject, IDisposable
     _screens = new FixedScreens();
     _service.Billboards.Subscribe(Sync).AddDisposableTo(_disposables);
   }
+
+  /// <summary>The rows' localized strings: the app's translation service, else the English
+  /// AppStrings.resx (tests, design time).</summary>
+  internal ITranslationService Strings => Translation ?? (_englishStrings ??= new TranslationService(
+    new System.Resources.ResourceManager("AetherVk.Logic.Resources.AppStrings", typeof(ITranslationService).Assembly),
+    new CultureInfo("en")));
+
+  private ITranslationService? Translation { get; }
 
   /// <summary>The billboards this view model edits.</summary>
   public DesktopBillboardService Service => _service;

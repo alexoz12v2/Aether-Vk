@@ -93,7 +93,7 @@ public sealed class AppSaveFileHostTests
         new BreadcrumbService(), Schedulers);
     }
 
-    private void Fire(ExternalStateType type, uint first, int second)
+    internal void Fire(ExternalStateType type, uint first, int second)
     {
       var p = Marshal.AllocHGlobal(64);
       try

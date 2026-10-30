@@ -254,3 +254,40 @@ fn test_uv_sphere_index_count() {
     );
   }
 }
+
+/// An imported mesh wound clockwise (normals inwards) renders its Sun side black: `finalize_comet`
+/// reverses the triangles and the normals, so the result has a positive signed volume and normals
+/// along the outward radius, and an already outward mesh is left as it is.
+#[test]
+fn finalize_comet_repairs_inward_winding() {
+  let inward = generate_uv_sphere(2.0, 12, 12, 1.0, true);
+  assert!(signed_volume(&inward.vertices, &inward.indices) < 0.0, "the fixture must be inward");
+  // the generator's normals point outwards whatever the winding; a real import generates them
+  // from the faces, so they point inwards too
+  let mut verts = inward.vertices.clone();
+  generate_normals(&mut verts, &inward.indices);
+  let outward_hits = verts.iter().filter(|v| {
+    v.normal[0] * v.position[0] + v.normal[1] * v.position[1] + v.normal[2] * v.position[2] > 0.0
+  }).count();
+  assert!(outward_hits * 10 < verts.len(), "face normals of the inward fixture point inwards");
+
+  let fixed = finalize_comet(verts, inward.indices.clone(), None, None, None, None, false, None)
+    .expect("finalize");
+  assert!(signed_volume(&fixed.vertices, &fixed.indices) > 0.0, "volume positive after repair");
+  for v in &fixed.vertices {
+    let r = (v.position[0] * v.position[0] + v.position[1] * v.position[1] + v.position[2] * v.position[2]).sqrt();
+    // the UV sphere's pole vertices touch only degenerate triangles: their face normal is
+    // arbitrary in the fixture, before and after the repair
+    if r < 1e-6 || v.position[2].abs() > 0.999 * r {
+      continue;
+    }
+    let d = (v.normal[0] * v.position[0] + v.normal[1] * v.position[1] + v.normal[2] * v.position[2]) / r;
+    assert!(d > 0.5, "normal {:?} at {:?} not outward", v.normal, v.position);
+  }
+
+  let outward = generate_uv_sphere(2.0, 12, 12, 1.0, false);
+  let kept = finalize_comet(outward.vertices.clone(), outward.indices.clone(), None, None, None, None, false, None)
+    .expect("finalize");
+  assert_eq!(kept.indices, outward.indices, "an outward mesh is untouched");
+  assert_eq!(kept.vertices, outward.vertices);
+}

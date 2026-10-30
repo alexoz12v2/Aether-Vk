@@ -36,6 +36,71 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
   // Pending rotational model debounce timer
   private IDisposable? _rotDebounceToken;
 
+  // Debounces manual nucleus radius edits (250 ms) so a slider drag does not flood the FFI.
+  private readonly System.Reactive.Subjects.Subject<float> _radiusChanges = new();
+
+  // ── Nucleus radius (feedback item 10b: moved here from the Model tab) ──────
+
+  /// <summary>
+  /// Manual nucleus radius in km (0 = use the catalogue radius). Lives in
+  /// <see cref="ModelSession.ManualNucleusRadiusKm"/>, so saves are unchanged; an edit is pushed
+  /// (debounced) through <see cref="CometConfigService.SetNucleusRadiusKm"/>, and after Play it
+  /// restores the snapshot like every other comet edit.
+  /// </summary>
+  [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(ManualNucleusRadiusKmNullable), nameof(IsNucleusRadiusUnknown))]
+  private float _manualNucleusRadiusKm = 2.0f;
+
+  partial void OnManualNucleusRadiusKmChanged(float value)
+  {
+    // restored values are what the session and the native runtime already have
+    if (_restoringFromSession) return;
+    if (GetModelSession() is { } model)
+      model.ManualNucleusRadiusKm = value;
+    _radiusChanges.OnNext(EffectiveNucleusRadiusKm);
+  }
+
+  /// <inheritdoc cref="ICometTabViewModel.ManualNucleusRadiusKmNullable"/>
+  public float? ManualNucleusRadiusKmNullable
+  {
+    get => ManualNucleusRadiusKm > 0f ? ManualNucleusRadiusKm : null;
+    set => ManualNucleusRadiusKm = value ?? 0f;
+  }
+
+  private float EffectiveNucleusRadiusKm =>
+    ManualNucleusRadiusKm > 0f ? ManualNucleusRadiusKm : (CurrentSession?.NucleusRadiusKm ?? 0f);
+
+  public bool IsNucleusRadiusUnknown => EffectiveNucleusRadiusKm == 0f;
+
+  private ModelSession? GetModelSession() =>
+    _modelSessionService is { ActiveSessionIds.Count: > 0 } svc ? svc.GetSession(svc.ActiveSessionIds[0]) : null;
+
+  private ModelSession? _modelRestoredHooked;
+
+  /// <summary>Reads the radius from the model session, without a push or a snapshot restore.</summary>
+  private void LoadRadiusFromModelSession()
+  {
+    var model = GetModelSession();
+    if (!ReferenceEquals(_modelRestoredHooked, model))
+    {
+      if (_modelRestoredHooked is not null) _modelRestoredHooked.Restored -= OnModelSessionRestored;
+      if (model is not null) model.Restored += OnModelSessionRestored;
+      _modelRestoredHooked = model;
+    }
+    if (model is null) return;
+    bool was = _restoringFromSession;
+    _restoringFromSession = true;
+    try { ManualNucleusRadiusKm = model.ManualNucleusRadiusKm; }
+    finally { _restoringFromSession = was; }
+  }
+
+  private void OnModelSessionRestored()
+  {
+    // a savefile open / New replaced the scene: the Play snapshot belongs to the old one
+    _snapshotExists = false;
+    LoadRadiusFromModelSession();
+  }
+
   // ── Observable properties — Proposed Timeline (read-only) ─────────────────
 
   [ObservableProperty]
@@ -204,7 +269,8 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
     INativeRuntimeService runtimeService,
     ITabStateService<ModelSession> modelSessionService,
     ICometMessenger cometMessenger,
-    ITabFactory tabFactory
+    ITabFactory tabFactory,
+    ITabStateService<TimelineSession>? timelineSessions = null
   )
     : base("Comet", sessionService)
   {
@@ -222,8 +288,25 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
     PreviewOrthographic = (Viewport3DViewModel)tabFactory.CreateScopedTab(typeof(Viewport3DViewModel)).ViewModel!;
 
     Icon = "☄"; // comet — U+2604
+
+    // the range is entered here (reviewer feedback item 7); the Timeline tab only shows it
+    Range = new RangeEntryViewModel(timelineSessions, timeline, cometMessenger, () => RotRateDegDay);
+    Range.PropertyChanged += OnRangePropertyChanged;
+    UpdateGuidedStep();
+
     SubscribeToStrings(schedulerProvider);
     WireReactiveSubscriptions(schedulerProvider);
+
+    _disposables.Add(_radiusChanges);
+    _radiusChanges
+      .Throttle(TimeSpan.FromMilliseconds(250), schedulerProvider.MainThread)
+      .Subscribe(r => _cometConfig.SetNucleusRadiusKm(r))
+      .AddDisposableTo(_disposables);
+    LoadRadiusFromModelSession();
+    // the catalogue radius (fetched on commit) can clear the "radius unknown" hint
+    _cometConfig.NucleusRadiusKm
+      .Subscribe(_ => OnPropertyChanged(nameof(IsNucleusRadiusUnknown)))
+      .AddDisposableTo(_disposables);
   }
 
   [ObservableProperty]
@@ -234,6 +317,9 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
   // ── Reactive wiring ───────────────────────────────────────────────────────
 
   private TimeRange? _currentProposedTimeRange;
+
+  /// <summary>The range Download &amp; Commit applies (RequestEpochRange, CommitCometAsync): the latest proposal.</summary>
+  internal TimeRange? ProposedRangeForCommit => _currentProposedTimeRange;
 
   private void WireReactiveSubscriptions(ISchedulerProvider schedulerProvider)
   {
@@ -275,7 +361,7 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
       })
       .AddDisposableTo(_disposables);
 
-    // the Timeline's "Recommit with this range": the same Download & Commit, with the proposed range
+    // "Recommit with this range" (the range section here, while locked): the same Download & Commit, with the proposed range
     _timeline.RecommitRequests
       .Subscribe(_ =>
       {
@@ -328,6 +414,13 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
   public override void Dispose()
   {
     HookRestored(null);
+    if (Range is not null)
+    {
+      Range.PropertyChanged -= OnRangePropertyChanged;
+      Range.Dispose();
+    }
+    if (_modelRestoredHooked is not null) _modelRestoredHooked.Restored -= OnModelSessionRestored;
+    _modelRestoredHooked = null;
     // a closed tab must stop reacting (it pushed its stale rotation on every later commit)
     _rotDebounceToken?.Dispose();
     _disposables.Dispose();
@@ -388,7 +481,8 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
         or nameof(RotRateDegDay)
         or nameof(BodyFixedOrientationIndex);
 
-    bool isStateChangingProp = isRotProp || e.PropertyName is nameof(SelectedComet) or nameof(SelectedSpkRecord);
+    bool isStateChangingProp = isRotProp
+      || e.PropertyName is nameof(SelectedComet) or nameof(SelectedSpkRecord) or nameof(ManualNucleusRadiusKm);
 
     // restored values are what the native runtime already has: no snapshot restore, no push
     if (_restoringFromSession)
@@ -434,6 +528,88 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
     }
     if (e.PropertyName == nameof(IsAlmanacCommitted))
       OnPropertyChanged(nameof(IsReferenceOrbitSelectable));
+
+    if (e.PropertyName
+        is nameof(FilteredSearchResults)
+          or nameof(SelectedComet)
+          or nameof(SelectedSpkRecord)
+          or nameof(IsAlmanacCommitted))
+      UpdateGuidedStep();
+    // a culture change re-reads the step texts
+    if (e.PropertyName is { } n && n.StartsWith("StrStep", StringComparison.Ordinal))
+      OnPropertyChanged(nameof(CurrentStepHelp));
+  }
+
+  // ── Range entry (reviewer feedback item 7) ────────────────────────────────
+
+  /// <summary>
+  /// The simulated range, entered here: Start/End, the Model range, the dust lead time, and the
+  /// lock + Recommit after a commit. The Timeline tab shows the committed range read-only.
+  /// </summary>
+  public RangeEntryViewModel Range { get; }
+
+  private void OnRangePropertyChanged(object? sender, PropertyChangedEventArgs e)
+  {
+    if (e.PropertyName is nameof(RangeEntryViewModel.HasValidRange) or nameof(RangeEntryViewModel.IsRangeLocked))
+      UpdateGuidedStep();
+    if (e.PropertyName is nameof(RangeEntryViewModel.IsRangeLocked))
+      DownloadAndCommitCommand.NotifyCanExecuteChanged();
+  }
+
+  // ── Guided flow (reviewer feedback item 3): 1 Search → 2 SPK record → 3 Range → 4 Commit ──
+
+  /// <summary>
+  /// The step the user is on (1 to 4), 5 once committed with the range in the boxes. A committed
+  /// comet counts steps 1 to 3 as done (a reopened save has no search results); an edited range
+  /// after a commit makes step 4 (Recommit) current again, an invalid one step 3.
+  /// </summary>
+  internal static int GuidedStepFor(bool hasSearchResults, bool hasComet, bool hasRecord, bool hasValidRange,
+                                    bool committed, bool rangeLocked)
+  {
+    if (committed)
+      return !hasValidRange ? 3 : rangeLocked ? 4 : 5;
+    if (!hasSearchResults && !hasComet) return 1;
+    if (!hasComet || !hasRecord) return 2;
+    if (!hasValidRange) return 3;
+    return 4;
+  }
+
+  [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(IsStep1Done), nameof(IsStep2Done), nameof(IsStep3Done), nameof(IsStep4Done),
+    nameof(IsStep1Current), nameof(IsStep2Current), nameof(IsStep3Current), nameof(IsStep4Current),
+    nameof(CurrentStepHelp))]
+  private int _currentGuidedStep = 1;
+
+  public bool IsStep1Done => CurrentGuidedStep > 1;
+  public bool IsStep2Done => CurrentGuidedStep > 2;
+  public bool IsStep3Done => CurrentGuidedStep > 3;
+  public bool IsStep4Done => CurrentGuidedStep > 4;
+  public bool IsStep1Current => CurrentGuidedStep == 1;
+  public bool IsStep2Current => CurrentGuidedStep == 2;
+  public bool IsStep3Current => CurrentGuidedStep == 3;
+  public bool IsStep4Current => CurrentGuidedStep == 4;
+
+  /// <summary>The one-line help of the current step (all done: what to do next).</summary>
+  public string CurrentStepHelp => CurrentGuidedStep switch
+  {
+    1 => StrStep1Help,
+    2 => StrStep2Help,
+    3 => StrStep3Help,
+    4 => StrStep4Help,
+    _ => StrStepsDoneHelp,
+  };
+
+  private void UpdateGuidedStep()
+  {
+    // runs from the base constructor too, before Range exists
+    if (Range is null) return;
+    CurrentGuidedStep = GuidedStepFor(
+      FilteredSearchResults is { Count: > 0 },
+      SelectedComet is not null,
+      SelectedSpkRecord is not null,
+      Range.HasValidRange,
+      IsAlmanacCommitted,
+      Range.IsRangeLocked);
   }
 
   /// <summary>
@@ -475,6 +651,20 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
     }
   }
 
+  /// <summary>
+  /// The days (yyyy-MM-dd, UTC) of the SPK download for <paramref name="range"/>: the start's day
+  /// and the end's day, so with <see cref="HorizonJplService.SpkRequestDays"/>'s margin the file
+  /// always covers the range (feedback #19). The ±5 years around today in
+  /// <see cref="LoadSpkRecordsAsync"/> only lists the comet's SPK records; it never sets the range.
+  /// </summary>
+  internal static (string Start, string Stop) SpkDownloadDays(TimeRange range)
+  {
+    var ci = System.Globalization.CultureInfo.InvariantCulture;
+    return (
+      TimeUtils.FromTaiParts(range.StartCenturies, range.StartNs).UtcDateTime.ToString("yyyy-MM-dd", ci),
+      TimeUtils.FromTaiParts(range.EndCenturies, range.EndNs).UtcDateTime.ToString("yyyy-MM-dd", ci));
+  }
+
   [RelayCommand]
   private async Task LoadSpkRecordsAsync()
   {
@@ -504,6 +694,7 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
       || CommittedCometName != SelectedComet.Name
       || CommittedSpkRecordId != SelectedSpkRecord.RecordId
       || HasTimelineChangedAfterCommit
+      || (Range is not null && Range.IsRangeLocked)
     );
 
   [RelayCommand(CanExecute = nameof(CanDownloadAndCommit))]
@@ -538,11 +729,14 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
       string fileName = string.Concat("spk_", sanitized, "_", recordPart, ".bsp");
       string savePath = _storage.GetDownloadsPath(fileName);
 
-      // Use stored display strings for date parsing (ISO prefix)
-      string startStr =
-        ProposedStartEpoch.Length >= 10 ? ProposedStartEpoch.Substring(0, 10) : "2020-01-01";
-      string endStr =
-        ProposedEndEpoch.Length >= 10 ? ProposedEndEpoch.Substring(0, 10) : "2026-01-01";
+      // The SPK covers the range the commit applies (the same proposal RequestEpochRange and
+      // CommitCometAsync get below); HorizonJplService widens it by SpkMarginDays on each side.
+      if (_currentProposedTimeRange is null)
+      {
+        EmitInvalidStateBreadcrumb();
+        return;
+      }
+      var (startStr, endStr) = SpkDownloadDays(_currentProposedTimeRange);
 
       DownloadStatus = string.Concat("Downloading SPK for ", SelectedComet.Name, "…");
 
@@ -581,6 +775,8 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
       if (committed)
       {
         CommittedSpkRecordId = SelectedSpkRecord.RecordId;
+        // the committed range in the timeline session and the boxes, then everyone else
+        Range.OnCommitted(_currentProposedTimeRange);
         _cometMessenger.Send(new Messages.CometCommittedMessage(_currentProposedTimeRange));
 
         // Update session
@@ -611,10 +807,10 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
         }
         catch
         {
-          // Best-effort — user can enter radius manually in Model tab
+          // Best-effort — user can enter radius manually in the Nucleus section of this tab
           _ = _breadcrumbService.ShowMessageAsync(
             "Nucleus Radius",
-            "SPK committed, but nucleus radius fetch failed. Please configure it manually in the Model tab.",
+            "SPK committed, but nucleus radius fetch failed. Please configure it manually in the Comet tab (Nucleus).",
             status: 3
           );
         }
@@ -670,6 +866,7 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
 
     _lastCommittedProposedRange = null;
     DownloadStatus = string.Empty;
+    Range.OnDecommitted();
     _cometMessenger.Send(new Messages.CometDecommittedMessage());
   }
 

@@ -56,7 +56,7 @@ public class HorizonJplService
 
   private const string HorizonsBase = "https://ssd.jpl.nasa.gov/api/horizons.api";
   // days of SPK requested beyond the timeline on each side (see DownloadSpkByIdAsync)
-  private const int SpkMarginDays = 30;
+  internal const int SpkMarginDays = 30;
   private const string SbdbBase = "https://ssd-api.jpl.nasa.gov/sbdb_query.api";
 
   // ── Observable collections consumed by ViewModels
@@ -880,6 +880,21 @@ public class HorizonJplService
   //  6. SPK BINARY DOWNLOAD
   // ═══════════════════════════════════════════════════════════════════════════
 
+  /// <summary>
+  /// The START_TIME / STOP_TIME days of an SPK request for the days <paramref name="startDay"/> to
+  /// <paramref name="stopDay"/> (yyyy-MM-dd): <see cref="SpkMarginDays"/> earlier and later.
+  /// Culture-invariant; a text that is not a date is passed through.
+  /// </summary>
+  internal static (string Start, string Stop) SpkRequestDays(string startDay, string stopDay)
+  {
+    var ci = System.Globalization.CultureInfo.InvariantCulture;
+    const System.Globalization.DateTimeStyles utc =
+      System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal;
+    string start = DateTime.TryParse(startDay, ci, utc, out var a) ? a.AddDays(-SpkMarginDays).ToString("yyyy-MM-dd", ci) : startDay;
+    string stop = DateTime.TryParse(stopDay, ci, utc, out var b) ? b.AddDays(SpkMarginDays).ToString("yyyy-MM-dd", ci) : stopDay;
+    return (start, stop);
+  }
+
   // Note as second param you pass the JPL COMMAND Identifier, not SPK ID
   // eg for 67/P: cmdId: 90000703, spkId: 10000012
   public async Task<string?> DownloadSpkByIdAsync(
@@ -930,18 +945,8 @@ public class HorizonJplService
       // can start days after the segment's nominal start (C/2022 N2 asked from 2024-07-17 is
       // interpolable only from 2024-07-21T19:55), so a 1-day margin left the start epoch outside
       // and the commit failed. A month on both sides covers the record steps.
-      string startTimeApi = startTime;
-      if (DateTime.TryParse(startTime, out var dtStart))
-      {
-          startTimeApi = dtStart.AddDays(-SpkMarginDays).ToString("yyyy-MM-dd");
-      }
+      var (startTimeApi, stopTimeApi) = SpkRequestDays(startTime, stopTime);
 
-      string stopTimeApi = stopTime;
-      if (DateTime.TryParse(stopTime, out var dtStop))
-      {
-          stopTimeApi = dtStop.AddDays(SpkMarginDays).ToString("yyyy-MM-dd");
-      }
-      
       var start = Uri.EscapeDataString($"'{startTimeApi}'");
       var stop = Uri.EscapeDataString($"'{stopTimeApi}'");
       var cmd = Uri.EscapeDataString($"'{cmdId};'");

@@ -21,6 +21,8 @@ public class TimelineTabViewModelEpochBoxTests
         public readonly TimelineSession Session;
         public readonly TimelineService Timeline;
         public readonly TimelineTabViewModel Vm;
+        /// <summary>The range boxes (the Comet tab since reviewer feedback item 7), same session.</summary>
+        public readonly RangeEntryViewModel Entry;
         public readonly TestSchedulerProvider Schedulers = new();
         public (short C, ulong N) Clock;
 
@@ -57,6 +59,7 @@ public class TimelineTabViewModelEpochBoxTests
             Vm = new TimelineTabViewModel(translation.Object, schedulers, sessions.Object, comets.Object,
                 Timeline, Runtime.Object, new Mock<ICometMessenger>().Object);
             Vm.CurrentSession = Session;
+            Entry = new RangeEntryViewModel(sessions.Object, Timeline, null, () => 0);
         }
     }
 
@@ -162,29 +165,29 @@ public class TimelineTabViewModelEpochBoxTests
         Assert.Equal("2020-01-25 00:00", rig.Session.CurrentEpochString);
     }
 
-    /// <summary>Feedback #19: the range boxes run the proposal on every keystroke; typing the
+    /// <summary>Feedback #19 (the boxes now in the Comet tab): the range boxes run the proposal on every keystroke; typing the
     /// image date one character at a time must end on that date, not snap back to the old end.</summary>
     [Fact]
     public void RangeBoxes_TypedCharByChar_KeepTheText_AndProposeTheFinalRange()
     {
         var rig = new Rig();
-        rig.Vm.StartEpoch = "2025-10-01T00:00:00Z";
-        rig.Vm.EndEpoch = "2025-11-11T00:00:00Z";
+        rig.Entry.StartEpoch = "2025-10-01T00:00:00Z";
+        rig.Entry.EndEpoch = "2025-11-11T00:00:00Z";
 
         const string start = "2021-11-01";
         const string end = "2021-12-27T00:14:47Z";
         for (int i = 1; i <= start.Length; i++)
-            rig.Vm.StartEpoch = start.Substring(0, i);
+            rig.Entry.StartEpoch = start.Substring(0, i);
         // start 2021, end still 2025: a valid (long) range; then the end is typed over
         for (int i = 1; i <= end.Length; i++)
         {
-            rig.Vm.EndEpoch = end.Substring(0, i);
-            Assert.Equal(end.Substring(0, i), rig.Vm.EndEpoch); // never snapped back
+            rig.Entry.EndEpoch = end.Substring(0, i);
+            Assert.Equal(end.Substring(0, i), rig.Entry.EndEpoch); // never snapped back
         }
 
         Assert.Equal(start, rig.Session.ProposedStartEpoch);
         Assert.Equal(end, rig.Session.ProposedEndEpoch);
-        Assert.False(rig.Vm.HasError);
+        Assert.False(rig.Entry.HasError);
     }
 
     [Theory]
@@ -194,14 +197,14 @@ public class TimelineTabViewModelEpochBoxTests
     public void RangeBoxes_InvalidRange_ShowsWhy_AndKeepsTheLastProposal(string start, string end, string why)
     {
         var rig = new Rig();
-        rig.Vm.StartEpoch = "2021-10-01";
-        rig.Vm.EndEpoch = "2021-12-31";
-        rig.Vm.StartEpoch = start;
-        rig.Vm.EndEpoch = end;
+        rig.Entry.StartEpoch = "2021-10-01";
+        rig.Entry.EndEpoch = "2021-12-31";
+        rig.Entry.StartEpoch = start;
+        rig.Entry.EndEpoch = end;
 
-        Assert.True(rig.Vm.HasError);
-        Assert.Contains(why, rig.Vm.ErrorMessage);
-        Assert.Equal(end, rig.Vm.EndEpoch);
+        Assert.True(rig.Entry.HasError);
+        Assert.Contains(why, rig.Entry.ErrorMessage);
+        Assert.Equal(end, rig.Entry.EndEpoch);
         Assert.Equal("2021-12-31", rig.Session.ProposedEndEpoch);
     }
 

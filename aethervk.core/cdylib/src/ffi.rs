@@ -725,7 +725,7 @@ pub unsafe extern "C" fn avkSimulationContext_setSphereGizmoParts(
 /// turns the look. With a comet, the comet and its dust are drawn at the light-time retarded epoch.
 /// `up` (C# `ObserverUp`): 0 Ecliptic (screen right in the ecliptic plane, up towards the ecliptic
 /// pole on the latitude's side), 1 CelestialNorth (up towards the J2000 celestial north pole
-/// `(0, sin ε, cos ε)`, whatever the latitude: north up, east left); unknown values read as 0.
+/// `(0, sin ε, cos ε)`, whatever the latitude: north up, east left, the default); unknown values read as 1.
 ///
 /// # Safety
 /// FFI Contract: `look` is null or points to 4 readable f64
