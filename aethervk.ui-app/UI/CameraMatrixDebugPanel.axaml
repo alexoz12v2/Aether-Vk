@@ -3,46 +3,124 @@
              x:Class="AetherVk.UI.CameraMatrixDebugPanel">
 
   <StackPanel Spacing="6">
-  <Grid ColumnDefinitions="Auto,24,Auto" Margin="0,4,0,0">
 
-    <!-- POS column -->
-    <StackPanel Grid.Column="0" Spacing="1">
-      <TextBlock Text="POSITION (km)"
-                 FontWeight="Bold" FontSize="9"
-                 Foreground="{DynamicResource Accent.Primary}"
-                 Margin="0,0,0,3"/>
-      <TextBlock Text="{ReflectionBinding PosX, StringFormat='X: {0:F3}'}"
-                 FontFamily="Consolas,Monospace" FontSize="9"
-                 Foreground="{DynamicResource Text.Primary}"/>
-      <TextBlock Text="{ReflectionBinding PosY, StringFormat='Y: {0:F3}'}"
-                 FontFamily="Consolas,Monospace" FontSize="9"
-                 Foreground="{DynamicResource Text.Primary}"/>
-      <TextBlock Text="{ReflectionBinding PosZ, StringFormat='Z: {0:F3}'}"
-                 FontFamily="Consolas,Monospace" FontSize="9"
-                 Foreground="{DynamicResource Text.Primary}"/>
-    </StackPanel>
-
-    <!-- ROT column -->
-    <StackPanel Grid.Column="2" Spacing="1">
-      <TextBlock Text="ROTATION (Quat)"
-                 FontWeight="Bold" FontSize="9"
-                 Foreground="{DynamicResource Accent.Primary}"
-                 Margin="0,0,0,3"/>
-      <TextBlock Text="{ReflectionBinding RotX, StringFormat='X: {0:F4}'}"
-                 FontFamily="Consolas,Monospace" FontSize="9"
-                 Foreground="{DynamicResource Text.Primary}"/>
-      <TextBlock Text="{ReflectionBinding RotY, StringFormat='Y: {0:F4}'}"
-                 FontFamily="Consolas,Monospace" FontSize="9"
-                 Foreground="{DynamicResource Text.Primary}"/>
-      <TextBlock Text="{ReflectionBinding RotZ, StringFormat='Z: {0:F4}'}"
-                 FontFamily="Consolas,Monospace" FontSize="9"
-                 Foreground="{DynamicResource Text.Primary}"/>
-      <TextBlock Text="{ReflectionBinding RotW, StringFormat='W: {0:F4}'}"
-                 FontFamily="Consolas,Monospace" FontSize="9"
-                 Foreground="{DynamicResource Text.Primary}"/>
-    </StackPanel>
-
+  <!-- Ephemeris at the shown epoch (reviewer docx item 15): a Horizons-style observer table,
+       "—" in every row without a committed comet -->
+  <Grid ColumnDefinitions="Auto,12,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto"
+        Margin="0,4,0,0" ToolTip.Tip="{ReflectionBinding StrTip}"
+        AutomationProperties.AutomationId="EphemerisTable">
+    <TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="3" Text="{ReflectionBinding StrTitle}"
+               FontWeight="Bold" FontSize="9"
+               Foreground="{DynamicResource Accent.Primary}"
+               Margin="0,0,0,3"/>
+    <TextBlock Grid.Row="1" Grid.Column="0" Text="{ReflectionBinding StrEpoch}"
+               FontFamily="Consolas,Monospace" FontSize="9"
+               Foreground="{DynamicResource Text.Secondary}"/>
+    <TextBlock Grid.Row="1" Grid.Column="2" Text="{ReflectionBinding EphemerisEpoch}"
+               AutomationProperties.AutomationId="EphemerisEpoch"
+               FontFamily="Consolas,Monospace" FontSize="9"
+               Foreground="{DynamicResource Text.Primary}"/>
+    <TextBlock Grid.Row="2" Grid.Column="0" Text="{ReflectionBinding StrRa}"
+               FontFamily="Consolas,Monospace" FontSize="9"
+               Foreground="{DynamicResource Text.Secondary}"/>
+    <TextBlock Grid.Row="2" Grid.Column="2" Text="{ReflectionBinding EphemerisRa}"
+               AutomationProperties.AutomationId="EphemerisRa"
+               FontFamily="Consolas,Monospace" FontSize="9"
+               Foreground="{DynamicResource Text.Primary}"/>
+    <TextBlock Grid.Row="3" Grid.Column="0" Text="{ReflectionBinding StrDec}"
+               FontFamily="Consolas,Monospace" FontSize="9"
+               Foreground="{DynamicResource Text.Secondary}"/>
+    <TextBlock Grid.Row="3" Grid.Column="2" Text="{ReflectionBinding EphemerisDec}"
+               AutomationProperties.AutomationId="EphemerisDec"
+               FontFamily="Consolas,Monospace" FontSize="9"
+               Foreground="{DynamicResource Text.Primary}"/>
+    <TextBlock Grid.Row="4" Grid.Column="0" Text="{ReflectionBinding StrR}"
+               FontFamily="Consolas,Monospace" FontSize="9"
+               Foreground="{DynamicResource Text.Secondary}"/>
+    <TextBlock Grid.Row="4" Grid.Column="2" Text="{ReflectionBinding EphemerisR}"
+               AutomationProperties.AutomationId="EphemerisR"
+               FontFamily="Consolas,Monospace" FontSize="9"
+               Foreground="{DynamicResource Text.Primary}"/>
+    <TextBlock Grid.Row="5" Grid.Column="0" Text="{ReflectionBinding StrDelta}"
+               FontFamily="Consolas,Monospace" FontSize="9"
+               Foreground="{DynamicResource Text.Secondary}"/>
+    <TextBlock Grid.Row="5" Grid.Column="2" Text="{ReflectionBinding EphemerisDelta}"
+               AutomationProperties.AutomationId="EphemerisDelta"
+               FontFamily="Consolas,Monospace" FontSize="9"
+               Foreground="{DynamicResource Text.Primary}"/>
+    <TextBlock Grid.Row="6" Grid.Column="0" Text="{ReflectionBinding StrPhase}"
+               FontFamily="Consolas,Monospace" FontSize="9"
+               Foreground="{DynamicResource Text.Secondary}"/>
+    <TextBlock Grid.Row="6" Grid.Column="2" Text="{ReflectionBinding EphemerisPhase}"
+               AutomationProperties.AutomationId="EphemerisPhase"
+               FontFamily="Consolas,Monospace" FontSize="9"
+               Foreground="{DynamicResource Text.Primary}"/>
+    <TextBlock Grid.Row="7" Grid.Column="0" Text="{ReflectionBinding StrElongation}"
+               FontFamily="Consolas,Monospace" FontSize="9"
+               Foreground="{DynamicResource Text.Secondary}"/>
+    <TextBlock Grid.Row="7" Grid.Column="2" Text="{ReflectionBinding EphemerisElongation}"
+               AutomationProperties.AutomationId="EphemerisElongation"
+               FontFamily="Consolas,Monospace" FontSize="9"
+               Foreground="{DynamicResource Text.Primary}"/>
+    <TextBlock Grid.Row="8" Grid.Column="0" Text="{ReflectionBinding StrSunPa}"
+               FontFamily="Consolas,Monospace" FontSize="9"
+               Foreground="{DynamicResource Text.Secondary}"/>
+    <TextBlock Grid.Row="8" Grid.Column="2" Text="{ReflectionBinding EphemerisSunPa}"
+               AutomationProperties.AutomationId="EphemerisSunPa"
+               FontFamily="Consolas,Monospace" FontSize="9"
+               Foreground="{DynamicResource Text.Primary}"/>
   </Grid>
+
+  <!-- The diagnostic sections: Settings › viewport › "Show diagnostic panels" -->
+  <StackPanel Spacing="6" IsVisible="{ReflectionBinding ShowDiagnostics}"
+              AutomationProperties.AutomationId="CameraHudDiagnostics">
+
+  <!-- The cartesian camera position (km) and rotation: collapsed by default -->
+  <Expander Header="{ReflectionBinding StrDebug}"
+            IsExpanded="{ReflectionBinding IsDebugExpanded, Mode=TwoWay}"
+            AutomationProperties.AutomationId="CameraHudDebugExpander"
+            FontSize="9" Padding="0" MinHeight="0">
+      <Grid ColumnDefinitions="Auto,24,Auto" Margin="0,4,0,0">
+
+        <!-- POS column -->
+        <StackPanel Grid.Column="0" Spacing="1">
+          <TextBlock Text="POSITION (km)"
+                     FontWeight="Bold" FontSize="9"
+                     Foreground="{DynamicResource Accent.Primary}"
+                     Margin="0,0,0,3"/>
+          <TextBlock Text="{ReflectionBinding PosX, StringFormat='X: {0:F3}'}"
+                     FontFamily="Consolas,Monospace" FontSize="9"
+                     Foreground="{DynamicResource Text.Primary}"/>
+          <TextBlock Text="{ReflectionBinding PosY, StringFormat='Y: {0:F3}'}"
+                     FontFamily="Consolas,Monospace" FontSize="9"
+                     Foreground="{DynamicResource Text.Primary}"/>
+          <TextBlock Text="{ReflectionBinding PosZ, StringFormat='Z: {0:F3}'}"
+                     FontFamily="Consolas,Monospace" FontSize="9"
+                     Foreground="{DynamicResource Text.Primary}"/>
+        </StackPanel>
+
+        <!-- ROT column -->
+        <StackPanel Grid.Column="2" Spacing="1">
+          <TextBlock Text="ROTATION (Quat)"
+                     FontWeight="Bold" FontSize="9"
+                     Foreground="{DynamicResource Accent.Primary}"
+                     Margin="0,0,0,3"/>
+          <TextBlock Text="{ReflectionBinding RotX, StringFormat='X: {0:F4}'}"
+                     FontFamily="Consolas,Monospace" FontSize="9"
+                     Foreground="{DynamicResource Text.Primary}"/>
+          <TextBlock Text="{ReflectionBinding RotY, StringFormat='Y: {0:F4}'}"
+                     FontFamily="Consolas,Monospace" FontSize="9"
+                     Foreground="{DynamicResource Text.Primary}"/>
+          <TextBlock Text="{ReflectionBinding RotZ, StringFormat='Z: {0:F4}'}"
+                     FontFamily="Consolas,Monospace" FontSize="9"
+                     Foreground="{DynamicResource Text.Primary}"/>
+          <TextBlock Text="{ReflectionBinding RotW, StringFormat='W: {0:F4}'}"
+                     FontFamily="Consolas,Monospace" FontSize="9"
+                     Foreground="{DynamicResource Text.Primary}"/>
+        </StackPanel>
+
+      </Grid>
+  </Expander>
 
   <!-- Native Earth observer (mode, aim error, target elevation) -->
   <StackPanel Spacing="1" IsVisible="{ReflectionBinding EarthObserver, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
@@ -64,6 +142,7 @@
     <TextBlock Text="{ReflectionBinding DustHistory}"
                FontFamily="Consolas,Monospace" FontSize="9"
                Foreground="{DynamicResource Text.Primary}"/>
+  </StackPanel>
   </StackPanel>
   </StackPanel>
 </UserControl>

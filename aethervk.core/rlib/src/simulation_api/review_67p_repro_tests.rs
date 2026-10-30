@@ -616,6 +616,173 @@ fn review_67p_jet_sites_lit_fraction() {
   }
 }
 
+/// The jet transform the FFI builds for a site at (`lat_deg`, lon 0°) on a unit-scale nucleus
+/// (only the site direction matters to the light).
+fn site_local(lat_deg: f64) -> TransformComponent {
+  let lat = lat_deg.to_radians();
+  let local_r = NUCLEUS_RADIUS_KM;
+  TransformComponent {
+    position: Vec3f32::from_components(
+      local_r * lat.cos() as f32,
+      0.0,
+      local_r * lat.sin() as f32,
+    ),
+    rotation: Quat::identity(),
+    scale: Vec3f32::from_components(0.04, 0.04, 0.04),
+  }
+}
+
+/// `dust::lit_fraction_sampled` (what `SimulationContext::jet_lit_fraction` evaluates) of a site
+/// over the committed range, on the test's own jet state (`jet_state`, the emission's mirror).
+fn mirror_lit_fraction(
+  almanac: &AlmanacPackedData,
+  planet: &AlmanacPlanet,
+  model: &BodyRotationalModel,
+  lat_deg: f64,
+) -> Option<f64> {
+  let (start, end) = (committed_start(), committed_end());
+  let jet_local = site_local(lat_deg);
+  crate::scene::dust::lit_fraction_sampled(
+    (end - start).to_seconds(),
+    SimulationContext::JET_LIT_SAMPLES,
+    |t| jet_state(almanac, planet, model, &jet_local, t, start + Duration::from_seconds(t)),
+  )
+}
+
+/// The lit-fraction query (R1b, the "never lit" warning) over the committed range agrees with
+/// `review_67p_jet_sites_lit_fraction`'s 10-minute integration on each of the save's four sites
+/// (lit or not, and the fraction within the window discretisation), and says "never lit" for a
+/// synthetic site in the polar night, "lit" for one just outside it. Both synthetic latitudes
+/// are derived from the subsolar latitude over the range (`asin(ŝ·pole)`): a site at latitude
+/// φ is lit at some spin phase iff |φ − δ_sub| < 90°, so with the subsolar point north all
+/// range long (δ_min > 0) the site at −90° + δ_min/2 is never lit and the one at
+/// −90° + 1.5·δ_max is (mirrored when the subsolar point stays south).
+#[test]
+fn review_67p_jet_lit_fraction_query() {
+  let mut almanac = AlmanacPackedData::default();
+  for f in [
+    "../../assets/planets/pck00011.pca",
+    "../../assets/planets/gm_de431.pca",
+    "../../assets/planets/de442.bsp",
+    SPK_COMMITTED,
+  ] {
+    almanac.load_almanac(f).expect(f);
+  }
+  let planet = AlmanacPlanet::new(NAIF_67P);
+  let model = save_rotation();
+  let (start, end) = (committed_start(), committed_end());
+  let span_s = (end - start).to_seconds();
+
+  // the save's four sites: query vs the sibling test's 10-minute integration
+  const STEP_S: f64 = 600.0;
+  for jet in SAVE_JETS.iter() {
+    let lat = jet.lat_deg as f64;
+    let jet_local = site_local(lat);
+    let (mut lit_s, mut t) = (0.0f64, 0.0f64);
+    while t < span_s {
+      let dur = STEP_S.min(span_s - t);
+      let js = jet_state(&almanac, &planet, &model, &jet_local, t, start + Duration::from_seconds(t))
+        .expect("comet state");
+      lit_s += js.lit_window(dur).lit_time_s;
+      t += STEP_S;
+    }
+    let reference = lit_s / span_s;
+    let query = mirror_lit_fraction(&almanac, &planet, &model, lat).expect("query");
+    println!("site lat {lat:>4}°: query {query:.4}, 10-minute reference {reference:.4}");
+    assert_eq!(query > 0.0, reference > 0.0, "site lat {lat}°: lit disagreement");
+    assert!(
+      (query - reference).abs() < 2e-3,
+      "site lat {lat}°: query {query} vs reference {reference}"
+    );
+    if lat == 40.0 || lat == -10.0 {
+      assert!(query > 0.0, "site lat {lat}° is never lit over the committed range");
+    }
+  }
+
+  // subsolar latitude over the range, from the spin axis the light model uses
+  let sgn = if model.rotation_rate < 0.0 { -1.0 } else { 1.0 };
+  let (mut sub_min, mut sub_max) = (f64::INFINITY, f64::NEG_INFINITY);
+  let probe = site_local(0.0);
+  let mut t = 0.0f64;
+  while t <= span_s {
+    let js = jet_state(&almanac, &planet, &model, &probe, t, start + Duration::from_seconds(t))
+      .expect("comet state");
+    let a = js.spin.expect("the save has a rotational model");
+    let s = js.sun_dir();
+    let sub = (sgn * (s[0] * a[0] + s[1] * a[1] + s[2] * a[2])).clamp(-1.0, 1.0).asin().to_degrees();
+    sub_min = sub_min.min(sub);
+    sub_max = sub_max.max(sub);
+    t += 3600.0;
+  }
+  println!("subsolar latitude over the range: {sub_min:.3}° … {sub_max:.3}°");
+  let (night_lat, lit_lat) = if sub_min > 0.0 {
+    (-90.0 + sub_min / 2.0, -90.0 + 1.5 * sub_max)
+  } else if sub_max < 0.0 {
+    (90.0 + sub_max / 2.0, 90.0 + 1.5 * sub_min)
+  } else {
+    panic!("no polar night over the range (subsolar latitude crosses the equator)");
+  };
+  let night = mirror_lit_fraction(&almanac, &planet, &model, night_lat).expect("query");
+  let lit = mirror_lit_fraction(&almanac, &planet, &model, lit_lat).expect("query");
+  println!("polar night site lat {night_lat:.3}°: lit fraction {night}; control lat {lit_lat:.3}°: {lit}");
+  assert_eq!(night, 0.0, "the polar-night site at {night_lat}° must never be lit");
+  assert!(lit > 0.0, "the control site at {lit_lat}° must be lit at some time");
+}
+
+/// The same query through `SimulationContext::jet_lit_fraction` (the FFI's path: the committed
+/// scene's clock, cartesian cache and the jets added through the FFI recipe) gives each of the
+/// save's four jets the mirror's fraction over the committed range.
+#[test]
+fn review_67p_jet_lit_fraction_query_through_context() {
+  let ctx = SimulationContext::startup(None).expect("Failed to create SimulationContext");
+  if ctx.render_frontend().is_none() {
+    println!("Skipping: no GPU");
+    return;
+  }
+  load_almanac_files(&ctx);
+  let (scene_id, comet_body) = committed_scene(&ctx);
+  let mut jets = Vec::new();
+  for jet in SAVE_JETS.iter() {
+    let id = add_particle_system(&ctx, scene_id, &save_dto(jet, EMISSION_START_NOW))
+      .unwrap_or_else(|e| panic!("jet lat {}°: {e}", jet.lat_deg));
+    jets.push((jet.lat_deg as f64, id));
+  }
+  let mut almanac = AlmanacPackedData::default();
+  for f in [
+    "../../assets/planets/pck00011.pca",
+    "../../assets/planets/gm_de431.pca",
+    "../../assets/planets/de442.bsp",
+    SPK_COMMITTED,
+  ] {
+    almanac.load_almanac(f).expect(f);
+  }
+  let (planet, model) = (AlmanacPlanet::new(NAIF_67P), save_rotation());
+  let mut failures = Vec::new();
+  for (lat, id) in &jets {
+    let Some((frac, start, end)) = ctx.jet_lit_fraction(scene_id, *id) else {
+      failures.push(format!("jet lat {lat}°: no answer"));
+      continue;
+    };
+    let mirror = mirror_lit_fraction(&almanac, &planet, &model, *lat).unwrap();
+    println!(
+      "jet lat {lat:>4}°: context {frac:.4} over {} → {}, mirror {mirror:.4}",
+      fmt_epoch(start),
+      fmt_epoch(end)
+    );
+    if start != committed_start() || end != committed_end() {
+      failures.push(format!("jet lat {lat}°: range {} → {}", fmt_epoch(start), fmt_epoch(end)));
+    }
+    // the FFI places the site from the DTO's f32 latitude, the mirror from f64
+    if (frac - mirror).abs() > 1e-4 {
+      failures.push(format!("jet lat {lat}°: context {frac} vs mirror {mirror}"));
+    }
+  }
+  // not a jet: no answer
+  assert!(ctx.jet_lit_fraction(scene_id, comet_body).is_none());
+  ctx.threads.logic_thread.tx().try_send(LogicCommand::Shutdown).unwrap();
+  assert!(failures.is_empty(), "{failures:?}");
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 4. dust age at the committed start
 // ─────────────────────────────────────────────────────────────────────────────

@@ -42,8 +42,10 @@ public sealed class ReviewerMailTests(ITestOutputHelper output)
         // the billboards are their own top-level windows: the placeholder of a failed texture
         Assert.Empty(s.Desktop.FindElementsByName("texture not loaded"));
 
-        Step("R4: no coordinate panels by default");
-        Assert.Null(s.Desktop.FindElementsByAccessibilityId("CameraHudCollapseButton").FirstOrDefault(e => e.Displayed));
+        Step("R4: no coordinate panels by default; the ephemeris table in their place (docx item 15)");
+        Assert.Null(s.Desktop.FindElementsByAccessibilityId("CameraHudDiagnostics").FirstOrDefault(e => e.Displayed));
+        Ui.WaitUntil(() => s.Desktop.FindElementsByAccessibilityId("EphemerisR").FirstOrDefault(e => e.Displayed)?.Text
+          .EndsWith(" AU", StringComparison.Ordinal) == true, TimeSpan.FromSeconds(10), "the ephemeris r row");
 
         Step("R1: four jets, all in the simulation");
         s.SelectTab("ModelTab");
