@@ -83,8 +83,10 @@
           <Expander.Header>
             <StackPanel Orientation="Horizontal" Spacing="4">
               <TextBlock Text="{Binding StrSun}" />
-              <controls:PropertyHelpButton HelpHeader="{Binding StrSun}"
-                                           HelpContent="{Binding StrSun}" />
+              <controls:PropertyHelpButton AutomationProperties.AutomationId="ModelSunSectionHelp"
+                                           HelpHeader="{Binding StrSun}"
+                                           HelpContent="{Binding StrHelpSun}"
+                                           FlyoutMaxWidth="300" />
             </StackPanel>
           </Expander.Header>
 
@@ -233,18 +235,27 @@
           <StackPanel Orientation="Vertical" Spacing="0">
 
             <!-- ──── Reference-position error lines (comet vs osculating reference) ── -->
-            <CheckBox Margin="12,10,12,0"
-                      AutomationProperties.AutomationId="ShowReferenceErrorToggle"
-                      Content="{Binding StrShowReferenceError}"
-                      IsChecked="{Binding ShowReferencePositionError}"
-                      ToolTip.Tip="Draws two lines from the comet to its reference orbit (red track): the closest point of the track (cross-track) and where the reference says the comet should be now (same-epoch). Each is shown only while longer than 10 nucleus radii." />
+            <StackPanel Orientation="Horizontal" Spacing="4" Margin="12,10,12,0">
+              <CheckBox AutomationProperties.AutomationId="ShowReferenceErrorToggle"
+                        Content="{Binding StrShowReferenceError}"
+                        IsChecked="{Binding ShowReferencePositionError}" />
+              <controls:PropertyHelpButton AutomationProperties.AutomationId="ShowReferenceErrorToggleHelp"
+                                           HelpHeader="{Binding StrShowReferenceError}"
+                                           HelpContent="{Binding StrHelpShowReferenceError}"
+                                           FlyoutMaxWidth="300" />
+            </StackPanel>
 
             <!-- ──── Dust visibility: asinh display stretch softening ───── -->
             <Grid ColumnDefinitions="*,12,1.6*"
                   Margin="12,10,12,0">
-              <TextBlock Grid.Column="0"
-                         Text="{Binding StrDustVisibility}"
-                         VerticalAlignment="Center" />
+              <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                <TextBlock Text="{Binding StrDustVisibility}"
+                           VerticalAlignment="Center" />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="DustVisibilitySliderHelp"
+                                             HelpHeader="{Binding StrDustVisibility}"
+                                             HelpContent="{Binding StrHelpDustVisibility}"
+                                             FlyoutMaxWidth="320" />
+              </StackPanel>
               <controls:UnboundedSlider Grid.Column="2"
                                         AutomationProperties.AutomationId="DustVisibilitySlider"
                                         Value="{Binding DustSoftening}"
@@ -252,56 +263,77 @@
                                         HasBounds="True"
                                         MinBound="0.00001"
                                         MaxBound="1.0"
-                                        DisplayFormat="G2"
-                                        ToolTip.Tip="Display stretch of the dust (softening of an asinh curve over the accumulated optical depth, relative to the brightest dust in view, which adapts to the view like an eye).&#x0A;Smaller: the faint, old tail and trail (thousands of times fainter than the coma) become visible while the coma saturates.&#x0A;1: close to linear, physically proportional brightness.&#x0A;Visual only." />
+                                        DisplayFormat="G2" />
             </Grid>
 
             <!-- ──── Dust view aids: tracers (real particles) and flow pulses (marks on synchrones) ── -->
-            <CheckBox Margin="12,10,12,0"
-                      Content="{Binding StrDustFlow}"
-                      IsChecked="{Binding DustFlow}"
-                      ToolTip.Tip="Brightness marks riding the dust along synchrones (the dust of one emission instant), a motion cue near the nucleus: peak 4x, trough 0.15x, mean 1.&#x0A;Off by default: seen from 0.03 AU and beyond the marks are the synchrone fan itself, hard rays through the nucleus that the physical optical depth does not show.&#x0A;Visual only." />
-            <CheckBox Margin="12,10,12,0"
-                      AutomationProperties.AutomationId="DustRhoNormToggle"
-                      Content="{Binding StrDustRhoNorm}"
-                      IsChecked="{Binding DustRhoNorm}"
-                      ToolTip.Tip="Divides the dust brightness by the distance from the nucleus (ρ) so the bright inner coma and the faint outer jets share one exposure. Display only: the simulated dust is unchanged." />
-            <CheckBox Margin="12,10,12,0"
-                      AutomationProperties.AutomationId="DustTrajectoriesToggle"
-                      Content="{Binding StrDustTrajectories}"
-                      IsChecked="{Binding DustTrajectories}"
-                      ToolTip.Tip="Draws about 200 grains' paths since they left the nucleus as lines, one colour per jet." />
+            <StackPanel Orientation="Horizontal" Spacing="4" Margin="12,10,12,0">
+              <CheckBox Content="{Binding StrDustFlow}"
+                        IsChecked="{Binding DustFlow}" />
+              <controls:PropertyHelpButton AutomationProperties.AutomationId="DustFlowHelp"
+                                           HelpHeader="{Binding StrDustFlow}"
+                                           HelpContent="{Binding StrHelpDustFlow}"
+                                           FlyoutMaxWidth="320" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="4" Margin="12,10,12,0">
+              <CheckBox AutomationProperties.AutomationId="DustRhoNormToggle"
+                        Content="{Binding StrDustRhoNorm}"
+                        IsChecked="{Binding DustRhoNorm}" />
+              <controls:PropertyHelpButton AutomationProperties.AutomationId="DustRhoNormToggleHelp"
+                                           HelpHeader="{Binding StrDustRhoNorm}"
+                                           HelpContent="{Binding StrHelpDustRhoNorm}" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="4" Margin="12,10,12,0">
+              <CheckBox AutomationProperties.AutomationId="DustTrajectoriesToggle"
+                        Content="{Binding StrDustTrajectories}"
+                        IsChecked="{Binding DustTrajectories}" />
+              <controls:PropertyHelpButton AutomationProperties.AutomationId="DustTrajectoriesToggleHelp"
+                                           HelpHeader="{Binding StrDustTrajectories}"
+                                           HelpContent="{Binding StrHelpDustTrajectories}" />
+            </StackPanel>
 
             <!-- ──── Dust exposure compensation over the automatic exposure ──── -->
             <Grid ColumnDefinitions="*,12,1.6*,8,Auto"
                   Margin="12,10,12,4">
-              <TextBlock Grid.Column="0"
-                         Text="{Binding StrDustExposure}"
-                         VerticalAlignment="Center" />
+              <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                <TextBlock Text="{Binding StrDustExposure}"
+                           VerticalAlignment="Center" />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="DustExposureSliderHelp"
+                                             HelpHeader="{Binding StrDustExposure}"
+                                             HelpContent="{Binding StrHelpDustExposure}" />
+              </StackPanel>
               <Slider Grid.Column="2"
                       AutomationProperties.AutomationId="DustExposureSlider"
                       Minimum="-6" Maximum="6"
                       SmallChange="0.25" LargeChange="1" TickFrequency="0.25" IsSnapToTickEnabled="True"
                       Value="{Binding DustExposureEv}"
-                      VerticalAlignment="Center"
-                      ToolTip.Tip="Brightens (+) or darkens (−) the dust over the automatic exposure, in photographic stops." />
+                      VerticalAlignment="Center" />
               <TextBlock Grid.Column="4"
                          Text="{Binding DustExposureEvText}"
                          MinWidth="64"
                          VerticalAlignment="Center" />
             </Grid>
-            <CheckBox Margin="12,10,12,0"
-                      AutomationProperties.AutomationId="DustTracersToggle"
-                      Content="{Binding StrDustTracers}"
-                      IsChecked="{Binding DustTracers}"
-                      ToolTip.Tip="Draws one dust cluster in 256 as bright dots at the exact positions of its grain sizes, from the slow large grains to the fast small ones: the dots span the tail.&#x0A;The dust drifts at 2 to 150 m/s while a pixel of a wide view spans tens of km: at low sim speed it moves far less than a pixel per second, and the dense dots blend into a still fog. Tracers are real particles to follow (raise the sim speed to see them stream).&#x0A;Visual only." />
+            <StackPanel Orientation="Horizontal" Spacing="4" Margin="12,10,12,0">
+              <CheckBox AutomationProperties.AutomationId="DustTracersToggle"
+                        Content="{Binding StrDustTracers}"
+                        IsChecked="{Binding DustTracers}" />
+              <controls:PropertyHelpButton AutomationProperties.AutomationId="DustTracersToggleHelp"
+                                           HelpHeader="{Binding StrDustTracers}"
+                                           HelpContent="{Binding StrHelpDustTracers}"
+                                           FlyoutMaxWidth="320" />
+            </StackPanel>
 
             <!-- ──── Flow time-lapse factor of the dust marks ──────────── -->
             <Grid ColumnDefinitions="*,12,1.6*"
                   Margin="12,10,12,4">
-              <TextBlock Grid.Column="0"
-                         Text="{Binding StrDustFlowSpeed}"
-                         VerticalAlignment="Center" />
+              <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                <TextBlock Text="{Binding StrDustFlowSpeed}"
+                           VerticalAlignment="Center" />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="DustFlowSpeedSliderHelp"
+                                             HelpHeader="{Binding StrDustFlowSpeed}"
+                                             HelpContent="{Binding StrHelpDustFlowSpeed}"
+                                             FlyoutMaxWidth="320" />
+              </StackPanel>
               <controls:UnboundedSlider Grid.Column="2"
                                         AutomationProperties.AutomationId="DustFlowSpeedSlider"
                                         Value="{Binding DustFlowSpeed}"
@@ -309,26 +341,25 @@
                                         HasBounds="True"
                                         MinBound="1"
                                         MaxBound="10000"
-                                        DisplayFormat="G3"
-                                        ToolTip.Tip="Speed of the brightness marks that ride the dust while the simulation runs (they freeze on pause).&#x0A;1: the marks move exactly with the dust (its real speed on screen, often far below a pixel per second in wide views).&#x0A;K: every mark moves K times faster than its dust, in its direction, so the whole swarm keeps its true velocity field at a readable pace. Changing it never jumps the marks.&#x0A;Visual only." />
+                                        DisplayFormat="G3" />
             </Grid>
 
-            <CheckBox Margin="12,2,12,4"
-                      AutomationProperties.AutomationId="SphereGizmoVisibleCheckBox"
-                      IsChecked="{Binding IsGizmoVisible}"
-                      Content="Show sphere gizmo"
-                      ToolTip.Tip="The wireframe sphere and axes around the nucleus. Saved with the file." />
+            <!-- one ? for the gizmo and its parts -->
+            <StackPanel Orientation="Horizontal" Spacing="4" Margin="12,2,12,4">
+              <CheckBox AutomationProperties.AutomationId="SphereGizmoVisibleCheckBox"
+                        IsChecked="{Binding IsGizmoVisible}"
+                        Content="Show sphere gizmo" />
+              <controls:PropertyHelpButton AutomationProperties.AutomationId="SphereGizmoVisibleCheckBoxHelp"
+                                           HelpHeader="{Binding StrHelpHeaderGizmo}"
+                                           HelpContent="{Binding StrHelpGizmo}"
+                                           FlyoutMaxWidth="300" />
+            </StackPanel>
             <WrapPanel Margin="28,0,12,4" IsEnabled="{Binding IsGizmoVisible}">
-              <CheckBox Margin="0,0,10,0" AutomationProperties.AutomationId="GizmoGridCheckBox" IsChecked="{Binding ShowGizmoGrid}" Content="Grid"
-                        ToolTip.Tip="The latitude / longitude wireframe" />
-              <CheckBox Margin="0,0,10,0" AutomationProperties.AutomationId="GizmoBodyAxesCheckBox" IsChecked="{Binding ShowGizmoBodyAxes}" Content="Body X/Y"
-                        ToolTip.Tip="The body-fixed X (red) and Y (green) axes, rotating with the nucleus" />
-              <CheckBox Margin="0,0,10,0" AutomationProperties.AutomationId="GizmoSpinAxisCheckBox" IsChecked="{Binding ShowGizmoSpinAxis}" Content="Spin axis"
-                        ToolTip.Tip="The rotation axis (body Z, blue)" />
-              <CheckBox Margin="0,0,10,0" AutomationProperties.AutomationId="GizmoSunCheckBox" IsChecked="{Binding ShowGizmoSun}" Content="Sun"
-                        ToolTip.Tip="The arrow towards the Sun" />
-              <CheckBox AutomationProperties.AutomationId="GizmoVelocityCheckBox" IsChecked="{Binding ShowGizmoVelocity}" Content="Velocity"
-                        ToolTip.Tip="The comet's heliocentric velocity direction (magenta)" />
+              <CheckBox Margin="0,0,10,0" AutomationProperties.AutomationId="GizmoGridCheckBox" IsChecked="{Binding ShowGizmoGrid}" Content="Grid" />
+              <CheckBox Margin="0,0,10,0" AutomationProperties.AutomationId="GizmoBodyAxesCheckBox" IsChecked="{Binding ShowGizmoBodyAxes}" Content="Body X/Y" />
+              <CheckBox Margin="0,0,10,0" AutomationProperties.AutomationId="GizmoSpinAxisCheckBox" IsChecked="{Binding ShowGizmoSpinAxis}" Content="Spin axis" />
+              <CheckBox Margin="0,0,10,0" AutomationProperties.AutomationId="GizmoSunCheckBox" IsChecked="{Binding ShowGizmoSun}" Content="Sun" />
+              <CheckBox AutomationProperties.AutomationId="GizmoVelocityCheckBox" IsChecked="{Binding ShowGizmoVelocity}" Content="Velocity" />
             </WrapPanel>
 
             <!-- Warning: no radius known yet -->
@@ -368,11 +399,14 @@
               </Panel>
             </Grid>
 
-            <CheckBox Margin="12,2,12,4"
-                      AutomationProperties.AutomationId="ShowJetAnglesCheckBox"
-                      IsChecked="{Binding ShowJetAngles}"
-                      Content="Show jet angles"
-                      ToolTip.Tip="Draws the selected jet's latitude and longitude as arcs with their degrees in the viewport. Saved with the file." />
+            <StackPanel Orientation="Horizontal" Spacing="4" Margin="12,2,12,4">
+              <CheckBox AutomationProperties.AutomationId="ShowJetAnglesCheckBox"
+                        IsChecked="{Binding ShowJetAngles}"
+                        Content="Show jet angles" />
+              <controls:PropertyHelpButton AutomationProperties.AutomationId="ShowJetAnglesCheckBoxHelp"
+                                           HelpHeader="{Binding StrHelpHeaderJetAngles}"
+                                           HelpContent="{Binding StrHelpJetAngles}" />
+            </StackPanel>
 
             <!-- ──── Jet list ─────────────────────────────────────────────── -->
             <ListBox x:Name="JetListBox"
@@ -475,9 +509,14 @@
                       x:DataType="vm:JetViewModel">
 
                   <!-- Latitude -->
-                  <TextBlock Grid.Row="0" Grid.Column="0" Text="Latitude" />
+                  <!-- the ?s in the jet panel read the tab VM's strings (DataContext here is the jet) -->
+                  <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                    <TextBlock Text="Latitude" />
+                    <controls:PropertyHelpButton AutomationProperties.AutomationId="JetLatitudeSliderHelp"
+                                                 HelpHeader="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrLatitude}"
+                                                 HelpContent="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpJetLatitude}" />
+                  </StackPanel>
                   <controls:UnboundedSlider Grid.Row="0" Grid.Column="2" AutomationProperties.AutomationId="JetLatitudeSlider"
-                    ToolTip.Tip="Latitude of the jet source on the nucleus, in degrees in the body-fixed frame: +90 is the north spin pole, 0 the equator, -90 the south pole."
                                             Value="{Binding LatitudeDeg}">
                     <controls:UnboundedSlider.InnerRightContent>
                       <TextBlock Classes="unit-of-measurement" Text="°" />
@@ -485,9 +524,13 @@
                   </controls:UnboundedSlider>
 
                   <!-- Longitude -->
-                  <TextBlock Grid.Row="2" Grid.Column="0" Text="Longitude" />
+                  <StackPanel Grid.Row="2" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                    <TextBlock Text="Longitude" />
+                    <controls:PropertyHelpButton AutomationProperties.AutomationId="JetLongitudeSliderHelp"
+                                                 HelpHeader="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrLongitude}"
+                                                 HelpContent="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpJetLongitude}" />
+                  </StackPanel>
                   <controls:UnboundedSlider Grid.Row="2" Grid.Column="2" AutomationProperties.AutomationId="JetLongitudeSlider"
-                    ToolTip.Tip="Longitude of the jet source on the nucleus, in degrees from the prime meridian (-180 to 180). The nucleus spin carries the jet around as it rotates."
                                             Value="{Binding LongitudeDeg}">
                     <controls:UnboundedSlider.InnerRightContent>
                       <TextBlock Classes="unit-of-measurement" Text="°" />
@@ -540,25 +583,41 @@
                   </Panel>
 
                   <!-- Stream Color -->
-                  <TextBlock Grid.Row="10" Grid.Column="0" Text="Stream Color" />
+                  <StackPanel Grid.Row="10" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                    <TextBlock Text="Stream Color" />
+                    <controls:PropertyHelpButton AutomationProperties.AutomationId="JetStreamColorHelp"
+                                                 HelpHeader="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpHeaderStreamColor}"
+                                                 HelpContent="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpJetStreamColor}" />
+                  </StackPanel>
                   <ColorPicker Grid.Row="10" Grid.Column="2"
-                    ToolTip.Tip="Colour used to draw this jet in the viewport (its dust and direction line). Display only: it does not change the physics."
+                               AutomationProperties.AutomationId="JetStreamColorPicker"
                                Color="{Binding StreamColor, Converter={x:Static converters:Vector4ToColorConverter.Instance}}"
                                HorizontalAlignment="Left" />
 
                   <!-- Computed: β -->
-                  <TextBlock Grid.Row="12" Grid.Column="0" Text="β (beta)" />
+                  <StackPanel Grid.Row="12" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                    <TextBlock Text="β (beta)" />
+                    <controls:PropertyHelpButton AutomationProperties.AutomationId="JetBetaHelp"
+                                                 HelpHeader="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpHeaderJetBeta}"
+                                                 HelpContent="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpJetBeta}"
+                                                 FlyoutMaxWidth="300" />
+                  </StackPanel>
                   <TextBox Grid.Row="12" Grid.Column="2"
                            Classes="computed"
-                           ToolTip.Tip="Computed, read-only. Beta is the ratio of solar radiation-pressure force to solar gravity on the reference grain, roughly 0.57 x Q_pr / (density in g/cm3 x grain radius in um). Small, light grains have larger beta and curve away from the Sun faster."
+                           AutomationProperties.AutomationId="JetBetaBox"
                            Text="{Binding Beta, StringFormat='{}{0:F4}'}" />
 
                   <!-- Computed: Dust production rate -->
-                  <TextBlock Grid.Row="14" Grid.Column="0" Text="Q_dust @ 1 AU" />
+                  <StackPanel Grid.Row="14" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                    <TextBlock Text="Q_dust @ 1 AU" />
+                    <controls:PropertyHelpButton AutomationProperties.AutomationId="JetQDustHelp"
+                                                 HelpHeader="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpHeaderJetQDust}"
+                                                 HelpContent="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpJetQDust}" />
+                  </StackPanel>
                   <Panel Grid.Row="14" Grid.Column="2" Classes="unit-overlay">
                     <TextBox Classes="computed"
-                             Text="{Binding DustProductionRateAt1AuKgs, StringFormat='{}{0:F4}'}"
-                             ToolTip.Tip="Computed, read-only. Dust mass production rate at 1 AU from the Sun in kg/s, as the engine applies it: this jet's Q_d at 1 AU clamped to the model-wide max." />
+                             AutomationProperties.AutomationId="JetQDustBox"
+                             Text="{Binding DustProductionRateAt1AuKgs, StringFormat='{}{0:F4}'}" />
                     <TextBlock Classes="unit-of-measurement" Text="kg/s" />
                   </Panel>
 
@@ -571,8 +630,9 @@
                   <StackPanel Orientation="Horizontal" Spacing="4">
                     <TextBlock Text="Grain" />
                     <controls:PropertyHelpButton AutomationProperties.AutomationId="JetGrainHelp"
-                                                 HelpHeader="Grain (this jet)"
-                                                 HelpContent="This jet's own dust grains: every jet has its own, and a new jet starts from the defaults further down.&#x0A;&#x0A;Grain radii follow n(s) ∝ s^−q from s₀/F to s₀·F, s₀ = diameter/2 (q = 3.5, F = 10, 100 µm → radii 5–500 µm).&#x0A;&#x0A;Diameter, density and Q_pr set β ∝ Q_pr/(ρ·s), how hard sunlight pushes the grains away from the Sun. The albedo sets how bright they are; the amount of dust is the jet's production rate Q_d (Advanced: activity).&#x0A;&#x0A;Limitation: q only changes the individual bright specks; the continuous dust rendering is built for q = 3.5 whatever q is." />
+                                                 HelpHeader="{Binding StrHelpHeaderJetGrain}"
+                                                 HelpContent="{Binding StrHelpJetGrain}"
+                                                 FlyoutMaxWidth="320" />
                   </StackPanel>
                 </Expander.Header>
                 <StackPanel Spacing="8">
@@ -581,10 +641,14 @@
                           RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto"
                           x:DataType="vm:JetViewModel">
 
-                      <TextBlock Grid.Row="0" Grid.Column="0" Text="Diameter" />
+                      <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                        <TextBlock Text="Diameter" />
+                        <controls:PropertyHelpButton AutomationProperties.AutomationId="JetDiametreUmHelp"
+                                                     HelpHeader="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpHeaderJetDiameter}"
+                                                     HelpContent="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpJetDiameter}" />
+                      </StackPanel>
                       <Panel Grid.Row="0" Grid.Column="2" Classes="unit-overlay">
-                        <TextBox AutomationProperties.AutomationId="JetDiametreUm"
-                          ToolTip.Tip="Reference grain diameter of this jet, in µm. With density and Q_pr it sets β, the radiation-pressure push: smaller or lighter grains curve away from the Sun faster. The size law spans radii from s₀/F to s₀·F about half of it.">
+                        <TextBox AutomationProperties.AutomationId="JetDiametreUm">
                           <i:Interaction.Behaviors>
                             <b:NumericTextBoxBehavior Value="{Binding DiametreUm}" Minimum="0.0001" Maximum="10000" />
                           </i:Interaction.Behaviors>
@@ -592,10 +656,14 @@
                         <TextBlock Classes="unit-of-measurement" Text="μm" />
                       </Panel>
 
-                      <TextBlock Grid.Row="2" Grid.Column="0" Text="Density" />
+                      <StackPanel Grid.Row="2" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                        <TextBlock Text="Density" />
+                        <controls:PropertyHelpButton AutomationProperties.AutomationId="JetDensityHelp"
+                                                     HelpHeader="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrDensity}"
+                                                     HelpContent="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpJetDensity}" />
+                      </StackPanel>
                       <Panel Grid.Row="2" Grid.Column="2" Classes="unit-overlay">
-                        <TextBox AutomationProperties.AutomationId="JetDensity"
-                          ToolTip.Tip="Bulk density of this jet's grains, in g/cm³ (cometary dust about 0.5 to 1). It enters β and the mass the observed brightness needs.">
+                        <TextBox AutomationProperties.AutomationId="JetDensity">
                           <i:Interaction.Behaviors>
                             <b:NumericTextBoxBehavior Value="{Binding DensityGCm3}" Minimum="0.00001" Maximum="7.0" />
                           </i:Interaction.Behaviors>
@@ -603,33 +671,49 @@
                         <TextBlock Classes="unit-of-measurement" Text="g/cm³" />
                       </Panel>
 
-                      <TextBlock Grid.Row="4" Grid.Column="0" Text="Q_pr" />
-                      <TextBox Grid.Row="4" Grid.Column="2" AutomationProperties.AutomationId="JetQpr"
-                        ToolTip.Tip="Radiation-pressure efficiency Q_pr of this jet's grains (0.5 to 2; 1 is a grey body). It scales β only, not the brightness.">
+                      <StackPanel Grid.Row="4" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                        <TextBlock Text="Q_pr" />
+                        <controls:PropertyHelpButton AutomationProperties.AutomationId="JetQprHelp"
+                                                     HelpHeader="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpHeaderQpr}"
+                                                     HelpContent="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpJetQpr}" />
+                      </StackPanel>
+                      <TextBox Grid.Row="4" Grid.Column="2" AutomationProperties.AutomationId="JetQpr">
                         <i:Interaction.Behaviors>
                           <b:NumericTextBoxBehavior Value="{Binding ScatteringEfficiency}" Minimum="0.5" Maximum="2" />
                         </i:Interaction.Behaviors>
                       </TextBox>
 
-                      <TextBlock Grid.Row="6" Grid.Column="0" Text="Albedo" />
-                      <TextBox Grid.Row="6" Grid.Column="2" AutomationProperties.AutomationId="JetAlbedo"
-                        ToolTip.Tip="Geometric albedo of this jet's dust (0.01 to 0.5; cometary dust 0.03 to 0.06). It scales the brightness only; the amount of dust is the jet's production rate Q_d.">
+                      <StackPanel Grid.Row="6" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                        <TextBlock Text="Albedo" />
+                        <controls:PropertyHelpButton AutomationProperties.AutomationId="JetAlbedoHelp"
+                                                     HelpHeader="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrAlbedo}"
+                                                     HelpContent="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpJetAlbedo}" />
+                      </StackPanel>
+                      <TextBox Grid.Row="6" Grid.Column="2" AutomationProperties.AutomationId="JetAlbedo">
                         <i:Interaction.Behaviors>
                           <b:NumericTextBoxBehavior Value="{Binding GeometricAlbedo}" Minimum="0.01" Maximum="0.5" />
                         </i:Interaction.Behaviors>
                       </TextBox>
 
-                      <TextBlock Grid.Row="8" Grid.Column="0" Text="Size law q" />
-                      <TextBox Grid.Row="8" Grid.Column="2" AutomationProperties.AutomationId="JetSizeQ"
-                        ToolTip.Tip="Exponent q of this jet's grain size law n(s) ∝ s⁻ᵠ (2 to 5; 3.5 is the usual value). Larger q means more small grains. It only changes the individual bright specks; the continuous dust assumes 3.5.">
+                      <StackPanel Grid.Row="8" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                        <TextBlock Text="Size law q" />
+                        <controls:PropertyHelpButton AutomationProperties.AutomationId="JetSizeQHelp"
+                                                     HelpHeader="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpHeaderSizeLawQ}"
+                                                     HelpContent="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpJetSizeQ}" />
+                      </StackPanel>
+                      <TextBox Grid.Row="8" Grid.Column="2" AutomationProperties.AutomationId="JetSizeQ">
                         <i:Interaction.Behaviors>
                           <b:NumericTextBoxBehavior Value="{Binding SizeQ}" Minimum="2" Maximum="5" />
                         </i:Interaction.Behaviors>
                       </TextBox>
 
-                      <TextBlock Grid.Row="10" Grid.Column="0" Text="Size range F" />
-                      <TextBox Grid.Row="10" Grid.Column="2" AutomationProperties.AutomationId="JetSizeRange"
-                        ToolTip.Tip="Range factor F of this jet's grains (1 to 1000): radii span from s₀/F to s₀·F, where s₀ is half the diameter. Larger F means a wider spread of grain sizes.">
+                      <StackPanel Grid.Row="10" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                        <TextBlock Text="Size range F" />
+                        <controls:PropertyHelpButton AutomationProperties.AutomationId="JetSizeRangeHelp"
+                                                     HelpHeader="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpHeaderSizeRangeF}"
+                                                     HelpContent="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpJetSizeRange}" />
+                      </StackPanel>
+                      <TextBox Grid.Row="10" Grid.Column="2" AutomationProperties.AutomationId="JetSizeRange">
                         <i:Interaction.Behaviors>
                           <b:NumericTextBoxBehavior Value="{Binding SizeRange}" Minimum="1" Maximum="1000" />
                         </i:Interaction.Behaviors>
@@ -655,16 +739,21 @@
                   <StackPanel Orientation="Horizontal" Spacing="4">
                     <TextBlock Text="Advanced: activity (Q_d)" />
                     <controls:PropertyHelpButton AutomationProperties.AutomationId="JetActivityHelp"
-                                                 HelpHeader="Activity (this jet)"
-                                                 HelpContent="This jet's dust mass production rate Q_d at 1 AU from the Sun, in kg/s: how much dust it produces. The jets add up: the comet's total is the Σ read-out under the list.&#x0A;&#x0A;Q_d(r) = min(max, Q_d₀ · r⁻ᵏ), zero beyond the cutoff; the exponent k, the cutoff and the max are shared by every jet (Advanced: activity (Q_d) under Defaults for new jets).&#x0A;&#x0A;Q_d does not depend on the grain (density, size, albedo) or the speed: those set the brightness and β only." />
+                                                 HelpHeader="{Binding StrHelpHeaderJetActivity}"
+                                                 HelpContent="{Binding StrHelpJetActivity}"
+                                                 FlyoutMaxWidth="320" />
                   </StackPanel>
                 </Expander.Header>
                 <StackPanel Spacing="8">
                   <Grid ColumnDefinitions="*,12,1.6*" DataContext="{Binding SelectedJet}" x:DataType="vm:JetViewModel">
-                    <TextBlock Grid.Column="0" Text="Q_d at 1 AU (kg/s)" />
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                      <TextBlock Text="Q_d at 1 AU (kg/s)" />
+                      <controls:PropertyHelpButton AutomationProperties.AutomationId="JetDustRate0Help"
+                                                   HelpHeader="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpHeaderQd1Au}"
+                                                   HelpContent="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpJetDustRate0}" />
+                    </StackPanel>
                     <Panel Grid.Column="2" Classes="unit-overlay">
-                      <TextBox AutomationProperties.AutomationId="JetDustRate0"
-                        ToolTip.Tip="Dust mass production rate of this jet at 1 AU from the Sun; it scales as r_h^−k up to the max, and stops beyond the cutoff. Comets range from well under 1 kg/s to thousands of kg/s.">
+                      <TextBox AutomationProperties.AutomationId="JetDustRate0">
                         <i:Interaction.Behaviors>
                           <b:NumericTextBoxBehavior Value="{Binding DustRate1AuKgs}" Minimum="0" Maximum="1000000" Format="0.###" />
                         </i:Interaction.Behaviors>
@@ -689,13 +778,18 @@
                 </StackPanel>
               </Expander>
 
-              <Button AutomationProperties.AutomationId="CopyGrainToAllJetsButton"
-                      Margin="12,8,12,12"
-                      HorizontalAlignment="Right"
-                      Padding="10,2"
-                      Content="Copy to all jets"
-                      Command="{Binding CopyGrainToAllJetsCommand}"
-                      ToolTip.Tip="Gives every other jet this jet's grain and activity: diameter, density, Q_pr, albedo, q, F and Q_d₀. Their sites, speeds and colours stay as they are." />
+              <StackPanel Orientation="Horizontal" Spacing="4"
+                          Margin="12,8,12,12"
+                          HorizontalAlignment="Right">
+                <Button AutomationProperties.AutomationId="CopyGrainToAllJetsButton"
+                        Padding="10,2"
+                        Content="Copy to all jets"
+                        Command="{Binding CopyGrainToAllJetsCommand}" />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="CopyGrainToAllJetsButtonHelp"
+                                             VerticalAlignment="Center"
+                                             HelpHeader="{Binding StrHelpHeaderCopyGrain}"
+                                             HelpContent="{Binding StrHelpCopyGrain}" />
+              </StackPanel>
             </StackPanel><!-- /detail StackPanel -->
           </Border><!-- /detail outer Border -->
 
@@ -711,8 +805,9 @@
                            FontWeight="SemiBold"
                            Foreground="{DynamicResource Text.Secondary}" />
                 <controls:PropertyHelpButton AutomationProperties.AutomationId="JetDefaultsHelp"
-                                             HelpHeader="Defaults for new jets"
-                                             HelpContent="Every jet has its own grain (diameter, density, Q_pr, albedo, q, F) and its own Q_d₀: edit them in the selected jet's Grain and Activity panels.&#x0A;&#x0A;The values here are what a newly added jet starts from; changing them does not change existing jets. Only the shape of the Q_d law (exponent, cutoff, max, under Advanced: activity) is shared by every jet." />
+                                             HelpHeader="{Binding StrHelpHeaderJetDefaults}"
+                                             HelpContent="{Binding StrHelpJetDefaults}"
+                                             FlyoutMaxWidth="300" />
               </StackPanel>
             </Border>
 
@@ -724,7 +819,7 @@
                 <TextBlock Text="{Binding StrDustDensity}" />
                 <controls:PropertyHelpButton AutomationProperties.AutomationId="DustDensityHelp"
                                              HelpHeader="{Binding StrDustDensity}"
-                                             HelpContent="Grain bulk density of new jets, g/cm³; enters β and the mass per brightness." />
+                                             HelpContent="{Binding StrHelpDustDensity}" />
               </StackPanel>
               <Panel Grid.Row="0" Grid.Column="2" Classes="unit-overlay">
                 <TextBox AutomationProperties.AutomationId="DustDensityBox">
@@ -739,7 +834,7 @@
                 <TextBlock Text="{Binding StrDustDiameter}" />
                 <controls:PropertyHelpButton AutomationProperties.AutomationId="DustDiameterHelp"
                                              HelpHeader="{Binding StrDustDiameter}"
-                                             HelpContent="Grain diameter of new jets; with density it sets β, the radiation-pressure push: smaller or lighter grains curve away from the Sun faster." />
+                                             HelpContent="{Binding StrHelpDustDiameter}" />
               </StackPanel>
               <Panel Grid.Row="2" Grid.Column="2" Classes="unit-overlay">
                 <TextBox AutomationProperties.AutomationId="DustDiameterBox">
@@ -750,9 +845,13 @@
                 <TextBlock Classes="unit-of-measurement" Text="μm" />
               </Panel>
 
-              <TextBlock Grid.Row="4" Grid.Column="0" Text="{Binding StrScatteringEfficiency}" />
-              <TextBox Grid.Row="4" Grid.Column="2"
-                ToolTip.Tip="Radiation-pressure efficiency Q_pr of new jets' grains (0.5 to 2; 1 is a grey body). It scales beta only, not the brightness.">
+              <StackPanel Grid.Row="4" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                <TextBlock Text="{Binding StrScatteringEfficiency}" />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="DustQprHelp"
+                                             HelpHeader="{Binding StrScatteringEfficiency}"
+                                             HelpContent="{Binding StrHelpScatteringEfficiency}" />
+              </StackPanel>
+              <TextBox Grid.Row="4" Grid.Column="2" AutomationProperties.AutomationId="DustQprBox">
                 <i:Interaction.Behaviors>
                   <b:NumericTextBoxBehavior Value="{Binding CurrentSession.ScatteringEfficiency}" Minimum="0.5" Maximum="2" />
                 </i:Interaction.Behaviors>
@@ -762,7 +861,7 @@
                 <TextBlock Text="{Binding StrGeometricAlbedo}" />
                 <controls:PropertyHelpButton AutomationProperties.AutomationId="DustAlbedoHelp"
                                              HelpHeader="{Binding StrGeometricAlbedo}"
-                                             HelpContent="Geometric albedo of new jets' dust; cometary dust 0.03–0.06; scales brightness only (not the production rate Q_d)." />
+                                             HelpContent="{Binding StrHelpDustAlbedo}" />
               </StackPanel>
               <TextBox Grid.Row="6" Grid.Column="2" AutomationProperties.AutomationId="DustAlbedoBox">
                 <i:Interaction.Behaviors>
@@ -778,8 +877,9 @@
                 <StackPanel Orientation="Horizontal" Spacing="4">
                   <TextBlock Text="Advanced: activity (Q_d)" />
                   <controls:PropertyHelpButton AutomationProperties.AutomationId="ActivityAdvancedHelp"
-                                               HelpHeader="Activity (Q_d)"
-                                               HelpContent="Q_d is the dust mass production rate: how much dust (kg/s) the comet produces at each distance from the Sun.&#x0A;&#x0A;Q_d(r) = min(max, Q_d₀ · r⁻ᵏ), zero beyond the cutoff.&#x0A;• Q_d at 1 AU: the rate at 1 AU (kg/s), per jet; the value here is the default for new jets.&#x0A;• Exponent k: how fast the rate falls with solar distance (k = 2: twice as far → 4× less dust).&#x0A;• Cutoff: distance where the emission stops.&#x0A;• Max: cap on the rate close to the Sun.&#x0A;k, cutoff and max are shared by every jet.&#x0A;&#x0A;Q_d sets the amount of dust directly: it does not depend on the grain or the speed. Density, diameter and albedo set how bright that dust is and how hard radiation pressure pushes the grains (β ∝ 1/(ρ·s)), i.e. how much the coma curves away from the Sun." />
+                                               HelpHeader="{Binding StrHelpHeaderActivity}"
+                                               HelpContent="{Binding StrHelpActivity}"
+                                               FlyoutMaxWidth="320" />
                 </StackPanel>
               </Expander.Header>
               <StackPanel Spacing="8">
@@ -787,14 +887,17 @@
                 <TextBlock AutomationProperties.AutomationId="TotalActivityText"
                            Text="{Binding TotalActivityText}"
                            FontSize="11" TextWrapping="Wrap"
-                           Foreground="{DynamicResource Text.Secondary}"
-                           ToolTip.Tip="The comet's total activity: the jets' dust production rates Q_d add up. Shown at 1 AU from the Sun and, with a committed comet, at its current distance." />
+                           Foreground="{DynamicResource Text.Secondary}" />
                 <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto,8,Auto,8,Auto,8,Auto">
 
-                  <TextBlock Grid.Row="0" Grid.Column="0" Text="Q_d at 1 AU (kg/s)" />
+                  <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                    <TextBlock Text="Q_d at 1 AU (kg/s)" />
+                    <controls:PropertyHelpButton AutomationProperties.AutomationId="DustRate0BoxHelp"
+                                                 HelpHeader="{Binding StrHelpHeaderQd1Au}"
+                                                 HelpContent="{Binding StrHelpDustRate0}" />
+                  </StackPanel>
                   <Panel Grid.Row="0" Grid.Column="2" Classes="unit-overlay">
-                    <TextBox AutomationProperties.AutomationId="DustRate0Box"
-                      ToolTip.Tip="Default dust mass production rate at 1 AU from the Sun for new jets, in kg/s; it scales as r_h^−k up to the max, and stops beyond the cutoff. Each jet then has its own (its Activity panel).">
+                    <TextBox AutomationProperties.AutomationId="DustRate0Box">
                       <i:Interaction.Behaviors>
                         <b:NumericTextBoxBehavior Value="{Binding CurrentSession.DustRate1AuKgs}" Minimum="0" Maximum="1000000" Format="0.###" />
                       </i:Interaction.Behaviors>
@@ -802,18 +905,26 @@
                     <TextBlock Classes="unit-of-measurement" Text="kg/s" />
                   </Panel>
 
-                  <TextBlock Grid.Row="2" Grid.Column="0" Text="Q_d law exponent" />
-                  <TextBox Grid.Row="2" Grid.Column="2" AutomationProperties.AutomationId="DustRatePowerBox"
-                    ToolTip.Tip="Exponent k of the production law Q_d(r) = Q_d₀ · r⁻ᵏ, with r the distance from the Sun in AU. 2 is the classic value; larger k means the rate drops faster as the comet recedes. Shared by every jet.">
+                  <StackPanel Grid.Row="2" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                    <TextBlock Text="Q_d law exponent" />
+                    <controls:PropertyHelpButton AutomationProperties.AutomationId="DustRatePowerBoxHelp"
+                                                 HelpHeader="{Binding StrHelpHeaderQdExponent}"
+                                                 HelpContent="{Binding StrHelpDustRatePower}" />
+                  </StackPanel>
+                  <TextBox Grid.Row="2" Grid.Column="2" AutomationProperties.AutomationId="DustRatePowerBox">
                     <i:Interaction.Behaviors>
                       <b:NumericTextBoxBehavior Value="{Binding CurrentSession.DustRatePower}" Minimum="1" Maximum="4" />
                     </i:Interaction.Behaviors>
                   </TextBox>
 
-                  <TextBlock Grid.Row="4" Grid.Column="0" Text="Cutoff (AU)" />
+                  <StackPanel Grid.Row="4" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                    <TextBlock Text="Cutoff (AU)" />
+                    <controls:PropertyHelpButton AutomationProperties.AutomationId="DustRateCutoffBoxHelp"
+                                                 HelpHeader="{Binding StrHelpHeaderQdCutoff}"
+                                                 HelpContent="{Binding StrHelpDustRateCutoff}" />
+                  </StackPanel>
                   <Panel Grid.Row="4" Grid.Column="2" Classes="unit-overlay">
-                    <TextBox AutomationProperties.AutomationId="DustRateCutoffBox"
-                      ToolTip.Tip="Distance from the Sun, in AU (at least 3), beyond which the comet emits no dust. Shared by every jet.">
+                    <TextBox AutomationProperties.AutomationId="DustRateCutoffBox">
                       <i:Interaction.Behaviors>
                         <b:NumericTextBoxBehavior Value="{Binding CurrentSession.DustRateCutoffAu}" Minimum="3" Maximum="100" />
                       </i:Interaction.Behaviors>
@@ -821,10 +932,14 @@
                     <TextBlock Classes="unit-of-measurement" Text="AU" />
                   </Panel>
 
-                  <TextBlock Grid.Row="6" Grid.Column="0" Text="Q_d max (kg/s)" />
+                  <StackPanel Grid.Row="6" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                    <TextBlock Text="Q_d max (kg/s)" />
+                    <controls:PropertyHelpButton AutomationProperties.AutomationId="DustRateMaxBoxHelp"
+                                                 HelpHeader="{Binding StrHelpHeaderQdMax}"
+                                                 HelpContent="{Binding StrHelpDustRateMax}" />
+                  </StackPanel>
                   <Panel Grid.Row="6" Grid.Column="2" Classes="unit-overlay">
-                    <TextBox AutomationProperties.AutomationId="DustRateMaxBox"
-                      ToolTip.Tip="Upper limit on each jet's dust production rate in kg/s, so that the emission does not grow without bound close to the Sun. Shared by every jet.">
+                    <TextBox AutomationProperties.AutomationId="DustRateMaxBox">
                       <i:Interaction.Behaviors>
                         <b:NumericTextBoxBehavior Value="{Binding CurrentSession.DustRateMaxKgs}" Minimum="0.001" Maximum="10000000" Format="0.###" />
                       </i:Interaction.Behaviors>
@@ -851,16 +966,21 @@
                 <StackPanel Orientation="Horizontal" Spacing="4">
                   <TextBlock Text="Advanced: grain size distribution" />
                   <controls:PropertyHelpButton AutomationProperties.AutomationId="SizeDistributionAdvancedHelp"
-                                               HelpHeader="Grain size distribution"
-                                               HelpContent="The size range new jets start from. The exponent q is set per jet, in each jet's Grain panel (new jets start at q = 3.5).&#x0A;&#x0A;Grain radii follow n(s) ∝ s^−q from s₀/F to s₀·F, s₀ = diameter/2 (q = 3.5, F = 10, 100 µm → radii 5–500 µm).&#x0A;&#x0A;By number, small grains dominate; by cross-section (what sets brightness) the law is s^(2−q), so brightness favours small grains only slowly.&#x0A;&#x0A;The continuous dust rendering is built for q = 3.5; changing q only affects the individual bright specks." />
+                                               HelpHeader="{Binding StrHelpHeaderSizeDistribution}"
+                                               HelpContent="{Binding StrHelpSizeDistribution}"
+                                               FlyoutMaxWidth="320" />
                 </StackPanel>
               </Expander.Header>
               <StackPanel Spacing="8">
                 <!-- q is per jet only (jet Grain panel; reviewer 2026-10-29): new jets start at 3.5 -->
                 <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto">
-                  <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding StrSizeRange}" />
-                  <TextBox Grid.Row="0" Grid.Column="2" AutomationProperties.AutomationId="SizeRangeBox"
-                    ToolTip.Tip="Default range factor F for new jets (1 to 1000): grain radii span from s₀/F to s₀·F, where s₀ is half the reference diameter. Larger F means a wider spread of grain sizes.">
+                  <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                    <TextBlock Text="{Binding StrSizeRange}" />
+                    <controls:PropertyHelpButton AutomationProperties.AutomationId="SizeRangeBoxHelp"
+                                                 HelpHeader="{Binding StrSizeRange}"
+                                                 HelpContent="{Binding StrHelpSizeRange}" />
+                  </StackPanel>
+                  <TextBox Grid.Row="0" Grid.Column="2" AutomationProperties.AutomationId="SizeRangeBox">
                     <i:Interaction.Behaviors>
                       <b:NumericTextBoxBehavior Value="{Binding CurrentSession.SizeRange}" Minimum="1" Maximum="1000" />
                     </i:Interaction.Behaviors>

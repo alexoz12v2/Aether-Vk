@@ -250,13 +250,18 @@
             <!-- SPK records section (visible when comet selected) -->
             <StackPanel Spacing="6"
                         IsVisible="{Binding SelectedComet, Converter={x:Static ObjectConverters.IsNotNull}}">
-              <TextBlock Text="Available SPK Records:" FontSize="11"
-                         Foreground="{DynamicResource Text.Secondary}" />
+              <StackPanel Orientation="Horizontal" Spacing="4">
+                <TextBlock Text="Available SPK Records:" FontSize="11"
+                           Foreground="{DynamicResource Text.Secondary}" />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="SpkRecordsListHelp"
+                                             HelpHeader="{Binding StrHelpHeaderSpkRecords}"
+                                             HelpContent="{Binding StrHelpSpkRecords}" />
+              </StackPanel>
               <TextBlock Text="Loading records…" FontSize="11"
                          Foreground="{DynamicResource Text.Disabled}"
                          IsVisible="{Binding IsLoadingSpkRecords}" />
               <ListBox AutomationProperties.AutomationId="SpkRecordsList"
-                ToolTip.Tip="Ephemeris (SPK) records of the selected comet: each is a fit of its orbit. Select one, then press Download &amp; Commit." ItemsSource="{Binding SpkRecords}"
+                       ItemsSource="{Binding SpkRecords}"
                        SelectedItem="{Binding SelectedSpkRecord}"
                        MaxHeight="120"
                        IsVisible="{Binding SpkRecords.Count}"
@@ -293,19 +298,23 @@
           <StackPanel Spacing="6" Margin="4,4,4,4">
             <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" RowSpacing="4" ColumnSpacing="8">
               <!-- the boxes are in the chosen time scale (Settings › Time scale for dates; UTC by default) -->
-              <TextBlock Grid.Row="0" Grid.Column="0" Classes="label" AutomationProperties.AutomationId="StartEpochLabel"
-                         Text="{Binding Range.ScaleName, StringFormat='Start ({0}):'}" ToolTip.Tip="{Binding Range.ScaleTip}" />
+              <!-- one ? for the Start/End pair -->
+              <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                <TextBlock Classes="label" AutomationProperties.AutomationId="StartEpochLabel"
+                           Text="{Binding Range.ScaleName, StringFormat='Start ({0}):'}" ToolTip.Tip="{Binding Range.ScaleTip}" />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="EpochRangeHelp"
+                                             HelpHeader="{Binding StrHelpHeaderEpochRange}"
+                                             HelpContent="{Binding StrHelpEpochRange}" FlyoutMaxWidth="300" />
+              </StackPanel>
               <TextBox Grid.Row="0" Grid.Column="1" AutomationProperties.AutomationId="StartEpochBox"
                        Text="{Binding Range.StartEpoch}" Watermark="e.g. 2000-01-01T12:00:00Z"
-                       FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11"
-                       ToolTip.Tip="Start of the simulated period (ISO 8601, e.g. 2000-01-01T12:00:00Z). Typing here only proposes a range; Download &amp; Commit applies it. The period must be at least 1 day long." />
+                       FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" />
               <TextBlock Grid.Row="1" Grid.Column="0" Classes="label" AutomationProperties.AutomationId="EndEpochLabel"
                          Text="{Binding Range.ScaleName, StringFormat='End ({0}):'}" ToolTip.Tip="{Binding Range.ScaleTip}" />
               <Grid Grid.Row="1" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="4">
                 <TextBox Grid.Column="0" AutomationProperties.AutomationId="EndEpochBox"
                          Text="{Binding Range.EndEpoch}" Watermark="e.g. 2000-02-01T12:00:00Z"
-                         FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11"
-                         ToolTip.Tip="End of the simulated period (ISO 8601). It must be at least 1 day after the start. Typing here only proposes a range; Download &amp; Commit applies it." />
+                         FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" />
                 <!-- a UTC date outside the leap-second table (after its validity, before 1972): converted all the same, may be off by a leap second -->
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center" IsVisible="{Binding Range.HasTimeScaleWarning}">
                   <TextBlock AutomationProperties.AutomationId="TimeScaleWarning" Text="⚠" Foreground="{DynamicResource Sem.Warning}"
@@ -325,9 +334,13 @@
             </StackPanel>
 
             <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding Range.HasProposedState}">
-              <TextBlock Text="Proposed:" FontWeight="SemiBold" FontSize="11" Foreground="{DynamicResource Text.Secondary}" />
+              <StackPanel Orientation="Horizontal" Spacing="4">
+                <TextBlock Text="Proposed:" FontWeight="SemiBold" FontSize="11" Foreground="{DynamicResource Text.Secondary}" />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="ProposedRangeTextHelp"
+                                             HelpHeader="{Binding StrHelpHeaderProposedRange}"
+                                             HelpContent="{Binding StrHelpProposedRange}" />
+              </StackPanel>
               <TextBlock AutomationProperties.AutomationId="ProposedRangeText" Text="{Binding Range.DisplayProposedRange}" TextWrapping="Wrap"
-                         ToolTip.Tip="The range in the boxes: what the next Download &amp; Commit or Recommit will use. It does not change the running simulation."
                          FontSize="11" FontFamily="Cascadia Mono, Consolas, monospace" />
             </StackPanel>
 
@@ -338,27 +351,41 @@
             <!-- Edited after a commit: the engine keeps the committed range until a recommit -->
             <StackPanel AutomationProperties.AutomationId="RangeLockedPanel" Spacing="4" IsVisible="{Binding Range.IsRangeLocked}">
               <TextBlock Text="{x:Static vm:RangeEntryViewModel.RangeLockedText}" Foreground="{DynamicResource Sem.Warning}" FontSize="11" TextWrapping="Wrap" />
-              <Button AutomationProperties.AutomationId="RecommitWithRangeButton" Content="Recommit with this range" Command="{Binding Range.RecommitWithRangeCommand}"
-                      ToolTip.Tip="Commits the comet again (as Download &amp; Commit) with the range in the boxes. The dust restarts from the new start." />
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <Button AutomationProperties.AutomationId="RecommitWithRangeButton" Content="Recommit with this range" Command="{Binding Range.RecommitWithRangeCommand}" />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="RecommitWithRangeButtonHelp"
+                                             HelpHeader="{Binding StrHelpHeaderRecommit}"
+                                             HelpContent="{Binding StrHelpRecommit}" />
+              </StackPanel>
             </StackPanel>
 
             <!-- "Model" preset (feedback #20): N nucleus rotations ending at the image epoch -->
+            <!-- one ? for the row (rotations, end epoch, Set range); it also carries the mode bar's Model explanation -->
             <WrapPanel Orientation="Horizontal">
-              <TextBlock Classes="label" Text="Model range:" Margin="0,0,6,4" />
+              <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,0,6,4">
+                <TextBlock Classes="label" Text="Model range:" Margin="0" />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="ModelRangeHelp"
+                                             HelpHeader="{Binding StrHelpHeaderModelRange}"
+                                             HelpContent="{Binding StrHelpModelRange}" FlyoutMaxWidth="320" />
+              </StackPanel>
               <TextBox AutomationProperties.AutomationId="ModelRotationsBox" Margin="0,0,6,4"
-                       ToolTip.Tip="Number of full nucleus rotations (a whole number, at least 1) that the model range should span. One rotation lasts the rotation period (Rotational Model: 360 deg divided by the rotation rate)." Text="{Binding Range.ModelRotations}" Width="48" />
+                       Text="{Binding Range.ModelRotations}" Width="48" />
               <TextBlock Classes="label" Text="rotations ending at" Margin="0,0,6,4" />
               <TextBox AutomationProperties.AutomationId="ModelEndEpochBox" Margin="0,0,6,4"
-                       ToolTip.Tip="End of the model range, normally the epoch of your telescope image (the FITS &quot;Model range&quot; button fills it with the observation epoch). Leave empty to use the End box." Text="{Binding Range.ModelEndEpoch}" Width="170" Watermark="image epoch (empty: End)" />
-              <Button AutomationProperties.AutomationId="ApplyModelRangeButton" Content="Set range" Command="{Binding Range.ApplyModelRangeCommand}" Margin="0,0,0,4"
-                      ToolTip.Tip="Sets Start and End so the range ends at the image epoch and starts N nucleus rotation periods earlier (N x period, never less than 1 day). The simulated dust history then covers N full spins before the image. It only proposes the range: Download &amp; Commit applies it." />
+                       Text="{Binding Range.ModelEndEpoch}" Width="170" Watermark="image epoch (empty: End)" />
+              <Button AutomationProperties.AutomationId="ApplyModelRangeButton" Content="Set range" Command="{Binding Range.ApplyModelRangeCommand}" Margin="0,0,0,4" />
             </WrapPanel>
 
             <!-- R3: jets ignite this long before the committed start, so the tail exists when play starts -->
             <StackPanel Orientation="Horizontal" Spacing="6">
-              <TextBlock Classes="label" Text="Dust lead time:" />
+              <StackPanel Orientation="Horizontal" Spacing="4">
+                <TextBlock Classes="label" Text="Dust lead time:" Margin="0" />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="DustLeadDaysBoxHelp"
+                                             HelpHeader="{Binding StrHelpHeaderDustLead}"
+                                             HelpContent="{Binding StrHelpDustLead}" FlyoutMaxWidth="300" />
+              </StackPanel>
               <TextBox AutomationProperties.AutomationId="DustLeadDaysBox"
-                       ToolTip.Tip="Days the jets start emitting before the start epoch (0 to 30; 30 = one dust lifetime, the default). With 30 the tail is already fully formed when the timeline starts; with 0 the jets switch on at the start and the tail grows from nothing. Used the next time the comet is committed." Text="{Binding Range.DustLeadDays}" Width="56" />
+                       Text="{Binding Range.DustLeadDays}" Width="56" />
               <TextBlock Classes="label" Text="days before the start" />
             </StackPanel>
           </StackPanel>
@@ -382,12 +409,11 @@
             <StackPanel Spacing="4">
               <StackPanel Orientation="Horizontal" Spacing="4">
                 <TextBlock Text="Reference orbit" VerticalAlignment="Center" />
-                <controls:PropertyHelpButton
-                  HelpHeader="Reference orbit"
-                  HelpContent="The red track is a two-body (Keplerian) reference next to the true SPK path.&#x0A;&#x0A;SBDB solution: the elements JPL publishes, osculating at the solution epoch, which can be years away from your window (67P: 2015-10-10, about 0.12 AU off its 2025 path because of Jupiter).&#x0A;&#x0A;Osculating at start epoch: elements recomputed from the SPK position and velocity at your start epoch. Exact there, and within about 10³ km over a month (planetary perturbations and outgassing forces).&#x0A;&#x0A;Cannot be changed while a comet is committed." />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="ReferenceOrbitPickerHelp"
+                  HelpHeader="{Binding StrHelpHeaderReferenceOrbit}"
+                  HelpContent="{Binding StrHelpReferenceOrbit}" FlyoutMaxWidth="320" />
               </StackPanel>
               <ComboBox AutomationProperties.AutomationId="ReferenceOrbitPicker" SelectedIndex="{Binding ReferenceOrbitIndex}"
-                        ToolTip.Tip="{Binding StrTipReferenceOrbit}"
                         IsEnabled="{Binding IsReferenceOrbitSelectable}"
                         PlaceholderText="Choose a reference orbit…"
                         HorizontalAlignment="Stretch">
@@ -422,13 +448,17 @@
         <Expander Header="{Binding StrNucleus}" AutomationProperties.AutomationId="NucleusSection" IsExpanded="True">
           <StackPanel Spacing="6" Margin="4,4,4,4">
             <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
-              <TextBlock Grid.Column="0" Classes="label" Text="{Binding StrNucleusRadius}" VerticalAlignment="Center" />
+              <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                <TextBlock Classes="label" Text="{Binding StrNucleusRadius}" VerticalAlignment="Center" />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="NucleusRadiusSliderHelp"
+                                             HelpHeader="{Binding StrNucleusRadius}"
+                                             HelpContent="{Binding StrHelpNucleusRadius}" />
+              </StackPanel>
               <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="NucleusRadiusSlider"
                                         Value="{Binding ManualNucleusRadiusKmNullable}"
                                         HasBounds="True"
                                         MinBound="0.1"
-                                        MaxBound="100.0"
-                                        ToolTip.Tip="Bounding-sphere radius of the comet nucleus in km; jets start on this sphere.&#x0A;Auto-filled from Horizons when a comet is committed. Override here if needed.&#x0A;An edit after Play returns the simulation to the snapshot taken at Play.">
+                                        MaxBound="100.0">
                 <controls:UnboundedSlider.InnerRightContent>
                   <TextBlock Classes="unit-of-measurement" Text="km" />
                 </controls:UnboundedSlider.InnerRightContent>
@@ -459,10 +489,10 @@
             <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
               <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
                 <TextBlock Classes="label" Text="Pole RA" VerticalAlignment="Center" />
-                <controls:PropertyHelpButton AutomationProperties.AutomationId="PoleRaHelp" HelpHeader="Pole RA"
-                                             HelpContent="Where the spin axis points on the sky (J2000). These are not rotations: the nucleus rotates only about its own axis, and the axis stays fixed in space. RA/Dec only orient it." />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="PoleRaHelp" HelpHeader="{Binding StrHelpHeaderPoleRa}"
+                                             HelpContent="{Binding StrHelpPoleRa}" />
               </StackPanel>
-              <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="PoleRaSlider" ToolTip.Tip="{Binding StrTipPoleRa}" Value="{Binding PoleRaDeg}" Step="0.1">
+              <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="PoleRaSlider" Value="{Binding PoleRaDeg}" Step="0.1">
                 <controls:UnboundedSlider.InnerRightContent>
                   <TextBlock Classes="unit-of-measurement" Text="°" />
                 </controls:UnboundedSlider.InnerRightContent>
@@ -473,10 +503,10 @@
             <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
               <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
                 <TextBlock Classes="label" Text="Pole Dec" VerticalAlignment="Center" />
-                <controls:PropertyHelpButton AutomationProperties.AutomationId="PoleDecHelp" HelpHeader="Pole Dec"
-                                             HelpContent="Where the spin axis points on the sky (J2000). These are not rotations: the nucleus rotates only about its own axis, and the axis stays fixed in space. RA/Dec only orient it." />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="PoleDecHelp" HelpHeader="{Binding StrHelpHeaderPoleDec}"
+                                             HelpContent="{Binding StrHelpPoleDec}" />
               </StackPanel>
-              <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="PoleDecSlider" ToolTip.Tip="{Binding StrTipPoleDec}" Value="{Binding PoleDecDeg}" Step="0.1">
+              <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="PoleDecSlider" Value="{Binding PoleDecDeg}" Step="0.1">
                 <controls:UnboundedSlider.InnerRightContent>
                   <TextBlock Classes="unit-of-measurement" Text="°" />
                 </controls:UnboundedSlider.InnerRightContent>
@@ -487,10 +517,10 @@
             <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
               <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
                 <TextBlock Classes="label" Text="Prime Meridian" VerticalAlignment="Center" />
-                <controls:PropertyHelpButton AutomationProperties.AutomationId="PrimeMeridianHelp" HelpHeader="Prime Meridian"
-                                             HelpContent="The nucleus' rotation angle at the reference date J2000 (where longitude 0 faces). It sets which side faces where at a given time, i.e. the timing of the jet spirals, not the outline of the fan." />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="PrimeMeridianHelp" HelpHeader="{Binding StrHelpHeaderPrimeMeridian}"
+                                             HelpContent="{Binding StrHelpPrimeMeridian}" />
               </StackPanel>
-              <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="PrimeMeridianSlider" ToolTip.Tip="{Binding StrTipPrimeMeridian}" Value="{Binding PrimeMeridianDeg}" Step="0.1">
+              <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="PrimeMeridianSlider" Value="{Binding PrimeMeridianDeg}" Step="0.1">
                 <controls:UnboundedSlider.InnerRightContent>
                   <TextBlock Classes="unit-of-measurement" Text="°" />
                 </controls:UnboundedSlider.InnerRightContent>
@@ -501,10 +531,10 @@
             <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
               <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
                 <TextBlock Classes="label" Text="Rotation Period (h)" VerticalAlignment="Center" />
-                <controls:PropertyHelpButton AutomationProperties.AutomationId="RotPeriodHelp" HelpHeader="Rotation Period (h)"
-                                             HelpContent="Sidereal spin period. Edits the rate in the Advanced expander (°/day); the sign (prograde/retrograde) is kept. Example: 718 °/day = 12.03 h." />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="RotPeriodHelp" HelpHeader="{Binding StrHelpHeaderRotPeriod}"
+                                             HelpContent="{Binding StrHelpRotPeriod}" />
               </StackPanel>
-              <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="RotPeriodSlider" ToolTip.Tip="{Binding StrTipRotPeriod}" Value="{Binding RotationPeriodHours}" Step="0.01">
+              <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="RotPeriodSlider" Value="{Binding RotationPeriodHours}" Step="0.01">
                 <controls:UnboundedSlider.InnerRightContent>
                   <TextBlock Classes="unit-of-measurement" Text="h" />
                 </controls:UnboundedSlider.InnerRightContent>
@@ -517,16 +547,15 @@
                 <StackPanel Orientation="Horizontal" Spacing="4">
                   <TextBlock Text="Advanced: rates (precession, °/day)" />
                   <controls:PropertyHelpButton AutomationProperties.AutomationId="RatesAdvancedHelp"
-                                               HelpHeader="Advanced: rates"
-                                               HelpContent="RA/Dec rates are a slow drift of the spin axis (precession), °/century, 0 by default. The rotation rate is the same spin as the period, in °/day (360·24 / period h)." />
+                                               HelpHeader="{Binding StrHelpHeaderRatesAdvanced}"
+                                               HelpContent="{Binding StrHelpRatesAdvanced}" FlyoutMaxWidth="300" />
                 </StackPanel>
               </Expander.Header>
               <StackPanel>
             <!-- RA Rate -->
             <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
               <TextBlock Grid.Column="0" Classes="label" Text="RA Rate" VerticalAlignment="Center" />
-              <controls:UnboundedSlider Grid.Column="2" Value="{Binding PoleRaRateDegCen}"
-                ToolTip.Tip="Slow drift of the spin axis right ascension (precession), in degrees per Julian century. 0 keeps the axis fixed." Step="0.001">
+              <controls:UnboundedSlider Grid.Column="2" Value="{Binding PoleRaRateDegCen}" Step="0.001">
                 <controls:UnboundedSlider.InnerRightContent>
                   <TextBlock Classes="unit-of-measurement" Text="°/cen" />
                 </controls:UnboundedSlider.InnerRightContent>
@@ -536,8 +565,7 @@
             <!-- Dec Rate -->
             <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
               <TextBlock Grid.Column="0" Classes="label" Text="Dec Rate" VerticalAlignment="Center" />
-              <controls:UnboundedSlider Grid.Column="2" Value="{Binding PoleDecRateDegCen}"
-                ToolTip.Tip="Slow drift of the spin axis declination (precession), in degrees per Julian century. 0 keeps the axis fixed." Step="0.001">
+              <controls:UnboundedSlider Grid.Column="2" Value="{Binding PoleDecRateDegCen}" Step="0.001">
                 <controls:UnboundedSlider.InnerRightContent>
                   <TextBlock Classes="unit-of-measurement" Text="°/cen" />
                 </controls:UnboundedSlider.InnerRightContent>
@@ -547,8 +575,7 @@
             <!-- Rotation Rate -->
             <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
               <TextBlock Grid.Column="0" Classes="label" Text="Rotation Rate (°/day)" VerticalAlignment="Center" />
-              <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="RotRateSlider"
-                ToolTip.Tip="Nucleus spin rate in degrees per day (the IAU rotation rate W). The sign gives prograde (+) or retrograde (-) spin; the period in hours is 360 x 24 / |rate|." Value="{Binding RotRateDegDay}" Step="0.01">
+              <controls:UnboundedSlider Grid.Column="2" AutomationProperties.AutomationId="RotRateSlider" Value="{Binding RotRateDegDay}" Step="0.01">
                 <controls:UnboundedSlider.InnerRightContent>
                   <TextBlock Classes="unit-of-measurement" Text="°/day" />
                 </controls:UnboundedSlider.InnerRightContent>
@@ -559,9 +586,14 @@
 
             <!-- Body-Fixed Camera -->
             <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto" Margin="4,2">
-              <TextBlock Grid.Column="0" Classes="label" Text="Camera orientation is body-fixed with respect to camera" VerticalAlignment="Center" TextWrapping="Wrap" />
+              <Grid Grid.Column="0" ColumnDefinitions="*,Auto" ColumnSpacing="4" VerticalAlignment="Center">
+                <TextBlock Grid.Column="0" Classes="label" Text="Camera orientation is body-fixed with respect to camera" VerticalAlignment="Center" TextWrapping="Wrap" />
+                <controls:PropertyHelpButton Grid.Column="1" AutomationProperties.AutomationId="BodyFixedOrientationPickerHelp"
+                                             HelpHeader="{Binding StrHelpHeaderBodyFixed}"
+                                             HelpContent="{Binding StrHelpBodyFixed}" />
+              </Grid>
               <ComboBox Grid.Column="2" AutomationProperties.AutomationId="BodyFixedOrientationPicker"
-                ToolTip.Tip="Yes: a camera attached to the nucleus turns with it, so the nucleus surface stays fixed in the view. No: the spin is compensated, so the view keeps its direction relative to the stars while the nucleus rotates." SelectedIndex="{Binding BodyFixedOrientationIndex}" HorizontalAlignment="Center">
+                        SelectedIndex="{Binding BodyFixedOrientationIndex}" HorizontalAlignment="Center">
                 <ComboBoxItem>Yes</ComboBoxItem>
                 <ComboBoxItem>No</ComboBoxItem>
               </ComboBox>
