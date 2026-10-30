@@ -70,6 +70,41 @@ public static class CrashReport
     }
   }
 
+  /// <summary>Set to "1" by the end-to-end suite on the app it launches.</summary>
+  public const string E2EEnvVar = "AETHERVK_E2E";
+
+  /// <summary>"1" (with <see cref="E2EEnvVar"/>) crashes the app on purpose once its main window is up.</summary>
+  public const string TestCrashEnvVar = "AETHERVK_TEST_CRASH";
+
+  /// <summary>The message of the exception the test crash throws (in the report's details).</summary>
+  public const string TestCrashMessage = "test crash requested through " + TestCrashEnvVar;
+
+  /// <summary>
+  /// A test crash is asked for: <see cref="TestCrashEnvVar"/> and <see cref="E2EEnvVar"/> are
+  /// both "1". Either alone does nothing, so a stray variable on a user's machine never crashes it.
+  /// </summary>
+  public static bool TestCrashRequested(Func<string, string?> getEnvironmentVariable) =>
+    getEnvironmentVariable(E2EEnvVar) == "1" && getEnvironmentVariable(TestCrashEnvVar) == "1";
+
+  /// <summary>
+  /// When <see cref="TestCrashRequested"/>, throws an unhandled exception on a background thread
+  /// after <paramref name="delay"/>: the path a real crash takes (the unhandled-exception handler
+  /// writes the report, then the process dies). Returns whether it was armed.
+  /// </summary>
+  public static bool StartTestCrashIfRequested(Func<string, string?> getEnvironmentVariable, TimeSpan delay)
+  {
+    if (!TestCrashRequested(getEnvironmentVariable))
+      return false;
+    var thread = new System.Threading.Thread(() =>
+    {
+      System.Threading.Thread.Sleep(delay);
+      throw new InvalidOperationException(TestCrashMessage);
+    })
+    { IsBackground = true, Name = "TestCrash" };
+    thread.Start();
+    return true;
+  }
+
   private static string Version()
   {
     var asm = System.Reflection.Assembly.GetEntryAssembly() ?? typeof(CrashReport).Assembly;

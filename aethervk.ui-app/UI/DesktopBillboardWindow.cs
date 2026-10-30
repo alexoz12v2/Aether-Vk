@@ -48,6 +48,10 @@ public sealed class DesktopBillboardWindow : Window
   /// <summary>Window-local physical-pixel rectangles that take pointer input (X11 input shape).</summary>
   public event Action<DesktopBillboardWindow>? InputRegionChanged;
 
+  /// <summary>A drag of the billboard started (true) or ended (false).</summary>
+  public event Action<DesktopBillboardWindow, bool>? DraggingChanged;
+  private bool _dragging;
+
   public DesktopBillboardWindow(DesktopBillboard billboard, Action<DesktopBillboard> edit)
   {
     _billboard = billboard;
@@ -68,7 +72,11 @@ public sealed class DesktopBillboardWindow : Window
     _canvas.PointerPressed += OnPointerPressed;
     _canvas.PointerMoved += OnPointerMoved;
     _canvas.PointerReleased += OnPointerReleased;
-    _canvas.PointerCaptureLost += (_, _) => _controller.Cancel();
+    _canvas.PointerCaptureLost += (_, _) =>
+    {
+      _controller.Cancel();
+      NotifyDragging();
+    };
     ScalingChanged += (_, _) => Apply(_billboard);
   }
 
@@ -139,8 +147,17 @@ public sealed class DesktopBillboardWindow : Window
         && DesktopBillboardGeometry.HitTest(_billboard, _billboard.GizmoMode, p) is null)
       return;
     Push(_controller.PointerPressed(_billboard, Button(kind), p));
+    NotifyDragging();
     e.Pointer.Capture(_canvas);
     e.Handled = true;
+  }
+
+  private void NotifyDragging()
+  {
+    if (_dragging == _controller.IsDragging)
+      return;
+    _dragging = _controller.IsDragging;
+    DraggingChanged?.Invoke(this, _dragging);
   }
 
   private void OnPointerMoved(object? sender, PointerEventArgs e)
@@ -161,6 +178,7 @@ public sealed class DesktopBillboardWindow : Window
       Desktop(e),
       m.HasFlag(KeyModifiers.Control),
       m.HasFlag(KeyModifiers.Shift)));
+    NotifyDragging();
     e.Pointer.Capture(null);
   }
 

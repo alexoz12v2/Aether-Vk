@@ -85,6 +85,22 @@ public interface IBillboardViewportProbe
   /// <summary>The viewport's centre on the desktop (physical px); null until it is known.</summary>
   PointD? ViewportCenterDesktopPx { get; }
 
+  /// <summary>The viewport on the desktop (top-left in physical px, pixel size, its screen's
+  /// scaling); null until it is laid out.</summary>
+  ViewportFrame? ViewportFrame { get; }
+
+  /// <summary>The viewport's place on the desktop changed: the window was dragged, maximised,
+  /// moved to another monitor.</summary>
+  event Action? ViewportMoved;
+
+  /// <summary>The viewport's view changed: the runtime confirmed a new camera transform or
+  /// projection (an orbit, a zoom, play; every frame while the camera moves). Main thread.</summary>
+  event Action? ViewChanged;
+
+  /// <summary>Completes when the viewport confirms the view a savefile open asked for (its
+  /// camera at the saved pose and projection); already complete when no open is pending.</summary>
+  Task RestoredViewConfirmed { get; }
+
   /// <summary>Mouse orbit / pan / zoom refused so the view cannot drift from a matched image.</summary>
   bool IsComparisonLocked { get; set; }
 }
@@ -146,6 +162,22 @@ public sealed class CameraBillboardProbe(CameraService camera) : IBillboardViewp
     camera.ViewportScreenOriginPx is { } o
       ? new PointD(o.X + camera.ViewportWidthPx / 2.0, o.Y + camera.ViewportHeightPx / 2.0)
       : null;
+
+  public ViewportFrame? ViewportFrame => camera.ViewportDesktopFrame;
+
+  public event Action? ViewportMoved
+  {
+    add => camera.ViewportScreenOriginChanged += value;
+    remove => camera.ViewportScreenOriginChanged -= value;
+  }
+
+  public event Action? ViewChanged
+  {
+    add => camera.ConfirmedViewChanged += value;
+    remove => camera.ConfirmedViewChanged -= value;
+  }
+
+  public Task RestoredViewConfirmed => camera.RestoredViewConfirmed;
 
   public bool IsComparisonLocked
   {
@@ -224,6 +256,10 @@ public partial class DesktopBillboardsViewModel : ObservableObject, IDisposable
       .ObserveOn(schedulerProvider.MainThread)
       .Subscribe(Sync)
       .AddDisposableTo(_disposables);
+    service.Restored
+      .ObserveOn(schedulerProvider.MainThread)
+      .Subscribe(_ => OnRestored())
+      .AddDisposableTo(_disposables);
   }
 
   /// <summary>Design-time / derived-class constructor: a private service on one 1920×1080 display,
@@ -273,7 +309,11 @@ public partial class DesktopBillboardsViewModel : ObservableObject, IDisposable
   /// </summary>
   public void AttachViewport(IBillboardViewportProbe probe, bool poll = true)
   {
+    if (_probe is { } previous)
+      Detach(previous);
     _probe = probe;
+    probe.ViewportMoved += OnViewportMoved;
+    probe.ViewChanged += OnViewChanged;
     _probeTimer?.Dispose();
     _probeTimer = null;
     if (poll && _schedulerProvider is { } s)
@@ -283,19 +323,96 @@ public partial class DesktopBillboardsViewModel : ObservableObject, IDisposable
     Probe();
   }
 
-  /// <summary>Reads the viewport once (the timer's work).</summary>
+  private void Detach(IBillboardViewportProbe probe)
+  {
+    probe.ViewportMoved -= OnViewportMoved;
+    probe.ViewChanged -= OnViewChanged;
+  }
+
+  /// <summary>Reads the viewport once (the timer's work): the scale, the comet and its distance;
+  /// bound billboards re-sized, the comet-anchored ones put on the comet.</summary>
   public void Probe()
   {
     if (_probe is not { } p)
       return;
+    FollowViewport();
     ViewportArcsecPerPx = p.ArcsecPerPx is { } a && a > 0 && !double.IsInfinity(a) ? a : null;
     CometDesktopPx = p.CometDesktopPx;
     CometDistanceKm = p.CometDistanceKm is { } d && d > 0 && !double.IsInfinity(d) ? d : null;
     if (ViewportArcsecPerPx is { } scale)
       _service.RescaleBound(scale, CometDistanceKm);
+    _service.AnchorOnComet(CometDesktopPx);
     foreach (var item in Items)
       item.RefreshPilot();
   }
+
+  /// <summary>Tells the service where the viewport is (<see cref="DesktopBillboardService.FollowViewport"/>):
+  /// billboards restored from a save are placed on it, the others follow its moves.</summary>
+  internal void FollowViewport()
+  {
+    if (_probe?.ViewportFrame is { } frame)
+      _service.FollowViewport(frame);
+  }
+
+  /// <summary>The window moved or was resized: the billboards follow the viewport's corner, then
+  /// the comet-anchored ones go back on the comet where the moved viewport draws it.</summary>
+  private void OnViewportMoved()
+  {
+    FollowViewport();
+    AnchorOnComet();
+  }
+
+  /// <summary>The camera moved (an orbit, a zoom, play): the comet-anchored billboards follow the
+  /// comet frame by frame, not only at the probe's ticks.</summary>
+  private void OnViewChanged() => AnchorOnComet();
+
+  private void AnchorOnComet()
+  {
+    if (_probe is not { } p)
+      return;
+    CometDesktopPx = p.CometDesktopPx;
+    _service.AnchorOnComet(CometDesktopPx);
+  }
+
+  /// <summary>The re-centring started by the last savefile open (null before one; tests await it).</summary>
+  internal Task? RestoreRecenter { get; private set; }
+
+  /// <summary>The last savefile open's view was not confirmed within <see cref="RestoredViewTimeout"/>:
+  /// the billboards were re-centred on whatever the viewport showed then.</summary>
+  internal bool RestoreRecenterTimedOut { get; private set; }
+
+  /// <summary>How long a savefile open waits for the viewport to confirm the restored view.</summary>
+  internal static readonly TimeSpan RestoredViewTimeout = TimeSpan.FromSeconds(10);
+
+  private void OnRestored()
+  {
+    FollowViewport();
+    RestoreRecenter = RecenterRestoredOnCometAsync();
+  }
+
+  /// <summary>
+  /// After a savefile open, puts the comparison billboards (bound to their physical size, or with
+  /// a nucleus pixel) on the comet as the restored view draws it, whatever the monitor, DPI or
+  /// window position. The cameras fly to their saved poses, so it waits for the viewport's
+  /// explicit confirmation of the restored view (<see cref="IBillboardViewportProbe.RestoredViewConfirmed"/>:
+  /// at once when the view did not change), bounded by <paramref name="timeout"/>, then probes
+  /// once; the anchor follows the comet from there on.
+  /// </summary>
+  internal async Task RecenterRestoredOnCometAsync(TimeSpan? timeout = null)
+  {
+    if (_probe is not { } p)
+      return;
+    var confirmed = p.RestoredViewConfirmed;
+    var bound = timeout ?? RestoredViewTimeout;
+    RestoreRecenterTimedOut = !confirmed.IsCompleted && await Task.WhenAny(confirmed, Task.Delay(bound)) != confirmed;
+    if (RestoreRecenterTimedOut)
+      System.Diagnostics.Trace.TraceWarning(
+        "The viewport did not confirm the restored view within {0:F0} s; billboards re-centred on the current view.", bound.TotalSeconds);
+    Probe();
+  }
+
+  private static bool SameComet(PointD? a, PointD? b) =>
+    a is null ? b is null : b is { } q && Math.Abs(a.Value.X - q.X) < 0.05 && Math.Abs(a.Value.Y - q.Y) < 0.05;
 
   /// <summary>
   /// Probes until the comet's place and the viewport scale hold still between two reads
@@ -311,7 +428,7 @@ public partial class DesktopBillboardsViewModel : ObservableObject, IDisposable
       var (comet, scale) = (CometDesktopPx, ViewportArcsecPerPx);
       await Task.Delay(intervalMs);
       Probe();
-      bool sameComet = comet is { } a && CometDesktopPx is { } b && Math.Abs(a.X - b.X) < 0.05 && Math.Abs(a.Y - b.Y) < 0.05;
+      bool sameComet = comet is not null && SameComet(comet, CometDesktopPx);
       bool sameScale = scale is { } s && ViewportArcsecPerPx is { } t && Math.Abs(s - t) <= 1e-6 * s;
       if (sameComet && sameScale)
         return;
@@ -418,6 +535,8 @@ public partial class DesktopBillboardsViewModel : ObservableObject, IDisposable
   public void Dispose()
   {
     _probeTimer?.Dispose();
+    if (_probe is { } p)
+      Detach(p);
     _disposables.Dispose();
     foreach (var item in Items)
       item.Dispose();

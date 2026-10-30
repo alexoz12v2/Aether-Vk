@@ -611,6 +611,8 @@ public sealed class SaveFileService
         HeightPx = b.HeightPx, Alpha = b.Alpha, RotationDeg = b.RotationDeg, Visible = b.Visible,
         ImageArcsecPerPx = b.ImageArcsecPerPx, ImageHeightKm = b.ImageHeightKm, ImageWidthPx = b.ImageWidthPx, ImageHeightPx = b.ImageHeightPx,
         PhysicalSizeBound = b.PhysicalSizeBound, FitsStretch = b.FitsStretch,
+        ImageNucleusX = b.ImageNucleusX, ImageNucleusY = b.ImageNucleusY,
+        ViewportOffsetX = b.ViewportOffsetX, ViewportOffsetY = b.ViewportOffsetY, ViewportScaling = b.ViewportScaling,
       }
       : b; // its texture is gone: the billboard keeps its spec as a placeholder
 
