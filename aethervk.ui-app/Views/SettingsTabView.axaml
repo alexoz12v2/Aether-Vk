@@ -65,7 +65,7 @@
       <!-- General Settings for Research: not wired yet (the dates live in the timeline), hidden
            until it drives the session (third feedback round) -->
       <Border Classes="accordion" IsVisible="False">
-        <Expander Header="{Binding StrGeneral}">
+        <Expander Header="{Binding StrGeneral}" AutomationProperties.AutomationId="GeneralSection">
           <!-- Form-Like: label auto-sizes, input stretches -->
           <Grid ColumnDefinitions="Auto,16,*"
                 RowDefinitions="Auto,8,Auto,8,Auto"
@@ -105,7 +105,7 @@
       <!-- Orbital Elements (Bunch of computed properties over the selected record in the CSV Tab):
            not bound yet, so it never filled; hidden until it is -->
       <Border Classes="accordion" IsVisible="False">
-        <Expander Header="{Binding StrOrbitalElements}">
+        <Expander Header="{Binding StrOrbitalElements}" AutomationProperties.AutomationId="OrbitalElementsSection">
           <!--
           Column layout:
           0 : Auto  – symbol label (TextBlock)
