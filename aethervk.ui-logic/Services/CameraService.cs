@@ -449,6 +449,57 @@ public sealed class CameraService : IDisposable
   // A saved pose the next transition into its mode lands on (instead of the mode's default).
   private CameraPersistedState? _pendingRestore;
 
+  // The savefile pose the viewport has yet to confirm (RestoredViewConfirmed), and its signal.
+  private CameraPersistedState? _restoreRequest;
+  private TaskCompletionSource<bool>? _restoreConfirmed;
+
+  /// <summary>Raised on the main thread each time the runtime confirms the camera's transform or
+  /// projection: the view changed (an orbit, a zoom, play, a restore's flight), frame by frame.</summary>
+  public event Action? ConfirmedViewChanged;
+
+  /// <summary>
+  /// Completes when the runtime has confirmed the transform and projection the last
+  /// <see cref="RestorePersistedState"/> asked for (within <see cref="SamePose"/>'s tolerance; the
+  /// epoch was restored before the pose was asked for). Already complete when the saved view is
+  /// the current one, when nothing was asked, or when the saved mode could not be entered.
+  /// </summary>
+  public Task RestoredViewConfirmed => _restoreConfirmed?.Task ?? Task.CompletedTask;
+
+  private void CheckRestoredView()
+  {
+    if (_restoreRequest is not { } request || _restoreConfirmed is not { } signal || signal.Task.IsCompleted)
+      return;
+    if (_modeSubject.Value != request.Mode
+        || (request.Transform is { } wantT && !(_lastConfirmedTransform is { } t && SamePose(wantT, t)))
+        || (request.Projection is { } wantP && !(_projectionSubject.Value is { } p && SameProjection(wantP, p))))
+      return;
+    _restoreRequest = null;
+    signal.TrySetResult(true);
+  }
+
+  /// <summary>The same camera pose: positions within 1e-9 relative (0.15 m at 1 AU) plus 1e-12 AU,
+  /// rotations within 1e-6 as quaternions (q and −q alike).</summary>
+  internal static bool SamePose(CameraTransformState a, CameraTransformState b)
+  {
+    double dx = a.PosX - b.PosX, dy = a.PosY - b.PosY, dz = a.PosZ - b.PosZ;
+    double r = Math.Sqrt(a.PosX * a.PosX + a.PosY * a.PosY + a.PosZ * a.PosZ);
+    if (Math.Sqrt(dx * dx + dy * dy + dz * dz) > 1e-12 + 1e-9 * r)
+      return false;
+    double dot = a.RotX * b.RotX + a.RotY * b.RotY + a.RotZ * b.RotZ + a.RotW * b.RotW;
+    return Math.Abs(dot) >= 1.0 - 1e-6;
+  }
+
+  /// <summary>The same field: the projection kind and its vertical extent (the field of view, or
+  /// the orthographic height) within 1e-5 relative; the aspect follows the viewport, not the save.</summary>
+  internal static bool SameProjection(CameraProjectionState a, CameraProjectionState b)
+  {
+    if (a.IsPerspective != b.IsPerspective)
+      return false;
+    double wa = a.IsPerspective ? a.Fov : a.Top - a.Bottom;
+    double wb = b.IsPerspective ? b.Fov : b.Top - b.Bottom;
+    return Math.Abs(wa - wb) <= 1e-5 * Math.Max(Math.Abs(wa), Math.Abs(wb));
+  }
+
   /// <summary>
   /// Puts the camera back as <see cref="GetPersistedState"/> saw it (savefile): the observer site,
   /// orbit offset, then the mode, landing on the saved pose and projection instead of the mode's
@@ -483,12 +534,25 @@ public sealed class CameraService : IDisposable
       _earthOrientationModeSubject.OnNext(_earthOrientationMode);
     }
     _pendingRestore = state;
+    _restoreConfirmed?.TrySetCanceled();
+    _restoreRequest = state;
+    _restoreConfirmed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
     if (_modeSubject.Value == state.Mode)
       TriggerModeTransitionAnimation(state.Mode, snapImmediate: true);
     else
       SetCameraMode(state.Mode);
     if (state.Mode == CameraMode.EarthPosition && state.ObserverOrientation != EarthObserverOrientationMode.Free)
       SetEarthObserverOrientationMode(state.ObserverOrientation);
+    // the saved mode refused (no comet committed): there is no restored view to wait for
+    if (_modeSubject.Value != state.Mode)
+    {
+      _restoreRequest = null;
+      _restoreConfirmed.TrySetResult(true);
+    }
+    else
+    {
+      CheckRestoredView(); // the saved view is the current one: confirmed at once
+    }
   }
 
   // Aspect ratio (W/H) of the Vulkan render target — set by OnViewportReady.
@@ -1901,14 +1965,46 @@ public sealed class CameraService : IDisposable
   }
 
   private (double X, double Y)? _viewportScreenOriginPx;
+  private double _viewportScreenScaling = 1.0;
 
   /// <summary>The viewport's top-left corner on the desktop (physical px, the billboards'
   /// coordinates); null until the control reports it.</summary>
   public (double X, double Y)? ViewportScreenOriginPx
   {
     get => _viewportScreenOriginPx;
-    set => _viewportScreenOriginPx = value;
+    set
+    {
+      if (value is { } o)
+        SetViewportScreenOrigin(o.X, o.Y, _viewportScreenScaling);
+      else
+        _viewportScreenOriginPx = null;
+    }
   }
+
+  /// <summary>The scaling (physical px per DIP) of the screen the viewport is on; 1 until reported.</summary>
+  public double ViewportScreenScaling => _viewportScreenScaling;
+
+  /// <summary>The viewport's place on the desktop changed (the window moved, a monitor change).</summary>
+  public event Action? ViewportScreenOriginChanged;
+
+  /// <summary>The control reports its top-left corner on the desktop (physical px) and its
+  /// screen's <paramref name="scaling"/>; raises <see cref="ViewportScreenOriginChanged"/> on a change.</summary>
+  public void SetViewportScreenOrigin(double x, double y, double scaling)
+  {
+    double s = scaling > 0 && !double.IsInfinity(scaling) ? scaling : 1.0;
+    if (_viewportScreenOriginPx is { } o && o.X == x && o.Y == y && _viewportScreenScaling == s)
+      return;
+    _viewportScreenOriginPx = (x, y);
+    _viewportScreenScaling = s;
+    ViewportScreenOriginChanged?.Invoke();
+  }
+
+  /// <summary>The viewport on the desktop (corner, pixel size, screen scaling); null until the
+  /// control reports its corner.</summary>
+  public Utils.ViewportFrame? ViewportDesktopFrame =>
+    _viewportScreenOriginPx is { } o
+      ? new Utils.ViewportFrame(new Utils.PointD(o.X, o.Y), _viewportWidthPx, _viewportHeightPx, _viewportScreenScaling)
+      : null;
 
   /// <summary>Where the Earth observer draws its comet on this viewport (physical px from its
   /// top-left corner). Null outside the Earth observer or when the core has no observed comet.</summary>
@@ -2841,7 +2937,12 @@ dump_context()
 #endif
 
     // BehaviorSubject.OnNext is not thread-safe for concurrent calls; marshal to the UI thread.
-    _schedulerProvider.MainThread.Schedule(() => _transformSubject.OnNext(state));
+    _schedulerProvider.MainThread.Schedule(() =>
+    {
+      _transformSubject.OnNext(state);
+      ConfirmedViewChanged?.Invoke();
+      CheckRestoredView();
+    });
   }
 
   private unsafe void HandleProjectionCallback(nint dataPtr)
@@ -2900,7 +3001,12 @@ dump_context()
       focusDistance
     );
     // Marshal to the UI thread — same reason as HandleTransformCallback.
-    _schedulerProvider.MainThread.Schedule(() => _projectionSubject.OnNext(projState));
+    _schedulerProvider.MainThread.Schedule(() =>
+    {
+      _projectionSubject.OnNext(projState);
+      ConfirmedViewChanged?.Invoke();
+      CheckRestoredView();
+    });
   }
 
   private unsafe void HandleEarthTransformCallback(nint dataPtr)

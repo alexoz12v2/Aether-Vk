@@ -59,6 +59,10 @@ public class FitsBillboardTests
     public PointD? CometDesktopPx { get; set; } = new PointD(700, 300);
     public bool IsEarthObserver { get; set; } = true;
     public PointD? ViewportCenterDesktopPx { get; set; } = new PointD(960, 540);
+    public ViewportFrame? ViewportFrame { get; set; }
+    public event Action? ViewportMoved { add { } remove { } }
+    public event Action? ViewChanged { add { } remove { } }
+    public System.Threading.Tasks.Task RestoredViewConfirmed => System.Threading.Tasks.Task.CompletedTask;
     public bool ViewUpIsEclipticSouth { get; set; }
     public bool ViewUpIsCelestialNorth { get; set; } = true;
     public double? CometDistanceKm { get; set; } = 0.47 * 149_597_870.7;

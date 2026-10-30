@@ -101,17 +101,21 @@ public class VulkanViewportControl : NativeControlHost
   }
 
   private Avalonia.PixelPoint? _origin;
+  private double _originScaling;
 
-  // the desktop position (physical px) the billboards use: window moves and layout changes move it
+  // the desktop position (physical px) the billboards use: window moves and layout changes move
+  // it, a monitor of another scaling changes the px per DIP
   private void PushOrigin()
   {
     if (DataContext is not Logic.ViewModels.VulkanViewportControlViewModel vm || this.GetVisualRoot() is null)
       return;
     var origin = this.PointToScreen(new Avalonia.Point(0, 0));
-    if (_origin == origin)
+    double scaling = _topLevel?.RenderScaling ?? TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0;
+    if (_origin == origin && _originScaling == scaling)
       return;
     _origin = origin;
-    vm.NotifyScreenOrigin(origin.X, origin.Y);
+    _originScaling = scaling;
+    vm.NotifyScreenOrigin(origin.X, origin.Y, scaling);
   }
 
   private void OnWindowMoved(object? sender, Avalonia.Controls.PixelPointEventArgs e) => PushOrigin();

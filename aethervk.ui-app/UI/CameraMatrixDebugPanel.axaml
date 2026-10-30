@@ -144,7 +144,7 @@
                FontWeight="Bold" FontSize="9"
                Foreground="{DynamicResource Accent.Primary}"
                Margin="0,0,0,3"/>
-    <TextBlock Text="{ReflectionBinding DustHistory}"
+    <TextBlock AutomationProperties.AutomationId="DustHistoryText" Text="{ReflectionBinding DustHistory}"
                FontFamily="Consolas,Monospace" FontSize="9"
                Foreground="{DynamicResource Text.Primary}"/>
   </StackPanel>

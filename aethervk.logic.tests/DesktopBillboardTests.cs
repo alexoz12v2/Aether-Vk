@@ -558,6 +558,10 @@ public class DesktopBillboardTests
     public bool ViewUpIsEclipticSouth => false;
     public bool ViewUpIsCelestialNorth => true;
     public PointD? ViewportCenterDesktopPx => null;
+    public ViewportFrame? ViewportFrame => null;
+    public event Action? ViewportMoved { add { } remove { } }
+    public event Action? ViewChanged { add { } remove { } }
+    public System.Threading.Tasks.Task RestoredViewConfirmed => System.Threading.Tasks.Task.CompletedTask;
     public bool IsComparisonLocked { get; set; }
   }
 
