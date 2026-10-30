@@ -1,3 +1,4 @@
+using System.Globalization;
 using AetherVk.Logic.ViewModels;
 
 namespace AetherVk.Logic.Services;
@@ -45,13 +46,50 @@ public static class JetNativeSync
     "Not in the simulation: the core refused this jet (the log has the reason). Retry, or commit again.";
 
   /// <summary>
+  /// English text of <see cref="JetViewModel.LitWarning"/> ({0} / {1}: the committed range ends);
+  /// the Model tab passes the localized <c>Tabs_Model_JetNeverLit</c> instead.
+  /// </summary>
+  public const string NeverLitFormat =
+    "This site is never lit between {0} and {1}: the jet emits no dust. Move it to another latitude, or change the range.";
+
+  /// <summary>
+  /// Refreshes <see cref="JetViewModel.LitWarning"/> from the core's lit fraction of the site
+  /// over the committed range (<see cref="INativeRuntimeService.GetJetLitFraction"/>): set when
+  /// the site is never lit, cleared when it is lit, not in the simulation, or the core has no
+  /// answer (no committed comet). <paramref name="format"/>: the localized text, else
+  /// <see cref="NeverLitFormat"/>. Not per frame: the core steps the ephemeris for it.
+  /// </summary>
+  public static void RefreshLitWarning(INativeRuntimeService runtime, JetViewModel jet, string? format = null)
+  {
+    if (jet.NativePsId == 0
+        || !runtime.GetJetLitFraction(jet.NativePsId, out double litFraction, out var range)
+        || litFraction > 0)
+    {
+      jet.LitWarning = null;
+      return;
+    }
+    string f = string.IsNullOrEmpty(format) ? NeverLitFormat : format!;
+    jet.LitWarning = string.Format(CultureInfo.InvariantCulture, f,
+      TimelineTabViewModel.FormatEpoch(range.StartCenturies, range.StartNs),
+      TimelineTabViewModel.FormatEpoch(range.EndCenturies, range.EndNs));
+  }
+
+  /// <summary><see cref="RefreshLitWarning"/> on every jet of <paramref name="session"/>.</summary>
+  public static void RefreshLitWarnings(INativeRuntimeService runtime, ModelSession session, string? format = null)
+  {
+    foreach (var jet in session.Jets)
+      RefreshLitWarning(runtime, jet, format);
+  }
+
+  /// <summary>
   /// Adds every jet of <paramref name="session"/> without a native system (the comet must be
   /// committed). The first system of the scene goes through <c>AddFirstParticleSystem</c>.
   /// Returns how many jets the core refused; each keeps <see cref="JetViewModel.NativeError"/>.
   /// <paramref name="emissionStartUs"/>: the ignition (<see cref="TimelineService.IgnitionUs()"/>).
+  /// Every jet's <see cref="JetViewModel.LitWarning"/> is refreshed (the committed range may be new).
   /// </summary>
   public static int EnsureNative(INativeRuntimeService runtime, ModelSession session, float nucleusRadiusKm,
-    long emissionStartUs = long.MaxValue)
+    long emissionStartUs = long.MaxValue, string? litWarningFormat = null)
   {
     bool any = false;
     foreach (var jet in session.Jets)
@@ -64,6 +102,7 @@ public static class JetNativeSync
       any |= jet.NativePsId != 0;
       if (jet.NativePsId == 0) refused++;
     }
+    RefreshLitWarnings(runtime, session, litWarningFormat);
     return refused;
   }
 
@@ -75,7 +114,7 @@ public static class JetNativeSync
   /// system) is not silent: it sets <see cref="JetViewModel.NativeError"/>, which a success clears.
   /// </summary>
   public static void AddNative(INativeRuntimeService runtime, ParticleSystemModel model,
-    ParticleSystemJet psJet, JetViewModel jet, bool isFirst)
+    ParticleSystemJet psJet, JetViewModel jet, bool isFirst, string? litWarningFormat = null)
   {
     if (isFirst)
     {
@@ -87,6 +126,7 @@ public static class JetNativeSync
         jet.Beta = computed.Beta;
         jet.DustProductionRateAt1AuKgs = computed.DustProductionRateAt1AuKgs;
       }
+      RefreshLitWarning(runtime, jet, litWarningFormat);
       return;
     }
     bool ok = runtime.AddParticleSystem(model, psJet, out ulong id);
@@ -98,5 +138,6 @@ public static class JetNativeSync
       jet.Beta = props.Beta;
       jet.DustProductionRateAt1AuKgs = props.DustProductionRateAt1AuKgs;
     }
+    RefreshLitWarning(runtime, jet, litWarningFormat);
   }
 }

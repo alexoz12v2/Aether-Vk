@@ -39,6 +39,14 @@ public sealed partial class JetViewModel : ObservableObject
   private string? _nativeError;
 
   /// <summary>
+  /// The site is never lit over the committed range, so the jet emits no dust (the text names the
+  /// range; <see cref="Services.JetNativeSync.RefreshLitWarning"/>). Refreshed after a commit, a
+  /// jet add / edit and a save open; null while lit, not in the simulation or without a commit.
+  /// </summary>
+  [ObservableProperty]
+  private string? _litWarning;
+
+  /// <summary>
   /// PCG seed — generated once at construction. Shown as an advanced read-only field.
   /// </summary>
   public uint Seed { get; }

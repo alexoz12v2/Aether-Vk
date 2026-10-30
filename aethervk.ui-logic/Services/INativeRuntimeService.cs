@@ -222,6 +222,13 @@ public interface INativeRuntimeService : IDisposable
     out ParticleSystemComputedProperties outPsComputedProps
   );
   bool SetJetPreviewVisibility(ulong jetEntityId, bool isVisible);
+  /// <summary>
+  /// Lit fraction (0..1) of one jet's surface site over the committed range, with that range
+  /// (TDB parts, as <see cref="GetSimulationClock"/>): a site that is never lit emits no dust.
+  /// On demand only (a commit, a jet edit, a save open): the core steps the ephemeris ~2048 times
+  /// per call. False when the id is not a jet of a committed comet.
+  /// </summary>
+  bool GetJetLitFraction(ulong jetEntityId, out double litFraction, out TimeRange committedRange);
   /// <summary>Shows or hides one jet's latitude/longitude arcs and degree labels in the viewport.</summary>
   bool SetJetAngleVisibility(ulong jetEntityId, bool isVisible);
 
@@ -269,12 +276,26 @@ public interface INativeRuntimeService : IDisposable
   /// </summary>
   bool SetEarthObserver(ulong cameraId, int mode, ulong earthId, ulong cometId, bool topocentric, double latDeg, double lonDeg, double elevM, Quaterniond look, ObserverUp up);
 
+  /// <summary>
+  /// The native "nucleus from Earth" view (feedback #17): the core poses the camera
+  /// <paramref name="distanceAu"/> short of the astrometric comet on the Earth → comet line, J2000
+  /// celestial north up, now and in every commit (it follows the comet): the face and orientation
+  /// an Earth telescope sees, without the Earth's distance. Cleared like the Earth observer
+  /// (<see cref="SetEarthObserver"/> with mode −1). False without the scene, an entity, a comet
+  /// or a positive distance.
+  /// </summary>
+  bool SetNucleusViewFromEarth(ulong cameraId, ulong earthId, ulong cometId, double distanceAu);
+
   /// <summary>Radius (km) of the visible dust coma (0 without dust): frames the comet in Earth
   /// observer tracking.</summary>
   double DustComaRadiusKm();
 
   /// <summary>Native Earth observer status (null when the UI poses the camera).</summary>
   EarthObserverStatus? EarthObserverStatus();
+
+  /// <summary>Ephemeris of the committed comet at the shown epoch, seen from the Earth's centre
+  /// (a query, polled by the viewport overlay); null without a committed comet.</summary>
+  CometEphemeris? CometEphemeris();
 
   /// <summary>Enables the comet's reference-position error lines (cross-track, same-epoch).</summary>
   bool SetReferenceErrorVisible(bool visible);
@@ -1373,6 +1394,16 @@ internal unsafe static class PInvokeAetherVkCore
   );
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern unsafe bool avkSimulationContext_jetLitFraction(
+    nint ctx,
+    ulong sceneId,
+    ulong jetEntityId,
+    double* outLitFraction,
+    CTime* outStart,
+    CTime* outEnd
+  );
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   public static extern bool avkSimulationContext_setJetAngleVisibility(
     nint ctx,
     ulong sceneId,
@@ -1432,6 +1463,10 @@ internal unsafe static class PInvokeAetherVkCore
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   [return: MarshalAs(UnmanagedType.U1)]
+  public static extern unsafe bool avkSimulationContext_cometEphemeris(nint ctx, ulong sceneId, CCometEphemerisDTO* outEphemeris);
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.U1)]
   public static extern bool avkSimulationContext_setEarthObserver(
     nint ctx,
     ulong sceneId,
@@ -1445,6 +1480,17 @@ internal unsafe static class PInvokeAetherVkCore
     double elevM,
     [In] double[] look,
     uint up
+  );
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.U1)]
+  public static extern bool avkSimulationContext_setNucleusViewFromEarth(
+    nint ctx,
+    ulong sceneId,
+    ulong cameraId,
+    ulong earthId,
+    ulong cometId,
+    double distanceAu
   );
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
@@ -2591,6 +2637,18 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     return new EarthObserverStatus((int)dto.Mode, dto.AimErrorRad, dto.TargetElevationRad);
   }
 
+  public unsafe CometEphemeris? CometEphemeris()
+  {
+    if (_ctx == 0)
+      return null;
+    CCometEphemerisDTO dto;
+    if (!PInvokeAetherVkCore.avkSimulationContext_cometEphemeris(_ctx, _sceneId, &dto) || dto.Active == 0)
+      return null;
+    return new CometEphemeris(
+      DateTimeOffset.FromUnixTimeMilliseconds((long)Math.Round(dto.EpochUnixS * 1000.0)),
+      dto.RaRad, dto.DecRad, dto.RAu, dto.DeltaAu, dto.PhaseRad, dto.ElongationRad, dto.SunPaRad, dto.LightTimeS);
+  }
+
   public double DustComaRadiusKm() =>
     _ctx != 0 ? PInvokeAetherVkCore.avkSimulationContext_dustComaRadiusKm(_ctx, _sceneId) : 0.0;
 
@@ -2599,6 +2657,10 @@ public sealed class NativeRuntimeService : INativeRuntimeService
       _ctx, _sceneId, cameraId, mode < 0 ? uint.MaxValue : (uint)mode, earthId, cometId, topocentric, latDeg, lonDeg, elevM,
       new[] { look.X, look.Y, look.Z, look.W }, (uint)up);
 
+  public bool SetNucleusViewFromEarth(ulong cameraId, ulong earthId, ulong cometId, double distanceAu) =>
+    _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_setNucleusViewFromEarth(
+      _ctx, _sceneId, cameraId, earthId, cometId, distanceAu);
+
   public bool SetJetPreviewVisibility(ulong jetEntityId, bool isVisible) =>
     PInvokeAetherVkCore.avkSimulationContext_setJetPreviewVisibility(
       _ctx,
@@ -2606,6 +2668,24 @@ public sealed class NativeRuntimeService : INativeRuntimeService
       jetEntityId,
       isVisible
     );
+
+  public bool GetJetLitFraction(ulong jetEntityId, out double litFraction, out TimeRange committedRange)
+  {
+    litFraction = 0;
+    committedRange = new TimeRange(0, 0, 0, 0);
+    if (_ctx == 0 || _sceneId == 0 || jetEntityId == 0)
+      return false;
+    unsafe
+    {
+      double frac;
+      CTime start, end;
+      if (!PInvokeAetherVkCore.avkSimulationContext_jetLitFraction(_ctx, _sceneId, jetEntityId, &frac, &start, &end))
+        return false;
+      litFraction = frac;
+      committedRange = new TimeRange(start.Centuries, start.Nanoseconds, end.Centuries, end.Nanoseconds);
+      return true;
+    }
+  }
 
   public bool SetJetAngleVisibility(ulong jetEntityId, bool isVisible) =>
     _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_setJetAngleVisibility(
@@ -3689,6 +3769,32 @@ internal struct CEarthObserverStatusDTO
 /// <summary>Native Earth observer: the submode (<c>EarthObserverOrientationMode</c> value), the
 /// view-axis error to the target and the target elevation (rad) at the last commit.</summary>
 public sealed record EarthObserverStatus(int Mode, double AimErrorRad, double TargetElevationRad);
+
+/// <summary>Mirrors Rust <c>CCometEphemeris</c> (ffi.rs), 80 bytes.</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct CCometEphemerisDTO
+{
+  public uint Active;
+  public uint Pad;
+  public double EpochUnixS;
+  public double RaRad;
+  public double DecRad;
+  public double RAu;
+  public double DeltaAu;
+  public double PhaseRad;
+  public double ElongationRad;
+  public double SunPaRad;
+  public double LightTimeS;
+}
+
+/// <summary>The committed comet's ephemeris at <paramref name="Epoch"/> (the shown epoch, UTC)
+/// seen from the Earth's centre, with JPL Horizons' observer-table conventions (Rust
+/// <c>astrometry::CometEphemeris</c>): astrometric J2000 RA/Dec (light-time corrected, no
+/// aberration), heliocentric r and geocentric Δ (AU), phase Sun–comet–Earth, elongation
+/// Sun–Earth–comet, and the position angle of the extended Sun→comet vector north through east
+/// (Horizons' PsAng), all in radians.</summary>
+public sealed record CometEphemeris(DateTimeOffset Epoch, double RaRad, double DecRad, double RAu, double DeltaAu,
+  double PhaseRad, double ElongationRad, double SunPaRad, double LightTimeS);
 
 /// <summary>The observed comet on the viewport: physical px from its top-left corner, and whether
 /// that is inside the viewport.</summary>
