@@ -17,7 +17,9 @@ The scripts are in `scripts/windows/` and use `cdb.exe` from WinDbg. They need P
 | `RENDERDOC_CAPTURE` / `renderdoccmd` on Linux | `Capture-RenderDoc.ps1 -Test <path::to::test>` |
 | choosing an SDK with `source setup-env.sh` | `. Use-VulkanSdk.ps1 -Version <x.y.z.w>` |
 | `ls /proc/<pid>/task` + `top -H` (one thread at 100 %?) | `Get-StackSamples.ps1`: the CPU-per-thread table |
-| In-process gdb dumps (render-stall watcher, `AETHERVK_GPU_LOST_DUMP`) | Already on Windows: minidumps on an unhandled exception, on a panic and on device loss, in `%LOCALAPPDATA%\Aether-Vk\logs` (`crash_dump.rs`). The render-stall watcher is still Linux-only. |
+| `RUSTFLAGS=-Zsanitizer=address cargo test` (ASan) | `Test-Asan.ps1` (the CPU tests; MSVC's ASan runtime) |
+| valgrind memcheck / handle tracking | `Enable-AppVerifier.ps1` (page heap, handles, locks; per exe image, elevated) |
+| In-process gdb dumps (render-stall watcher, `AETHERVK_GPU_LOST_DUMP`) | Already on Windows: minidumps on an unhandled exception, on a panic and on device loss, in `%LOCALAPPDATA%\Aether-Vk\logs` (`crash_dump.rs`). The render-stall watcher also runs on Windows debug builds: a minidump plus every thread's stack read back by cdb (see *A test or the app hangs*). |
 
 ## One-time setup
 
@@ -58,6 +60,15 @@ How the attach works and what the report holds:
   - tags: `loader` (`vulkan_1`), `layer` (`VkLayer_*`), `driver` (`nvoglv64` …), `waiting`.
 - Then it has the full `~*kn`, `!runaway` (CPU per thread) and `!locks`.
 - Rust names each test thread after its test, so the summary also tells you *which test* is hung.
+
+**The in-process render-stall watcher** (debug builds; `render_stall_watcher.rs`) works without attaching anything:
+- While a simulation runs, it fires if no `vkQueueSubmit` happens for 3 s, at most once per 10 s.
+- It writes `aethervk-stall-<pid>.dmp` to `%LOCALAPPDATA%\Aether-Vk\logs`.
+- When cdb is found (`AVK_CDB`, the `Setup-DebugTools.ps1` copy, or the Windows Kits debuggers), it reads every thread's stack out of that dump with `~*kn`. The stacks go to `aethervk-stall-<pid>.txt` and into the log as `[cdb]` lines.
+- The stacks come from the dump, out of process, so no thread is suspended while it might hold a lock the capture needs.
+- The watcher's own stack ends at `NtGetContextThread`, because the dump is taken mid-call. The stalled threads are the other ones, named after their oshal thread names (`SetThreadDescription`).
+- Without cdb, open the dump with `windbgx -z`.
+- Check the capture with `cargo test -p aethervk-oshal-rlib capture_stall -- --ignored`, and the watcher with `cargo test -p aethervk-core-rlib --lib -- --ignored --exact simulation_api::render_stall_watcher::tests::the_watcher_dumps_a_forced_stall`.
 
 **Watchdog for a whole run.** It catches a test process that stalls or runs too long, before nextest kills it:
 
@@ -140,7 +151,7 @@ scripts\windows\Capture-RenderDoc.ps1 -Test gpu_backends::vulkan::device::dust::
 - In debug builds that variable makes each `Device` capture its whole life (`renderdoc::DeviceLifeCapture`): tests have no swapchain and no frames, so this is how their dispatches end up in a capture.
 - The `.rdc` goes to `target\diagnostics\renderdoc\` and opens in qrenderdoc (`-NoOpen` to skip). `-Exe <program> -- <args>` captures something else.
 
-**Nsight Graphics** (2025.4, installed) supports frame debugging on Pascal; GPU Trace needs Turing or newer. Launch the app or a test exe from its *Start Activity* dialog, with the implicit-layer disable cleared as above.
+**Nsight Graphics.** On the GTX 1070 (Pascal), use 2022.1.1: newer releases dropped Pascal. 2025.4.1 is installed too, for newer GPUs. GPU Trace needs Turing or newer in every version. Launch the app or a test exe from the *Start Activity* dialog, with the implicit-layer disable cleared as above. Each installed version registers its own implicit layers; `Setup-DebugTools.ps1 -Status` lists them.
 
 ## Opening a dump
 
@@ -176,7 +187,39 @@ The `[profile.profiling]` cargo profile is the one to profile on both OSes: a de
 
 **.NET side.** `dotnet tool restore` installs `dotnet-trace` (`dotnet-trace collect -p <pid>`, then open the `.nettrace` in PerfView or VS), `dotnet-counters monitor -p <pid>`, `dotnet-dump collect -p <pid>` and `dotnet-stack report -p <pid>` (managed stacks of every thread, no debugger).
 
+## Memory errors: AddressSanitizer and Application Verifier
+
+**AddressSanitizer** (nightly `-Zsanitizer=address`, MSVC runtime). It finds heap and stack overruns, use after free and double free in our Rust code and its C dependencies:
+
+```powershell
+scripts\windows\Test-Asan.ps1                                       # aethervk-core-rlib, CPU tests
+scripts\windows\Test-Asan.ps1 -Package aethervk-oshal-rlib -Skip @()
+scripts\windows\Test-Asan.ps1 -- simulation::texture_cache          # a filter, as for the test exe
+```
+
+- The script builds into `targetsan`, so the normal debug build stays valid. It then runs the test exe from the crate's folder, with `clang_rt.asan_dynamic-x86_64.dll` on PATH.
+- The runtime must be the toolset rustc linked with. The script picks the newest MSVC toolset that ships it; `AVK_ASAN_RUNTIME_DIR` overrides it. A wrong one fails at start with exit 127 or `STATUS_DLL_NOT_FOUND`.
+- This needs the Visual Studio component *C++ AddressSanitizer*.
+- It covers the CPU tests only. The GPU drivers aren't instrumented, so the default skips the Vulkan, simulation-API and logic-thread tests and the slow `scene::dust` references.
+- A report names the source line of the bad access and of the allocation.
+- **Baseline (2026-10-31):** oshal 90/90 tests clean; core, 193 CPU tests clean. The only failures were the 2 missing fixtures, `BoxTextured.glb` and the ephemeris data. A deliberate overrun is reported with its line.
+
+**Application Verifier** works on the uninstrumented build, the GPU tests and the app too:
+
+```powershell
+scripts\windows\Enable-AppVerifier.ps1 -Status
+scripts\windows\Enable-AppVerifier.ps1 -Enable -Test -Light    # elevated; -Light for GPU tests
+scripts\windows\Invoke-UnderDebugger.ps1 -- <test exe> --exact <test> --nocapture
+scripts\windows\Enable-AppVerifier.ps1 -Disable -Test          # elevated
+```
+
+- It's per exe *name*: every run of that image is verified until `-Disable`.
+- `-Test` picks the newest `aethervk_core_rlib-<hash>.exe`. The hash stays the same across rebuilds of one configuration.
+- A verifier stop breaks into cdb; `!avrf` shows it. Without a debugger, the process dies and the crash handler writes `aethervk-crash-<pid>.dmp`.
+- `-Export` turns the binary log into XML.
+- `appverif.exe` needs elevation even for `-?`, so `-Status` reads the registry instead.
+
 ## Caveats
 
 - **Killing cdb mid-attach.** While cdb is attached non-invasively, the target's threads are suspended. If cdb is killed during the attach (the scripts' 120 s timeout), the target can stay suspended. With `symsrv.ini` in place an attach takes seconds.
-- **No Windows render-stall watcher.** `render_stall_watcher.rs` and `dump_all_thread_backtraces_gdb` are Linux-only. On Windows, use `Watch-TestHang.ps1` / `Get-HungStacks.ps1` from outside.
+- **The render-stall watcher needs a simulation.** It only arms while a scene simulation runs (`start_simulation`), so a test that drives the device directly is not covered. Use `Watch-TestHang.ps1` / `Get-HungStacks.ps1` from outside for those.

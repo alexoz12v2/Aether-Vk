@@ -60,10 +60,10 @@ pub struct SimulationContext {
   texture_cache: Arc<RwLock<crate::simulation::texture_cache::TextureCache>>,
   pub audio_mixer: Arc<RwLock<crate::audio::AudioMixer>>,
   /// Set to `true` while any scene simulation is running; read by the stall-watcher thread.
-  #[cfg(all(target_os = "linux", debug_assertions))]
+  #[cfg(all(any(target_os = "linux", target_os = "windows"), debug_assertions))]
   pub stall_watcher_simulation_active: Arc<core::sync::atomic::AtomicBool>,
   /// Set to `true` on shutdown to stop the stall-watcher thread.
-  #[cfg(all(target_os = "linux", debug_assertions))]
+  #[cfg(all(any(target_os = "linux", target_os = "windows"), debug_assertions))]
   pub stall_watcher_shutdown: Arc<core::sync::atomic::AtomicBool>,
 }
 
@@ -71,7 +71,7 @@ impl Drop for SimulationContext {
   fn drop(&mut self) {
     oshal::log!("SimulationContext drop started");
     // Signal the stall-watcher thread to exit.
-    #[cfg(all(target_os = "linux", debug_assertions))]
+    #[cfg(all(any(target_os = "linux", target_os = "windows"), debug_assertions))]
     {
       self
         .stall_watcher_simulation_active
@@ -120,7 +120,7 @@ impl SimulationContext {
 
       read_scene.simulation_running.store(true, core::sync::atomic::Ordering::Release);
       // Arm the stall-watcher so it monitors GPU submits while simulation is active.
-      #[cfg(all(target_os = "linux", debug_assertions))]
+      #[cfg(all(any(target_os = "linux", target_os = "windows"), debug_assertions))]
       self
         .stall_watcher_simulation_active
         .store(true, core::sync::atomic::Ordering::Release);
@@ -259,7 +259,7 @@ impl SimulationContext {
           scene.hold_dust_preview();
         }
         // Disarm the stall-watcher; GPU submits are expected to stop.
-        #[cfg(all(target_os = "linux", debug_assertions))]
+        #[cfg(all(any(target_os = "linux", target_os = "windows"), debug_assertions))]
         self
           .stall_watcher_simulation_active
           .store(false, core::sync::atomic::Ordering::Release);

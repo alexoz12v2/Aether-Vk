@@ -95,8 +95,8 @@ impl SimulationContext {
       // 4. Render Proxy
       addr_of_mut!((*ptr).render_proxy).write(render_proxy);
 
-      // 5. Stall-watcher (Linux debug only)
-      #[cfg(all(target_os = "linux", debug_assertions))]
+      // 5. Stall-watcher (Linux and Windows debug only)
+      #[cfg(all(any(target_os = "linux", target_os = "windows"), debug_assertions))]
       {
         let sim_active = Arc::new(core::sync::atomic::AtomicBool::new(false));
         let shutdown = Arc::new(core::sync::atomic::AtomicBool::new(false));
