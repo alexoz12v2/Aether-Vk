@@ -23,14 +23,20 @@ The project is structured into a modern, cross-platform architecture:
 To build and run the project, you will need:
 - [Rust Toolchain](https://rustup.rs/) (Cargo)
 - [.NET 10.0 SDK](https://dotnet.microsoft.com/)
-- [Vulkan SDK](https://vulkan.lunarg.com/) (>= 1.4)
+- [Vulkan SDK](https://vulkan.lunarg.com/sdk/home) **1.4.363.0 exactly**, the version pinned in [`.vulkan-sdk-version`](.vulkan-sdk-version).
+  The SPIR-V blobs are built and validated with that SDK's `glslc`/`spirv-opt`, and CI installs the same one;
+  the shader scripts refuse another SDK (they switch to the pinned one if it is installed side by side).
+  It is also the first SDK whose validation layer does not deadlock under GPU-AV (`docs/vulkan_test_loader_stall.md`).
+  Windows: `winget install KhronosGroup.VulkanSDK --version 1.4.363.0 --force`, then `. scripts\windows\Use-VulkanSdk.ps1` in the shell.
 
 ## Build & Run
 
 ### 1. Compile Shaders
-The Vulkan pipelines require precompiled SPIR-V shaders (`.spv`). Use the provided scripts to compile them (ensure `VULKAN_SDK` is set in your environment):
+The Vulkan pipelines require precompiled SPIR-V shaders (`.spv`). Use the provided scripts to compile them (ensure `VULKAN_SDK` points at the pinned SDK). The build also runs it when a `.spv` is older than its source:
 - **macOS / Linux**: `./compile_shaders.sh`
-- **Windows**: `.\compile_shaders.ps1`
+- **Windows**: `bash compile_shaders.sh` from Git Bash (`.\compile_shaders.ps1` is a fallback that lacks the blob variants)
+
+To move to a newer SDK: change `.vulkan-sdk-version`, rerun `compile_shaders.sh`, rerun the GPU dust tests (`cargo nextest run -E 'test(gpu_dust)'`) and commit the file and the blobs together.
 
 ### 2. Build the Rust Core Engine
 The physics simulation and rendering backend are built into a C-compatible dynamic library.
