@@ -10,6 +10,11 @@ on:
       - '[0-9]*'
   workflow_dispatch:
 
+# use the committed SPIR-V blobs (built with the pinned SDK) instead of rebuilding them with the
+# runner's tools: see aethervk.core/rlib/build.rs
+env:
+  AETHERVK_PREBUILT_SHADERS: "1"
+
 jobs:
   build-release:
     name: Release ${{ matrix.dotnet_arch }}
