@@ -8,7 +8,9 @@
 
 set -e
 
-SDK_VERSION="1.4.321.0"
+# the project's pinned SDK (.vulkan-sdk-version at the repo root; compile_shaders.sh requires it)
+SDK_VERSION="$(tr -d '[:space:]' < "$(dirname "$0")/../.vulkan-sdk-version" 2>/dev/null || true)"
+SDK_VERSION="${SDK_VERSION:-1.4.363.0}"
 SDK_URL="https://sdk.lunarg.com/sdk/download/${SDK_VERSION}/mac/vulkansdk-macos-${SDK_VERSION}.zip"
 DOWNLOAD_DIR="$HOME/Downloads"
 ZIP_PATH="$DOWNLOAD_DIR/vulkan_sdk_${SDK_VERSION}.zip"

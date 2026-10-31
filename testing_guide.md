@@ -62,6 +62,13 @@ Use filter syntax to run all tests in a specific module:
 cargo nextest run -E 'test(gpu_backends::vulkan::physics)'
 ```
 
+### The slow tier (dust host-reference tests)
+About twenty `scene::dust::tests` compare the cadence and volume paths against the CPU reference rasterizer for hundreds of frames, and two GPU dust tests (`gpu_dust_budget_loop_keeps_the_ladder_order`, `gpu_dust_reproject_matches_reference`) run full-ring frames or such a mirror. A debug build takes hours per test: the reference draws a 128 px frame in about 30 s. The default profile therefore leaves them out (the list is in `.config/nextest.toml`), and the `slow` profile runs only them, one at a time with every core, in an optimised dev build. Debug assertions stay on, and the separate target dir leaves the normal build alone:
+```bash
+CARGO_PROFILE_DEV_OPT_LEVEL=2 CARGO_TARGET_DIR=target/opt2 cargo nextest run -p aethervk-core-rlib --profile slow
+```
+On a 16-thread machine the whole tier takes a few hours; `cadence_keeps_the_light` alone runs 500 frames at about 3.7 s each. Run it before a release and after changing `scene/dust`.
+
 ### Debugging Failed Tests
 By default, `nextest` captures standard output and standard error and only prints them if a test fails.
 

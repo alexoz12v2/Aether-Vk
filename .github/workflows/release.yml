@@ -63,10 +63,16 @@ jobs:
       run: |
         sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross
 
+    # the SDK the SPIR-V blobs are built with: pinned in .vulkan-sdk-version (see compile_shaders.sh)
+    - name: Read pinned Vulkan SDK version
+      id: vksdk
+      shell: bash
+      run: echo "version=$(tr -d '[:space:]' < .vulkan-sdk-version)" >> "$GITHUB_OUTPUT"
+
     - name: Setup Vulkan SDK
       uses: jakoch/install-vulkan-sdk-action@v1.5.5
       with:
-        vulkan_version: '1.4.321.0'
+        vulkan_version: ${{ steps.vksdk.outputs.version }}
 
     - name: Setup .NET
       uses: actions/setup-dotnet@v4

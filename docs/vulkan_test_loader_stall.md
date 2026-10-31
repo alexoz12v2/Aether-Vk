@@ -78,10 +78,19 @@ This is a three-way lock-order deadlock between the test thread, our polling thr
 
 **The separate `cargo test` abort** (all tests in one process): `Exceeded MAX_TRACKED_THREADS for lock tracking` (`gpu_backends/vulkan/device/locks.rs:52`). The debug lock tracker's table of thread hashes only ever grows. nextest, with one process per test, doesn't hit it.
 
-Next steps:
-- Resolve our frames.
-- Try a newer SDK's validation layer.
-- If the deadlock remains, report it upstream (KhronosGroup/Vulkan-ValidationLayers) with the repro test.
+**2026-10-31: fixed upstream, in the SDK 1.4.363.0 validation layer.** The `test_commands` module (4 tests, one process, GPU-AV on), run with each layer and the loader log confirming which `VkLayer_khronos_validation.dll` was inserted:
+- 1.4.321.0: hung, killed at 180 s.
+- 1.4.363.0: passed in 4–5 s, four runs out of four.
+
+So use 1.4.363.0 or newer for GPU-AV runs. `. scripts\windows\Use-VulkanSdk.ps1 -Version 1.4.363.0` selects it in a shell. The SDK installer also makes it the machine default (`VULKAN_SDK`, `PATH`, the registered explicit layers). No upstream report is needed.
+
+Testing caveat: `VK_LAYER_PATH` set from Git Bash left the engine without any validation layer. The engine skips the layer silently when it doesn't enumerate it, so such a run proves nothing. Select the layer with `Use-VulkanSdk.ps1` (`VK_ADD_LAYER_PATH`), and check the loader log (`VK_LOADER_DEBUG=layer`) for the `Inserted device layer "VK_LAYER_KHRONOS_validation"` line.
+
+**1.4.363.0 adds a GPU-AV false positive: "data race on shared memory".** Two shaders trigger it:
+- `dust_vs` in `dust_volume_draw_mono.glsl`, seen in `gpu_dust_budget_loop_keeps_the_ladder_order`;
+- `s_depth` in `dust_reproject.comp`, seen in `gpu_dust_reproject_matches_reference`.
+
+Neither is a race. Each invocation only touches its own slots, and the reports pair a store or load with an atomic from the same invocation. The layer's detector exempts same-invocation accesses on a store but not on an atomic, or on a load after an atomic; its source header documents this limitation. Reported upstream as KhronosGroup/Vulkan-ValidationLayers#13615. If the noise gets in the way, a bit-identical workaround makes every access to those words atomic (`atomicExchange` for the stores, `atomicOr(x, 0u)` for the loads).
 
 The loader pin experiment for the positional stall is still pending.
 
