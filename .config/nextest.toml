@@ -19,6 +19,13 @@ slow-timeout = { period = "60s", terminate-after = 5 }
 filter = 'test(dust_image_is_independent_of_ring_capacity)'
 slow-timeout = { period = "60s", terminate-after = 20 }
 
+[[profile.default.overrides]]
+# GPU parity tests whose CPU mirror runs every frame in a debug build: the handover parities
+# compare ~470 frames (6.5 and 10 min on the GTX 1070, 2026-10-31), the spinning-site perspective
+# splats the spiral on the CPU for each split family (6.5 min)
+filter = 'test(gpu_dust_cadence_handover) | test(=gpu_backends::vulkan::device::test_dust::gpu_dust_splat_matches_reference_spinning_site_perspective)'
+slow-timeout = { period = "60s", terminate-after = 15 }
+
 [test-groups]
 vulkan-tests = { max-threads = 1 }
 

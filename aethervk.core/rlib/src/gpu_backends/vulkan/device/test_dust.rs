@@ -1670,15 +1670,43 @@ fn splat_parity_in(
         "the shell override reached the header"
       );
     }
-    let _ = dust::take_volume_class_counts();
-    let _ = dust::take_volume_small_paths();
-    let _ = dust::take_volume_small_margins();
-    let _ = dust::take_volume_split_adds();
-    dust::splat_tier(&moments, &render, &pc, &flow, 0, &layout, &mut cpu);
-    let classes = dust::take_volume_class_counts();
-    let small_paths = dust::take_volume_small_paths();
-    let small_margins = dust::take_volume_small_margins();
-    let split_adds = dust::take_volume_split_adds();
+    // the reference of an earlier path / split run when its inputs are bit-identical (the
+    // propagate does not depend on the splat path, so the moments usually are; the split families
+    // can differ in the header's split word): the CPU splat is a pure function of them, and in a
+    // debug build it is most of a case's minutes
+    let mut key = alloc::vec::Vec::new();
+    key.extend_from_slice(bytemuck::cast_slice(&cpu[..dust::PYRAMID_HEADER_WORDS as usize]));
+    key.extend_from_slice(bytemuck::bytes_of(&pc));
+    key.extend_from_slice(bytemuck::cast_slice(&moments));
+    key.extend_from_slice(bytemuck::cast_slice(&render));
+    let mut cache = PARITY_REFERENCE.lock().unwrap_or_else(|e| e.into_inner());
+    let (classes, small_paths, small_margins, split_adds) = match cache.iter().find(|c| c.0 == key) {
+      Some(c) => {
+        std::println!("[dust gpu] splat parity case {id}: reference reused (same inputs as an earlier run)");
+        cpu.copy_from_slice(&c.1);
+        c.2
+      }
+      None => {
+        let _ = dust::take_volume_class_counts();
+        let _ = dust::take_volume_small_paths();
+        let _ = dust::take_volume_small_margins();
+        let _ = dust::take_volume_split_adds();
+        dust::splat_tier(&moments, &render, &pc, &flow, 0, &layout, &mut cpu);
+        let counts = (
+          dust::take_volume_class_counts(),
+          dust::take_volume_small_paths(),
+          dust::take_volume_small_margins(),
+          dust::take_volume_split_adds(),
+        );
+        // (a few per case: one per split family; a new case's inputs never match the old ones)
+        if cache.len() >= 4 {
+          cache.remove(0);
+        }
+        cache.push((key, cpu.clone(), counts));
+        counts
+      }
+    };
+    drop(cache);
     // the small pieces' paths on both mirrors at the count level, from the profiler's
     // words when the `.prof` shaders drew this frame (`gpu_dust_small_paths_match_reference`): a
     // decision on a float boundary (the edge decision's 3σ within 1e-3 σ of the frame's edge, the predictor
@@ -2187,6 +2215,11 @@ static PARITY_EXTRA_FLAGS: core::sync::atomic::AtomicU32 = core::sync::atomic::A
 /// the volumetric pieces the reference drew per class in the last [`splat_parity`] of a case id
 /// (centre, small, sub-rays, lines: `dust::take_volume_class_counts`, counted on the closure's thread)
 static PARITY_VOLUME_CLASSES: std::sync::Mutex<alloc::vec::Vec<(u64, [u64; 4])>> = std::sync::Mutex::new(alloc::vec::Vec::new());
+/// the latest [`splat_parity`] references: their input bytes (header, push constants, moments, render
+/// records), the splatted pyramid and the reference's counters (classes, small paths, small
+/// margins, split adds)
+type ParityReference = (alloc::vec::Vec<u8>, alloc::vec::Vec<u32>, ([u64; 4], [u64; 2], [u64; 3], u64));
+static PARITY_REFERENCE: std::sync::Mutex<alloc::vec::Vec<ParityReference>> = std::sync::Mutex::new(alloc::vec::Vec::new());
 fn parity_volume_bias() -> Option<u32> {
   let b = PARITY_VOLUME_BIAS.load(core::sync::atomic::Ordering::SeqCst);
   (b != u32::MAX).then_some(b)
