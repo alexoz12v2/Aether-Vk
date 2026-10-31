@@ -123,6 +123,13 @@ Every Vulkan process on this machine gets the registered *implicit* layers injec
 
 **Shader source lines.** The `.d.spv` shader twins are compiled with `-g` (`compile_shaders.sh`). With `AETHERVK_SHADER_DEBUG_INFO=1` the engine loads them for every compute pipeline, in any build, tests included. GPU-AV out-of-bounds reports then name the GLSL file and line instead of "Unable to source", and RenderDoc shows GLSL in its shader viewer and debugger. Without the variable, tests always use the plain `.spv`.
 
+**Is it the driver's compiler?** A GPU result that differs between two blobs of the same source points at the driver, not the shader:
+- `AETHERVK_SHADER_NO_VMM=1` loads the plain blobs instead of the `.vmm` (Vulkan memory model) ones.
+- `AETHERVK_SHADER_DEBUG_INFO=1` loads the unoptimised `-g` twins.
+- `spirv-opt -O --target-env=vulkan1.1spv1.4 -o <blob> <blob>` on one blob (back it up first) feeds the driver very different SPIR-V with the same meaning. Shaders load at runtime, so run the existing test exe directly (`target\debug\build\aethervk-core-rlib\<hash>\out\aethervk_core_rlib-<hash>.exe --exact <test> --nocapture`); going through cargo relinks.
+
+This is how the 2026-10-31 dust mismatch was found: the GTX 1070's Windows driver (576.80) builds the unoptimised `dust_splat_mono.comp` blob wrong (twice the texels of the CPU reference) and the `spirv-opt -O` one right. The `dust_splat.comp` stage chain has the same problem: unoptimised, it spreads the spinning-site spiral and gives a peak about 8x low. `compile_shaders.sh` now always optimises both splat enumerators.
+
 **RenderDoc capture of one test:**
 
 ```powershell
