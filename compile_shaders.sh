@@ -127,6 +127,17 @@ is_float16_variant() {
 # grows 6.8x and the first run pays a shader-cache miss, so it stays an opt-in experiment.
 # Never applied to the -DDEBUG_SHADERS twins.
 opt_flags() {
+    # the splat enumerators always (dust_splat_mono.comp and the dust_splat.comp stage chain): the
+    # GTX 1070's Windows driver (576.80, 2026-10-31) mis-builds both unoptimised. The mono's records
+    # deposit into ~2x the texels of the CPU mirror (gpu_dust_splat_matches_reference_lod: 621 vs 324
+    # texels, deterministic); the chain spreads the spinning-site spiral (..._spinning_site: level-0
+    # peak 802843 vs 6479371, tau_max 22x low). The same sources through spirv-opt -O match the CPU
+    # (the sums agree to 1e-6). No source difference was found: the optimiser either sidesteps a driver
+    # miscompile or settles an undefined read the driver resolves differently. The `.d` twins stay
+    # unoptimised (debug info), so they still show the wrong result under AETHERVK_SHADER_DEBUG_INFO.
+    case "$1" in
+        dust_splat_mono.comp|dust_splat.comp) echo "-O"; return ;;
+    esac
     if [ "${AETHERVK_SPIRV_OPT:-0}" = "1" ]; then
         case "$1" in
             dust_*.comp) echo "-O" ;;
@@ -251,13 +262,13 @@ for file in assets/*.comp assets/sim/*.comp; do
                     for st in 0 1 2 3 4 5 6 7 8 9 10 11; do
                         compile_one "$file" comp "-DDUST_SPLAT_STAGE=${st}u $(opt_flags "$base") $vmm_flag" "${file%.comp}.comp.st${st}${vmm_infix}.spv"
                         compile_one "$file" comp "-DDUST_SPLAT_STAGE=${st}u -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.st${st}${vmm_infix}.d.spv"
-                        compile_one "$file" comp "-DDUST_SPLAT_STAGE=${st}u -DDUST_PROFILE=1 $vmm_flag" "${file%.comp}.comp.prof.st${st}${vmm_infix}.spv"
+                        compile_one "$file" comp "-DDUST_SPLAT_STAGE=${st}u -DDUST_PROFILE=1 $(opt_flags "$base") $vmm_flag" "${file%.comp}.comp.prof.st${st}${vmm_infix}.spv"
                         compile_one "$file" comp "-DDUST_SPLAT_STAGE=${st}u -DDUST_PROFILE=1 -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.prof.st${st}${vmm_infix}.d.spv"
                     done
                     ;;
                 # the monolithic enumerator (the splat path knob): its `.prof` blobs
                 dust_splat_mono.comp)
-                    compile_one "$file" comp "-DDUST_PROFILE=1 $vmm_flag" "${file%.comp}.comp.prof${vmm_infix}.spv"
+                    compile_one "$file" comp "-DDUST_PROFILE=1 $(opt_flags "$base") $vmm_flag" "${file%.comp}.comp.prof${vmm_infix}.spv"
                     compile_one "$file" comp "-DDUST_PROFILE=1 -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.prof${vmm_infix}.d.spv"
                     ;;
                 # the pre-split splitter (AETHERVK_DUST_SPLIT_STAGED=0, the GTX 1070

@@ -511,7 +511,10 @@ impl PhysicsPipelines {
     let mut pc_sizes = hashbrown::HashMap::<u64, u32>::new();
     // Helper to unwrap (Pipeline, workgroup_size) — stores pc_size, returns pipeline
     let mut wg_sizes = hashbrown::HashMap::<u64, [u32; 3]>::new();
-    let vmm_infix = if has_vulkan_memory_model { ".vmm" } else { "" };
+    // `AETHERVK_SHADER_NO_VMM=1`: the plain blobs on a memory-model device too (a driver compiler
+    // difference between the two variants shows as a parity change)
+    let no_vmm = aethervk_oshal_rlib::os::env::var("AETHERVK_SHADER_NO_VMM").is_some();
+    let vmm_infix = if has_vulkan_memory_model && !no_vmm { ".vmm" } else { "" };
 
     // Create all pipelines using a helper that extracts and stores reflected PC sizes
     macro_rules! mk {
