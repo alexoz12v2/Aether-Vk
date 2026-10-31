@@ -11,6 +11,8 @@ crate-type = ["cdylib"]
 [features]
 default = []
 std = []
+# Tracy instrumentation of the engine the .NET app loads (see docs/windows_debugging.md)
+profile-tracy = ["aethervk-core-rlib/profile-tracy", "aethervk-oshal-rlib/profile-tracy"]
 
 [build-dependencies]
 anyhow = { version = "1.0" }
