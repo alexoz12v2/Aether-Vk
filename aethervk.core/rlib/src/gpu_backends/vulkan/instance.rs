@@ -701,6 +701,21 @@ impl Instance {
         if want_checkpoints && has_ext(ash::nv::device_diagnostic_checkpoints::NAME) {
           optional_extensions.insert(utils::OptionalExtensionSupportFlags::DIAGNOSTIC_CHECKPOINTS);
         }
+        // the Tracy GPU context's calibration (`device/profile.rs`); the device time domain is
+        // the one it reads, the host domains are not needed
+        #[cfg(feature = "profile-tracy")]
+        if has_ext(ash::ext::calibrated_timestamps::NAME) {
+          let device_domain = self.entry_wrapper.weak_entry().upgrade().is_some_and(|entry| {
+            unsafe {
+              ash::ext::calibrated_timestamps::Instance::new(&entry, &self.instance)
+                .get_physical_device_calibrateable_time_domains(physical_device)
+            }
+            .is_ok_and(|domains| domains.contains(&vk::TimeDomainEXT::DEVICE))
+          });
+          if device_domain {
+            optional_extensions.insert(utils::OptionalExtensionSupportFlags::CALIBRATED_TIMESTAMPS);
+          }
+        }
         // compute subgroup basic + arithmetic operations
         // (Vulkan 1.1 core, the arithmetic optional on the baseline devices) on subgroups of at
         // least 32 lanes: the volume consumer's `.sg` blob reduces its top-level deposits over the
