@@ -1187,6 +1187,9 @@ pub struct Device {
 
   pub res: Arc<DebugTrackedRwLock<DeviceResources>>,
   callback_stop_signal: Arc<core::sync::atomic::AtomicBool>,
+  /// `AETHERVK_RENDERDOC_CAPTURE`: the device's whole life in one RenderDoc capture
+  #[cfg(debug_assertions)]
+  rdoc_capture: super::renderdoc::DeviceLifeCapture,
 
   // Some bookkeeping I don't know where to put
   depth_stencil_format: vk::Format,
@@ -2355,6 +2358,8 @@ impl Device {
       queues,
       res: Arc::new(DebugTrackedRwLock::new(res)),
       callback_stop_signal: Arc::new(core::sync::atomic::AtomicBool::new(false)),
+      #[cfg(debug_assertions)]
+      rdoc_capture: super::renderdoc::DeviceLifeCapture::begin(),
       kernels,
       instance,
       depth_stencil_format,
@@ -2376,13 +2381,25 @@ impl Drop for Device {
   fn drop(&mut self) {
     aethervk_oshal_rlib::log!("Device::drop started. Waiting for device idle...");
     locks::set_disable_lock_assertions(true);
+    #[cfg(debug_assertions)]
+    self.rdoc_capture.end();
 
     // Signal stop to timeline polling task
     self.callback_stop_signal.store(true, Ordering::Release);
 
-    // Wait for the timeline polling task to exit before destroying the device
+    // Wait for the timeline polling task to exit before destroying the device (destroying it
+    // under the task is undefined, so this keeps waiting, but says so every 5 s: a task stuck
+    // inside the driver shows in the log instead of as a silent hang)
+    let mut waited_ms = 0u64;
     while Arc::strong_count(&self.callback_stop_signal) > 1 {
       oshal::os::native::this_thread::sleep_for(core::time::Duration::from_millis(1));
+      waited_ms += 1;
+      if waited_ms % 5000 == 0 {
+        aethervk_oshal_rlib::log!(
+          "WARNING: Device::drop still waiting for the timeline polling task after {} s",
+          waited_ms / 1000
+        );
+      }
     }
 
     let mut cleanup = || {

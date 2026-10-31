@@ -31,6 +31,13 @@ panic = "abort"
 [profile.dev]
 panic = "abort"
 
+# Release code with symbols, for CPU profilers (samply / WPR on Windows, perf on Linux): its own
+# output dir (target/profiling), so a profiled binary never replaces the shipped release build
+[profile.profiling]
+inherits = "release"
+debug = "line-tables-only"
+strip = false
+
 ### # 2. Override for a specific workspace member
 ### # NOTE: Use the actual package name (from the member's [package] block),
 ### # NOT the folder name!

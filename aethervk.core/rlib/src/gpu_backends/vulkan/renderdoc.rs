@@ -221,6 +221,38 @@ pub unsafe fn start_frame_capture(device: *mut core::ffi::c_void, wnd: *mut core
   }
 }
 
+/// A capture spanning a whole device's life, for runs without a swapchain (a GPU test, a
+/// headless tool): with `AETHERVK_RENDERDOC_CAPTURE` set and the process launched under RenderDoc
+/// (`renderdoccmd capture`, `scripts/windows/Capture-RenderDoc.ps1`), [`DeviceLifeCapture::begin`]
+/// starts a capture on any device and [`DeviceLifeCapture::end`] (or the drop) writes the `.rdc`:
+/// every command buffer submitted in between, compute dispatches included. A no-op otherwise.
+#[derive(Debug, Default)]
+pub struct DeviceLifeCapture(bool);
+
+impl DeviceLifeCapture {
+  pub fn begin() -> Self {
+    if aethervk_oshal_rlib::os::env::var("AETHERVK_RENDERDOC_CAPTURE").is_none() || !is_available() {
+      return Self(false);
+    }
+    // null device + window: RenderDoc's "any device" wildcard (one device per test process)
+    unsafe { start_frame_capture(core::ptr::null_mut(), core::ptr::null_mut()) };
+    Self(true)
+  }
+
+  /// Ends the capture (idempotent); call before the device is destroyed.
+  pub fn end(&mut self) {
+    if core::mem::take(&mut self.0) {
+      unsafe { end_frame_capture(core::ptr::null_mut(), core::ptr::null_mut()) };
+    }
+  }
+}
+
+impl Drop for DeviceLifeCapture {
+  fn drop(&mut self) {
+    self.end();
+  }
+}
+
 /// Ends the scoped capture started by [`start_frame_capture`].
 ///
 /// Call after `vkQueuePresentKHR` for the **same** `device + window` pair.
