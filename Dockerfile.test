@@ -80,6 +80,8 @@ RUN curl -LsSf https://get.nexte.st/0.9.137/linux | tar zxf - -C /usr/local/carg
 # System Vulkan validation layers (installed via apt-get above).
 ENV VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json
 ENV RUST_BACKTRACE=1
+# the committed SPIR-V blobs (pinned SDK; this image has no glslc): see aethervk.core/rlib/build.rs
+ENV AETHERVK_PREBUILT_SHADERS=1
 ENV CARGO_TERM_COLOR=always
 # Redirect build artifacts to /build-target so the Linux ELF binaries never
 # mix with Mac's Mach-O/aarch64 artifacts in the mounted /workspace/target/.

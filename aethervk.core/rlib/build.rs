@@ -83,6 +83,18 @@ fn main() {
     }
   }
 
+  // AETHERVK_PREBUILT_SHADERS=1 (set by CI): use the committed blobs as they are. A fresh checkout
+  // gives arbitrary mtimes, so the check above would rebuild every shader with the runner's tools;
+  // blobs from another glslc differ byte for byte from the pinned ones the parity tests were
+  // validated against, and the Linux glslang of SDK 1.4.363 never finishes parsing
+  // dust_draw_volume.comp with DUST_SUBGROUP + DUST_PROFILE (it grows past 7.5 GB, the runner is
+  // killed with exit 143; the Windows build of the same SDK compiles it in 0.3 s, 2026-10-31).
+  println!("cargo:rerun-if-env-changed=AETHERVK_PREBUILT_SHADERS");
+  if needs_recompile && env::var_os("AETHERVK_PREBUILT_SHADERS").is_some_and(|v| v == "1") {
+    println!("cargo:warning=AETHERVK_PREBUILT_SHADERS=1: keeping the committed SPIR-V blobs (some are older than their sources)");
+    needs_recompile = false;
+  }
+
   if needs_recompile {
     // compile_shaders.sh is the maintained script (blob variants, spv1.4, spirv-opt): on Windows
     // it runs under Git Bash; compile_shaders.ps1 is a stale fallback whose inline `-Os` crashes
