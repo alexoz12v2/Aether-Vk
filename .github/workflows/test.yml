@@ -12,6 +12,11 @@ on:
         type: boolean
         default: true
 
+# use the committed SPIR-V blobs (built with the pinned SDK) instead of rebuilding them with the
+# runner's tools: see aethervk.core/rlib/build.rs
+env:
+  AETHERVK_PREBUILT_SHADERS: "1"
+
 jobs:
   compile:
     name: Compile ${{ matrix.target }}
