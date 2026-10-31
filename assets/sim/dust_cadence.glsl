@@ -85,6 +85,13 @@ const uint DUST_CAD_ANCH_TIER_WORDS = 2304u;
 const uint DUST_CAD_ANCH_ENTRY0 = 4u;
 
 // ── the per-view state (words; dust_cadence::CADS_*) ──
+// Its own reference type: GPU-AV (unsafe mode, the default) puts one range check per basic block
+// and per buffer_reference type, so state words (1024+) accessed as DustUintBuffer in a block that
+// also reads the state's address from the params (DUST_CADP_STATE) came out as one ~4 KiB access
+// into the 1 KiB params buffer (a false positive)
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer DustCadStateBuffer {
+    uint v[];
+};
 // per pair (k * 2 + p): +0 exists shown, +1 exists build, +2 abort flags (bit 0 build, 1 pending),
 // +3 / +4 the excess (f32) that aborted the build / pending list, +5 / +6 the build cycle's D3
 // rejected / drawn, +7 / +8 the last finished cycle's, +9 / +10 the abort reason of the build /

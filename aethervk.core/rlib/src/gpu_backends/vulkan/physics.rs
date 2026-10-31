@@ -503,6 +503,9 @@ impl PhysicsPipelines {
       not(target_vendor = "apple")
     )))]
     let use_debug = false;
+    // `AETHERVK_SHADER_DEBUG_INFO=1`: the `.d.spv` twins (built with `-g`: GPU-AV and RenderDoc
+    // then name the GLSL file and line) in any build, tests included, without the printf layer
+    let use_debug = use_debug || aethervk_oshal_rlib::os::env::var("AETHERVK_SHADER_DEBUG_INFO").is_some();
 
     // Helper to unwrap (Pipeline, pc_size) — stores pc_size, returns pipeline
     let mut pc_sizes = hashbrown::HashMap::<u64, u32>::new();

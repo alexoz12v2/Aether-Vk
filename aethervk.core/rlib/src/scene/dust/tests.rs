@@ -5041,7 +5041,7 @@ fn gpu_layout_sizes() {
   assert_eq!(core::mem::size_of::<DustSplatPushConstants>(), 128);
   assert_eq!(
     core::mem::size_of::<crate::gpu::CompositePushConstants>(),
-    96
+    128
   );
   assert_eq!(core::mem::offset_of!(DustSplatPushConstants, mvp), 48);
   assert_eq!(
