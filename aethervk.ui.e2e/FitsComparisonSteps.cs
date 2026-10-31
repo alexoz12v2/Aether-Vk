@@ -253,7 +253,21 @@ public static partial class FitsComparisonSteps
     var vp = s.Find("ViewportHost");
     // the HUD is in the overlay window, a separate top-level window: search the desktop
     var hud = s.Desktop.FindElementsByAccessibilityId("EarthObserverStatus").FirstOrDefault();
-    return CometScreenPx(hud?.Text, vp.Location, vp.Size);
+    return CometScreenPx(hud?.Text, DesktopLocation(s, vp), vp.Size);
+  }
+
+  /// <summary>
+  /// An element's top-left corner in desktop px (the primary monitor at the origin, a monitor on
+  /// its left at negative x), the frame of the billboards' geometry. WinAppDriver measures from
+  /// the leftmost monitor's edge there (the window maximised on the left monitor read at x 534,
+  /// the billboard over it at −821); the shift is the window's, WinAppDriver's corner against
+  /// GetWindowRect's (0 on the primary monitor).
+  /// </summary>
+  public static System.Drawing.Point DesktopLocation(AppSession s, AppiumWebElement e)
+  {
+    var real = Win32.WindowCorner(s.MainWindow);
+    var reported = s.App.Manage().Window.Position;
+    return new System.Drawing.Point(e.Location.X + real.X - reported.X, e.Location.Y + real.Y - reported.Y);
   }
 
   /// <summary><see cref="CometScreenPx(AppSession)"/> from a HUD text already read and the
@@ -297,9 +311,18 @@ public static partial class FitsComparisonSteps
   private static int Rows(AppSession s) => s.App.FindElementsByAccessibilityId("BillboardGeometry").Count;
 
   /// <summary>The <paramref name="row"/>-th element with <paramref name="automationId"/>.</summary>
-  private static AppiumWebElement At(AppSession s, string automationId, int row) =>
-    s.ScrollIntoView(Ui.WaitFor(() => s.App.FindElementsByAccessibilityId(automationId).ElementAtOrDefault(row),
+  /// <remarks>The rows exist only in the Settings tab's Billboards section: without the row, the
+  /// tab is selected and the section opened first (a save opens on the Model tab).</remarks>
+  private static AppiumWebElement At(AppSession s, string automationId, int row)
+  {
+    if (s.App.FindElementsByAccessibilityId(automationId).ElementAtOrDefault(row) is null)
+    {
+      s.SelectTab("SettingsTab");
+      s.Expand("BillboardsSection", "CreateBillboardButton");
+    }
+    return s.ScrollIntoView(Ui.WaitFor(() => s.App.FindElementsByAccessibilityId(automationId).ElementAtOrDefault(row),
       what: $"'{automationId}' of billboard row {row}"));
+  }
 
   private static void ClickAt(AppSession s, string automationId, int row)
   {

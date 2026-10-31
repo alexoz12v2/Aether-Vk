@@ -99,6 +99,17 @@ When testing under Docker with Lavapipe (software rasterization), you must often
 xvfb-run cargo nextest run test_visual_physics_render_sync
 ```
 
+### Windows: hangs, crashes, profiling (cdb)
+The Windows counterpart of the gdb recipes below lives in `scripts/windows/` (PowerShell 7, cdb from WinDbg); see [docs/windows_debugging.md](docs/windows_debugging.md). The most used commands:
+```powershell
+scripts\windows\Setup-DebugTools.ps1                                       # once: cdb copy, symsrv.ini, status
+scripts\windows\Watch-TestHang.ps1 -- cargo nextest run -p aethervk-core-rlib  # stacks (+ minidump) of a stalled test before nextest kills it
+scripts\windows\Get-HungStacks.ps1 -Id <pid> -Dump Full                    # gdb "thread apply all bt" + gcore
+cargo nextest run -E 'test(=x::y)' --debugger 'pwsh -NoProfile -File scripts/windows/Invoke-UnderDebugger.ps1'  # crash -> stacks + dump
+scripts\windows\Get-StackSamples.ps1 -Id <pid>                             # perf-top-like sampling
+```
+With the pinned nightly cargo, test exes are under `target\debug\build\<pkg>\<hash>\out\`, not `target\debug\deps`.
+
 ## Known VVL Quirks (Linux/Lavapipe)
 
 If you encounter Vulkan Validation Layer errors like `[ UNASSIGNED-CoreValidation-DrawState-InvalidImageLayout ] VK_IMAGE_LAYOUT_UNDEFINED` during test teardown:
