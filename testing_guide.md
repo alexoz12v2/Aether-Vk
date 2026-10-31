@@ -107,8 +107,14 @@ scripts\windows\Watch-TestHang.ps1 -- cargo nextest run -p aethervk-core-rlib  #
 scripts\windows\Get-HungStacks.ps1 -Id <pid> -Dump Full                    # gdb "thread apply all bt" + gcore
 cargo nextest run -E 'test(=x::y)' --debugger 'pwsh -NoProfile -File scripts/windows/Invoke-UnderDebugger.ps1'  # crash -> stacks + dump
 scripts\windows\Get-StackSamples.ps1 -Id <pid>                             # perf-top-like sampling
+scripts\windows\Record-Cpu.ps1 -- <exe> <args>                             # samply profile (elevated); build with --profile profiling
+scripts\windows\Capture-RenderDoc.ps1 -Test <path::to::test> -ShaderDebugInfo  # one test's dispatches in a RenderDoc capture
+. scripts\windows\Use-VulkanSdk.ps1 -Version latest                       # this shell's validation layer from another SDK
+cargo nextest run --profile triage --retries 0 -p aethervk-core-rlib       # 30 s per test instead of 15 min, no fail-fast
 ```
 With the pinned nightly cargo, test exes are under `target\debug\build\<pkg>\<hash>\out\`, not `target\debug\deps`.
+
+nextest disables the machine's implicit Vulkan layers (OBS, Steam, Nsight, RenderDoc) for every test; clear `VK_LOADER_LAYERS_DISABLE` to capture. `AETHERVK_SHADER_DEBUG_INFO=1` loads the `-g` shader twins, so GPU-AV and RenderDoc show GLSL lines.
 
 ## Known VVL Quirks (Linux/Lavapipe)
 
