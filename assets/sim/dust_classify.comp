@@ -153,7 +153,7 @@ void dust_cls_classify(uint gid, uint lane, uint t) {
                 if (asInc) nib = dust_own_byte(k, (nib & ~DUST_OWN_CLASS_MASK) | DUST_OWN_PENDING);
                 else nb = dust_own_byte(k, (nb & ~DUST_OWN_CLASS_MASK) | DUST_OWN_PENDING);
                 float g = uintBitsToFloat(pc.sys.v[rw + 11u]);
-                if (dust_cad_finite(g)) atomicMax(DustUintBuffer(st).v[dust_cads_tp(t, k, pp) + 6u], floatBitsToUint(g));
+                if (dust_cad_finite(g)) atomicMax(DustCadStateBuffer(st).v[dust_cads_tp(t, k, pp) + 6u], floatBitsToUint(g));
             }
         }
         if ((cnt & 0xFFu) != 0u) {
@@ -173,13 +173,13 @@ void dust_cls_classify(uint gid, uint lane, uint t) {
     }
     barrier();
     if (lane == 0u) {
-        if (s_hist0 != 0u) atomicAdd(DustUintBuffer(st).v[DUST_CADS_HIST], s_hist0);
-        if (s_hist1 != 0u) atomicAdd(DustUintBuffer(st).v[DUST_CADS_HIST + 1u], s_hist1);
-        if (s_hist2 != 0u) atomicAdd(DustUintBuffer(st).v[DUST_CADS_HIST + 2u], s_hist2);
-        if (s_hist3 != 0u) atomicAdd(DustUintBuffer(st).v[DUST_CADS_HIST + 3u], s_hist3);
-        if (s_shell != 0u) atomicAdd(DustUintBuffer(st).v[DUST_CADS_SHELL_FORCED], s_shell);
-        if (s_d3 != 0u) atomicAdd(DustUintBuffer(st).v[dust_cads_tp(t, 0u, 0u) + 10u], s_d3);
-        if (s_unshifted != 0u) atomicAdd(DustUintBuffer(st).v[dust_cads_tp(t, 0u, 0u) + 11u], s_unshifted);
+        if (s_hist0 != 0u) atomicAdd(DustCadStateBuffer(st).v[DUST_CADS_HIST], s_hist0);
+        if (s_hist1 != 0u) atomicAdd(DustCadStateBuffer(st).v[DUST_CADS_HIST + 1u], s_hist1);
+        if (s_hist2 != 0u) atomicAdd(DustCadStateBuffer(st).v[DUST_CADS_HIST + 2u], s_hist2);
+        if (s_hist3 != 0u) atomicAdd(DustCadStateBuffer(st).v[DUST_CADS_HIST + 3u], s_hist3);
+        if (s_shell != 0u) atomicAdd(DustCadStateBuffer(st).v[DUST_CADS_SHELL_FORCED], s_shell);
+        if (s_d3 != 0u) atomicAdd(DustCadStateBuffer(st).v[dust_cads_tp(t, 0u, 0u) + 10u], s_d3);
+        if (s_unshifted != 0u) atomicAdd(DustCadStateBuffer(st).v[dust_cads_tp(t, 0u, 0u) + 11u], s_unshifted);
     }
 }
 
@@ -297,7 +297,7 @@ void dust_cls_transition(uint gid) {
     if ((DustUintBuffer(prm).v[DUST_CADP_FLAGS] & DUST_CADF_ABORTS) != 0u) {
         for (uint k = 0u; k < nc; ++k) {
             for (uint pp = 0u; pp < np; ++pp) {
-                uint af = DustUintBuffer(st).v[dust_cads_pair(k, pp) + 2u];
+                uint af = DustCadStateBuffer(st).v[dust_cads_pair(k, pp) + 2u];
                 if (af == 0u || (np == 2u && (s & 1u) != pp)) continue;
                 if ((nb & DUST_OWN_CLASS_MASK) == k + 1u) {
                     if ((af & 1u) != 0u && (nb & DUST_OWN_BUILD) != 0u)
@@ -334,8 +334,8 @@ void dust_cls_transition(uint gid) {
         // the handover's collapse (rule c): a valid incoming build entry takes the owner byte
         // when the faster class's swap (earlier in this loop) emptied it, else it is dropped
         if ((nib & DUST_OWN_CLASS_MASK) == k + 1u && (nib & DUST_OWN_BUILD) != 0u) {
-            if (nb == 0u) { nb = nib; atomicAdd(DustUintBuffer(st).v[DUST_CADS_HANDOVER], 1u); }
-            else atomicAdd(DustUintBuffer(st).v[DUST_CADS_HANDOVER + 1u], 1u);
+            if (nb == 0u) { nb = nib; atomicAdd(DustCadStateBuffer(st).v[DUST_CADS_HANDOVER], 1u); }
+            else atomicAdd(DustCadStateBuffer(st).v[DUST_CADS_HANDOVER + 1u], 1u);
             nib = 0u;
         }
         if ((nib & DUST_OWN_CLASS_MASK) == k + 1u) {
@@ -380,13 +380,13 @@ void dust_cls_mark_fresh(uint gid, uint lane) {
     }
     barrier();
     if (lane == 0u) {
-        if (s_fresh != 0u) atomicAdd(DustUintBuffer(st).v[DUST_CADS_FRESH], s_fresh);
-        if (s_shown0 != 0u) atomicAdd(DustUintBuffer(st).v[DUST_CADS_SHOWN_PAIR0], s_shown0);
-        if (s_shown1 != 0u) atomicAdd(DustUintBuffer(st).v[DUST_CADS_SHOWN_PAIR0 + 1u], s_shown1);
-        if (s_shown2 != 0u) atomicAdd(DustUintBuffer(st).v[DUST_CADS_SHOWN_PAIR0 + 2u], s_shown2);
-        if (s_shown3 != 0u) atomicAdd(DustUintBuffer(st).v[DUST_CADS_SHOWN_PAIR0 + 3u], s_shown3);
-        if (s_shown4 != 0u) atomicAdd(DustUintBuffer(st).v[DUST_CADS_SHOWN_PAIR0 + 4u], s_shown4);
-        if (s_shown5 != 0u) atomicAdd(DustUintBuffer(st).v[DUST_CADS_SHOWN_PAIR0 + 5u], s_shown5);
+        if (s_fresh != 0u) atomicAdd(DustCadStateBuffer(st).v[DUST_CADS_FRESH], s_fresh);
+        if (s_shown0 != 0u) atomicAdd(DustCadStateBuffer(st).v[DUST_CADS_SHOWN_PAIR0], s_shown0);
+        if (s_shown1 != 0u) atomicAdd(DustCadStateBuffer(st).v[DUST_CADS_SHOWN_PAIR0 + 1u], s_shown1);
+        if (s_shown2 != 0u) atomicAdd(DustCadStateBuffer(st).v[DUST_CADS_SHOWN_PAIR0 + 2u], s_shown2);
+        if (s_shown3 != 0u) atomicAdd(DustCadStateBuffer(st).v[DUST_CADS_SHOWN_PAIR0 + 3u], s_shown3);
+        if (s_shown4 != 0u) atomicAdd(DustCadStateBuffer(st).v[DUST_CADS_SHOWN_PAIR0 + 4u], s_shown4);
+        if (s_shown5 != 0u) atomicAdd(DustCadStateBuffer(st).v[DUST_CADS_SHOWN_PAIR0 + 5u], s_shown5);
     }
 }
 // MARK_CHUNK, CHUNK_FOOT, CHUNK: the chunk's entry j of pair (k, p): its slot when it is a valid
@@ -395,7 +395,7 @@ uint dust_cls_chunk_entry(uint j, uint t, uint k, uint pp, bool needImage) {
     uint su = DustUintBuffer(prm).v[DUST_CADP_STEPU + (t * 3u + k) * 2u + pp];
     if (j >= su) return 0xFFFFFFFEu;
     uint tp = dust_cads_tp(t, k, pp);
-    uint len = DustUintBuffer(st).v[tp + 1u], cursor = DustUintBuffer(st).v[tp + 3u], step = DustUintBuffer(st).v[tp + 4u];
+    uint len = DustCadStateBuffer(st).v[tp + 1u], cursor = DustCadStateBuffer(st).v[tp + 3u], step = DustCadStateBuffer(st).v[tp + 4u];
     uint idx = cursor + j;
     uint s = 0xFFFFFFFFu;
     if (j < step && idx < len) s = pc.sys.v[dust_cad_list(R, nc, np, rb, cap, k, pp, 1u) + idx];
@@ -407,7 +407,7 @@ uint dust_cls_chunk_entry(uint j, uint t, uint k, uint pp, bool needImage) {
     bool valid = (((b & DUST_OWN_CLASS_MASK) == k + 1u && (b & DUST_OWN_BUILD) != 0u) || onInc)
               && ((s - pc.firstSlot) & pc.ringMask) < pc.liveCount;
     // (a build without an image draws nothing: cadence::finish F3 skips it)
-    if (needImage && DustUintBuffer(st).v[dust_cads_pair(k, pp) + 1u] == 0u) valid = false;
+    if (needImage && DustCadStateBuffer(st).v[dust_cads_pair(k, pp) + 1u] == 0u) valid = false;
     return valid ? s : 0xFFFFFFFFu;
 }
 void dust_cls_mark_chunk(uint gid, uint t, uint pairCode) {
@@ -445,13 +445,13 @@ void dust_cls_chunk(uint gid, uint t, uint pairCode) {
     uint tp = dust_cads_tp(t, k, pp);
     // the footprint rule's result (CHUNK_FOOT)
     if (DustUintBuffer(prm).v[DUST_CADP_FOOT] != 0u && pc.sys.v[drawAt] == 0u) {
-        atomicAdd(DustUintBuffer(st).v[tp + 9u], 1u);
-        atomicAdd(DustUintBuffer(st).v[dust_cads_pair(k, pp) + 5u], 1u);
+        atomicAdd(DustCadStateBuffer(st).v[tp + 9u], 1u);
+        atomicAdd(DustCadStateBuffer(st).v[dust_cads_pair(k, pp) + 5u], 1u);
         pc.sys.v[drawAt] = 0xFFFFFFFFu;
         return;
     }
-    atomicAdd(DustUintBuffer(st).v[tp + 8u], 1u);
-    atomicAdd(DustUintBuffer(st).v[dust_cads_pair(k, pp) + 6u], 1u);
+    atomicAdd(DustCadStateBuffer(st).v[tp + 8u], 1u);
+    atomicAdd(DustCadStateBuffer(st).v[dust_cads_pair(k, pp) + 6u], 1u);
     uint inc0 = dust_cad_inc0(R, nc, np);
     uint b = dust_own_get(uvec2(pc.sys), rb + s);
     uint ib = dust_inc_get(uvec2(pc.sys), inc0, rb + s);

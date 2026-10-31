@@ -49,7 +49,11 @@ pub fn increment_lock_count() {
         }
       }
     }
-    panic!("Exceeded MAX_TRACKED_THREADS for lock tracking");
+    // The table is full: slots are never given back (a slot's thread may still be running, and
+    // freeing it under a concurrent increment would hand its count to another thread), so a
+    // process that spawns more than MAX_TRACKED_THREADS lock-taking threads over its life (`cargo
+    // test` runs every test in one process) leaves the newer threads untracked; the assertion is a
+    // debug aid, not a reason to abort the process
   }
 }
 

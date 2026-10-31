@@ -3437,10 +3437,21 @@ impl ArchetypeArenaCreate for ForwardMesh2RenderResourceArchetypeArena {
       return Err(e.into());
     }
 
-    if let Err(e) = unsafe { device.wait_for_fences(core::slice::from_ref(&fence), true, u64::MAX) }
-    {
-      aethervk_oshal_rlib::log!("ERROR: wait_for_fences failed: {:?}", e);
-      return Err(e.into());
+    // waits as long as it takes, in 5 s slices that log: a submit the GPU never finishes shows
+    // in the log instead of as a silent hang
+    let mut waited_s = 0u64;
+    loop {
+      match unsafe { device.wait_for_fences(core::slice::from_ref(&fence), true, 5_000_000_000) } {
+        Ok(()) => break,
+        Err(vk::Result::TIMEOUT) => {
+          waited_s += 5;
+          aethervk_oshal_rlib::log!("WARNING: fence of the init submit still unsignaled after {} s", waited_s);
+        }
+        Err(e) => {
+          aethervk_oshal_rlib::log!("ERROR: wait_for_fences failed: {:?}", e);
+          return Err(e.into());
+        }
+      }
     }
 
     unsafe {

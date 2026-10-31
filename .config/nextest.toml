@@ -1,7 +1,13 @@
 [profile.default]
 # WORKAROUND: Prevent Vulkan GPU-AV from leaking File Descriptors 
 # during rapid test setups/teardowns by disabling dynamic library unloading.
-env = { VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING = "1" }
+#
+# `VK_LOADER_LAYERS_DISABLE=~implicit~`: no third-party implicit layer (OBS capture, Steam overlay,
+# Nsight, RenderDoc) is injected into a test; the Khronos layers the engine enables itself still
+# load, and so do the GPU drivers' own layers (`VK_LOADER_LAYERS_ALLOW`: NVIDIA Optimus/present,
+# AMD switchable graphics, which pick the GPU on hybrid laptops). To capture a test with RenderDoc
+# or Nsight, override it, e.g. VK_LOADER_LAYERS_DISABLE="".
+env = { VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING = "1", VK_LOADER_LAYERS_DISABLE = "~implicit~", VK_LOADER_LAYERS_ALLOW = "VK_LAYER_NV_optimus,VK_LAYER_NV_present,VK_LAYER_AMD_switchable_graphics*" }
 test-threads = 8
 # A test is reported SLOW after 1 min and killed after 5 (a hung Vulkan test or a runaway
 # host-rasterizer test); the Vulkan group's retries still apply after a termination.
@@ -38,3 +44,11 @@ fail-fast = false
 # Renders a full dust ring at 1280 x 800 for 2 x 240 frames: ~10 s per frame on lavapipe, so it
 # cannot finish inside the 5 min limit.
 default-filter = 'not (package(aethervk-core-rlib) & test(=gpu_backends::vulkan::device::dust::cadence::tests::gpu_dust_budget_loop_keeps_the_ladder_order))'
+
+# Local triage on a GPU box where some tests hang: a 30 s kill instead of 5 min, no retries
+# (`cargo nextest run --profile triage`); a test killed here may just be slow, so rerun it alone
+# under the default profile before calling it a hang.
+[profile.triage]
+slow-timeout = { period = "30s", terminate-after = 1 }
+retries = 0
+fail-fast = false

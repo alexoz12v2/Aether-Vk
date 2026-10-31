@@ -12,7 +12,10 @@ The scripts are in `scripts/windows/` and use `cdb.exe` from WinDbg. They need P
 | `docker-gdb-run.sh` (`gdb -batch`, `bt full` on SIGSEGV) | `Invoke-UnderDebugger.ps1 <exe> [args]` |
 | `cargo nextest run --debugger 'rust-gdb --args'` | `cargo nextest run --debugger 'pwsh -NoProfile -File scripts/windows/Invoke-UnderDebugger.ps1'` |
 | core dumps (`ulimit -c`) | WER LocalDumps (`Setup-DebugTools.ps1 -EnableCrashDumps`, elevated) |
-| `perf top -p <pid>` | `Get-StackSamples.ps1 -Id <pid>` (quick look), or ETW: `wpr` + WPA (full profile) |
+| `perf top -p <pid>` | `Get-StackSamples.ps1 -Id <pid>` (quick look) |
+| `perf record -g` / `samply record` | `Record-Cpu.ps1` (samply over ETW, the same Firefox Profiler UI; elevated), or `Record-Cpu.ps1 -Wpr` for WPA |
+| `RENDERDOC_CAPTURE` / `renderdoccmd` on Linux | `Capture-RenderDoc.ps1 -Test <path::to::test>` |
+| choosing an SDK with `source setup-env.sh` | `. Use-VulkanSdk.ps1 -Version <x.y.z.w>` |
 | `ls /proc/<pid>/task` + `top -H` (one thread at 100 %?) | `Get-StackSamples.ps1`: the CPU-per-thread table |
 | In-process gdb dumps (render-stall watcher, `AETHERVK_GPU_LOST_DUMP`) | Already on Windows: minidumps on an unhandled exception, on a panic and on device loss, in `%LOCALAPPDATA%\Aether-Vk\logs` (`crash_dump.rs`). The render-stall watcher is still Linux-only. |
 
@@ -21,7 +24,11 @@ The scripts are in `scripts/windows/` and use `cdb.exe` from WinDbg. They need P
 ```powershell
 winget install Microsoft.WinDbg              # if WinDbg is not installed yet
 scripts\windows\Setup-DebugTools.ps1         # copies cdb out of the Store package, writes symsrv.ini, prints the status
-scripts\windows\Setup-DebugTools.ps1 -Status # status only
+scripts\windows\Setup-DebugTools.ps1 -Status # status only (tools, SDKs, Vulkan implicit layers)
+scripts\windows\Setup-DebugTools.ps1 -RemoveStaleLayers   # elevated: drop layer registry entries whose manifest is gone
+cargo install --locked samply                # CPU profiler
+winget install Microsoft.Sysinternals.Suite  # procdump, Process Explorer, handle
+dotnet tool restore                          # dotnet-trace / -counters / -dump / -stack
 ```
 
 - **cdb location.** The Store package's `cdb.exe` can't be run from WindowsApps. The script copies the `amd64` folder to `%LOCALAPPDATA%\dbg\amd64`. Set `AVK_CDB` to use a different cdb.
@@ -100,6 +107,34 @@ A `--list` call (nextest's discovery step) runs the exe directly, without cdb, s
 
 `StartupWatchdog.cs` adds a dump when startup goes silent.
 
+## A clean Vulkan environment for tests
+
+Every Vulkan process on this machine gets the registered *implicit* layers injected: OBS game capture, the Steam overlay and fossilize, Nsight Graphics, RenderDoc. `Setup-DebugTools.ps1 -Status` lists them. They change timing and can hide or cause bugs, so `.config/nextest.toml` turns them off for every test:
+
+- `VK_LOADER_LAYERS_DISABLE=~implicit~`, with `VK_LOADER_LAYERS_ALLOW` keeping the NVIDIA Optimus / present and AMD switchable-graphics layers that pick the GPU.
+- The layers the engine enables by name (`VK_LAYER_KHRONOS_validation`) are explicit and still load.
+- To capture a test with RenderDoc or Nsight, clear the disable: `$env:VK_LOADER_LAYERS_DISABLE = ""` (nextest's own env wins over the shell's, so run the test exe directly, as `Capture-RenderDoc.ps1` does).
+
+**Validation-layer versions.** Several SDKs install side by side under `C:\VulkanSDK`. `. scripts\windows\Use-VulkanSdk.ps1` lists them; `-Version latest` or `-Version 1.4.321.0` points this shell's `VULKAN_SDK`, `PATH` and `VK_ADD_LAYER_PATH` at one, so the tests load its validation layer. Use it to check whether a GPU-AV problem is a layer bug fixed upstream.
+
+**Triage runs.** `cargo nextest run --profile triage --retries 0 ...` gives up on a test after 30 s instead of 15 min and runs everything (`fail-fast = false`). `--retries 0` is needed on the command line because the `vulkan-tests` override's retries beat the profile's.
+
+## GPU and shader debugging
+
+**Shader source lines.** The `.d.spv` shader twins are compiled with `-g` (`compile_shaders.sh`). With `AETHERVK_SHADER_DEBUG_INFO=1` the engine loads them for every compute pipeline, in any build, tests included. GPU-AV out-of-bounds reports then name the GLSL file and line instead of "Unable to source", and RenderDoc shows GLSL in its shader viewer and debugger. Without the variable, tests always use the plain `.spv`.
+
+**RenderDoc capture of one test:**
+
+```powershell
+scripts\windows\Capture-RenderDoc.ps1 -Test gpu_backends::vulkan::device::dust::cadence::tests::gpu_dust_cadence_state_matches_reference -ShaderDebugInfo
+```
+
+- It runs the newest `aethervk_core_rlib-*.exe` test binary under `renderdoccmd capture` with `AETHERVK_RENDERDOC_CAPTURE=1`.
+- In debug builds that variable makes each `Device` capture its whole life (`renderdoc::DeviceLifeCapture`): tests have no swapchain and no frames, so this is how their dispatches end up in a capture.
+- The `.rdc` goes to `target\diagnostics\renderdoc\` and opens in qrenderdoc (`-NoOpen` to skip). `-Exe <program> -- <args>` captures something else.
+
+**Nsight Graphics** (2025.4, installed) supports frame debugging on Pascal; GPU Trace needs Turing or newer. Launch the app or a test exe from its *Start Activity* dialog, with the implicit-layer disable cleared as above.
+
 ## Opening a dump
 
 ```powershell
@@ -118,16 +153,21 @@ scripts\windows\Get-StackSamples.ps1 -Name dust_observer -Samples 30
 
 The report has CPU per thread over the window (from the OS thread times), the hottest leaf functions (self), the functions most often on the stack (inclusive), and the hottest leaf per thread. Threads sitting in a kernel wait are left out unless you pass `-IncludeWaiting`. Each sample is a short attach, so expect a sample every 0.5–3 s. It's good for "where is it spinning", not for fine profiles.
 
-**Real profile (ETW).** The Windows Performance Toolkit is installed (`wpr`, `xperf`, `wpa`). Run this in an elevated shell:
+**Real profile: samply.** samply samples over ETW and opens the Firefox Profiler, the same workflow as on Linux. ETW needs an elevated shell.
 
 ```powershell
-wpr -start CPU -filemode
-# ... reproduce ...
-wpr -stop target\diagnostics\cpu.etl
-wpa target\diagnostics\cpu.etl     # Trace > Configure Symbol Paths: add the exe folder, then Load Symbols
+cargo build --profile profiling --example dust_observer   # release + line tables, not stripped
+scripts\windows\Record-Cpu.ps1 -- target\profiling\examples\dust_observer.exe --frames 600
+scripts\windows\Record-Cpu.ps1 -Id <pid> -Seconds 15       # attach to the running app
 ```
 
-This hasn't been run by the tooling author: it needs elevation. To get symbols for a stripped release binary, build a profiling copy as the Linux recipe in `.agents/skills/AetherVk/SKILL.md` describes (`CARGO_PROFILE_RELEASE_DEBUG=line-tables-only`, own target dir).
+Profiles go to `target\diagnostics\profiles\cpu-<stamp>.json.gz` (reopen with `samply load <file>`).
+
+**Who waits on whom: WPR + WPA.** `Record-Cpu.ps1 -Wpr -Seconds 20` (or `-Wpr -- <command>`) records CPU and context-switch ETW events to an `.etl`. Open it with `wpa`, then Trace > Configure Symbol Paths: add the exe folder, then Load Symbols.
+
+The `[profile.profiling]` cargo profile is the one to profile on both OSes: a debug build symbolises but doesn't show release timing.
+
+**.NET side.** `dotnet tool restore` installs `dotnet-trace` (`dotnet-trace collect -p <pid>`, then open the `.nettrace` in PerfView or VS), `dotnet-counters monitor -p <pid>`, `dotnet-dump collect -p <pid>` and `dotnet-stack report -p <pid>` (managed stacks of every thread, no debugger).
 
 ## Caveats
 

@@ -141,6 +141,10 @@ compile_one() {
     # vulkan1.1 and refuses the 1.4 blob; spirv-opt with the explicit 1.4 target env does it.
     local opt=0
     case " $extra_flags " in *" -O "*) opt=1; extra_flags="${extra_flags//-O/}" ;; esac
+    # the -DDEBUG_SHADERS twins carry source-level debug info (`-g`): GPU-AV's out-of-bounds and
+    # printf reports and RenderDoc's shader debugger then name the GLSL file and line
+    # (`AETHERVK_SHADER_DEBUG_INFO=1` loads them; the shipped blobs stay without it)
+    case " $extra_flags " in *" -DDEBUG_SHADERS "*) extra_flags="$extra_flags -g" ;; esac
     echo "  glslc $extra_flags$([ "$opt" -eq 1 ] && echo ' + spirv-opt -O') -> $(basename "$out")"
     # shellcheck disable=SC2086
     "$GLSLC" $COMMON_FLAGS -fshader-stage="$stage" $extra_flags -o "$out" "$file"

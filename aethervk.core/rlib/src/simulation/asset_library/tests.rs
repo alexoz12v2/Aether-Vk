@@ -960,7 +960,8 @@ fn khronos_damaged_helmet_glb_imports_all_supported_channels() {
   ] {
     let t = image_of(channel);
     assert!(
-      t.key.ends_with(&format!("DamagedHelmet.glb#image{image}")),
+      // keys are case-folded on case-insensitive file systems (Windows)
+      t.key.to_lowercase().ends_with(&format!("damagedhelmet.glb#image{image}")),
       "{channel:?}: {}",
       t.key
     );

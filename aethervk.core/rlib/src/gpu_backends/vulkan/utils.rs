@@ -468,8 +468,7 @@ impl EntryWrapper {
           Win32::{
             Foundation::HMODULE,
             System::LibraryLoader::{
-              GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, GetModuleHandleExW, GetProcAddress,
-              LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
+              GetModuleHandleExW, GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
             },
           },
           core::{PCSTR, PCWSTR, s, w},
@@ -480,14 +479,11 @@ impl EntryWrapper {
 
         let mut h_vulkan = HMODULE::default();
 
-        // 1. Try to get the handle without incrementing the reference count if it's already loaded
-        let handle_exists = unsafe {
-          GetModuleHandleExW(
-            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-            VULKAN_DLL_NAME,
-            &mut h_vulkan,
-          )
-        };
+        // 1. If it's already loaded, take a reference of our own (flags 0 increments the count):
+        //    `Drop` frees one, so a wrapper never unloads the loader under another wrapper still
+        //    using it (with the count unchanged, the second of two concurrent wrappers to drop
+        //    unloaded vulkan-1.dll mid-use: an access violation in parallel GPU tests)
+        let handle_exists = unsafe { GetModuleHandleExW(0, VULKAN_DLL_NAME, &mut h_vulkan) };
 
         // 2. If it's not already in the process, load it explicitly from System32
         if handle_exists.is_err() {

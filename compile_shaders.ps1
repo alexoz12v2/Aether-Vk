@@ -81,6 +81,10 @@ function Compile-One {
     if ($ExtraFlags -and $ExtraFlags.Length -gt 0) {
         $ArgsList += $ExtraFlags
     }
+    # debug twins carry source-level debug info, as in compile_shaders.sh
+    if ($ExtraFlags -contains "-DDEBUG_SHADERS") {
+        $ArgsList += "-g"
+    }
     $ArgsList += "-o", $Out, $File
 
     & $glslc $ArgsList

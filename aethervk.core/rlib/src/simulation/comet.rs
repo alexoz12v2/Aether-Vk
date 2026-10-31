@@ -705,7 +705,15 @@ fn finalize_comet(
   }
   signed_volume /= 6.0;
 
-  if signed_volume < 0.0 {
+  if signed_volume < 0.0 && !normals_agree_with_winding(&vertices, &indices) {
+    // Winding inwards but vertex normals outwards (e.g. `assets/Comet2.glb`): the normals are
+    // authoritative and only the winding is wrong, which `asset_library::orient_outward` (rule 1)
+    // repairs. Negating the normals here too would leave both inwards after that repair.
+    oshal::log!(
+      "  WARNING: Signed volume is {} (< 0) but the vertex normals point outwards: winding left to the importer.",
+      signed_volume
+    );
+  } else if signed_volume < 0.0 {
     // An inward-wound import lights its night side and shows its Sun side black (the shader's
     // Lambert term sees inward normals, and the pipeline culls back faces). Repair it here:
     // reverse every triangle and the vertex normals ([`repair_inward_winding`]).
@@ -1044,6 +1052,35 @@ pub(crate) fn signed_volume(vertices: &[Vertex], indices: &[u32]) -> f64 {
     v6 += v0[0] * cp[0] + v0[1] * cp[1] + v0[2] * cp[2];
   }
   v6 / 6.0
+}
+
+/// Whether most non-degenerate triangles have a CCW face normal along the sum of their vertex
+/// normals (the same vote as `asset_library::orient_outward`'s rule 1).
+fn normals_agree_with_winding(vertices: &[Vertex], indices: &[u32]) -> bool {
+  let (mut agree, mut disagree) = (0usize, 0usize);
+  for chunk in indices.chunks_exact(3) {
+    let (Some(a), Some(b), Some(c)) = (
+      vertices.get(chunk[0] as usize),
+      vertices.get(chunk[1] as usize),
+      vertices.get(chunk[2] as usize),
+    ) else {
+      continue;
+    };
+    let e1 = [b.position[0] - a.position[0], b.position[1] - a.position[1], b.position[2] - a.position[2]];
+    let e2 = [c.position[0] - a.position[0], c.position[1] - a.position[1], c.position[2] - a.position[2]];
+    let face = [
+      e1[1] * e2[2] - e1[2] * e2[1],
+      e1[2] * e2[0] - e1[0] * e2[2],
+      e1[0] * e2[1] - e1[1] * e2[0],
+    ];
+    let d: f32 = (0..3).map(|k| face[k] * (a.normal[k] + b.normal[k] + c.normal[k])).sum();
+    if d > 0.0 {
+      agree += 1;
+    } else if d < 0.0 {
+      disagree += 1;
+    }
+  }
+  agree >= disagree
 }
 
 /// Turns an inward-wound mesh outwards: reverses every triangle's winding and negates the vertex
