@@ -275,6 +275,20 @@ internal static partial class Win32
     public int Left, Top, Right, Bottom;
   }
 
+  [DllImport("dwmapi.dll")]
+  private static extern int DwmGetWindowAttribute(IntPtr hWnd, int attribute, out Rect rect, int size);
+
+  private const int DWMWA_EXTENDED_FRAME_BOUNDS = 9;
+
+  /// <summary>A top-level window's visible top-left corner, physical desktop px (the primary
+  /// monitor at the origin, a monitor on its left at negative x). The DWM frame bounds, as
+  /// WinAppDriver's window position: GetWindowRect adds the invisible resize border (8 px
+  /// outside the screen on a maximised window).</summary>
+  public static (int X, int Y) WindowCorner(IntPtr hWnd) =>
+    DwmGetWindowAttribute(hWnd, DWMWA_EXTENDED_FRAME_BOUNDS, out var r, Marshal.SizeOf<Rect>()) == 0
+      ? (r.Left, r.Top)
+      : throw new InvalidOperationException("DwmGetWindowAttribute(DWMWA_EXTENDED_FRAME_BOUNDS) failed");
+
   /// <summary>A monitor's bounds, physical desktop px.</summary>
   public sealed record Monitor(int Left, int Top, int Width, int Height);
 
