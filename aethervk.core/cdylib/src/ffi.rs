@@ -113,6 +113,7 @@ pub unsafe extern "C" fn avkSimulationContext_startup(
   params: *const CStartupParameters,
   out: *mut CStartupReturn,
 ) -> bool {
+  oshal::prof_zone!("ffi: startup");
   aethervk_oshal_rlib::os::debug::spawn_dedicated_console();
 
   if params.is_null() || out.is_null() {
@@ -250,6 +251,7 @@ pub unsafe extern "C" fn avkSimulationContext_initEarth() -> u64 {
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_shutdownSync(ctx: *mut SimulationContext) {
+  oshal::prof_zone!("ffi: shutdownSync");
   oshal::log!(">>> avkSimulationContext_shutdown called!");
   if !ctx.is_null() {
     oshal::log!(">>> ctx is not null, from_raw...");
@@ -311,6 +313,7 @@ pub unsafe extern "C" fn avkSimulationContext_addViewport(
   out_presentation_engine: *mut u64,
   out_camera_entity: *mut u64,
 ) -> bool {
+  oshal::prof_zone!("ffi: addViewport");
   // Null check
   if ctx.is_null() {
     return false;
@@ -448,6 +451,7 @@ pub unsafe extern "C" fn avkSimulationContext_resize(
   width: u32,
   height: u32,
 ) {
+  oshal::prof_zone!("ffi: resize");
   if ctx.is_null() || handle == 0 {
     return;
   }
@@ -1829,6 +1833,7 @@ pub unsafe extern "C" fn avkSimulationContext_resetSimulationSync(
   ctx: *mut SimulationContext,
   scene_id: u64,
 ) -> bool {
+  oshal::prof_zone!("ffi: resetSimulationSync");
   if ctx.is_null() {
     return false;
   }
@@ -1850,6 +1855,7 @@ pub unsafe extern "C" fn avkSimulationContext_seekEpochSync(
   centuries: i16,
   nanoseconds: u64,
 ) -> bool {
+  oshal::prof_zone!("ffi: seekEpochSync");
   if ctx.is_null() {
     return false;
   }
@@ -1867,6 +1873,7 @@ pub unsafe extern "C" fn avkSimulationContext_snapshotSceneSync(
   ctx: *mut SimulationContext,
   scene_id: u64,
 ) -> bool {
+  oshal::prof_zone!("ffi: snapshotSceneSync");
   if ctx.is_null() {
     return false;
   }
@@ -1880,6 +1887,7 @@ pub unsafe extern "C" fn avkSimulationContext_restoreSnapshotSync(
   ctx: *mut SimulationContext,
   scene_id: u64,
 ) -> bool {
+  oshal::prof_zone!("ffi: restoreSnapshotSync");
   if ctx.is_null() {
     return false;
   }
@@ -1895,6 +1903,7 @@ pub unsafe extern "C" fn avkSimulationContext_pauseSimulationSync(
   ctx: *mut SimulationContext,
   scene_id: u64,
 ) -> bool {
+  oshal::prof_zone!("ffi: pauseSimulationSync");
   if ctx.is_null() {
     return false;
   }
@@ -2363,6 +2372,7 @@ pub unsafe extern "C" fn avkSimulationContext_tryInitComet(
   keplerian_elements: *const CKeplerianElementsDTO,
   out_comet_id: *mut u64,
 ) -> bool {
+  oshal::prof_zone!("ffi: tryInitComet");
   if ctx.is_null() || proposed_range.is_null() || keplerian_elements.is_null() {
     return false;
   }
@@ -2592,6 +2602,7 @@ pub unsafe extern "C" fn avkSimulationContext_loadAlmanacFile(
   ctx: *mut SimulationContext,
   path: *const c_char,
 ) -> bool {
+  oshal::prof_zone!("ffi: loadAlmanacFile");
   if ctx.is_null() || path.is_null() {
     return false;
   }
@@ -2953,6 +2964,7 @@ pub unsafe extern "C" fn avkSimulationContext_downloadImage(
   buffer_ptr: *mut u8,
   buffer_size: usize,
 ) -> bool {
+  oshal::prof_zone!("ffi: downloadImage");
   if ctx.is_null() {
     return false;
   }

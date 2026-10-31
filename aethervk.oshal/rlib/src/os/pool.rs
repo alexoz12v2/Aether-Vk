@@ -178,6 +178,7 @@ mod windows_pool {
 
     #[cfg(debug_assertions)]
     crate::os::debug::set_thread_name_dynamic(&alloc::format!("worker_{}", id));
+    crate::prof_thread_name!("worker_{}", id);
 
     let mut tick: u8 = 0;
 
@@ -406,6 +407,7 @@ mod pthread_pool {
 
     #[cfg(debug_assertions)]
     crate::os::debug::set_thread_name_dynamic(&alloc::format!("worker_{}", id));
+    crate::prof_thread_name!("worker_{}", id);
 
     let mut tick: u8 = 0;
 

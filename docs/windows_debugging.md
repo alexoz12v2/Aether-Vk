@@ -14,6 +14,7 @@ The scripts are in `scripts/windows/` and use `cdb.exe` from WinDbg. They need P
 | core dumps (`ulimit -c`) | WER LocalDumps (`Setup-DebugTools.ps1 -EnableCrashDumps`, elevated) |
 | `perf top -p <pid>` | `Get-StackSamples.ps1 -Id <pid>` (quick look) |
 | `perf record -g` / `samply record` | `Record-Cpu.ps1` (samply over ETW, the same Firefox Profiler UI; elevated), or `Record-Cpu.ps1 -Wpr` for WPA |
+| Tracy (`--features profile-tracy`; the same on both OSes) | `winget install wolfpld.tracy` (see *Instrumentation profiling*) |
 | `RENDERDOC_CAPTURE` / `renderdoccmd` on Linux | `Capture-RenderDoc.ps1 -Test <path::to::test>` |
 | choosing an SDK with `source setup-env.sh` | `. Use-VulkanSdk.ps1 -Version <x.y.z.w>` |
 | `ls /proc/<pid>/task` + `top -H` (one thread at 100 %?) | `Get-StackSamples.ps1`: the CPU-per-thread table |
@@ -185,6 +186,27 @@ Profiles go to `target\diagnostics\profiles\cpu-<stamp>.json.gz` (reopen with `s
 
 The `[profile.profiling]` cargo profile is the one to profile on both OSes: a debug build symbolises but doesn't show release timing.
 
+**Instrumentation profiling (Tracy).** Where sampling says *which function*, Tracy's zones say *which frame, which phase, how long, on which thread*, with the dust passes' GPU time on a GPU row under the CPU zones that recorded them. Opt-in: the cargo feature `profile-tracy` (core rlib, forwarded by the cdylib and oshal) is off by default, with no dependency and no code compiled in. Cross-platform: the same feature and GUI on Linux.
+
+```powershell
+winget install wolfpld.tracy --version 0.14.1       # tracy-profiler (GUI), tracy-capture, tracy-csvexport on PATH
+cargo test -p aethervk-core-rlib --lib --features profile-tracy --no-run                 # a test exe
+cargo build -p aethervk-core-rlib --example dust_observer --features std,profile-tracy --profile profiling
+cargo build -p aethervk-core-cdylib --features profile-tracy                             # the engine the app loads (Debug; --profile release for Release)
+```
+
+Tracy 0.14.1 is the GUI for `tracy-client` 0.19 (the crate's README has the table; another GUI version refuses the connection). Start the profiler first (`tracy-profiler`, Connect to 127.0.0.1; or headless `tracy-capture -o run.tracy`, then `tracy-profiler run.tracy`), then the process: the client streams from start-up and a short run that ends before the connection is lost, unless `TRACY_NO_EXIT=1` is set, which makes it wait at exit for the connection and the flush. The dust GPU zones need a few frames: a test that renders one frame shows CPU zones only.
+
+```powershell
+$env:TRACY_NO_EXIT = "1"
+tracy-capture -o dust.tracy -s 60                                  # another shell; -s: give up after 60 s
+target\debug\deps\aethervk_core_rlib-<hash>.exe --exact gpu_backends::vulkan::device::test_dust::gpu_dust_splat_matches_reference --nocapture --test-threads=1
+target\profiling\examples\dust_observer.exe --out $env:TEMP\obs --days 5 --play 20   # the observer: a logic + render loop, dust GPU zones
+dotnet run                                                          # the app, with the cdylib built above (the .NET build keeps an existing dll)
+```
+
+Zones: the logic thread (`logic: tick`, `commands`, `fixed update`, `update`, `clear changed`, `emit dust`, `dust history`), the render path (`render: frames`, `build_render_scene`, `submit`; `vk: queue submit`, `vk: present`; a frame mark per submitted render), the dust recording (`dust: frame begin`, `emit`, `propagate`, `specks`, `splat`, `frame end`, `cadence begin`, `cadence classify`, `cadence builds`) and the FFI calls that block the UI thread (`ffi: startup`, `shutdownSync`, `addViewport`, `resize`, `resetSimulationSync`, `seekEpochSync`, `snapshotSceneSync`, `restoreSnapshotSync`, `pauseSimulationSync`, `tryInitComet`, `loadAlmanacFile`, `downloadImage`). Threads are named (`aethervk-logic`, `aethervk-render`, `worker_N`, every `thread::Builder` name). The GPU row `Vulkan graphics` holds `dust frame` > `propagate` (`cadence begin`), `classify`, `builds`, `reproject`, `specks`, `splat`, `queue`, `measure`, then `dust composite`: the engine's own per-pass timestamps (`DustGpuTimings`), fed to Tracy at readback, four frames later, so their thin CPU-side markers sit on a later render tasklet while their GPU position is the measured one. The GPU clock is paired with the CPU clock through `VK_EXT_calibrated_timestamps` (read right before the Tracy call, re-synced once a second); without the extension a one-shot timestamp submit is used and the zones show late by up to that submit's latency (the `[Tracy GPU]` log line says which, and by how much). Adding a zone: `aethervk_oshal_rlib::prof_zone!("name")` at the top of a block (a string literal; `prof_thread_name!`, `prof_frame_mark!` likewise, all no-ops without the feature). Keep the set small: a zone is a few dozen ns, but a thousand per frame is a profile of the profiler.
+
 **.NET side.** `dotnet tool restore` installs `dotnet-trace` (`dotnet-trace collect -p <pid>`, then open the `.nettrace` in PerfView or VS), `dotnet-counters monitor -p <pid>`, `dotnet-dump collect -p <pid>` and `dotnet-stack report -p <pid>` (managed stacks of every thread, no debugger).
 
 ## Memory errors: AddressSanitizer and Application Verifier
@@ -197,7 +219,7 @@ scripts\windows\Test-Asan.ps1 -Package aethervk-oshal-rlib -Skip @()
 scripts\windows\Test-Asan.ps1 -- simulation::texture_cache          # a filter, as for the test exe
 ```
 
-- The script builds into `targetsan`, so the normal debug build stays valid. It then runs the test exe from the crate's folder, with `clang_rt.asan_dynamic-x86_64.dll` on PATH.
+- The script builds into `target\asan`, so the normal debug build stays valid. It then runs the test exe from the crate's folder, with `clang_rt.asan_dynamic-x86_64.dll` on PATH.
 - The runtime must be the toolset rustc linked with. The script picks the newest MSVC toolset that ships it; `AVK_ASAN_RUNTIME_DIR` overrides it. A wrong one fails at start with exit 127 or `STATUS_DLL_NOT_FOUND`.
 - This needs the Visual Studio component *C++ AddressSanitizer*.
 - It covers the CPU tests only. The GPU drivers aren't instrumented, so the default skips the Vulkan, simulation-API and logic-thread tests and the slow `scene::dust` references.

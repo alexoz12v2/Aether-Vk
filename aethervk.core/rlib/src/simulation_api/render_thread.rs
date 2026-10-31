@@ -29,6 +29,7 @@ pub fn start_render_thread(
   render_params: RenderThreadContext,
 ) -> EngineResult<Thread> {
   thread::spawn(move || {
+    oshal::prof_thread_name!("aethervk-render");
     #[cfg(debug_assertions)]
     {
       oshal::os::debug::fpe::unmask_fpu_for_current_thread();
@@ -228,6 +229,7 @@ fn process_command(
       Ok(())
     }
     RenderCommand::RenderFrames(render_frames) => {
+      oshal::prof_zone!("render: frames");
       if ctx.skip_present.load(core::sync::atomic::Ordering::Acquire) {
         return Ok(());
       }
@@ -471,8 +473,9 @@ fn process_command(
                 )
               };
 
-              let render_scene = scene_arc
-                .build_render_scene(
+              let render_scene = {
+                oshal::prof_zone!("render: build_render_scene");
+                scene_arc.build_render_scene(
                   &vulkan_device,
                   pe_handle,
                   cmd_buffer,
@@ -492,7 +495,8 @@ fn process_command(
                 .map_err(|e| {
                   aethervk_oshal_rlib::log!("[render tasklet] build_render_scene failed: {:?}", e);
                   e
-                });
+                })
+              };
               // the scene_context_read guard dropped here — before any GPU work
               drop(scene_context_read);
               let mut render_scene = render_scene?;
@@ -665,11 +669,16 @@ fn process_command(
                 }
               }
 
-              cmd_scope.submit().map_err(|e| {
-                aethervk_oshal_rlib::log!("[render tasklet] cmd_scope.submit failed: {:?}", e);
-                e
-              })?;
+              {
+                oshal::prof_zone!("render: submit");
+                cmd_scope.submit().map_err(|e| {
+                  aethervk_oshal_rlib::log!("[render tasklet] cmd_scope.submit failed: {:?}", e);
+                  e
+                })?;
+              }
               present_guard.defuse();
+              // one frame per submitted render (tests and the windowless observer included)
+              oshal::prof_frame_mark!();
 
               let task_id_feedback = alloc::sync::Arc::clone(&render_frame.task_id);
               task_id_feedback.store(task_id, core::sync::atomic::Ordering::Release);

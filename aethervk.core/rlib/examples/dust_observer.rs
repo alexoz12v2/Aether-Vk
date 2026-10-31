@@ -3239,7 +3239,7 @@ fn main() {
       }
     }
     std::mem::forget(ctx);
-    unsafe { libc::_exit(exit_code) }
+    hard_exit(exit_code)
   }
 
   // ───── frames ─────
@@ -4706,7 +4706,7 @@ fn main() {
       std::thread::sleep(std::time::Duration::from_secs(20));
       if !done2.load(Ordering::Acquire) {
         log_line("teardown watchdog: shutdown did not finish in 20 s, exiting anyway");
-        unsafe { libc::_exit(exit_code) }
+        hard_exit(exit_code)
       }
     });
     drop(ctx);
@@ -4716,7 +4716,17 @@ fn main() {
   }
   // `_exit`: no atexit handlers / static destructors while the render thread may still be
   // running (a plain `exit` segfaulted after a device loss); everything is flushed above.
-  unsafe { libc::_exit(exit_code) }
+  hard_exit(exit_code)
+}
+
+/// `_exit` on unix; `std::process::exit` on Windows, where `libc` is not a dependency
+fn hard_exit(exit_code: i32) -> ! {
+  #[cfg(unix)]
+  unsafe {
+    libc::_exit(exit_code)
+  }
+  #[cfg(not(unix))]
+  std::process::exit(exit_code)
 }
 
 /// Segments every frame's dust (from `frame_NNN.pyr`, τ per px² through the reference
