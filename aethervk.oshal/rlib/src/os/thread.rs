@@ -159,6 +159,13 @@ impl Builder {
       };
 
       if let Ok(handle) = native {
+        // the name debuggers, dumps and profilers show (cdb `~`, WinDbg, samply / ETW)
+        if let Some(name) = self.name {
+          let wide: alloc::vec::Vec<u16> = name.encode_utf16().chain(core::iter::once(0)).collect();
+          let _ = unsafe {
+            windows::Win32::System::Threading::SetThreadDescription(handle, windows::core::PCWSTR(wide.as_ptr()))
+          };
+        }
         Ok(Thread {
           native: handle.0 as isize,
         })

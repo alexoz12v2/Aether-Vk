@@ -1679,17 +1679,10 @@ impl Device {
             crate::gpu_backends::vulkan::DEBUG_RENDER_THREAD_CPU_TIME_MS
               .store(elapsed_ms.to_bits(), core::sync::atomic::Ordering::Relaxed);
 
-            // Update the stall-watcher's last-submit timestamp (Linux debug only).
-            #[cfg(target_os = "linux")]
+            // Update the stall-watcher's last-submit timestamp (Linux and Windows debug only).
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
             {
-              let now = unsafe {
-                let mut ts = libc::timespec {
-                  tv_sec: 0,
-                  tv_nsec: 0,
-                };
-                libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts);
-                (ts.tv_sec as u64).wrapping_mul(1_000_000_000).wrapping_add(ts.tv_nsec as u64)
-              };
+              let now = crate::simulation_api::render_stall_watcher::monotonic_ns();
               crate::gpu_backends::vulkan::device::hooks::LAST_SUBMIT_NS
                 .store(now, core::sync::atomic::Ordering::Relaxed);
             }

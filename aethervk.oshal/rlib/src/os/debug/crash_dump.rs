@@ -196,6 +196,65 @@ pub fn capture_gpu_lost(out_path: &str, dump_path: &str) -> Vec<String> {
   echo
 }
 
+/// Path of cdb.exe, as `scripts\windows\AvkDebug.psm1` (`Get-AvkCdb`) looks for it: `AVK_CDB`, the
+/// copy `Setup-DebugTools.ps1` makes in `%LOCALAPPDATA%\dbg\amd64`, then the Windows Kits debuggers.
+/// `None` when none exists.
+fn find_cdb() -> Option<String> {
+  use windows::Win32::Storage::FileSystem::{GetFileAttributesW, INVALID_FILE_ATTRIBUTES};
+  let mut candidates = Vec::new();
+  candidates.extend(crate::os::env::var("AVK_CDB"));
+  candidates.extend(crate::os::env::var("LOCALAPPDATA").map(|d| format!("{d}\\dbg\\amd64\\cdb.exe")));
+  for var in ["ProgramFiles(x86)", "ProgramFiles"] {
+    candidates.extend(crate::os::env::var(var).map(|d| format!("{d}\\Windows Kits\\10\\Debuggers\\x64\\cdb.exe")));
+  }
+  candidates
+    .into_iter()
+    .find(|c| unsafe { GetFileAttributesW(PCWSTR(wide(c).as_ptr())) } != INVALID_FILE_ATTRIBUTES)
+}
+
+/// Render-stall report (the debug builds' stall watcher, the counterpart of the Linux gdb dump):
+/// a minidump of this process to `aethervk-stall-<pid>.dmp` in [`log_dir`], then every thread's
+/// stack read back out of that dump by cdb (`~*kn`, when cdb is found) into
+/// `aethervk-stall-<pid>.txt`. The stacks come from the dump, out of process: no thread of ours is
+/// suspended while a lock it holds might be needed. Returns the lines worth echoing to the log
+/// (the paths, then cdb's stacks).
+pub fn capture_stall() -> Vec<String> {
+  let mut echo = Vec::new();
+  let Some(dir) = log_dir() else {
+    echo.push("[StallWatcher] LOCALAPPDATA unset: no dump written".into());
+    return echo;
+  };
+  let pid = process_id();
+  let dump_path = format!("{dir}\\aethervk-stall-{pid}.dmp");
+  let dumped = write_minidump(&dump_path, None);
+  echo.push(format!(
+    "[StallWatcher] minidump {}: {dump_path}",
+    if dumped { "written" } else { "FAILED" }
+  ));
+  if !dumped {
+    return echo;
+  }
+  let Some(cdb) = find_cdb() else {
+    echo.push(
+      "[StallWatcher] cdb.exe not found (scripts\\windows\\Setup-DebugTools.ps1, or AVK_CDB): open the dump with windbgx -z".into(),
+    );
+    return echo;
+  };
+  // our PDBs are found through the absolute paths in the images; `_NT_SYMBOL_PATH`, when set,
+  // adds the system ones
+  let stacks = run_capture(&format!("\"{cdb}\" -z \"{dump_path}\" -c \"~*kn 64; q\""));
+  let stacks_path = format!("{dir}\\aethervk-stall-{pid}.txt");
+  let _ = crate::os::fs::remove_file(&stacks_path);
+  append_text(&stacks_path, &stacks);
+  echo.push(format!("[StallWatcher] thread stacks (cdb ~*kn): {stacks_path}"));
+  // the stacks only: cdb's banner and symbol chatter end where it echoes the command, the
+  // unload chatter starts at `quit:`
+  let body = stacks.split_once("~*kn 64; q'").map_or(stacks.as_str(), |(_, b)| b);
+  let body = body.split_once("quit:").map_or(body, |(b, _)| b);
+  echo.extend(body.lines().filter(|l| !l.trim().is_empty()).map(|l| format!("[cdb] {l}")));
+  echo
+}
+
 static INSTALLED: AtomicBool = AtomicBool::new(false);
 
 unsafe extern "system" fn unhandled_exception(pointers: *const EXCEPTION_POINTERS) -> i32 {
@@ -246,5 +305,29 @@ pub fn append_text(path: &str, text: &str) {
     let mut written = 0u32;
     let _ = WriteFile(file, Some(text.as_bytes()), Some(&mut written), None);
     let _ = CloseHandle(file);
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  /// The stall capture end to end: the minidump is written and cdb reads the other threads' stacks
+  /// out of it with our symbols (the harness's main thread waits in `test::test_main`). The calling
+  /// thread's own stack ends in `NtGetContextThread` (the dump is taken mid-call), which is why the
+  /// watcher thread is the one that calls it. Needs cdb (`scripts\windows\Setup-DebugTools.ps1`) and writes to
+  /// `%LOCALAPPDATA%\Aether-Vk\logs`, so it is opt-in: `cargo test -p aethervk-oshal-rlib
+  /// capture_stall -- --ignored`.
+  #[test]
+  #[ignore = "needs cdb.exe; writes a minidump to the Aether-Vk log folder"]
+  fn capture_stall_writes_the_dump_and_the_stacks() {
+    std::fs::create_dir_all(super::log_dir().expect("LOCALAPPDATA")).unwrap();
+    let lines = super::capture_stall();
+    for l in &lines {
+      std::println!("{l}");
+    }
+    assert!(lines.iter().any(|l| l.contains("minidump written")), "no dump: {lines:?}");
+    assert!(
+      lines.iter().any(|l| l.starts_with("[cdb]") && l.contains("!test::test_main")),
+      "cdb did not symbolise the main thread's stack"
+    );
   }
 }
