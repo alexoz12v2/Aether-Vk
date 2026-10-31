@@ -252,28 +252,21 @@ define_hook!(
 // ── Stall-watcher submit timestamp ───────────────────────────────────────────
 
 /// Monotonic nanosecond timestamp of the most recent `vkQueueSubmit` call.
-/// Updated by [`stall_watcher_submit_hook`] (Linux debug builds only).
+/// Updated by [`stall_watcher_submit_hook`] (Linux and Windows debug builds only).
 /// Read by the stall-watcher thread to detect render hangs.
-#[cfg(all(target_os = "linux", debug_assertions))]
+#[cfg(all(any(target_os = "linux", target_os = "windows"), debug_assertions))]
 pub static LAST_SUBMIT_NS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 /// Hook function registered into [`vkQueueSubmit_HOOK`] at device creation time.
-/// Records the current CLOCK_MONOTONIC nanosecond timestamp on every submit.
-#[cfg(all(target_os = "linux", debug_assertions))]
+/// Records the current monotonic nanosecond timestamp on every submit.
+#[cfg(all(any(target_os = "linux", target_os = "windows"), debug_assertions))]
 fn stall_watcher_submit_hook(
   _queue: vk::Queue,
   _submit_count: u32,
   _p_submits: *const vk::SubmitInfo,
   _fence: vk::Fence,
 ) -> vk::Result {
-  let now = unsafe {
-    let mut ts = libc::timespec {
-      tv_sec: 0,
-      tv_nsec: 0,
-    };
-    libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts);
-    (ts.tv_sec as u64).wrapping_mul(1_000_000_000).wrapping_add(ts.tv_nsec as u64)
-  };
+  let now = crate::simulation_api::render_stall_watcher::monotonic_ns();
   LAST_SUBMIT_NS.store(now, core::sync::atomic::Ordering::Relaxed);
   vk::Result::SUCCESS
 }
@@ -417,7 +410,7 @@ pub unsafe fn load_device_with_hooks(
     );
 
     // Register the stall-watcher timestamp hook so every vkQueueSubmit updates LAST_SUBMIT_NS.
-    #[cfg(all(target_os = "linux", debug_assertions))]
+    #[cfg(all(any(target_os = "linux", target_os = "windows"), debug_assertions))]
     unsafe {
       vkQueueSubmit_HOOK = Some(stall_watcher_submit_hook);
     }
