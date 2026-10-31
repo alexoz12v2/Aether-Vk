@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Define Vulkan SDK path
-# Note: You may need to adjust this path depending on your system configuration.
-VULKAN_SDK="/Volumes/ExtData/alessioext/VulkanSDK/1.4.321.0/macOS"
+# Defaults to the pinned SDK (.vulkan-sdk-version) at its default macOS location.
+VULKAN_SDK="${VULKAN_SDK:-$HOME/VulkanSDK/$(tr -d '[:space:]' < "$(dirname "$0")/.vulkan-sdk-version")/macOS}"
 
 if [ ! -f "$VULKAN_SDK/bin/spirv-dis" ]; then
     echo "Error: spirv-dis not found at $VULKAN_SDK/bin/spirv-dis"

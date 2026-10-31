@@ -127,7 +127,7 @@ Every Vulkan process on this machine gets the registered *implicit* layers injec
 - The layers the engine enables by name (`VK_LAYER_KHRONOS_validation`) are explicit and still load.
 - To capture a test with RenderDoc or Nsight, clear the disable: `$env:VK_LOADER_LAYERS_DISABLE = ""` (nextest's own env wins over the shell's, so run the test exe directly, as `Capture-RenderDoc.ps1` does).
 
-**Validation-layer versions.** Several SDKs install side by side under `C:\VulkanSDK`. `. scripts\windows\Use-VulkanSdk.ps1` lists them; `-Version latest` or `-Version 1.4.321.0` points this shell's `VULKAN_SDK`, `PATH` and `VK_ADD_LAYER_PATH` at one, so the tests load its validation layer. Use it to check whether a GPU-AV problem is a layer bug fixed upstream.
+**Validation-layer versions.** Several SDKs install side by side under `C:\VulkanSDK`. `. scripts\windows\Use-VulkanSdk.ps1` selects the project's pinned SDK (`.vulkan-sdk-version`, 1.4.363.0: the shader scripts and CI require it), `-List` lists them, and `-Version latest` or `-Version 1.4.321.0` points this shell's `VULKAN_SDK`, `PATH` and `VK_ADD_LAYER_PATH` at one, so the tests load its validation layer. Use it to check whether a GPU-AV problem is a layer bug fixed upstream.
 
 **Triage runs.** `cargo nextest run --profile triage --retries 0 ...` gives up on a test after 30 s instead of 15 min and runs everything (`fail-fast = false`). `--retries 0` is needed on the command line because the `vulkan-tests` override's retries beat the profile's.
 

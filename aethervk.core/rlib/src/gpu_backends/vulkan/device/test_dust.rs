@@ -4014,8 +4014,11 @@ fn gpu_dust_profile_counters_are_consistent() {
       let thread = s(idx("thread"));
       let inner = s(idx("setup")) + s(idx("subpk")) + s(idx("tracer")) + s(idx("ecount"));
       assert!(inner <= thread, "{name}: setup + subpk + tracer + ecount {inner} > thread {thread}");
-      // (the rest is the enumerator's barriers and prefix between its two passes, unprobed)
-      assert!((thread - inner) as f64 <= 0.50 * thread as f64, "{name}: {} cycles outside the stages of {thread}", thread - inner);
+      // (the rest is the enumerator's barriers and prefix between its two passes, unprobed; the
+      // `.prof` chain goes through spirv-opt -O like the production blobs, as the GTX 1070 mis-builds
+      // it unoptimised, and the optimiser moves work out of the probed windows: 55.5% outside on
+      // the GTX 1070 with SDK 1.4.321 and 1.4.363, 2026-10-31; unoptimised it stayed under the 50% this bound was set at)
+      assert!((thread - inner) as f64 <= 0.65 * thread as f64, "{name}: {} cycles outside the stages of {thread}", thread - inner);
       let sthread = p.u64_at(dust::DUST_PROF_STHREAD);
       assert!(s(idx("count")) + s(idx("packet")) <= sthread, "{name}: count + packet > the splitter's cycles {sthread}");
       assert!(p.word(dust::DUST_PROF_SLANES) > 0, "{name}: the splitter drew nothing");
