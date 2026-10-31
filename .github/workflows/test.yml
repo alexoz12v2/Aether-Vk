@@ -59,10 +59,16 @@ jobs:
         toolchain: nightly-2026-09-26 # keep in sync with rust-toolchain.toml
         targets: ${{ matrix.target }}
 
+    # the SDK the SPIR-V blobs are built with: pinned in .vulkan-sdk-version (see compile_shaders.sh)
+    - name: Read pinned Vulkan SDK version
+      id: vksdk
+      shell: bash
+      run: echo "version=$(tr -d '[:space:]' < .vulkan-sdk-version)" >> "$GITHUB_OUTPUT"
+
     - name: Setup Vulkan SDK
       uses: jakoch/install-vulkan-sdk-action@v1.5.5
       with:
-        vulkan_version: '1.4.321.0'
+        vulkan_version: ${{ steps.vksdk.outputs.version }}
 
     - name: Cargo Check
       run: cargo check --locked --all-targets --target ${{ matrix.target }}
@@ -106,10 +112,16 @@ jobs:
         components: rustfmt, llvm-tools-preview
 
     # build.rs compiles shaders with glslc from VULKAN_SDK
+    # the SDK the SPIR-V blobs are built with: pinned in .vulkan-sdk-version (see compile_shaders.sh)
+    - name: Read pinned Vulkan SDK version
+      id: vksdk
+      shell: bash
+      run: echo "version=$(tr -d '[:space:]' < .vulkan-sdk-version)" >> "$GITHUB_OUTPUT"
+
     - name: Setup Vulkan SDK
       uses: jakoch/install-vulkan-sdk-action@v1.5.5
       with:
-        vulkan_version: '1.4.321.0'
+        vulkan_version: ${{ steps.vksdk.outputs.version }}
 
     - name: Install cargo-llvm-cov
       uses: taiki-e/install-action@v2

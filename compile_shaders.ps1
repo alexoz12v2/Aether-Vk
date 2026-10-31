@@ -1,5 +1,40 @@
 $ErrorActionPreference = "Stop"
 
+# Pinned Vulkan SDK: the SPIR-V blobs are built with exactly the SDK in .vulkan-sdk-version (CI
+# reads the same file; see compile_shaders.sh). AETHERVK_ANY_VULKAN_SDK=1 skips the check, for
+# experiments only: never commit blobs built that way.
+$PinnedSdk = (Get-Content (Join-Path $PSScriptRoot ".vulkan-sdk-version") -Raw).Trim()
+$PinnedMmp = $PinnedSdk -replace '\.\d+$', ''
+function Get-SdkHeaderVersion([string] $sdk) {
+    if (-not $sdk) { return $null }
+    foreach ($h in (Join-Path $sdk "Include\vulkan\vulkan_core.h"), (Join-Path $sdk "include\vulkan\vulkan_core.h")) {
+        if (Test-Path $h) {
+            $t = Get-Content $h -Raw
+            if ($t -match '(?m)^#define VK_HEADER_VERSION (\d+)') { $patch = $Matches[1] } else { continue }
+            if ($t -match '(?m)^#define VK_HEADER_VERSION_COMPLETE VK_MAKE_API_VERSION\(0, *(\d+), *(\d+),') {
+                return "$($Matches[1]).$($Matches[2]).$patch"
+            }
+        }
+    }
+    return $null
+}
+if (-not $env:AETHERVK_ANY_VULKAN_SDK) {
+    $have = Get-SdkHeaderVersion $env:VULKAN_SDK
+    if ($have -ne $PinnedMmp) {
+        $side = "C:\VulkanSDK\$PinnedSdk"
+        if ((Get-SdkHeaderVersion $side) -eq $PinnedMmp) {
+            Write-Host "NOTE: VULKAN_SDK=$env:VULKAN_SDK is SDK $have; using the pinned SDK at $side"
+            $env:VULKAN_SDK = $side
+        } else {
+            Write-Error ("This project requires Vulkan SDK $PinnedSdk (pinned in .vulkan-sdk-version), but " +
+                "VULKAN_SDK=$env:VULKAN_SDK is SDK $have. Install it side by side: " +
+                "winget install KhronosGroup.VulkanSDK --version $PinnedSdk --force " +
+                "(then: . scripts\windows\Use-VulkanSdk.ps1). AETHERVK_ANY_VULKAN_SDK=1 skips this check.")
+            exit 1
+        }
+    }
+}
+
 if (-not $env:VULKAN_SDK) {
     Write-Error "VULKAN_SDK environment variable is not set."
     exit 1

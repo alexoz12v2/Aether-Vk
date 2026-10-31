@@ -326,7 +326,7 @@ pub const DUST_FRAME_GATES_OFF_BIT: u32 = 22;
 pub fn jacobian_at_start() -> bool {
   #[cfg(any(test, feature = "std"))]
   {
-    std::env::var("AETHERVK_DUST_JACOBIAN_AT_START").is_ok_and(|v| v == "1")
+    dust_env("AETHERVK_DUST_JACOBIAN_AT_START") == Some("1")
   }
   #[cfg(not(any(test, feature = "std")))]
   {
@@ -408,7 +408,28 @@ pub fn deep_chord_factors(w0: f32, w1: f32, rho: [f32; 2]) -> (f32, f32) {
 /// `AETHERVK_DUST_LAB_NO_SUPPORT=1` draws every packet without its support plane.
 #[cfg(any(test, feature = "std"))]
 fn lab_knob(name: &str) -> Option<f32> {
-  std::env::var(name).ok().and_then(|v| v.trim().parse::<f32>().ok())
+  dust_env(name).and_then(|v| v.trim().parse::<f32>().ok())
+}
+
+/// The process environment's `AETHERVK_DUST_*` variables, read once. The knobs sit on the splat's
+/// per-packet path, and every `std::env::var` takes the process environment lock (on Windows
+/// `GetEnvironmentVariableW` under the PEB lock), which serialised the host rasterizer's threads:
+/// `cadence_keeps_the_light` drew a frame in 7.7 s on 8 or 16 threads and 38 s on 1 (opt-level 2,
+/// 2026-10-31). The knobs are set before the process starts; a change made later is not seen.
+#[cfg(any(test, feature = "std"))]
+fn dust_env(name: &str) -> Option<&'static str> {
+  static VARS: std::sync::OnceLock<std::vec::Vec<(std::string::String, std::string::String)>> =
+    std::sync::OnceLock::new();
+  VARS
+    .get_or_init(|| {
+      std::env::vars_os()
+        .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
+        .filter(|(k, _)| k.starts_with("AETHERVK_DUST_"))
+        .collect()
+    })
+    .iter()
+    .find(|(k, _)| k == name)
+    .map(|(_, v)| v.as_str())
 }
 #[cfg(not(any(test, feature = "std")))]
 fn lab_knob(_name: &str) -> Option<f32> {
@@ -418,8 +439,7 @@ fn lab_knob(_name: &str) -> Option<f32> {
 /// A lab bit mask: decimal or `0x` hexadecimal (std builds, the process environment)
 #[cfg(any(test, feature = "std"))]
 fn lab_mask(name: &str) -> Option<u32> {
-  let v = std::env::var(name).ok()?;
-  let v = v.trim();
+  let v = dust_env(name)?.trim();
   match v.strip_prefix("0x").or_else(|| v.strip_prefix("0X")) {
     Some(h) => u32::from_str_radix(h, 16).ok(),
     None => v.parse::<u32>().ok(),

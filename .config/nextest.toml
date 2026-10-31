@@ -9,6 +9,14 @@
 # or Nsight, override it, e.g. VK_LOADER_LAYERS_DISABLE="".
 env = { VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING = "1", VK_LOADER_LAYERS_DISABLE = "~implicit~", VK_LOADER_LAYERS_ALLOW = "VK_LAYER_NV_optimus,VK_LAYER_NV_present,VK_LAYER_AMD_switchable_graphics*" }
 test-threads = 8
+# The slow tier: host-reference tests whose CPU mirror draws hundreds of 128-256 px dust frames
+# (3.7 s a frame at opt-level 2 on 16 threads, ~10x that in a debug build: up to hours each), and
+# the two GPU dust tests that run 2 x 240 full-ring frames or such a mirror. A debug run cannot
+# finish them, so the default profile leaves them out and `slow` runs only them, one at a time
+# with every core, in an optimised dev build (debug assertions stay on):
+#   CARGO_PROFILE_DEV_OPT_LEVEL=2 CARGO_TARGET_DIR=target/opt2 cargo nextest run -p aethervk-core-rlib --profile slow
+# Keep the list in sync in the three default-filters below (nextest has no variables).
+default-filter = 'not (package(aethervk-core-rlib) & (test(=scene::dust::tests::bounded_chords_match_the_bounded_monte_carlo) | test(=scene::dust::tests::cadence_budget_aborts_and_readmits) | test(=scene::dust::tests::cadence_builds_read_the_frame_gates) | test(=scene::dust::tests::cadence_folds_into_the_largest_admitted_class) | test(=scene::dust::tests::cadence_fresh_pass_matches_the_full_draw) | test(=scene::dust::tests::cadence_handover_timeline_is_exactly_once) | test(=scene::dust::tests::cadence_hands_members_over_as_the_light_bound_moves) | test(=scene::dust::tests::cadence_hands_members_over_through_three_classes) | test(=scene::dust::tests::cadence_hands_members_over_without_a_gap) | test(=scene::dust::tests::cadence_image_projection_offsets_the_viewport) | test(=scene::dust::tests::cadence_keeps_the_light) | test(=scene::dust::tests::cadence_keeps_the_light_whole_clusters) | test(=scene::dust::tests::cadence_resets_and_aborts) | test(=scene::dust::tests::cadence_resets_on_a_time_jump) | test(=scene::dust::tests::cadence_retains_members_when_a_slower_class_is_admitted) | test(=scene::dust::tests::cadence_traced_build_draw_matches_serial) | test(=scene::dust::tests::cell_kernels_reproduce_the_continuous_emission) | test(=scene::dust::tests::lod_keeps_the_drawn_light) | test(=scene::dust::tests::reprojection_is_exact_for_a_rotation) | test(=scene::dust::tests::specks_n_eye_counts_every_cluster) | test(=gpu_backends::vulkan::device::dust::cadence::tests::gpu_dust_budget_loop_keeps_the_ladder_order) | test(=gpu_backends::vulkan::device::dust::cadence::tests::gpu_dust_reproject_matches_reference)))'
 # A test is reported SLOW after 1 min and killed after 5 (a hung Vulkan test or a runaway
 # host-rasterizer test); the Vulkan group's retries still apply after a termination.
 slow-timeout = { period = "60s", terminate-after = 5 }
@@ -50,7 +58,8 @@ retries = { backoff = "exponential", count = 2, delay = "2s", jitter = true }
 fail-fast = false
 # Renders a full dust ring at 1280 x 800 for 2 x 240 frames: ~10 s per frame on lavapipe, so it
 # cannot finish inside the 5 min limit.
-default-filter = 'not (package(aethervk-core-rlib) & test(=gpu_backends::vulkan::device::dust::cadence::tests::gpu_dust_budget_loop_keeps_the_ladder_order))'
+# (the budget loop is in the slow tier, with the host-reference tests lavapipe's CPUs cannot finish either)
+default-filter = 'not (package(aethervk-core-rlib) & (test(=scene::dust::tests::bounded_chords_match_the_bounded_monte_carlo) | test(=scene::dust::tests::cadence_budget_aborts_and_readmits) | test(=scene::dust::tests::cadence_builds_read_the_frame_gates) | test(=scene::dust::tests::cadence_folds_into_the_largest_admitted_class) | test(=scene::dust::tests::cadence_fresh_pass_matches_the_full_draw) | test(=scene::dust::tests::cadence_handover_timeline_is_exactly_once) | test(=scene::dust::tests::cadence_hands_members_over_as_the_light_bound_moves) | test(=scene::dust::tests::cadence_hands_members_over_through_three_classes) | test(=scene::dust::tests::cadence_hands_members_over_without_a_gap) | test(=scene::dust::tests::cadence_image_projection_offsets_the_viewport) | test(=scene::dust::tests::cadence_keeps_the_light) | test(=scene::dust::tests::cadence_keeps_the_light_whole_clusters) | test(=scene::dust::tests::cadence_resets_and_aborts) | test(=scene::dust::tests::cadence_resets_on_a_time_jump) | test(=scene::dust::tests::cadence_retains_members_when_a_slower_class_is_admitted) | test(=scene::dust::tests::cadence_traced_build_draw_matches_serial) | test(=scene::dust::tests::cell_kernels_reproduce_the_continuous_emission) | test(=scene::dust::tests::lod_keeps_the_drawn_light) | test(=scene::dust::tests::reprojection_is_exact_for_a_rotation) | test(=scene::dust::tests::specks_n_eye_counts_every_cluster) | test(=gpu_backends::vulkan::device::dust::cadence::tests::gpu_dust_budget_loop_keeps_the_ladder_order) | test(=gpu_backends::vulkan::device::dust::cadence::tests::gpu_dust_reproject_matches_reference)))'
 
 # Local triage on a GPU box where some tests hang: a 30 s kill instead of 5 min, no retries
 # (`cargo nextest run --profile triage`); a test killed here may just be slow, so rerun it alone
@@ -59,3 +68,11 @@ default-filter = 'not (package(aethervk-core-rlib) & test(=gpu_backends::vulkan:
 slow-timeout = { period = "30s", terminate-after = 1 }
 retries = 0
 fail-fast = false
+
+# The slow tier (see the default profile): one test at a time, each spawns a rasterizer thread per
+# core; 2 h kill limit (cadence_keeps_the_light: 230 + 270 frames, ~50 min at opt-level 2).
+[profile.slow]
+default-filter = 'package(aethervk-core-rlib) & (test(=scene::dust::tests::bounded_chords_match_the_bounded_monte_carlo) | test(=scene::dust::tests::cadence_budget_aborts_and_readmits) | test(=scene::dust::tests::cadence_builds_read_the_frame_gates) | test(=scene::dust::tests::cadence_folds_into_the_largest_admitted_class) | test(=scene::dust::tests::cadence_fresh_pass_matches_the_full_draw) | test(=scene::dust::tests::cadence_handover_timeline_is_exactly_once) | test(=scene::dust::tests::cadence_hands_members_over_as_the_light_bound_moves) | test(=scene::dust::tests::cadence_hands_members_over_through_three_classes) | test(=scene::dust::tests::cadence_hands_members_over_without_a_gap) | test(=scene::dust::tests::cadence_image_projection_offsets_the_viewport) | test(=scene::dust::tests::cadence_keeps_the_light) | test(=scene::dust::tests::cadence_keeps_the_light_whole_clusters) | test(=scene::dust::tests::cadence_resets_and_aborts) | test(=scene::dust::tests::cadence_resets_on_a_time_jump) | test(=scene::dust::tests::cadence_retains_members_when_a_slower_class_is_admitted) | test(=scene::dust::tests::cadence_traced_build_draw_matches_serial) | test(=scene::dust::tests::cell_kernels_reproduce_the_continuous_emission) | test(=scene::dust::tests::lod_keeps_the_drawn_light) | test(=scene::dust::tests::reprojection_is_exact_for_a_rotation) | test(=scene::dust::tests::specks_n_eye_counts_every_cluster) | test(=gpu_backends::vulkan::device::dust::cadence::tests::gpu_dust_budget_loop_keeps_the_ladder_order) | test(=gpu_backends::vulkan::device::dust::cadence::tests::gpu_dust_reproject_matches_reference))'
+test-threads = 1
+fail-fast = false
+slow-timeout = { period = "60s", terminate-after = 120 }

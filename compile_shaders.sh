@@ -25,6 +25,61 @@
 # ──────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
+# ── Pinned Vulkan SDK ─────────────────────────────────────────────────────────
+# The project builds its SPIR-V with exactly the SDK named in .vulkan-sdk-version:
+# blobs from another glslc/spirv-opt differ byte for byte, and the dust parity
+# tests were validated against these (the GTX 1070 driver mis-builds some
+# unoptimised shaders, so a different optimiser is a different test). CI reads
+# the same file. To bump: change the file, rerun this script, rerun the GPU
+# dust tests, commit the blobs. AETHERVK_ANY_VULKAN_SDK=1 skips the check (for
+# experiments only: do not commit blobs built that way).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PINNED_SDK="$(tr -d '[:space:]' < "$SCRIPT_DIR/.vulkan-sdk-version")"
+
+# major.minor.patch of an SDK, from its vulkan_core.h (folder names lie)
+sdk_header_version() {
+    local h
+    for h in "$1/Include/vulkan/vulkan_core.h" "$1/include/vulkan/vulkan_core.h"; do
+        if [ -f "$h" ]; then
+            local patch mm
+            patch="$(sed -n 's/^#define VK_HEADER_VERSION \([0-9]*\).*/\1/p' "$h")"
+            mm="$(sed -n 's/^#define VK_HEADER_VERSION_COMPLETE VK_MAKE_API_VERSION(0, *\([0-9]*\), *\([0-9]*\),.*/\1.\2/p' "$h")"
+            [ -n "$patch" ] && [ -n "$mm" ] && echo "$mm.$patch" && return
+        fi
+    done
+}
+
+PINNED_MMP="${PINNED_SDK%.*}"
+if [ -z "${AETHERVK_ANY_VULKAN_SDK:-}" ]; then
+    HAVE_MMP=""
+    [ -n "${VULKAN_SDK:-}" ] && HAVE_MMP="$(sdk_header_version "$VULKAN_SDK")"
+    if [ "$HAVE_MMP" != "$PINNED_MMP" ]; then
+        # the pinned SDK installed side by side at its default location
+        for cand in "/c/VulkanSDK/$PINNED_SDK" "C:/VulkanSDK/$PINNED_SDK" \
+                    "$HOME/VulkanSDK/$PINNED_SDK/macOS" "$HOME/VulkanSDK/$PINNED_SDK/x86_64" \
+                    "$HOME/vulkansdk/$PINNED_SDK/x86_64" "/opt/vulkansdk/$PINNED_SDK/x86_64"; do
+            if [ "$(sdk_header_version "$cand")" = "$PINNED_MMP" ]; then
+                echo "NOTE: VULKAN_SDK=${VULKAN_SDK:-<unset>} is SDK ${HAVE_MMP:-?}; using the pinned SDK at $cand" >&2
+                VULKAN_SDK="$cand"
+                HAVE_MMP="$PINNED_MMP"
+                break
+            fi
+        done
+    fi
+    if [ "$HAVE_MMP" != "$PINNED_MMP" ]; then
+        cat >&2 <<MSG
+ERROR: this project requires Vulkan SDK $PINNED_SDK (pinned in .vulkan-sdk-version),
+       but VULKAN_SDK=${VULKAN_SDK:-<unset>} is SDK ${HAVE_MMP:-unknown}.
+       Install it side by side and point VULKAN_SDK at it:
+         Windows: winget install KhronosGroup.VulkanSDK --version $PINNED_SDK --force
+                  (then: . scripts/windows/Use-VulkanSdk.ps1)
+         Linux/macOS: https://vulkan.lunarg.com/sdk/home (version $PINNED_SDK)
+       AETHERVK_ANY_VULKAN_SDK=1 skips this check (never commit blobs built that way).
+MSG
+        exit 1
+    fi
+fi
+
 if [ -z "${VULKAN_SDK:-}" ]; then
     echo "ERROR: VULKAN_SDK environment variable is not set." >&2
     exit 1
