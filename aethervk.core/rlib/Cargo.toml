@@ -19,6 +19,9 @@ test_dedicated_alloc = []
 shader_debug_sync = []
 debug_gizmo_depth = []
 debug_gpu = ["vk-mem/vma-debug", "ash/debug", "aethervk-oshal-rlib/debug_gpu"]
+# Tracy instrumentation (`prof_zone!`, thread names, frame marks, the dust GPU zones). Off: no
+# dependency, nothing compiled in. See docs/windows_debugging.md, "Instrumentation profiling".
+profile-tracy = ["dep:tracy-client", "aethervk-oshal-rlib/profile-tracy"]
 
 [[example]]
 name = "dust_observer"
@@ -85,6 +88,9 @@ lazy_static = "1.5.0"
 
 # Audio
 pure_wav = "2.0.0"
+
+# Tracy profiler client (`profile-tracy` only)
+tracy-client = { version = "0.19", optional = true, default-features = false, features = ["enable", "system-tracing", "context-switch-tracing", "sampling", "code-transfer", "broadcast", "callstack-inlines", "demangle"] }
 
 # threading and sync
 parking_lot = { version = "0.12.5", default-features = false }

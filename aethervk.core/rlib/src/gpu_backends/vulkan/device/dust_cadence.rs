@@ -818,6 +818,7 @@ impl Device {
     tiers: &[CadenceTierInput],
     d_max: f32,
   ) -> GpuResult<CadenceGpuPlan> {
+    aethervk_oshal_rlib::prof_zone!("dust: cadence begin");
     let res = self.res.read();
     let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
     let allocator = res.allocator.allocator.as_allocator_view();
@@ -1335,6 +1336,7 @@ impl Device {
     mvp: [f32; 16],
     eye_local: [f32; 4],
   ) -> GpuResult<()> {
+    aethervk_oshal_rlib::prof_zone!("dust: cadence classify");
     let res = self.res.read();
     let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
     let entry = mgr.cadence.get(&pe).ok_or(gpu_err!("dust cadence of PE {} absent", pe.0))?;
@@ -2003,6 +2005,7 @@ impl Device {
   /// chunk drawn from its draw list into the image at its frozen view, the EWA queue drained into
   /// the image, the counters back into the frame's header
   pub fn cmd_dust_cadence_builds(&self, cmd: vk::CommandBuffer, pe: gpu::PresentationEngineHandle, draws: &[CadenceBuildDraw]) -> GpuResult<()> {
+    aethervk_oshal_rlib::prof_zone!("dust: cadence builds");
     struct Job {
       k: usize,
       p: usize,

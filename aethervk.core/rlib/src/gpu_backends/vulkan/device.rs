@@ -355,6 +355,8 @@ pub(super) mod debug_labels;
 pub(super) mod descriptors;
 pub mod dust;
 pub mod fault;
+#[cfg(feature = "profile-tracy")]
+pub mod profile;
 #[cfg(any(debug_assertions, test))]
 pub mod hooks;
 pub(super) mod locks;
@@ -1180,6 +1182,10 @@ where
 pub struct Device {
   pub query_result: utils::PhysicalDeviceQueryResult,
   queues: Queues,
+  /// the Tracy GPU context the dust timestamps are fed into (`None`: no timestamps, or its
+  /// calibration failed)
+  #[cfg(feature = "profile-tracy")]
+  pub(super) prof_gpu: Option<profile::GpuProfiler>,
   pub instance: Arc<instance::Instance>,
 
   pub device: LogicalDevice,
@@ -1407,6 +1413,7 @@ impl Device {
     role: QueueRole,
   ) -> GpuResult<(vk::Semaphore, u64)> {
     use super::utils::RwLockable;
+    aethervk_oshal_rlib::prof_zone!("vk: queue submit");
     const MAX_WAIT_SYNC_INFOS: usize = 8;
     const MAX_SIGNAL_SYNC_INFOS: usize = 8;
     if wait_infos.len() > MAX_WAIT_SYNC_INFOS || signal_infos.len() > MAX_SIGNAL_SYNC_INFOS {
@@ -2345,10 +2352,13 @@ impl Device {
       }
     };
 
-    Ok(Self {
+    #[cfg_attr(not(feature = "profile-tracy"), expect(unused_mut))]
+    let mut this = Self {
       query_result: *chosen_physical_device_query_result,
       device,
       queues,
+      #[cfg(feature = "profile-tracy")]
+      prof_gpu: None,
       res: Arc::new(DebugTrackedRwLock::new(res)),
       callback_stop_signal: Arc::new(core::sync::atomic::AtomicBool::new(false)),
       #[cfg(debug_assertions)]
@@ -2359,7 +2369,13 @@ impl Device {
       micro_color_format,
       recording_command_buffers: dashmap::DashMap::with_capacity(32),
       pending_mesh_updates: locks::DebugTrackedMutex::new(alloc::vec::Vec::new()),
-    })
+    };
+    // needs the queues and the transient command path of the finished device
+    #[cfg(feature = "profile-tracy")]
+    {
+      this.prof_gpu = profile::GpuProfiler::new(&this);
+    }
+    Ok(this)
   }
 
   /// TODO: Document this item
@@ -5424,6 +5440,7 @@ impl RenderDevice for Device {
     image_index: usize,
     frame_index: usize,
   ) -> GpuResult<crate::gpu::SwapchainStatus> {
+    aethervk_oshal_rlib::prof_zone!("vk: present");
     crate::gpu_backends::vulkan::utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read(handle, |state, h| extract_pe!(state, h))?
       .execute(|mut pe, _rollback| {

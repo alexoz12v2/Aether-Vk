@@ -14,8 +14,11 @@ std = []
 console_log = []
 debug_gpu = []
 profile_thread_names = []
+# Tracy instrumentation: thread names and zones (`prof_zone!`); forwarded from the core rlib
+profile-tracy = ["dep:tracy-client"]
 
 [dependencies]
+tracy-client = { version = "0.19", optional = true, default-features = false, features = ["enable", "system-tracing", "context-switch-tracing", "sampling", "code-transfer", "broadcast", "callstack-inlines", "demangle"] }
 heapless = { version = "0.9" }
 spin = { version = "0.10", features = ["once", "rwlock"] }
 libm = { version = "0.2.11" }

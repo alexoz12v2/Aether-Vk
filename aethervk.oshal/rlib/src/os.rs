@@ -10,6 +10,7 @@ pub mod fs;
 pub mod memory;
 pub mod native;
 pub mod pool;
+pub mod profile;
 pub mod thread;
 pub mod time;
 

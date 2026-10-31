@@ -2025,6 +2025,7 @@ impl Device {
     batch: &DustBatch,
     seq: u64,
   ) -> GpuResult<()> {
+    aethervk_oshal_rlib::prof_zone!("dust: emit");
     if batch.count == 0 {
       return Ok(());
     }
@@ -2506,6 +2507,7 @@ impl Device {
     flow: dust::DustFlowUniform,
     inputs: Option<u64>,
   ) -> GpuResult<(DustViewParams, bool)> {
+    aethervk_oshal_rlib::prof_zone!("dust: frame begin");
     let res = self.res.read();
     let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
     let allocator = res.allocator.allocator.as_allocator_view();
@@ -2889,6 +2891,10 @@ impl Device {
           });
           let period = self.query_result.physical_device_properties.limits.timestamp_period;
           let mut t = DustGpuTimings::from_timestamps(&ts, period);
+          #[cfg(feature = "profile-tracy")]
+          if let Some(prof) = &self.prof_gpu {
+            prof.emit_dust_frame(&ts);
+          }
           if !t.total_ms.is_nan() {
             t.frame = host.ts_frame[slot];
             t.reused = host.ts_reused[slot];
@@ -3484,6 +3490,7 @@ impl Device {
     moments: u64,
     mut pc: DustSpecksPushConstants,
   ) -> GpuResult<()> {
+    aethervk_oshal_rlib::prof_zone!("dust: specks");
     let res = self.res.read();
     let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
     let sys = mgr.systems.get(&id).ok_or(gpu_err!("dust system {} not found", id))?;
@@ -3698,6 +3705,7 @@ impl Device {
     moments: u64,
     pc: DustSplatPushConstants,
   ) -> GpuResult<()> {
+    aethervk_oshal_rlib::prof_zone!("dust: splat");
     // the preview's stride (`PlayStride`): every S-th slot, S times brighter
     if let Some((list, n, s)) = self.dust_stride_list(pe, id, first_slot, capacity, pc.live_count)? {
       let pc = DustSplatPushConstants { exposure: pc.exposure * s as f32, ..pc };
@@ -4522,6 +4530,7 @@ impl Device {
     cmd: vk::CommandBuffer,
     pe: gpu::PresentationEngineHandle,
   ) -> GpuResult<()> {
+    aethervk_oshal_rlib::prof_zone!("dust: frame end");
     let res = self.res.read();
     let mgr = res.dust_manager.as_ref().ok_or(gpu_err!("dust manager absent"))?;
     let view = mgr.views.get(&pe).ok_or(gpu_err!("dust view of PE {} absent", pe.0))?;
@@ -5655,6 +5664,7 @@ impl Device {
     live_count: u32,
     frame: &DustFrame,
   ) -> GpuResult<(u64, u64)> {
+    aethervk_oshal_rlib::prof_zone!("dust: propagate");
     self
       .propagate(cmd, id, ring_base, capacity, first_slot, live_count, frame, None, 0)
       .map(|(addrs, _)| addrs)

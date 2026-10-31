@@ -151,6 +151,7 @@ fn drain_logic_commands(
   rx: &mpsc::Receiver<LogicCommand>,
   ctx: &alloc::sync::Arc<LogicThreadContext>,
 ) -> bool {
+  oshal::prof_zone!("logic: commands");
   loop {
     match rx.try_recv() {
       Ok(cmd) => {
@@ -203,6 +204,7 @@ pub fn start_logic_thread(
   context: alloc::sync::Arc<LogicThreadContext>,
 ) -> EngineResult<Thread> {
   thread::spawn(move || {
+    oshal::prof_thread_name!("aethervk-logic");
     #[cfg(debug_assertions)]
     {
       oshal::os::debug::fpe::unmask_fpu_for_current_thread();
@@ -305,6 +307,7 @@ pub fn start_logic_thread(
         };
 
         for scene_id in &scene_ids {
+          oshal::prof_zone!("logic: tick");
           let pc = play_controls
             .entry(*scene_id)
             .or_insert_with(|| PlayControl::new(target_frame_time));
@@ -2973,6 +2976,7 @@ fn execute_simulation_tick_fixed_update_phase(
   >,
   almanac: &AlmanacPackedData,
 ) -> EngineResult<SimulationTickOutput> {
+  oshal::prof_zone!("logic: fixed update");
   static CAPTURE_COMPUTE_ONCE: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(true);
   use crate::simulation_api::structs::SceneEntityId;
@@ -3196,6 +3200,7 @@ fn execute_simulation_tick_update_phase(
   scene: parking_lot::lock_api::RwLockUpgradableReadGuard<parking_lot::RawRwLock, SceneContext>,
   time_mgr: &oshal::os::time::v2::TimeManager,
 ) {
+  oshal::prof_zone!("logic: update");
   let dt_unscaled_s = utils::time_micro_to_seconds(time_mgr.state.read().unscaled_delta);
 
   // -- Update Transform Animations --
@@ -3286,6 +3291,7 @@ fn execute_simulation_tick_clear_changed_entities_phase(
   scene_id: u64,
   thread_pool: &oshal::os::pool::ThreadPool,
 ) {
+  oshal::prof_zone!("logic: clear changed");
   let r_lock = crate::simulation_api::SIMULATION_CALLBACK.read();
   if r_lock.is_none() {
     return;
@@ -3437,6 +3443,7 @@ pub(crate) mod utils {
     reference: Option<crate::simulation_api::structs::KeplerianElements>,
     capture_this_tick: bool,
   ) -> EngineResult<PhysicsDeviceSelfSync> {
+    oshal::prof_zone!("logic: emit dust");
     fill_dust_history_passes(
       vulkan_device,
       scene,
@@ -3481,6 +3488,7 @@ pub(crate) mod utils {
     reference: Option<crate::simulation_api::structs::KeplerianElements>,
     capture_first: bool,
   ) -> EngineResult<Option<PhysicsDeviceSelfSync>> {
+    oshal::prof_zone!("logic: dust history");
     fill_dust_history_passes(
       vulkan_device,
       scene,

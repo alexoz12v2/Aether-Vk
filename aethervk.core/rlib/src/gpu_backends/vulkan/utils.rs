@@ -55,6 +55,9 @@ bitflags! {
     /// compute subgroup basic + arithmetic operations (Vulkan 1.1 core; the arithmetic is
     /// optional on the baseline devices): the volume consumer's `.sg` blob
     const SUBGROUP_ARITHMETIC = 1 << 9;
+    /// `VK_EXT_calibrated_timestamps`: the GPU clock read at a known CPU instant, which places the
+    /// dust GPU zones on the Tracy timeline (`profile-tracy`, `device/profile.rs`)
+    const CALIBRATED_TIMESTAMPS = 1 << 10;
   }
 }
 
@@ -268,6 +271,10 @@ impl PhysicalDeviceQueryResult {
     }
     if self.optional_extensions.contains(OptionalExtensionSupportFlags::DEVICE_FAULT) {
       the_vec.push(c"VK_EXT_device_fault".as_ptr());
+    }
+    #[cfg(feature = "profile-tracy")]
+    if self.optional_extensions.contains(OptionalExtensionSupportFlags::CALIBRATED_TIMESTAMPS) {
+      the_vec.push(ash::ext::calibrated_timestamps::NAME.as_ptr());
     }
     if self.optional_extensions.contains(OptionalExtensionSupportFlags::DIAGNOSTIC_CHECKPOINTS) {
       the_vec.push(ash::nv::device_diagnostic_checkpoints::NAME.as_ptr());

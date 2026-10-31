@@ -87,6 +87,17 @@ impl Builder {
     F: FnOnce(),
     F: Send + 'static,
   {
+    // Tracy reads thread names from the client, from the thread itself: wrap the body
+    #[cfg(feature = "profile-tracy")]
+    let f = {
+      let name = self.name.clone();
+      move || {
+        if let Some(name) = &name {
+          crate::os::profile::thread_name(name);
+        }
+        f()
+      }
+    };
     let main: Box<dyn FnOnce()> = Box::new(f);
     let main: Box<Box<dyn FnOnce()>> = Box::new(main);
 
