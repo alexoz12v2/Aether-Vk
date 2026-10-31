@@ -259,10 +259,13 @@ public sealed class BillboardMonitorTests(ITestOutputHelper output)
     FitsComparisonSteps.WaitForSettledGeometry(s, FitsRow);
     var g = FitsComparisonSteps.ReadGeometry(s, FitsRow);
     var vp = s.Find("ViewportHost");
-    output.WriteLine($"{when}: billboard centre ({g.CenterX:F1}, {g.CenterY:F1}), viewport at ({vp.Location.X}, {vp.Location.Y}) {vp.Size.Width}×{vp.Size.Height}");
+    // the billboard's centre is in desktop px: the viewport in the same frame
+    var at = FitsComparisonSteps.DesktopLocation(s, vp);
+    int vx = at.X, vy = at.Y, ox = vx - vp.Location.X, oy = vy - vp.Location.Y;
+    output.WriteLine($"{when}: billboard centre ({g.CenterX:F1}, {g.CenterY:F1}), viewport at ({vx}, {vy}) {vp.Size.Width}×{vp.Size.Height} (WinAppDriver ({vp.Location.X}, {vp.Location.Y}), window shift ({ox}, {oy}))");
     Assert.True(
-      g.CenterX >= vp.Location.X && g.CenterX < vp.Location.X + vp.Size.Width
-      && g.CenterY >= vp.Location.Y && g.CenterY < vp.Location.Y + vp.Size.Height,
-      $"{when}: the billboard's centre ({g.CenterX:F1}, {g.CenterY:F1}) is off the viewport at ({vp.Location.X}, {vp.Location.Y}) {vp.Size.Width}×{vp.Size.Height}");
+      g.CenterX >= vx && g.CenterX < vx + vp.Size.Width
+      && g.CenterY >= vy && g.CenterY < vy + vp.Size.Height,
+      $"{when}: the billboard's centre ({g.CenterX:F1}, {g.CenterY:F1}) is off the viewport at ({vx}, {vy}) {vp.Size.Width}×{vp.Size.Height} (window shift ({ox}, {oy}))");
   }
 }
