@@ -419,16 +419,16 @@
                       <TextBlock Grid.Row="2" Grid.Column="0"
                                  Text="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrBillboardPosition}" />
                       <UniformGrid Grid.Row="2" Grid.Column="2" Columns="2" ColumnSpacing="6">
-                        <NumericUpDown AutomationProperties.AutomationId="BillboardX" Value="{Binding X}" Increment="1" FormatString="F0" ToolTip.Tip="Horizontal position of the billboard centre, in desktop pixels." />
-                        <NumericUpDown AutomationProperties.AutomationId="BillboardY" Value="{Binding Y}" Increment="1" FormatString="F0" ToolTip.Tip="Vertical position of the billboard centre, in desktop pixels." />
+                        <TextBox AutomationProperties.AutomationId="BillboardX" ToolTip.Tip="Horizontal position of the billboard centre, in desktop pixels."><i:Interaction.Behaviors><b:DoubleTextBoxBehavior Value="{Binding X}" Format="F0" /></i:Interaction.Behaviors></TextBox>
+                        <TextBox AutomationProperties.AutomationId="BillboardY" ToolTip.Tip="Vertical position of the billboard centre, in desktop pixels."><i:Interaction.Behaviors><b:DoubleTextBoxBehavior Value="{Binding Y}" Format="F0" /></i:Interaction.Behaviors></TextBox>
                       </UniformGrid>
 
                       <TextBlock Grid.Row="4" Grid.Column="0"
                                  Text="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrBillboardSize}" />
                       <StackPanel Grid.Row="4" Grid.Column="2" Spacing="4">
                         <UniformGrid Columns="2" ColumnSpacing="6">
-                          <NumericUpDown AutomationProperties.AutomationId="BillboardWidth" Value="{Binding Width}" Minimum="16" Increment="1" FormatString="F0" ToolTip.Tip="Billboard width in pixels (at least 16)." />
-                          <NumericUpDown AutomationProperties.AutomationId="BillboardHeight" Value="{Binding Height}" Minimum="16" Increment="1" FormatString="F0" ToolTip.Tip="Billboard height in pixels (at least 16)." />
+                          <TextBox AutomationProperties.AutomationId="BillboardWidth" ToolTip.Tip="Billboard width in pixels (at least 16)."><i:Interaction.Behaviors><b:DoubleTextBoxBehavior Value="{Binding Width}" Format="F0" Minimum="16" /></i:Interaction.Behaviors></TextBox>
+                          <TextBox AutomationProperties.AutomationId="BillboardHeight" ToolTip.Tip="Billboard height in pixels (at least 16)."><i:Interaction.Behaviors><b:DoubleTextBoxBehavior Value="{Binding Height}" Format="F0" Minimum="16" /></i:Interaction.Behaviors></TextBox>
                         </UniformGrid>
                         <StackPanel Orientation="Horizontal" Spacing="4">
                           <CheckBox IsChecked="{Binding IsAspectLocked}" AutomationProperties.AutomationId="BillboardAspectLock"
@@ -499,10 +499,8 @@
                                                        HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpNucleusPixel}" Grid.Column="2" FlyoutMaxWidth="300" />
                         </Grid>
                         <Grid ColumnDefinitions="*,6,*,6,Auto">
-                          <NumericUpDown Grid.Column="0" AutomationProperties.AutomationId="BillboardNucleusX" Value="{Binding NucleusX}"
-                                         Increment="0.1" FormatString="F2" Watermark="image centre" />
-                          <NumericUpDown Grid.Column="2" AutomationProperties.AutomationId="BillboardNucleusY" Value="{Binding NucleusY}"
-                                         Increment="0.1" FormatString="F2" Watermark="image centre" />
+                          <TextBox Grid.Column="0" AutomationProperties.AutomationId="BillboardNucleusX" Watermark="image centre"><i:Interaction.Behaviors><b:DoubleTextBoxBehavior Value="{Binding NucleusX}" Format="F2" AllowEmpty="True" /></i:Interaction.Behaviors></TextBox>
+                          <TextBox Grid.Column="2" AutomationProperties.AutomationId="BillboardNucleusY" Watermark="image centre"><i:Interaction.Behaviors><b:DoubleTextBoxBehavior Value="{Binding NucleusY}" Format="F2" AllowEmpty="True" /></i:Interaction.Behaviors></TextBox>
                           <Button Grid.Column="4" AutomationProperties.AutomationId="BillboardDetectNucleus" Content="Detect"
                                   Command="{Binding DetectNucleusCommand}" />
                         </Grid>

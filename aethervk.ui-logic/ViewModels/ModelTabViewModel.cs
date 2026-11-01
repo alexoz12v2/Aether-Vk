@@ -497,12 +497,16 @@ public partial class ModelTabViewModel
   [ObservableProperty]
   private string _jetSizeRangeError = "";
 
+  // a missing string (a test double without the key, or the base constructor setting the session
+  // before this class assigned its fields) gives an empty text, not an exception
+  private string Text(string key) => _translationService?.GetString(key) ?? "";
+
   private string GrainRangeErrorText(GrainRangeError e) => e switch
   {
     GrainRangeError.OutOfBounds => string.Format(System.Globalization.CultureInfo.CurrentCulture,
-      _translationService.GetString("Tabs_Model_GrainRangeOutOfBounds"), GrainDiameterRange.MinBoundUm, GrainDiameterRange.MaxBoundUm),
-    GrainRangeError.MinAboveMax => _translationService.GetString("Tabs_Model_GrainRangeMinAboveMax"),
-    GrainRangeError.RatioTooLarge => _translationService.GetString("Tabs_Model_GrainRangeRatioTooLarge"),
+      Text("Tabs_Model_GrainRangeOutOfBounds"), GrainDiameterRange.MinBoundUm, GrainDiameterRange.MaxBoundUm),
+    GrainRangeError.MinAboveMax => Text("Tabs_Model_GrainRangeMinAboveMax"),
+    GrainRangeError.RatioTooLarge => Text("Tabs_Model_GrainRangeRatioTooLarge"),
     _ => "",
   };
 
@@ -510,7 +514,7 @@ public partial class ModelTabViewModel
   {
     var ci = System.Globalization.CultureInfo.InvariantCulture;
     return string.Format(System.Globalization.CultureInfo.CurrentCulture,
-      _translationService.GetString("Tabs_Model_SimulatedGrainsNote"), minUm.ToString("0.######", ci), maxUm.ToString("0.######", ci));
+      Text("Tabs_Model_SimulatedGrainsNote"), minUm.ToString("0.######", ci), maxUm.ToString("0.######", ci));
   }
 
   private void RefreshGrainTexts()
@@ -858,7 +862,7 @@ public partial class ModelTabViewModel
   /// model session; display only, the simulated dust is unchanged.
   /// </summary>
   [ObservableProperty]
-  private bool _dustRhoNorm = false;
+  private bool _dustRhoNorm = true;
 
   partial void OnDustRhoNormChanged(bool value)
   {
@@ -965,10 +969,14 @@ public partial class ModelTabViewModel
       .Where(e =>
       {
         var name = e.EventArgs.PropertyName;
-        // computed outputs and the preview toggle (own subscription below) are not forwarded
+        // computed outputs and the preview toggle (own subscription below) are not forwarded; nor
+        // is the grain range view (min/max/error), derived from DiametreUm/SizeRange, which are
         if (name == nameof(JetViewModel.Beta) ||
             name == nameof(JetViewModel.DustProductionRateAt1AuKgs) ||
-            name == nameof(JetViewModel.IsPreviewVisible))
+            name == nameof(JetViewModel.IsPreviewVisible) ||
+            name == nameof(JetViewModel.MinDiameterUm) ||
+            name == nameof(JetViewModel.MaxDiameterUm) ||
+            name == nameof(JetViewModel.GrainRangeError))
           return false;
 
         // Visual-only edits (draw parameters, read by the renderer every frame) are forwarded

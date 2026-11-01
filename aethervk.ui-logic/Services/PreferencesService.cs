@@ -156,8 +156,8 @@ public sealed class PreferencesService
 
   public bool HudOrbitExpanded => _file.HudOrbitExpanded ?? true;
 
-  /// <summary>The nucleus view's physical lighting; on when the file has none.</summary>
-  public bool PhysicalLighting => _file.PhysicalLighting ?? true;
+  /// <summary>The nucleus view's physical lighting; off when the file has none.</summary>
+  public bool PhysicalLighting => _file.PhysicalLighting ?? false;
 
   /// <summary>Background stars override; null = automatic (off in the Model view only).</summary>
   public bool? StarBackground => _file.StarBackground;

@@ -51,13 +51,24 @@ public class DesktopBillboardViewTests
     Assert.Contains(view.GetVisualDescendants().OfType<TextBlock>(), t => t.Text == row.DisplayLabel);
 
     // edit through the controls of the row
-    var numbers = list.GetVisualDescendants().OfType<NumericUpDown>().ToList();
-    Assert.Equal(6, numbers.Count); // x, y, w, h, nucleus x, nucleus y
-    Assert.Equal(["BillboardNucleusX", "BillboardNucleusY"], numbers.Skip(4).Select(AutomationProperties.GetAutomationId));
-    Assert.Null(numbers[4].Value); // unset: the image centre
-    numbers[0].Value = 333;
-    numbers[4].Value = 12.5m;
-    numbers[5].Value = 7.25m;
+    // plain text boxes (no spin buttons), committed on focus loss
+    Assert.Empty(list.GetVisualDescendants().OfType<NumericUpDown>());
+    TextBox Box(string id) => list.GetVisualDescendants().OfType<TextBox>().Single(t => AutomationProperties.GetAutomationId(t) == id);
+    void Type(string id, string text)
+    {
+      var box = Box(id);
+      box.Text = text;
+      box.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(InputElement.LostFocusEvent));
+    }
+    foreach (var id in new[] { "BillboardX", "BillboardY", "BillboardWidth", "BillboardHeight", "BillboardNucleusX", "BillboardNucleusY" })
+      Assert.NotNull(Box(id));
+    Assert.Equal(string.Empty, Box("BillboardNucleusX").Text); // unset: the image centre
+    Type("BillboardX", "333");
+    Type("BillboardNucleusX", "12.5");
+    Type("BillboardNucleusY", "7,25"); // a decimal comma reads as the point
+    Type("BillboardWidth", "3"); // clamped to the 16 px minimum
+    Dispatcher.UIThread.RunJobs();
+    Assert.Equal("16", Box("BillboardWidth").Text);
     var slider = list.GetVisualDescendants().OfType<Slider>().Single();
     slider.Value = 0.3;
     Dispatcher.UIThread.RunJobs();

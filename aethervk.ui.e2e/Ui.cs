@@ -301,6 +301,20 @@ public static partial class Ui
   }
 
   /// <summary>
+  /// The app's visible dialogs (class #32770). Another program's message box (an editor's, say)
+  /// has the same class, so dialogs of other processes are left out.
+  /// </summary>
+  private static IEnumerable<WindowsElement> AppDialogs(this AppSession s) =>
+    s.Desktop.FindElementsByClassName("#32770").Where(d =>
+    {
+      try
+      {
+        return d.Displayed && Win32.ProcessOf(new IntPtr(Convert.ToInt64(d.GetAttribute("NativeWindowHandle")))) == s.Process.Id;
+      }
+      catch (WebDriverException) { return false; } // closed while being read
+    });
+
+  /// <summary>
   /// Windows common item dialog: the containing folder in the address bar at the top (Alt+D),
   /// Enter navigates there; then only the file (or folder) name in the name box at the bottom,
   /// Enter accepts. A folder picker that only navigated into the named folder is accepted with
@@ -308,7 +322,7 @@ public static partial class Ui
   /// </summary>
   private static void AnswerWindowsFileDialog(this AppSession s, string path)
   {
-    var dialog = WaitFor(() => s.Desktop.FindElementsByClassName("#32770").FirstOrDefault(d => d.Displayed),
+    var dialog = WaitFor(() => s.AppDialogs().FirstOrDefault(),
       TimeSpan.FromSeconds(20), "a file dialog");
     var handle = new IntPtr(Convert.ToInt64(dialog.GetAttribute("NativeWindowHandle")));
     Win32.SetForegroundWindow(handle);
@@ -327,7 +341,7 @@ public static partial class Ui
     if (folder)
     {
       dialog.FindElementsByAccessibilityId("1").First(e => e.Displayed).RealClick();
-      WaitUntil(() => !s.Desktop.FindElementsByClassName("#32770").Any(d => d.Displayed),
+      WaitUntil(() => !s.AppDialogs().Any(),
         TimeSpan.FromSeconds(10), "the folder dialog to close");
       return;
     }
@@ -343,10 +357,10 @@ public static partial class Ui
     Win32.Paste(Path.GetFileName(full));
     Win32.PressKey(Win32.VK_RETURN);
     Thread.Sleep(1500);
-    if (s.Desktop.FindElementsByClassName("#32770").FirstOrDefault(d => d.Displayed) is { } still)
+    if (s.AppDialogs().FirstOrDefault() is { } still)
     {
       still.FindElementsByAccessibilityId("1").FirstOrDefault()?.RealClick();
-      WaitUntil(() => !s.Desktop.FindElementsByClassName("#32770").Any(d => d.Displayed),
+      WaitUntil(() => !s.AppDialogs().Any(),
         TimeSpan.FromSeconds(10), "the file dialog to close");
     }
   }
