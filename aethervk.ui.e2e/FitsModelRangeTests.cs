@@ -134,6 +134,8 @@ public sealed class FitsModelRangeTests(ITestOutputHelper output)
 
   private void AssertRange(AppSession s, DateTime end, TimeSpan span, string what)
   {
+    // Start/End sit in the range's Advanced expander (collapsed by default)
+    s.OpenRangeEntry("EndEpochBox");
     Ui.WaitUntil(() => Parse(s.Find("EndEpochBox").Text) == end, TimeSpan.FromSeconds(10), $"{what}: the end at the image epoch");
     var start = Parse(s.Find("StartEpochBox").Text);
     output.WriteLine($"{what}: {start:s} -> {end:s}");

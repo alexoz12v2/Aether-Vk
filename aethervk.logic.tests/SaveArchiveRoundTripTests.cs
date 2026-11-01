@@ -91,9 +91,10 @@ public sealed class SaveArchiveRoundTripTests : IDisposable
 
     // non-default dust view options
     var defaults = new ModelSession();
-    Assert.False(defaults.DustRhoNorm || defaults.DustTrajectories);
+    Assert.True(defaults.DustRhoNorm); // on by default
+    Assert.False(defaults.DustTrajectories);
     Assert.Equal(0.0, defaults.DustExposureEv);
-    first.Model.DustRhoNorm = true;
+    first.Model.DustRhoNorm = false;
     first.Model.DustTrajectories = true;
     first.Model.DustExposureEv = 1.75;
 
@@ -133,9 +134,9 @@ public sealed class SaveArchiveRoundTripTests : IDisposable
     Assert.True(second.Comet.IsAlmanacLoaded);
     Assert.Equal(rates, second.Model.Jets.Select(j => j.DustRate1AuKgs).ToArray());
     Assert.Equal(first.Model.Jets.Select(j => j.Seed), second.Model.Jets.Select(j => j.Seed));
-    Assert.Equal((true, true, 1.75), (second.Model.DustRhoNorm, second.Model.DustTrajectories, second.Model.DustExposureEv));
+    Assert.Equal((false, true, 1.75), (second.Model.DustRhoNorm, second.Model.DustTrajectories, second.Model.DustExposureEv));
     var index = reopening.CurrentIndex!;
-    Assert.Equal((true, true, 1.75), (index.Model.DustRhoNorm, index.Model.DustTrajectories, index.Model.DustExposureEv));
+    Assert.Equal((false, true, 1.75), (index.Model.DustRhoNorm, index.Model.DustTrajectories, index.Model.DustExposureEv));
     Assert.Equal(committedEnd, index.Timeline.CurrentEpoch!.Nanoseconds);
   }
 }

@@ -57,6 +57,13 @@ internal static partial class Win32
 
   public sealed record Window(IntPtr Handle, string Title, string ClassName);
 
+  /// <summary>The id of the process that owns a window.</summary>
+  public static int ProcessOf(IntPtr hWnd)
+  {
+    GetWindowThreadProcessId(hWnd, out uint pid);
+    return (int)pid;
+  }
+
   /// <summary>Visible top-level windows of a process.</summary>
   public static List<Window> TopLevelWindows(int processId)
   {

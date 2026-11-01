@@ -304,6 +304,9 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
       .Subscribe(r => _cometConfig.SetNucleusRadiusKm(r))
       .AddDisposableTo(_disposables);
     LoadRadiusFromModelSession();
+    // the base constructor's restore ran before the services existed: redo it for the selection
+    if (CurrentSession is { } restoredSession)
+      RestoreFromSession(restoredSession);
     // the catalogue radius (fetched on commit) can clear the "radius unknown" hint
     _cometConfig.NucleusRadiusKm
       .Subscribe(_ => OnPropertyChanged(nameof(IsNucleusRadiusUnknown)))
@@ -369,9 +372,18 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
         try
         {
           if (DownloadAndCommitCommand.CanExecute(null))
+          {
+            _lastCommitSucceeded = false;
             await DownloadAndCommitCommand.ExecuteAsync(null);
-          // a request with nothing to commit (the same range again) counts as committed with it
-          request.Complete(IsAlmanacCommitted && !Range.IsRangeLocked);
+            // the commit's own outcome: IsAlmanacCommitted and the range lock follow it through
+            // main-thread posts, so right after the await they can still show the decommit
+            request.Complete(_lastCommitSucceeded);
+          }
+          else
+          {
+            // a request with nothing to commit (the same range again) counts as committed with it
+            request.Complete(IsAlmanacCommitted && !Range.IsRangeLocked);
+          }
         }
         catch
         {
@@ -459,12 +471,59 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
       {
         CommittedCometName = session.CommittedFullName;
         CommittedSpkRecordId = session.CommittedSpkRecordId;
+        RestoreSelection(session);
       }
     }
     finally
     {
       _restoringFromSession = false;
     }
+  }
+
+  /// <summary>
+  /// Rebuilds the comet / SPK record selection of a reopened save from what the commit stored, so
+  /// Download &amp; Commit (and the recommit of a range change) work without a new search. The
+  /// restored items are also put into the collections the combo boxes bind to. No network, no
+  /// commit. Needs <c>_jpl</c>, so the base-constructor pass skips it (the constructor repeats the
+  /// restore); an old save without the fields keeps the selection empty.
+  /// </summary>
+  private void RestoreSelection(CometSession session)
+  {
+    if (_jpl is null) return;
+    string designation = session.CommittedDesignation;
+    string recordId = session.CommittedSpkRecordId;
+    string fullName = session.CommittedFullName;
+    if (string.IsNullOrEmpty(designation) || string.IsNullOrEmpty(recordId) || string.IsNullOrEmpty(fullName))
+      return;
+
+    // the comet: the search result of the same comet when the list holds one, else an equivalent one
+    CometSearchResult? comet = null;
+    foreach (var c in _jpl.CometsData)
+      if (c.PrimaryDesignation == designation && c.Name == fullName) { comet = c; break; }
+    if (comet is null)
+    {
+      comet = new CometSearchResult { Name = fullName, PrimaryDesignation = designation };
+      _jpl.CometsData.Add(comet);
+    }
+    ApplySearchFilter();
+    if (!FilteredSearchResults.Contains(comet))
+      FilteredSearchResults.Add(comet);
+
+    // the record, as HorizonJplService.ParseSpkRecordsText builds it
+    bool single = recordId.StartsWith(HorizonJplService.DesignationRecordPrefix, StringComparison.Ordinal);
+    var record = new SpkRecordItem
+    {
+      RecordId = recordId,
+      EpochYear = single ? "(only record)" : string.Empty,
+      MatchDesig = designation,
+      PrimaryDesig = designation,
+      Name = single && session.SpkId is { } spk ? $"{designation} (SPK {spk})" : fullName,
+    };
+    _jpl.SpkRecordsData.Clear();
+    _jpl.SpkRecordsData.Add(record);
+
+    SelectedComet = comet;
+    SelectedSpkRecord = record;
   }
 
   // ── Property change override for rotational model debounce ───────────────
@@ -519,7 +578,7 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
       ApplySearchFilter();
 
     // Auto-load SPK records when a comet is selected
-    if (e.PropertyName == nameof(SelectedComet) && SelectedComet is not null)
+    if (e.PropertyName == nameof(SelectedComet) && SelectedComet is not null && !_restoringFromSession)
       _ = LoadSpkRecordsAsync();
 
     if (
@@ -771,6 +830,9 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
       || (Range is not null && Range.IsRangeLocked)
     );
 
+  /// <summary>Set by <see cref="DownloadAndCommitAsync"/> when the engine accepted the commit (the recommit request's result).</summary>
+  private bool _lastCommitSucceeded;
+
   [RelayCommand(CanExecute = nameof(CanDownloadAndCommit))]
   private async Task DownloadAndCommitAsync()
   {
@@ -859,6 +921,13 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
 
       if (committed)
       {
+        _lastCommitSucceeded = true;
+        // the jets now, before a caller seeks (Run at this date): the Model tab's commit
+        // subscription posts to the main thread and could add them after the seek, and a jet
+        // added while paused gets no dust history until Play. Idempotent with that subscription.
+        if (GetModelSession() is { } jetsModel && JetNativeSync.EffectiveNucleusRadiusKm(jetsModel, CurrentSession) > 0f)
+          JetNativeSync.EnsureNative(_runtimeService, jetsModel,
+            JetNativeSync.EffectiveNucleusRadiusKm(jetsModel, CurrentSession), _timeline.IgnitionUs());
         CommittedSpkRecordId = SelectedSpkRecord.RecordId;
         // the committed range in the timeline session and the boxes, then everyone else
         Range.OnCommitted(_currentProposedTimeRange);
