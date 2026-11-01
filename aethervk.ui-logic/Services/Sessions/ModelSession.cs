@@ -25,8 +25,8 @@ public sealed partial class ModelSession : ObservableObject, ITabSession
   public bool DustFlow { get; set; } = false;
   /// <summary>Trajectory lines: the paths of ~200 grains since they left the nucleus, visual only.</summary>
   public bool DustTrajectories { get; set; } = false;
-  /// <summary>Coma 1/ρ normalisation of the dust brightness (display only), off by default.</summary>
-  public bool DustRhoNorm { get; set; } = false;
+  /// <summary>Coma 1/ρ normalisation of the dust brightness (display only), on by default.</summary>
+  public bool DustRhoNorm { get; set; } = true;
   /// <summary>Dust exposure compensation in stops over the automatic exposure, in [-6, 6], visual only.</summary>
   public double DustExposureEv { get; set; } = 0.0;
   /// <summary>Time-lapse factor of the dust flow marks (Model tab), 1 = real motion, visual only.</summary>

@@ -57,7 +57,7 @@ public partial class DesignModelTabViewModel
   public bool DustTracers { get; set; } = false;
   public bool DustFlow { get; set; } = false;
   public bool DustTrajectories { get; set; } = false;
-  public bool DustRhoNorm { get; set; } = false;
+  public bool DustRhoNorm { get; set; } = true;
   public double DustExposureEv { get; set; } = 0.0;
   public string DustExposureEvText => "0.00 EV";
   public double DustFlowSpeed { get; set; } = 1.0;

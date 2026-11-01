@@ -937,7 +937,7 @@ Scrivi un'epoca dentro l'intervallo confermato e premi Invio, o Vai, per saltarc
     <value>Segni di luminosità che viaggiano con la polvere lungo le sincrone (la polvere emessa in uno stesso istante), un indizio di moto vicino al nucleo: picco 4×, minimo 0,15×, media 1.&#10;&#10;Disattivati per impostazione predefinita: visti da 0,03 UA e oltre, i segni sono il ventaglio stesso delle sincrone, raggi netti attraverso il nucleo che la profondità ottica fisica non mostra.&#10;&#10;Solo visivo. La loro velocità si regola con il time-lapse del flusso.</value>
   </data>
   <data name="Tabs_Model_HelpDustRhoNorm" xml:space="preserve">
-    <value>Divide la luminosità della polvere per la distanza dal nucleo (ρ), così la chioma interna brillante e i getti esterni deboli condividono un'unica esposizione.&#10;&#10;Solo visualizzazione: la polvere simulata non cambia.</value>
+    <value>Divide la luminosità della polvere per la distanza dal nucleo (ρ), così la chioma interna brillante e i getti esterni deboli condividono un'unica esposizione.&#10;&#10;Solo visualizzazione: la polvere simulata non cambia. Attiva per impostazione predefinita.</value>
   </data>
   <data name="Tabs_Model_HelpDustTrajectories" xml:space="preserve">
     <value>Disegna come linee i percorsi di circa 200 grani da quando hanno lasciato il nucleo, un colore per getto.</value>
@@ -1216,7 +1216,7 @@ Scrivi un'epoca dentro l'intervallo confermato e premi Invio, o Vai, per saltarc
     <value>Illuminazione fisica</value>
   </data>
   <data name="Tabs_Settings_HelpViewPhysicalLighting" xml:space="preserve">
-    <value>Solo luce solare diretta, scalata con la distanza eliocentrica r della cometa come (1 UA / r)², ed esposta in modo che una superficie bianca rivolta al Sole a 1 UA sia disegnata bianca. Nessuna luce ambiente.&#10;&#10;La superficie non raggiunta dal Sole è disegnata in indaco scuro.&#10;&#10;Attiva per impostazione predefinita nella vista del nucleo; la scelta viene ricordata.</value>
+    <value>Solo luce solare diretta, scalata con la distanza eliocentrica r della cometa come (1 UA / r)², ed esposta in modo che una superficie bianca rivolta al Sole a 1 UA sia disegnata bianca. Nessuna luce ambiente.&#10;&#10;La superficie non raggiunta dal Sole è disegnata in indaco scuro.&#10;&#10;Disattivata per impostazione predefinita; la scelta viene ricordata.</value>
 
   </data>
   <data name="Tabs_Settings_HelpHeaderViewNucleusFromEarth" xml:space="preserve">

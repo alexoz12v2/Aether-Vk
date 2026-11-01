@@ -12418,7 +12418,12 @@ fn cad_run_b(dist_r: f64, frames: usize, scenario: bool, tag: &str) {
   let mut seq = 0u64;
   settle(&mut sys, t0, &cfg_at, &mut seq);
   let radius = sys.coma_radius_m().expect("coma");
-  let mut st = cad_state(CadenceConfig::full());
+  // The scenario asserts the class histogram (every class >= 1 %). At 60 s a frame the light
+  // tolerance's shape bound admits class 64 only for dust older than ~16.7 d (2 N dt <= theta age),
+  // nearly none of this 30-day coma: 5 instead of 853 members at frame 5. The scenario therefore
+  // runs the A/B without the bound; `cadence_keeps_the_light` (scenario off) keeps the full config.
+  let light_tol = if scenario { 0.0 } else { super::cadence::DUST_CADENCE_LIGHT_TOL };
+  let mut st = cad_state(CadenceConfig { light_tol, ..CadenceConfig::full() });
   st.trace_light = true;
   let fwd0: V3 = unit([1.0, 0.3, -0.2]);
   let up0: V3 = [0.0, 0.0, 1.0];

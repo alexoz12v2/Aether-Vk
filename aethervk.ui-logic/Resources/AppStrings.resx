@@ -936,7 +936,7 @@ Type an epoch inside the committed range and press Enter, or Go, to jump there; 
     <value>Brightness marks riding the dust along synchrones (the dust of one emission instant), a motion cue near the nucleus: peak 4×, trough 0.15×, mean 1.&#10;&#10;Off by default: seen from 0.03 AU and beyond, the marks are the synchrone fan itself, hard rays through the nucleus that the physical optical depth does not show.&#10;&#10;Visual only. Their speed is set by the flow time-lapse.</value>
   </data>
   <data name="Tabs_Model_HelpDustRhoNorm" xml:space="preserve">
-    <value>Divides the dust brightness by the distance from the nucleus (ρ), so the bright inner coma and the faint outer jets share one exposure.&#10;&#10;Display only: the simulated dust is unchanged.</value>
+    <value>Divides the dust brightness by the distance from the nucleus (ρ), so the bright inner coma and the faint outer jets share one exposure.&#10;&#10;Display only: the simulated dust is unchanged. On by default.</value>
   </data>
   <data name="Tabs_Model_HelpDustTrajectories" xml:space="preserve">
     <value>Draws as lines the paths of about 200 grains since they left the nucleus, one colour per jet.</value>
@@ -1215,7 +1215,7 @@ Type an epoch inside the committed range and press Enter, or Go, to jump there; 
     <value>Physical lighting</value>
   </data>
   <data name="Tabs_Settings_HelpViewPhysicalLighting" xml:space="preserve">
-    <value>Direct sunlight only, scaled with the comet's heliocentric distance r as (1 AU / r)², and exposed so that a white surface facing the Sun at 1 AU is drawn white. No ambient fill.&#10;&#10;The surface the Sun does not reach is drawn in dark indigo.&#10;&#10;On by default in the nucleus view; your choice is remembered.</value>
+    <value>Direct sunlight only, scaled with the comet's heliocentric distance r as (1 AU / r)², and exposed so that a white surface facing the Sun at 1 AU is drawn white. No ambient fill.&#10;&#10;The surface the Sun does not reach is drawn in dark indigo.&#10;&#10;Off by default; your choice is remembered.</value>
   </data>
   <data name="Tabs_Settings_HelpHeaderViewNucleusFromEarth" xml:space="preserve">
     <value>Nucleus from Earth</value>

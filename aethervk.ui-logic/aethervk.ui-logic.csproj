@@ -12,8 +12,9 @@
     <AssemblyName>AetherVk.Logic</AssemblyName>
     <RootNamespace>AetherVk.Logic</RootNamespace>
 
-    <!-- Note: For now, skip native builds (TODO: Remove this) -->
-    <SkipNativeBuild>true</SkipNativeBuild>
+    <!-- Local builds run cargo for the native engine. CI (GitHub sets CI=true) builds Rust in its own
+         steps, and the packaging scripts pass -p:SkipNativeBuild=false explicitly. -->
+    <SkipNativeBuild Condition="'$(SkipNativeBuild)' == '' And '$(CI)' == 'true'">true</SkipNativeBuild>
 
     <!-- https://learn.microsoft.com/en-us/dotnet/standard/native-interop/disabled-marshalling -->
     <!--
@@ -485,24 +486,14 @@
     <CargoTargetBaseDirectory Condition="'$(CargoTargetBaseDirectory)' == ''"
       >$(MSBuildProjectDirectory)/../target/$(CargoTargetProfile)</CargoTargetBaseDirectory
     >
-
-    <NativeLibExists>false</NativeLibExists>
-    <NativeLibExists
-      Condition="'$(IsWindows)' == 'true' And Exists('$(CargoTargetBaseDirectory)/aethervk_core_cdylib.dll') And Exists('$(CargoTargetBaseDirectory)/aethervk_core_cdylib.dll.lib')"
-      >true</NativeLibExists
-    >
-    <NativeLibExists
-      Condition="'$(IsWindows)' != 'true' And (Exists('$(CargoTargetBaseDirectory)/libaethervk_core_cdylib.so') Or Exists('$(CargoTargetBaseDirectory)/libaethervk_core_cdylib.dylib'))"
-      >true</NativeLibExists
-    >
   </PropertyGroup>
 
+  <!-- Runs cargo on every build: cargo's own fingerprints decide what is stale (a no-op build takes
+       about a second). Gating it on an existing DLL left a stale engine in bin/ after Rust changes. -->
   <Target
     Name="BuildNativeLibrary"
     BeforeTargets="BeforeBuild"
-    Inputs="@(RustFiles)"
-    Outputs="..\target\$(CargoOutDir)\.cargo-build-successful"
-    Condition="'$(SkipNativeBuild)' != 'true' And '$(NativeLibExists)' != 'true'"
+    Condition="'$(SkipNativeBuild)' != 'true'"
   >
     <Exec
       Command="cargo build $(CargoArgs)"
@@ -515,7 +506,6 @@
       Condition="'$(CargoExitCode)' != '0'"
       Text="Cargo build failed or cargo not found. Native library might be missing."
     />
-    <!-- TODO Touch file on completion -->
   </Target>
 
   <!-- Resolve the cargo output folder at execution time: when building from a clean checkout

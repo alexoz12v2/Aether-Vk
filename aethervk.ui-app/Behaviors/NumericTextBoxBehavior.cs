@@ -93,6 +93,22 @@ public class NumericTextBoxBehavior : Behavior<Control>, IHandlesCommit
     set => SetValue(FormatProperty, value);
   }
 
+  // ── Live commit ───────────────────────────────────────────────────────────
+
+  public static readonly StyledProperty<bool> LiveCommitProperty =
+    AvaloniaProperty.Register<NumericTextBoxBehavior, bool>(nameof(LiveCommit));
+
+  /// <summary>
+  /// When <c>true</c> (a TextBox only), every keystroke that reads as a value inside the range
+  /// commits it at once: a small integer box (e.g. the rotations count) whose edit must survive a
+  /// tab switch, where neither LostFocus nor the detach reach the view model reliably.
+  /// </summary>
+  public bool LiveCommit
+  {
+    get => GetValue(LiveCommitProperty);
+    set => SetValue(LiveCommitProperty, value);
+  }
+
   // ── Text access helpers ───────────────────────────────────────────────────
 
   /// <summary>Reads the displayed text from whichever control type is associated.</summary>
@@ -122,7 +138,26 @@ public class NumericTextBoxBehavior : Behavior<Control>, IHandlesCommit
 
     AssociatedObject.LostFocus += OnCommit;
     AssociatedObject.KeyDown   += OnKeyDown;
+    AssociatedObject.DetachedFromVisualTree += OnDetachedFromVisualTree;
+    if (AssociatedObject is TextBox tb)
+      tb.TextChanged += OnTextChanged;
     SetText(Value.ToString(Format));
+  }
+
+  private void OnTextChanged(object? sender, TextChangedEventArgs e)
+  {
+    if (!LiveCommit || AssociatedObject is not { IsFocused: true }) return;
+    // only a value the range keeps as typed: "1" on the way to "12" commits, "-" or "0" waits
+    if (float.TryParse(GetText(), out float parsed) && float.IsFinite(parsed) && Constrain(parsed) == parsed)
+      Value = parsed;
+  }
+
+  // a tab switch unloads the box without a LostFocus when the click lands on a non-focusable tab
+  // header: commit a typed value then, or the edit is silently lost
+  private void OnDetachedFromVisualTree(object? sender, VisualTreeAttachmentEventArgs e)
+  {
+    if (GetText() != Value.ToString(Format))
+      OnCommit(sender, new RoutedEventArgs());
   }
 
   protected override void OnDetaching()
@@ -132,6 +167,9 @@ public class NumericTextBoxBehavior : Behavior<Control>, IHandlesCommit
 
     AssociatedObject.LostFocus -= OnCommit;
     AssociatedObject.KeyDown   -= OnKeyDown;
+    AssociatedObject.DetachedFromVisualTree -= OnDetachedFromVisualTree;
+    if (AssociatedObject is TextBox tb)
+      tb.TextChanged -= OnTextChanged;
   }
 
   protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)

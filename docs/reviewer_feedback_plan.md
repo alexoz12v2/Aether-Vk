@@ -58,9 +58,11 @@ A-D first (the reply needs them), then E-G, H, I.
 - Tests: `CometTabRangeEntryTests` (chain order, no download within coverage, save round trip),
   `ViewModeBarTests.Model_UsesTheObservationChain`, e2e `FitsModelRangeTests` extension (hands-off).
 
-### C. Physical lighting by default (P7)
-- `CameraService.cs:2453` and `ViewportSettingsViewModel.cs:272` -> true; persist as a preference
-  (`PreferencesService`, default true). Physical = terminator at the Sun direction (answers slide 5's lit extent).
+### C. Physical lighting as a remembered preference (P7)
+- A preference (`PreferencesService.PhysicalLighting`); physical = terminator at the Sun direction (answers
+  slide 5's lit extent). Default changed to **off** before the release (user, 2026-11-01): the display shading
+  stays the first view, the setting turns it on and is remembered. Same release: coma 1/ρ normalisation **on**
+  by default for new models (old saves keep their stored value).
 - Tests: `CameraServiceTests.PhysicalLighting_IsOnByDefault...`, preferences round trip.
 
 ### D. Declutter (P5)
