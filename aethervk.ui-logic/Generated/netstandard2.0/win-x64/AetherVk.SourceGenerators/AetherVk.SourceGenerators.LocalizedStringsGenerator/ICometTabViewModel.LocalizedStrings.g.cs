@@ -33,6 +33,11 @@ public partial interface ICometTabViewModel
     string StrHelpRecommit { get; set; }
     string StrHelpHeaderModelRange { get; set; }
     string StrHelpModelRange { get; set; }
+    string StrObservationDate { get; set; }
+    string StrFromImage { get; set; }
+    string StrRotationsBefore { get; set; }
+    string StrRunAtDate { get; set; }
+    string StrAdvancedRange { get; set; }
     string StrHelpHeaderDustLead { get; set; }
     string StrHelpDustLead { get; set; }
     string StrHelpHeaderReferenceOrbit { get; set; }

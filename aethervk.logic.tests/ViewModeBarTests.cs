@@ -4,6 +4,8 @@ using System.Linq;
 using System.Reactive.Subjects;
 using System.Threading.Tasks;
 using AetherVk.Logic.Services;
+using AetherVk.Logic.Tests.Mocks;
+using AetherVk.Logic.Utils;
 using AetherVk.Logic.ViewModels;
 using Microsoft.Reactive.Testing;
 using Moq;
@@ -42,6 +44,14 @@ public class ViewModeBarTests
     return sp.Object;
   }
 
+  private static ISchedulerProvider Immediate()
+  {
+    var sp = new Mock<ISchedulerProvider>();
+    sp.Setup(s => s.MainThread).Returns(System.Reactive.Concurrency.Scheduler.Immediate);
+    sp.Setup(s => s.Background).Returns(System.Reactive.Concurrency.Scheduler.Immediate);
+    return sp.Object;
+  }
+
   private static ITranslationService Translation()
   {
     var t = new Mock<ITranslationService>();
@@ -62,13 +72,16 @@ public class ViewModeBarTests
     public readonly Mock<ITabStateService<TimelineSession>> Sessions = new();
     public readonly TimelineSession Session = new();
 
-    public CameraRig()
+    public readonly Mock<INativeRuntimeService> Runtime = new();
+
+    /// <param name="immediate">Main-thread work delivered at once (the Model chain awaits the Comet tab's answer).</param>
+    public CameraRig(bool immediate = false)
     {
-      var runtime = new Mock<INativeRuntimeService>();
+      var runtime = Runtime;
       runtime.Setup(r => r.EarthEntityId).Returns(42UL);
       runtime.Setup(r => r.SetCameraParent(It.IsAny<ulong>(), It.IsAny<ulong>(), It.IsAny<bool>())).Returns(true);
       runtime.Setup(r => r.SetCameraParentToComet(It.IsAny<ulong>(), It.IsAny<bool>())).Returns(true);
-      var schedulers = Schedulers(Scheduler);
+      var schedulers = immediate ? Immediate() : Schedulers(Scheduler);
       var breadcrumb = new BreadcrumbService();
       CometConfig = new CometConfigService(runtime.Object, schedulers);
       Timeline = new TimelineService(runtime.Object, schedulers, CometConfig, breadcrumb);
@@ -129,24 +142,47 @@ public class ViewModeBarTests
     Assert.True(rig.Bar.HasHint);
   }
 
+  /// <summary>
+  /// Model with a FITS image: the Comet tab's "Run at this date" chain (reviewer 2026-10-31, slide 1),
+  /// one implementation, through the timeline service: N rotations ending at the image's date are
+  /// proposed, the comet recommitted, the clock sought to the date, then the comparison set up.
+  /// </summary>
   [Fact]
-  public async Task Model_WithAFitsImage_RequestsTheModelRange_ThenSetsUpTheComparison()
+  public async Task Model_UsesTheObservationChain()
   {
-    var rig = new CameraRig();
-    var fits = new FitsBillboardTests.Rig(withModelRange: true);
+    var rig = new CameraRig(immediate: true);
+    var fits = new FitsBillboardTests.Rig();
     var row = fits.Create("/data/lt_67p.fits");
     fits.Probe.IsEarthObserver = false;
     fits.Probe.ArcsecPerPx = null;
     fits.Vm.Probe();
     using var attached = rig.Bar.AttachBillboards(fits.Vm);
+    rig.Timeline.ObservationImageSource = fits.Vm.ObservationImage; // as the Settings tab wires it
+
+    // the Comet tab's range entry (the chain's owner) and its Download & Commit, faked
+    var log = new List<string>();
+    rig.Sessions.Setup(s => s.UpdateSession(It.IsAny<SessionId>(), It.IsAny<Action<TimelineSession>>()))
+      .Callback<SessionId, Action<TimelineSession>>((_, a) => a(rig.Session));
+    using var range = new RangeEntryViewModel(rig.Sessions.Object, rig.Timeline, null, () => 696.0,
+      new TimeScaleService(new FakeTimeScaleConverter()) { Scale = TimeScale.Utc });
+    rig.Timeline.RecommitRequests.Subscribe(r =>
+    {
+      log.Add("recommit");
+      Assert.True(TimeUtils.TryParseIso8601(rig.Session.ProposedEndEpoch, out var end));
+      Assert.Equal(new DateTimeOffset(2021, 12, 27, 0, 14, 47, TimeSpan.Zero), end); // the image's mid-exposure
+      range.OnCommitted(null);
+      r.Complete(true);
+    });
+    rig.Runtime.Setup(r => r.SeekEpochSync(It.IsAny<short>(), It.IsAny<ulong>()))
+      .Returns<short, ulong>((_, _) => { log.Add("seek"); return true; });
+    range.ModelRotations = 2;
 
     await rig.Bar.SelectModelCommand.ExecuteAsync(null);
     fits.Fake.Drain();
 
-    // the model range first (end = the image's mid-exposure), then the comparison steps in order
-    Assert.Equal(["range", "enter", "seek", "site", "match 364.416″", "lock True"], fits.Probe.Log);
-    Assert.Equal(DateTimeOffset.Parse("2021-12-27T00:14:47.345Z", System.Globalization.CultureInfo.InvariantCulture),
-      Assert.Single(fits.ModelRanges));
+    Assert.Equal(["recommit", "seek"], log);
+    Assert.Equal(["enter", "seek", "site", "match 364.416″", "lock True"], fits.Probe.Log); // the comparison, after the chain's seek
+    Assert.Equal("2021-12-27T00:14:47", range.ObservationEpoch);
     Assert.Equal(((short)0, 693749756529000001UL), Assert.Single(fits.Seeks)); // the image's TDB parts
     Assert.True(fits.Probe.IsComparisonLocked);
     Assert.Equal(row.Fits!.StatusMessage, rig.Bar.Hint);
@@ -155,6 +191,17 @@ public class ViewModeBarTests
     attached.Dispose();
     await rig.Bar.SelectModelCommand.ExecuteAsync(null); // detached: the no-FITS path again
     Assert.Equal("ModeBar_NoFitsHint", rig.Bar.Hint);
+  }
+
+  [Fact]
+  public async Task Model_WithoutACometTab_ShowsTheChainsAnswer()
+  {
+    var rig = new CameraRig(immediate: true);
+    var fits = new FitsBillboardTests.Rig();
+    fits.Create("/data/lt_67p.fits");
+    using var attached = rig.Bar.AttachBillboards(fits.Vm);
+    await rig.Bar.SelectModelCommand.ExecuteAsync(null);
+    Assert.Equal(ObservationRunResult.NoHandler.Status, rig.Bar.Hint);
   }
 
   [Fact]

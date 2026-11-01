@@ -295,9 +295,6 @@
   <data name="Tabs_Model_DustDensity" xml:space="preserve">
     <value>Densità Polveri</value>
   </data>
-  <data name="Tabs_Model_DustDiameter" xml:space="preserve">
-    <value>Diametri Polveri</value>
-  </data>
   <data name="Tabs_Model_Albedo" xml:space="preserve">
     <value>Albedo</value>
   </data>
@@ -310,8 +307,35 @@
   <data name="Tabs_Model_SizeQ" xml:space="preserve">
     <value>Esponente della legge dimensionale q (granelli)</value>
   </data>
-  <data name="Tabs_Model_SizeRange" xml:space="preserve">
-    <value>Fattore di intervallo dimensionale F</value>
+  <data name="Tabs_Model_MinDiameter" xml:space="preserve">
+    <value>Diametro minimo del grano</value>
+  </data>
+  <data name="Tabs_Model_MaxDiameter" xml:space="preserve">
+    <value>Diametro massimo del grano</value>
+  </data>
+  <data name="Tabs_Model_HelpMinDiameter" xml:space="preserve">
+    <value>Diametro del più piccolo grano simulato dei nuovi getti, in µm (da 0,01 a 10000). I grani simulati vanno da questo al diametro massimo, con densità numerica n(d) ∝ d^−q.&#10;&#10;Diametri minimo e massimo uguali simulano una sola dimensione di grano. Poi ogni getto ha il suo (nel suo pannello Grain).</value>
+  </data>
+  <data name="Tabs_Model_HelpMaxDiameter" xml:space="preserve">
+    <value>Diametro del più grande grano simulato dei nuovi getti, in µm (da 0,01 a 10000), al massimo 1.000.000 di volte il minimo. Non può essere inferiore al diametro minimo: una coppia non valida non viene applicata (compare un errore) e i due diametri non vengono mai scambiati.&#10;&#10;Poi ogni getto ha il suo (nel suo pannello Grain).</value>
+  </data>
+  <data name="Tabs_Model_HelpJetMinDiameter" xml:space="preserve">
+    <value>Diametro del più piccolo grano simulato di questo getto, in µm (da 0,01 a 10000). I grani simulati vanno da questo al diametro massimo, con densità numerica n(d) ∝ d^−q.&#10;&#10;Con la densità e Q_pr, la media geometrica dei due diametri determina β, la spinta della pressione di radiazione: i grani più piccoli o più leggeri si allontanano più rapidamente dal Sole. Diametri minimo e massimo uguali simulano una sola dimensione di grano.</value>
+  </data>
+  <data name="Tabs_Model_HelpJetMaxDiameter" xml:space="preserve">
+    <value>Diametro del più grande grano simulato di questo getto, in µm (da 0,01 a 10000), al massimo 1.000.000 di volte il minimo. Non può essere inferiore al diametro minimo: una coppia non valida non viene applicata (compare un errore) e i due diametri non vengono mai scambiati.</value>
+  </data>
+  <data name="Tabs_Model_SimulatedGrainsNote" xml:space="preserve">
+    <value>Grani simulati: diametri {0}-{1} µm. La polvere continua assume q = 3,5 su questo intervallo; il tuo q cambia solo i granelli luminosi.</value>
+  </data>
+  <data name="Tabs_Model_GrainRangeOutOfBounds" xml:space="preserve">
+    <value>I diametri dei grani devono essere numeri tra {0} e {1} µm. Non è stato modificato nulla.</value>
+  </data>
+  <data name="Tabs_Model_GrainRangeMinAboveMax" xml:space="preserve">
+    <value>Il diametro minimo non può superare il massimo. Non è stato modificato nulla.</value>
+  </data>
+  <data name="Tabs_Model_GrainRangeRatioTooLarge" xml:space="preserve">
+    <value>Il diametro massimo può essere al massimo 1.000.000 di volte il minimo. Non è stato modificato nulla.</value>
   </data>
   <data name="Tabs_Model_Beta" xml:space="preserve">
     <value>Beta</value>
@@ -691,16 +715,33 @@ Non modifica la simulazione in corso. Restore rimette nelle caselle l'intervallo
 Fino ad allora la simulazione mantiene l'intervallo confermato.</value>
   </data>
   <data name="Tabs_Comet_HelpHeaderModelRange" xml:space="preserve">
-    <value>Intervallo modello</value>
+    <value>Osservazione</value>
   </data>
   <data name="Tabs_Comet_HelpModelRange" xml:space="preserve">
-    <value>Un intervallo per il confronto con un'immagine al telescopio (la vista Modello): termina all'epoca dell'immagine e inizia N rotazioni complete del nucleo prima, così la storia simulata della polvere copre N giri completi prima dell'immagine.
+    <value>La data di osservazione è separata dal periodo di generazione: l'intervallo simulato termina alla data e inizia N rotazioni complete del nucleo prima, così la storia della polvere copre N giri prima dell'immagine. Un'altra data nelle settimane di una campagna richiede solo una nuova esecuzione, non un nuovo modello.
 
-Rotazioni: N, un numero intero di almeno 1. Una rotazione dura il periodo di rotazione (Modello rotazionale: 360° diviso la velocità di rotazione).
+Data di osservazione (UTC): l'epoca della tua immagine al telescopio. "Dall'immagine" la prende dal file FITS caricato (la metà dell'esposizione). Vuota: la casella Fine.
 
-Che terminano a: di norma l'epoca della tua immagine al telescopio (il pulsante FITS "Intervallo modello" la compila con l'epoca dell'osservazione). Lascialo vuoto per usare la casella Fine.
+Rotazioni prima: N, un numero intero di almeno 1; una rotazione dura il periodo di rotazione (Modello rotazionale: 360° diviso la velocità di rotazione). L'intervallo non è mai inferiore a 1 giorno.
 
-Set range: imposta Inizio e Fine (N × periodo, mai meno di 1 giorno). Propone soltanto l'intervallo: Download &amp; Commit lo applica.</value>
+Esegui a questa data: propone l'intervallo, conferma la cometa con esso (l'SPK viene scaricato solo quando quello attuale non copre l'intervallo), porta l'orologio alla data e imposta il confronto con l'immagine quando ce n'è una caricata. Il pulsante Modello della barra delle modalità fa lo stesso.
+
+Avanzate: le caselle Inizio / Fine, Ripristina e Riconferma per un intervallo digitato a mano.</value>
+  </data>
+  <data name="Tabs_Comet_ObservationDate" xml:space="preserve">
+    <value>Data di osservazione (UTC):</value>
+  </data>
+  <data name="Tabs_Comet_FromImage" xml:space="preserve">
+    <value>Dall'immagine</value>
+  </data>
+  <data name="Tabs_Comet_RotationsBefore" xml:space="preserve">
+    <value>rotazioni prima</value>
+  </data>
+  <data name="Tabs_Comet_RunAtDate" xml:space="preserve">
+    <value>Esegui a questa data</value>
+  </data>
+  <data name="Tabs_Comet_AdvancedRange" xml:space="preserve">
+    <value>Avanzate: Inizio / Fine, Ripristina, Riconferma</value>
   </data>
   <data name="Tabs_Comet_HelpHeaderDustLead" xml:space="preserve">
     <value>Anticipo della polvere</value>
@@ -847,17 +888,11 @@ Scrivi un'epoca dentro l'intervallo confermato e premi Invio, o Vai, per saltarc
   <data name="Tabs_Model_HelpHeaderJetQDust" xml:space="preserve">
     <value>Q_dust a 1 UA</value>
   </data>
-  <data name="Tabs_Model_HelpHeaderJetDiameter" xml:space="preserve">
-    <value>Diametro</value>
-  </data>
   <data name="Tabs_Model_HelpHeaderQpr" xml:space="preserve">
     <value>Q_pr</value>
   </data>
   <data name="Tabs_Model_HelpHeaderSizeLawQ" xml:space="preserve">
     <value>Legge dimensionale q</value>
-  </data>
-  <data name="Tabs_Model_HelpHeaderSizeRangeF" xml:space="preserve">
-    <value>Intervallo dimensionale F</value>
   </data>
   <data name="Tabs_Model_HelpHeaderJetGrain" xml:space="preserve">
     <value>Grani (questo getto)</value>
@@ -937,9 +972,6 @@ Scrivi un'epoca dentro l'intervallo confermato e premi Invio, o Vai, per saltarc
   <data name="Tabs_Model_HelpJetQDust" xml:space="preserve">
     <value>Calcolato, sola lettura. Il tasso di produzione in massa di polvere a 1 UA dal Sole, in kg/s, come lo applica il motore: il Q_d a 1 UA di questo getto limitato al massimo comune al modello (Q_d massimo).</value>
   </data>
-  <data name="Tabs_Model_HelpJetDiameter" xml:space="preserve">
-    <value>Diametro del grano di riferimento di questo getto, in µm. Con la densità e Q_pr determina β, la spinta della pressione di radiazione: i grani più piccoli o più leggeri si allontanano più rapidamente dal Sole.&#10;&#10;La legge dimensionale copre raggi da s₀/F a s₀·F attorno a s₀, metà del diametro.</value>
-  </data>
   <data name="Tabs_Model_HelpJetDensity" xml:space="preserve">
     <value>Densità di massa dei grani di questo getto, in g/cm³ (polvere cometaria circa da 0,5 a 1). Entra in β e nella massa di polvere necessaria per una data luminosità.</value>
   </data>
@@ -950,13 +982,10 @@ Scrivi un'epoca dentro l'intervallo confermato e premi Invio, o Vai, per saltarc
     <value>Albedo geometrica della polvere di questo getto (da 0,01 a 0,5; polvere cometaria da 0,03 a 0,06). Scala solo la luminosità; la quantità di polvere è il tasso di produzione Q_d del getto.</value>
   </data>
   <data name="Tabs_Model_HelpJetSizeQ" xml:space="preserve">
-    <value>Esponente q della legge dimensionale dei grani di questo getto, n(s) ∝ s^−q (da 2 a 5; 3,5 è il valore usuale). Un q maggiore significa più grani piccoli.&#10;&#10;Limitazione: q cambia solo i singoli granelli luminosi; la resa continua della polvere assume q = 3,5.</value>
-  </data>
-  <data name="Tabs_Model_HelpJetSizeRange" xml:space="preserve">
-    <value>Fattore di intervallo F dei grani di questo getto (da 1 a 1000): i raggi vanno da s₀/F a s₀·F, dove s₀ è metà del diametro. Un F maggiore significa una gamma più ampia di dimensioni dei grani.</value>
+    <value>Esponente q della legge dimensionale dei grani di questo getto, n(d) ∝ d^−q sui diametri simulati (da 2 a 5; 3,5 è il valore usuale). Un q maggiore significa più grani piccoli.&#10;&#10;Limitazione: q cambia solo i singoli granelli luminosi; la resa continua della polvere assume q = 3,5 sullo stesso intervallo.</value>
   </data>
   <data name="Tabs_Model_HelpJetGrain" xml:space="preserve">
-    <value>I grani di polvere propri di questo getto: ogni getto ha i suoi, e un nuovo getto parte dai valori predefiniti più in basso.&#10;&#10;I raggi dei grani seguono n(s) ∝ s^−q da s₀/F a s₀·F, s₀ = diametro/2 (q = 3.5, F = 10, 100 µm → raggi 5–500 µm).&#10;&#10;Diametro, densità e Q_pr determinano β ∝ Q_pr/(ρ·s), cioè quanto la luce solare spinge i grani lontano dal Sole. L'albedo determina quanto sono luminosi; la quantità di polvere è il tasso di produzione Q_d del getto (Advanced: activity).&#10;&#10;Ogni campo ha il suo ? con il suo intervallo.&#10;&#10;Limitazione: q cambia solo i singoli granelli luminosi; la resa continua della polvere è costruita per q = 3.5 qualunque sia q.</value>
+    <value>I grani di polvere propri di questo getto: ogni getto ha i suoi, e un nuovo getto parte dai valori predefiniti più in basso.&#10;&#10;I grani simulati hanno diametri d dal minimo al massimo, con densità numerica n(d) ∝ d^−q (predefinito 10-1000 µm, q = 3.5).&#10;&#10;I diametri dei grani, la densità e Q_pr determinano β ∝ Q_pr/(ρ·s), cioè quanto la luce solare spinge i grani lontano dal Sole. L'albedo determina quanto sono luminosi; la quantità di polvere è il tasso di produzione Q_d del getto (Advanced: activity).&#10;&#10;Ogni campo ha il suo ? con il suo intervallo.&#10;&#10;Limitazione: q cambia solo i singoli granelli luminosi; la resa continua della polvere assume q = 3.5 sullo stesso intervallo.</value>
   </data>
   <data name="Tabs_Model_HelpJetActivity" xml:space="preserve">
     <value>Il tasso di produzione in massa di polvere Q_d di questo getto a 1 UA dal Sole, in kg/s: quanta polvere produce. I getti si sommano: il totale della cometa è la lettura Σ in Advanced: activity (Q_d) tra i valori predefiniti.&#10;&#10;Q_d(r) = min(max, Q_d₀ · r^−k), nullo oltre il cutoff; l'esponente k, il cutoff e il massimo sono comuni a tutti i getti (Advanced: activity (Q_d) sotto Defaults for new jets).&#10;&#10;Q_d non dipende dal grano (densità, dimensione, albedo) né dalla velocità: questi determinano solo la luminosità e β.&#10;&#10;Le comete vanno da molto meno di 1 kg/s a migliaia di kg/s.</value>
@@ -965,16 +994,13 @@ Scrivi un'epoca dentro l'intervallo confermato e premi Invio, o Vai, per saltarc
     <value>Il tasso di produzione in massa di polvere di questo getto a 1 UA dal Sole, in kg/s. Scala come r_h^−k fino al massimo e si annulla oltre il cutoff (entrambi comuni a tutti i getti).&#10;&#10;Le comete vanno da molto meno di 1 kg/s a migliaia di kg/s.</value>
   </data>
   <data name="Tabs_Model_HelpCopyGrain" xml:space="preserve">
-    <value>Assegna a tutti gli altri getti i grani e l'attività di questo getto: diametro, densità, Q_pr, albedo, q, F e Q_d₀.&#10;&#10;I loro siti, velocità e colori restano invariati.</value>
+    <value>Assegna a tutti gli altri getti i grani e l'attività di questo getto: diametro minimo e massimo, densità, Q_pr, albedo, q e Q_d₀.&#10;&#10;I loro siti, velocità e colori restano invariati.</value>
   </data>
   <data name="Tabs_Model_HelpJetDefaults" xml:space="preserve">
-    <value>Ogni getto ha i propri grani (diametro, densità, Q_pr, albedo, q, F) e il proprio Q_d₀: modificali nei pannelli Grain e Activity del getto selezionato.&#10;&#10;I valori qui sono quelli da cui parte un getto appena aggiunto; cambiarli non modifica i getti esistenti. Solo la forma della legge di Q_d (esponente, cutoff, massimo, in Advanced: activity) è comune a tutti i getti.</value>
+    <value>Ogni getto ha i propri grani (diametro minimo e massimo, densità, Q_pr, albedo, q) e il proprio Q_d₀: modificali nei pannelli Grain e Activity del getto selezionato.&#10;&#10;I valori qui sono quelli da cui parte un getto appena aggiunto; cambiarli non modifica i getti esistenti. Solo la forma della legge di Q_d (esponente, cutoff, massimo, in Advanced: activity) è comune a tutti i getti.</value>
   </data>
   <data name="Tabs_Model_HelpDustDensity" xml:space="preserve">
     <value>Densità di massa dei grani dei nuovi getti, in g/cm³ (polvere cometaria circa da 0,5 a 1). Entra in β e nella massa di polvere necessaria per una data luminosità.&#10;&#10;Poi ogni getto ha la sua (nel suo pannello Grain).</value>
-  </data>
-  <data name="Tabs_Model_HelpDustDiameter" xml:space="preserve">
-    <value>Diametro del grano di riferimento dei nuovi getti, in µm. Con la densità e Q_pr determina β, la spinta della pressione di radiazione: i grani più piccoli o più leggeri si allontanano più rapidamente dal Sole.&#10;&#10;Poi ogni getto ha il suo (nel suo pannello Grain).</value>
   </data>
   <data name="Tabs_Model_HelpScatteringEfficiency" xml:space="preserve">
     <value>Efficienza della pressione di radiazione Q_pr dei grani dei nuovi getti (da 0,5 a 2; 1 è un corpo grigio). Scala solo β, non la luminosità.&#10;&#10;Poi ogni getto ha la sua (nel suo pannello Grain).</value>
@@ -998,10 +1024,7 @@ Scrivi un'epoca dentro l'intervallo confermato e premi Invio, o Vai, per saltarc
     <value>Limite superiore del tasso di produzione di polvere di ciascun getto, in kg/s, perché l'emissione non cresca senza limite vicino al Sole.&#10;&#10;Comune a tutti i getti.</value>
   </data>
   <data name="Tabs_Model_HelpSizeDistribution" xml:space="preserve">
-    <value>L'intervallo dimensionale da cui partono i nuovi getti. L'esponente q si imposta per getto, nel pannello Grain di ciascun getto (i nuovi getti partono da q = 3.5).&#10;&#10;I raggi dei grani seguono n(s) ∝ s^−q da s₀/F a s₀·F, s₀ = diametro/2 (q = 3.5, F = 10, 100 µm → raggi 5–500 µm).&#10;&#10;In numero dominano i grani piccoli; in sezione d'urto (ciò che determina la luminosità) la legge è s^(2−q), quindi la luminosità favorisce i grani piccoli solo lentamente.&#10;&#10;La resa continua della polvere è costruita per q = 3.5; cambiare q influisce solo sui singoli granelli luminosi.</value>
-  </data>
-  <data name="Tabs_Model_HelpSizeRange" xml:space="preserve">
-    <value>Fattore di intervallo F predefinito per i nuovi getti (da 1 a 1000): i raggi dei grani vanno da s₀/F a s₀·F, dove s₀ è metà del diametro di riferimento. Un F maggiore significa una gamma più ampia di dimensioni dei grani.&#10;&#10;Poi ogni getto ha il suo (nel suo pannello Grain).</value>
+    <value>L'intervallo di dimensioni dei grani da cui partono i nuovi getti: diametro minimo e massimo del grano, in µm. L'esponente q si imposta per getto, nel pannello Grain di ciascun getto (i nuovi getti partono da q = 3.5).&#10;&#10;I grani simulati hanno diametri d dal minimo al massimo, con densità numerica n(d) ∝ d^−q (predefinito 10-1000 µm, q = 3.5). Il grafico mostra esattamente questo intervallo.&#10;&#10;In numero dominano i grani piccoli; in sezione d'urto (ciò che determina la luminosità) la legge è d^(2−q), quindi la luminosità favorisce i grani piccoli solo lentamente.&#10;&#10;La resa continua della polvere assume q = 3.5 su tutto l'intervallo; cambiare q influisce solo sui singoli granelli luminosi.</value>
   </data>
   <data name="Tabs_Settings_HelpDisplayMode" xml:space="preserve">
     <value>Predefinita: disegna il nucleo come una semplice sfera procedurale del raggio del nucleo.&#10;&#10;Mesh personalizzata: disegna una mesh 3D importata con le sue texture, scelte qui sotto (importa le mesh nella scheda Importazioni).&#10;&#10;Solo aspetto: la simulazione non cambia. La scelta si blocca mentre la simulazione è in esecuzione.</value>
@@ -1186,11 +1209,15 @@ Scrivi un'epoca dentro l'intervallo confermato e premi Invio, o Vai, per saltarc
   <data name="Tabs_Settings_HelpViewShowBehindCamera" xml:space="preserve">
     <value>Solo ortografica: disegna anche la geometria dietro il piano della camera (entro la distanza lontana), come fa un'immagine telescopica.&#10;&#10;Le polveri dietro la camera non vengono disegnate. Una vista prospettica non può mostrarla.</value>
   </data>
+  <data name="Tabs_Settings_PhysicalLighting" xml:space="preserve">
+    <value>Illuminazione fisica</value>
+  </data>
   <data name="Tabs_Settings_HelpHeaderViewPhysicalLighting" xml:space="preserve">
     <value>Illuminazione fisica</value>
   </data>
   <data name="Tabs_Settings_HelpViewPhysicalLighting" xml:space="preserve">
-    <value>Solo luce solare diretta, scalata con la distanza eliocentrica r della cometa come (1 UA / r)², ed esposta in modo che una superficie bianca rivolta al Sole a 1 UA sia disegnata bianca. Nessuna luce ambiente.&#10;&#10;La superficie non raggiunta dal Sole è disegnata in indaco scuro.</value>
+    <value>Solo luce solare diretta, scalata con la distanza eliocentrica r della cometa come (1 UA / r)², ed esposta in modo che una superficie bianca rivolta al Sole a 1 UA sia disegnata bianca. Nessuna luce ambiente.&#10;&#10;La superficie non raggiunta dal Sole è disegnata in indaco scuro.&#10;&#10;Attiva per impostazione predefinita nella vista del nucleo; la scelta viene ricordata.</value>
+
   </data>
   <data name="Tabs_Settings_HelpHeaderViewNucleusFromEarth" xml:space="preserve">
     <value>Nucleo dalla Terra</value>
@@ -1269,5 +1296,65 @@ Scrivi un'epoca dentro l'intervallo confermato e premi Invio, o Vai, per saltarc
   </data>
   <data name="Overlay_DustRendering" xml:space="preserve">
     <value>Rendering dell'immagine completa…</value>
+  </data>
+  <data name="Overlay_LegendTitle" xml:space="preserve">
+    <value>Legenda</value>
+  </data>
+  <data name="Overlay_LegendGrid" xml:space="preserve">
+    <value>Griglia di latitudine / longitudine</value>
+  </data>
+  <data name="Overlay_LegendBodyX" xml:space="preserve">
+    <value>Asse X del corpo</value>
+  </data>
+  <data name="Overlay_LegendBodyY" xml:space="preserve">
+    <value>Asse Y del corpo</value>
+  </data>
+  <data name="Overlay_LegendSpin" xml:space="preserve">
+    <value>Asse di rotazione (Z del corpo)</value>
+  </data>
+  <data name="Overlay_LegendSun" xml:space="preserve">
+    <value>Direzione del Sole</value>
+  </data>
+  <data name="Overlay_LegendVelocity" xml:space="preserve">
+    <value>Direzione della velocità (eliocentrica)</value>
+  </data>
+  <data name="Overlay_LegendJet" xml:space="preserve">
+    <value>Direzione del getto {0}</value>
+  </data>
+  <data name="Overlay_LegendCometOrbit" xml:space="preserve">
+    <value>Orbita della cometa (di riferimento, dagli elementi orbitali)</value>
+  </data>
+  <data name="Overlay_LegendEarthOrbit" xml:space="preserve">
+    <value>Orbita della Terra</value>
+  </data>
+  <data name="Overlay_LegendTravelledPath" xml:space="preserve">
+    <value>Percorso compiuto in questa simulazione</value>
+  </data>
+  <data name="Tabs_Settings_StarBackground" xml:space="preserve">
+    <value>Stelle di sfondo</value>
+  </data>
+  <data name="Tabs_Settings_StarBackgroundAuto" xml:space="preserve">
+    <value>Auto (spente nella vista Modello)</value>
+  </data>
+  <data name="Tabs_Settings_StarBackgroundOn" xml:space="preserve">
+    <value>Attive</value>
+  </data>
+  <data name="Tabs_Settings_StarBackgroundOff" xml:space="preserve">
+    <value>Spente</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewStarBackground" xml:space="preserve">
+    <value>Stelle di sfondo</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewStarBackground" xml:space="preserve">
+    <value>Le stelle sono un campo procedurale decorativo: non corrispondono al cielo reale e il loro campo visivo è fisso.&#10;&#10;Auto le disegna in ogni vista tranne la vista Modello (osservatore sulla Terra), che ha quindi uno sfondo nero. Attive o Spente vale per tutte le viste.</value>
+  </data>
+  <data name="Tabs_Settings_OrbitLines" xml:space="preserve">
+    <value>Linee orbitali</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewOrbitLines" xml:space="preserve">
+    <value>Linee orbitali</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewOrbitLines" xml:space="preserve">
+    <value>Disegna l'orbita di riferimento della cometa (rossa), l'orbita della Terra (azzurra) e il percorso compiuto in questa simulazione (gialla). La legenda le elenca nelle viste Modello e Orbita.</value>
   </data>
 </root>

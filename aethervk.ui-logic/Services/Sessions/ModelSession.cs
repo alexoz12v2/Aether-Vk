@@ -116,12 +116,73 @@ public sealed partial class ModelSession : ObservableObject, ITabSession
   private float _sizeQ = JetGrain.Default.SizeQ;
 
   /// <summary>
-  /// Size range factor F: grain radii from r/F to r·F about the configured radius. Valid range
+  /// Size range factor F = √(D_max/D_min): grain diameters from D/F to D·F. Valid range
   /// 1–1000; default 10. Enters the size distribution of every cluster.
   /// Corresponds to <c>ParticleSystemEmitParams.size_range</c>.
   /// </summary>
   [ObservableProperty]
   private float _sizeRange = JetGrain.Default.SizeRange;
+
+  // ── Grain size law stated as the smallest / largest diameter (the UI), stored as (D, F) ───────
+  private readonly GrainRangeEdit _grainRange = new();
+  private bool _applyingGrainRange;
+
+  /// <summary>
+  /// Smallest simulated grain diameter in µm (D/F). Setting it keeps the largest and stores the
+  /// engine's (D, F); an invalid pair is not applied (see <see cref="GrainRangeError"/>).
+  /// </summary>
+  public float MinDiameterUm
+  {
+    get => _grainRange.Min(DiametreUm, SizeRange);
+    set => EditGrainRange(false, value);
+  }
+
+  /// <summary>Largest simulated grain diameter in µm (D·F); see <see cref="MinDiameterUm"/>.</summary>
+  public float MaxDiameterUm
+  {
+    get => _grainRange.Max(DiametreUm, SizeRange);
+    set => EditGrainRange(true, value);
+  }
+
+  /// <summary>Why the typed smallest / largest pair is not applied, None when it is (or was).</summary>
+  public GrainRangeError GrainRangeError => _grainRange.Error;
+
+  private void EditGrainRange(bool isMax, float value)
+  {
+    var pair = _grainRange.Edit(isMax, value, DiametreUm, SizeRange);
+    _applyingGrainRange = true;
+    try
+    {
+      if (pair is { } p)
+      {
+        DiametreUm = p.DiametreUm;
+        SizeRange = p.SizeRange;
+      }
+    }
+    finally { _applyingGrainRange = false; }
+    NotifyGrainRange();
+  }
+
+  private void NotifyGrainRange()
+  {
+    OnPropertyChanged(nameof(MinDiameterUm));
+    OnPropertyChanged(nameof(MaxDiameterUm));
+    OnPropertyChanged(nameof(GrainRangeError));
+  }
+
+  partial void OnDiametreUmChanged(float value)
+  {
+    if (_applyingGrainRange) return;
+    _grainRange.Reset();
+    NotifyGrainRange();
+  }
+
+  partial void OnSizeRangeChanged(float value)
+  {
+    if (_applyingGrainRange) return;
+    _grainRange.Reset();
+    NotifyGrainRange();
+  }
 
   /// <summary>
   /// Dust mass production rate Q_d at 1 AU heliocentric distance, in kg/s (default for new jets).

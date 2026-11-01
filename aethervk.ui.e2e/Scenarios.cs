@@ -53,7 +53,7 @@ public sealed record Scenario(
   double FallbackNucleusRadiusKm = 2.0,
   // A mesh of assets/ shown as the nucleus (Comet Appearance → Custom) before the run
   string? NucleusMesh = null,
-  // Grain size range F (radii s₀/F … s₀·F about the reference grain); null keeps the app's 10
+  // Grain size range F (diameters 100 um/F … 100 um·F, typed as smallest / largest diameter); null keeps the app's 10
   double? GrainSizeRange = null,
   // Expected fan ridges of the settled observer view (checked when set)
   FanCheck? Fan = null)

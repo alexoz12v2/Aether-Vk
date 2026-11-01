@@ -276,11 +276,32 @@ public sealed class AppSaveFileHostTests
     Assert.Equal("2025-10-01T00:00:00Z", rig.Timeline.CommittedStartEpoch);
     Assert.Equal("2025-12-01T00:00:00Z", rig.Timeline.CommittedEndEpoch);
     Assert.Equal(1, timelineRestored);
+    // an older save: no Observation block fields (the range entry then shows N = 3 and the committed end)
+    Assert.Null(rig.Timeline.ObservationRotations);
+    Assert.Null(rig.Timeline.ObservationEpochUtc);
 
     var id = Guid.NewGuid();
     rig.Host.ApplyBillboards([new BillboardDto { Id = id, TextureKey = "/t.png", CenterX = 5, WidthPx = 10, HeightPx = 20, Alpha = 0.3 }]);
     var b = Assert.Single(rig.Billboards.Current);
     Assert.Equal((id, "/t.png", 5.0, 0.3), (b.Id, b.TextureKey, b.CenterX, b.Alpha));
+  }
+
+  /// <summary>The Observation block's N and date (reviewer 2026-10-31, slide 1): saved and restored, nullable additive.</summary>
+  [Fact]
+  public void ObservationFields_RoundTripThroughTheTimelineDto()
+  {
+    var rig = new Rig();
+    rig.Timeline.ObservationRotations = 4;
+    rig.Timeline.ObservationEpochUtc = "2021-12-27T00:14:47";
+    var snap = rig.Host.Capture();
+    Assert.Equal((4, "2021-12-27T00:14:47"), (snap.Timeline.ObservationRotations, snap.Timeline.ObservationEpochUtc));
+
+    rig.Host.ApplyTimeline(new TimelineDto { ObservationRotations = 2, ObservationEpochUtc = "2021-12-20T06:00:00" }, committed: false);
+    Assert.Equal((2, "2021-12-20T06:00:00"), (rig.Timeline.ObservationRotations, rig.Timeline.ObservationEpochUtc));
+
+    rig.Host.ApplyTimeline(new TimelineDto(), committed: false); // an older save clears them
+    Assert.Null(rig.Timeline.ObservationRotations);
+    Assert.Null(rig.Timeline.ObservationEpochUtc);
   }
 
   [Fact]

@@ -789,6 +789,16 @@ impl Component for HiddenComponent {}
 pub const RENDER_LAYER_DEFAULT: u32 = 1 << 0;
 /// Drawn only by cameras in the UpZenith mode (the Earth body, its axis, labels and indicator).
 pub const RENDER_LAYER_UPZENITH_ONLY: u32 = 1 << 1;
+/// The procedural sky (the decorative star field). Opt-out: see [`DEFAULT_CAMERA_RENDER_MASK`].
+pub const RENDER_LAYER_SKY: u32 = 1 << 2;
+/// The orbit lines (comet reference orbit, Earth orbit, travelled path). Opt-out: see
+/// [`DEFAULT_CAMERA_RENDER_MASK`].
+pub const RENDER_LAYER_ORBITS: u32 = 1 << 3;
+/// The mask of a camera without a [`CameraRenderMaskComponent`]: everything except the
+/// UpZenith-only content, so tests, examples and windowless observers keep drawing the sky and the
+/// orbit lines.
+pub const DEFAULT_CAMERA_RENDER_MASK: u32 =
+  RENDER_LAYER_DEFAULT | RENDER_LAYER_SKY | RENDER_LAYER_ORBITS;
 
 /// The render layers an entity (and its whole subtree) belongs to. A camera draws the subtree only
 /// if `layers & camera mask != 0` ([`CameraRenderMaskComponent`]). Unlike [`HiddenComponent`],
@@ -798,7 +808,7 @@ pub const RENDER_LAYER_UPZENITH_ONLY: u32 = 1 << 1;
 pub struct RenderLayerComponent(pub u32);
 impl Component for RenderLayerComponent {}
 
-/// The render layers a camera draws. A camera without it draws [`RENDER_LAYER_DEFAULT`] only.
+/// The render layers a camera draws. A camera without it draws [`DEFAULT_CAMERA_RENDER_MASK`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct CameraRenderMaskComponent(pub u32);
 impl Component for CameraRenderMaskComponent {}

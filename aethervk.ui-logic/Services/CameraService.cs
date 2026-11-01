@@ -2423,9 +2423,55 @@ public sealed class CameraService : IDisposable
   /// the "Earth" label (native <c>RENDER_LAYER_UPZENITH_ONLY</c>).</summary>
   internal const uint RenderLayerUpZenithOnly = 1u << 1;
 
-  /// <summary>The render layers a camera in <paramref name="mode"/> draws.</summary>
-  internal static uint RenderMaskFor(CameraMode mode) =>
-    mode == CameraMode.UpZenith ? RenderLayerDefault | RenderLayerUpZenithOnly : RenderLayerDefault;
+  /// <summary>The procedural sky, the decorative star field (native <c>RENDER_LAYER_SKY</c>).</summary>
+  internal const uint RenderLayerSky = 1u << 2;
+
+  /// <summary>The orbit lines: comet reference orbit, Earth orbit, travelled path (native
+  /// <c>RENDER_LAYER_ORBITS</c>).</summary>
+  internal const uint RenderLayerOrbits = 1u << 3;
+
+  /// <summary>
+  /// The render layers a camera in <paramref name="mode"/> draws. <paramref name="showStars"/>
+  /// null is the default policy: no star field in the Earth observer (Model) view, drawn
+  /// elsewhere; true / false forces it everywhere.
+  /// </summary>
+  internal static uint RenderMaskFor(CameraMode mode, bool? showStars = null, bool showOrbits = true)
+  {
+    uint mask = RenderLayerDefault;
+    if (mode == CameraMode.UpZenith)
+      mask |= RenderLayerUpZenithOnly;
+    if (showStars ?? mode != CameraMode.EarthPosition)
+      mask |= RenderLayerSky;
+    if (showOrbits)
+      mask |= RenderLayerOrbits;
+    return mask;
+  }
+
+  private bool? _starBackground;
+  private bool _orbitLines = true;
+
+  /// <summary>Star background override: null = default policy (off in the Earth observer view),
+  /// true / false = everywhere.</summary>
+  public bool? StarBackground => _starBackground;
+
+  /// <summary>Orbit lines drawn (default on).</summary>
+  public bool OrbitLines => _orbitLines;
+
+  /// <summary>Sets the star background override (null = default policy) and resends the mask.</summary>
+  public void SetStarBackground(bool? value)
+  {
+    _starBackground = value;
+    _renderMaskSent = null;
+    RefreshRenderMask();
+  }
+
+  /// <summary>Shows or hides the orbit lines and resends the mask.</summary>
+  public void SetOrbitLines(bool shown)
+  {
+    _orbitLines = shown;
+    _renderMaskSent = null;
+    RefreshRenderMask();
+  }
 
   // last (camera, mask) the runtime accepted (null: unknown, resend)
   private (ulong Camera, uint Mask)? _renderMaskSent;
@@ -2436,7 +2482,7 @@ public sealed class CameraService : IDisposable
     ulong cam = CameraEntityId ?? 0;
     if (cam == 0)
       return;
-    uint mask = RenderMaskFor(_modeSubject.Value);
+    uint mask = RenderMaskFor(_modeSubject.Value, _starBackground, _orbitLines);
     if (_renderMaskSent == (cam, mask))
       return;
     if (_runtimeService.SetCameraRenderMask(cam, mask))
@@ -2450,11 +2496,12 @@ public sealed class CameraService : IDisposable
   /// (<c>scene::CAMERA_HIDE_BEHIND</c>).</summary>
   public const uint HideBehindCamera = 1u << 1;
 
-  private bool _physicalLighting;
+  private bool _physicalLighting = true;
 
   /// <summary>
-  /// Comet debug: the nucleus lit physically (direct sunlight at (1 AU / r)², no ambient fill, the
-  /// surface the Sun does not reach in a debug tint) instead of the display shading. Applies in
+  /// The nucleus lit physically (direct sunlight at (1 AU / r)², no ambient fill, the
+  /// surface the Sun does not reach in a dark tint) instead of the display shading; on by default
+  /// (reviewer feedback: the terminator then follows the Sun direction). Applies in
   /// <see cref="CameraMode.CometOrbiting"/> only, where the setting is offered.
   /// </summary>
   public bool PhysicalLighting
@@ -2530,9 +2577,10 @@ public sealed class CameraService : IDisposable
       ? 1f
       : (float)(Math.Pow(2.0, ev) * (physicalLighting && mode == CameraMode.CometOrbiting ? 1.0 : Math.PI));
 
-  /// <summary>Modes where the comet is far or small enough to need a label.</summary>
+  /// <summary>The comet label and its indicator line are drawn in the Orbit view only (the comet is
+  /// a speck there); the Model and Nucleus views show the body itself (reviewer feedback).</summary>
   internal static bool ShowsCometLabel(CameraMode mode) =>
-    mode is CameraMode.EarthPosition or CameraMode.UpZenith;
+    mode is CameraMode.UpZenith;
 
   // last visibility the runtime accepted (null: unknown, resend)
   private bool? _cometIndicatorShown;

@@ -433,7 +433,7 @@ public partial class ModelTabViewModel
     _translationService.CultureChanged
       .Skip(1)
       .ObserveOn(schedulerProvider.MainThread)
-      .Subscribe(_ => RefreshStrings())
+      .Subscribe(_ => { RefreshStrings(); RefreshGrainTexts(); })
       .AddDisposableTo(_disposables);
   }
 
@@ -481,6 +481,56 @@ public partial class ModelTabViewModel
   [ObservableProperty]
   private CurvePlotModel? _jetSizeDistributionPlot;
 
+  /// <summary>Note under the defaults' size plot: the simulated diameters and what q does.</summary>
+  [ObservableProperty]
+  private string _sizeRangeNote = "";
+
+  /// <summary>Note under the selected jet's size plot.</summary>
+  [ObservableProperty]
+  private string _jetSizeRangeNote = "";
+
+  /// <summary>Why the defaults' smallest / largest diameters are not applied; empty when they are.</summary>
+  [ObservableProperty]
+  private string _sizeRangeError = "";
+
+  /// <summary>Why the selected jet's smallest / largest diameters are not applied; empty when they are.</summary>
+  [ObservableProperty]
+  private string _jetSizeRangeError = "";
+
+  private string GrainRangeErrorText(GrainRangeError e) => e switch
+  {
+    GrainRangeError.OutOfBounds => string.Format(System.Globalization.CultureInfo.CurrentCulture,
+      _translationService.GetString("Tabs_Model_GrainRangeOutOfBounds"), GrainDiameterRange.MinBoundUm, GrainDiameterRange.MaxBoundUm),
+    GrainRangeError.MinAboveMax => _translationService.GetString("Tabs_Model_GrainRangeMinAboveMax"),
+    GrainRangeError.RatioTooLarge => _translationService.GetString("Tabs_Model_GrainRangeRatioTooLarge"),
+    _ => "",
+  };
+
+  private string SimulatedGrainsNote(float minUm, float maxUm)
+  {
+    var ci = System.Globalization.CultureInfo.InvariantCulture;
+    return string.Format(System.Globalization.CultureInfo.CurrentCulture,
+      _translationService.GetString("Tabs_Model_SimulatedGrainsNote"), minUm.ToString("0.######", ci), maxUm.ToString("0.######", ci));
+  }
+
+  private void RefreshGrainTexts()
+  {
+    if (CurrentSession is not { } s)
+      return;
+    SizeRangeNote = SimulatedGrainsNote(GrainDiameterRange.MinOf(s.DiametreUm, s.SizeRange), GrainDiameterRange.MaxOf(s.DiametreUm, s.SizeRange));
+    SizeRangeError = GrainRangeErrorText(s.GrainRangeError);
+    if (SelectedJet is { } j)
+    {
+      JetSizeRangeNote = SimulatedGrainsNote(GrainDiameterRange.MinOf(j.DiametreUm, j.SizeRange), GrainDiameterRange.MaxOf(j.DiametreUm, j.SizeRange));
+      JetSizeRangeError = GrainRangeErrorText(j.GrainRangeError);
+    }
+    else
+    {
+      JetSizeRangeNote = "";
+      JetSizeRangeError = "";
+    }
+  }
+
   /// <summary>"Q_d now (r_h X AU): Y kg/s" for the comet's current r_h and the selected jet.</summary>
   [ObservableProperty]
   private string _dustRateNowText = "";
@@ -500,14 +550,16 @@ public partial class ModelTabViewModel
   {
     nameof(ModelSession.DustRate1AuKgs), nameof(ModelSession.DustRatePower), nameof(ModelSession.DustRateCutoffAu),
     nameof(ModelSession.DustRateMaxKgs), nameof(ModelSession.DiametreUm), nameof(ModelSession.SizeRange),
-    nameof(ModelSession.SizeQ),
+    nameof(ModelSession.SizeQ), nameof(ModelSession.MinDiameterUm), nameof(ModelSession.MaxDiameterUm),
+    nameof(ModelSession.GrainRangeError),
   };
 
   // a jet's own curve inputs
   private static readonly System.Collections.Generic.HashSet<string?> JetCurveInputs = new()
   {
     nameof(JetViewModel.DustRate1AuKgs), nameof(JetViewModel.DiametreUm), nameof(JetViewModel.SizeRange),
-    nameof(JetViewModel.SizeQ),
+    nameof(JetViewModel.SizeQ), nameof(JetViewModel.MinDiameterUm), nameof(JetViewModel.MaxDiameterUm),
+    nameof(JetViewModel.GrainRangeError),
   };
 
   /// <summary>
@@ -591,13 +643,14 @@ public partial class ModelTabViewModel
       return;
     DustRatePlot = DustCurves.DustRatePlot(s.DustRate1AuKgs, s.DustRatePower, s.DustRateCutoffAu, s.DustRateMaxKgs, CurrentRhAu);
     SizeDistributionPlot = DustCurves.SizeDistributionPlot(s.DiametreUm, s.SizeRange, Models.JetGrain.Default.SizeQ);
-    RefreshJetCurves();
+    RefreshGrainTexts();
     RefreshDustRateNowText();
     RefreshTotalActivityText();
   }
 
   private void RefreshJetCurves()
   {
+    RefreshGrainTexts();
     if (CurrentSession is not { } s || SelectedJet is not { } j)
     {
       JetDustRatePlot = null;

@@ -212,7 +212,7 @@ public class CometTabRangeEntryTests
       Assert.False(p.SetMethod?.IsPublic ?? false, $"{name} must be read-only");
     }
     // no range entry left on the Timeline
-    foreach (var gone in new[] { "RestoreCommand", "RecommitWithRangeCommand", "ApplyModelRangeCommand", "DustLeadDays", "IsRangeLocked", "ModelRotations", "ModelEndEpoch" })
+    foreach (var gone in new[] { "RestoreCommand", "RecommitWithRangeCommand", "ApplyModelRangeCommand", "DustLeadDays", "IsRangeLocked", "ModelRotations", "ObservationEpoch", "RunAtDateCommand" })
       Assert.Null(typeof(TimelineTabViewModel).GetProperty(gone));
 
     var rig = new Rig();
@@ -244,7 +244,7 @@ public class CometTabRangeEntryTests
     rig.Vm.RotRateDegDay = 696.0; // 67P: P = 360 · 24 / 696 h ≈ 12.41 h
     double periodHours = 360.0 * 24.0 / 696.0;
     rig.Vm.Range.ModelRotations = 3;
-    rig.Vm.Range.ModelEndEpoch = "2021-12-27T00:14:47";
+    rig.Vm.Range.ObservationEpoch = "2021-12-27T00:14:47";
     rig.Vm.Range.ApplyModelRangeCommand.Execute(null);
 
     var end = new DateTimeOffset(2021, 12, 27, 0, 14, 47, TimeSpan.Zero);
@@ -259,7 +259,7 @@ public class CometTabRangeEntryTests
     var image = new DateTimeOffset(2021, 12, 20, 6, 0, 0, TimeSpan.Zero);
     rig.Timeline.RequestModelRange(image);
     rig.Flush();
-    Assert.Equal("2021-12-20T06:00:00", rig.Vm.Range.ModelEndEpoch);
+    Assert.Equal("2021-12-20T06:00:00", rig.Vm.Range.ObservationEpoch);
     Assert.Equal("2021-12-20T06:00:00", rig.Vm.Range.EndEpoch);
     Assert.True(TimeUtils.TryParseIso8601(rig.Vm.Range.StartEpoch, out var s1));
     // one 12.41 h rotation is under a day: the minimum range applies
@@ -295,7 +295,7 @@ public class CometTabRangeEntryTests
     fits.Fake.Drain();
     rig.Flush();
 
-    Assert.Equal("2021-12-27T00:14:47", rig.Vm.Range.ModelEndEpoch); // the box: no fraction, no Z
+    Assert.Equal("2021-12-27T00:14:47", rig.Vm.Range.ObservationEpoch); // the box: no fraction, no Z, UTC
     Assert.Equal("2021-12-27T00:14:47", rig.Vm.Range.EndEpoch);
     Assert.True(TimeUtils.TryParseIso8601(rig.Vm.Range.StartEpoch, out var start));
     var end = new DateTimeOffset(2021, 12, 27, 0, 14, 47, TimeSpan.Zero);

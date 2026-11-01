@@ -70,7 +70,8 @@ public class CometTimelineHelpViewTests
     AssertHelp(view, "EpochRangeHelp", "at least 1 day");
     AssertHelp(view, "ProposedRangeTextHelp", "running simulation");
     AssertHelp(view, "RecommitWithRangeButtonHelp", "dust restarts");
-    AssertHelp(view, "ModelRangeHelp", "image epoch");
+    AssertHelp(view, "ModelRangeHelp", "Observation date (UTC)");
+    AssertHelp(view, "ModelRangeHelp", "Run at this date");
     AssertHelp(view, "DustLeadDaysBoxHelp", "one dust lifetime");
     AssertHelp(view, "ReferenceOrbitPickerHelp", "Required before the first commit");
     AssertHelp(view, "NucleusRadiusSliderHelp", "Horizons");
@@ -89,6 +90,7 @@ public class CometTimelineHelpViewTests
              {
                "SpkRecordsList", "StartEpochBox", "EndEpochBox", "ProposedRangeText", "RecommitWithRangeButton",
                "ModelRotationsBox", "ModelEndEpochBox", "ApplyModelRangeButton", "DustLeadDaysBox",
+               "FromImageButton", "RunAtDateButton",
                "ReferenceOrbitPicker", "NucleusRadiusSlider", "PoleRaSlider", "PoleDecSlider", "PrimeMeridianSlider",
                "RotPeriodSlider", "RotRateSlider", "BodyFixedOrientationPicker",
              })

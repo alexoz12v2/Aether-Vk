@@ -46,7 +46,7 @@ namespace AetherVk.Logic.Services
 
         private static global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[] PreferencesFilePropInit(global::System.Text.Json.JsonSerializerOptions options)
         {
-            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[14];
+            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[17];
 
             var info0 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<int>
             {
@@ -332,6 +332,66 @@ namespace AetherVk.Logic.Services
             
             properties[13] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<string>(options, info13);
 
+            var info14 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<bool?>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.Services.PreferencesFile),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.Services.PreferencesFile)obj).PhysicalLighting,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.Services.PreferencesFile)obj).PhysicalLighting = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "PhysicalLighting",
+                JsonPropertyName = "physical_lighting",
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.Services.PreferencesFile).GetProperty("PhysicalLighting", InstanceMemberBindingFlags, null, typeof(bool?), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[14] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<bool?>(options, info14);
+
+            var info15 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<bool?>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.Services.PreferencesFile),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.Services.PreferencesFile)obj).StarBackground,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.Services.PreferencesFile)obj).StarBackground = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "StarBackground",
+                JsonPropertyName = "star_background",
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.Services.PreferencesFile).GetProperty("StarBackground", InstanceMemberBindingFlags, null, typeof(bool?), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[15] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<bool?>(options, info15);
+
+            var info16 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<bool?>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.Services.PreferencesFile),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.Services.PreferencesFile)obj).OrbitLines,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.Services.PreferencesFile)obj).OrbitLines = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "OrbitLines",
+                JsonPropertyName = "orbit_lines",
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.Services.PreferencesFile).GetProperty("OrbitLines", InstanceMemberBindingFlags, null, typeof(bool?), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[16] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<bool?>(options, info16);
+
             return properties;
         }
 
@@ -372,6 +432,12 @@ namespace AetherVk.Logic.Services
             writer.WritePropertyName(PropName_show_diagnostic_panels);
             global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.Services.PreferencesFile)value).ShowDiagnosticPanels, NullableBoolean);
             writer.WriteString(PropName_time_scale, ((global::AetherVk.Logic.Services.PreferencesFile)value).TimeScale);
+            writer.WritePropertyName(PropName_physical_lighting);
+            global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.Services.PreferencesFile)value).PhysicalLighting, NullableBoolean);
+            writer.WritePropertyName(PropName_star_background);
+            global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.Services.PreferencesFile)value).StarBackground, NullableBoolean);
+            writer.WritePropertyName(PropName_orbit_lines);
+            global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.Services.PreferencesFile)value).OrbitLines, NullableBoolean);
 
             writer.WriteEndObject();
         }
