@@ -299,6 +299,48 @@ namespace AetherVk.Logic.ViewModels
             }
         }
 
+        /// <inheritdoc cref="_starBackgroundChoice"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public int StarBackgroundChoice
+        {
+            get => _starBackgroundChoice;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<int>.Default.Equals(_starBackgroundChoice, value))
+                {
+                    OnStarBackgroundChoiceChanging(value);
+                    OnStarBackgroundChoiceChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.StarBackgroundChoice);
+                    _starBackgroundChoice = value;
+                    OnStarBackgroundChoiceChanged(value);
+                    OnStarBackgroundChoiceChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.StarBackgroundChoice);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_isOrbitLinesShown"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public bool IsOrbitLinesShown
+        {
+            get => _isOrbitLinesShown;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_isOrbitLinesShown, value))
+                {
+                    OnIsOrbitLinesShownChanging(value);
+                    OnIsOrbitLinesShownChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsOrbitLinesShown);
+                    _isOrbitLinesShown = value;
+                    OnIsOrbitLinesShownChanged(value);
+                    OnIsOrbitLinesShownChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsOrbitLinesShown);
+                }
+            }
+        }
+
         /// <inheritdoc cref="_isCometCommitted"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
@@ -861,6 +903,50 @@ namespace AetherVk.Logic.ViewModels
         /// <remarks>This method is invoked right after the value of <see cref="IsPhysicalLighting"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnIsPhysicalLightingChanged(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="StarBackgroundChoice"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="StarBackgroundChoice"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnStarBackgroundChoiceChanging(int value);
+        /// <summary>Executes the logic for when <see cref="StarBackgroundChoice"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="StarBackgroundChoice"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnStarBackgroundChoiceChanging(int oldValue, int newValue);
+        /// <summary>Executes the logic for when <see cref="StarBackgroundChoice"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="StarBackgroundChoice"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnStarBackgroundChoiceChanged(int value);
+        /// <summary>Executes the logic for when <see cref="StarBackgroundChoice"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="StarBackgroundChoice"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnStarBackgroundChoiceChanged(int oldValue, int newValue);
+        /// <summary>Executes the logic for when <see cref="IsOrbitLinesShown"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="IsOrbitLinesShown"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsOrbitLinesShownChanging(bool value);
+        /// <summary>Executes the logic for when <see cref="IsOrbitLinesShown"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="IsOrbitLinesShown"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsOrbitLinesShownChanging(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="IsOrbitLinesShown"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="IsOrbitLinesShown"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsOrbitLinesShownChanged(bool value);
+        /// <summary>Executes the logic for when <see cref="IsOrbitLinesShown"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="IsOrbitLinesShown"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsOrbitLinesShownChanged(bool oldValue, bool newValue);
         /// <summary>Executes the logic for when <see cref="IsCometCommitted"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="IsCometCommitted"/> is changed.</remarks>

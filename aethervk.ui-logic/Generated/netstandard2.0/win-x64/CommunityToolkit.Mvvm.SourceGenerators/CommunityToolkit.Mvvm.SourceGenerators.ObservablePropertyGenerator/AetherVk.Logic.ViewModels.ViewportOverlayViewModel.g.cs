@@ -197,48 +197,6 @@ namespace AetherVk.Logic.ViewModels
             }
         }
 
-        /// <inheritdoc cref="_jetPreviewSizeString"/>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-        public string JetPreviewSizeString
-        {
-            get => _jetPreviewSizeString;
-            set
-            {
-                if (!global::System.Collections.Generic.EqualityComparer<string>.Default.Equals(_jetPreviewSizeString, value))
-                {
-                    OnJetPreviewSizeStringChanging(value);
-                    OnJetPreviewSizeStringChanging(default, value);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.JetPreviewSizeString);
-                    _jetPreviewSizeString = value;
-                    OnJetPreviewSizeStringChanged(value);
-                    OnJetPreviewSizeStringChanged(default, value);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.JetPreviewSizeString);
-                }
-            }
-        }
-
-        /// <inheritdoc cref="_isModeIndicatorExpanded"/>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-        public bool IsModeIndicatorExpanded
-        {
-            get => _isModeIndicatorExpanded;
-            set
-            {
-                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_isModeIndicatorExpanded, value))
-                {
-                    OnIsModeIndicatorExpandedChanging(value);
-                    OnIsModeIndicatorExpandedChanging(default, value);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsModeIndicatorExpanded);
-                    _isModeIndicatorExpanded = value;
-                    OnIsModeIndicatorExpandedChanged(value);
-                    OnIsModeIndicatorExpandedChanged(default, value);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsModeIndicatorExpanded);
-                }
-            }
-        }
-
         /// <inheritdoc cref="_currentMode"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
@@ -252,19 +210,11 @@ namespace AetherVk.Logic.ViewModels
                     OnCurrentModeChanging(value);
                     OnCurrentModeChanging(default, value);
                     OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.CurrentMode);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.CameraModeName);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsModeEarthPosition);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsModeUpZenith);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsModeCometOrbiting);
                     OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.FrameLabel);
                     _currentMode = value;
                     OnCurrentModeChanged(value);
                     OnCurrentModeChanged(default, value);
                     OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.CurrentMode);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.CameraModeName);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsModeEarthPosition);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsModeUpZenith);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsModeCometOrbiting);
                     OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.FrameLabel);
                 }
             }
@@ -577,50 +527,6 @@ namespace AetherVk.Logic.ViewModels
         /// <remarks>This method is invoked right after the value of <see cref="DustRenderingText"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnDustRenderingTextChanged(string? oldValue, string newValue);
-        /// <summary>Executes the logic for when <see cref="JetPreviewSizeString"/> is changing.</summary>
-        /// <param name="value">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="JetPreviewSizeString"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnJetPreviewSizeStringChanging(string value);
-        /// <summary>Executes the logic for when <see cref="JetPreviewSizeString"/> is changing.</summary>
-        /// <param name="oldValue">The previous property value that is being replaced.</param>
-        /// <param name="newValue">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="JetPreviewSizeString"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnJetPreviewSizeStringChanging(string? oldValue, string newValue);
-        /// <summary>Executes the logic for when <see cref="JetPreviewSizeString"/> just changed.</summary>
-        /// <param name="value">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="JetPreviewSizeString"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnJetPreviewSizeStringChanged(string value);
-        /// <summary>Executes the logic for when <see cref="JetPreviewSizeString"/> just changed.</summary>
-        /// <param name="oldValue">The previous property value that was replaced.</param>
-        /// <param name="newValue">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="JetPreviewSizeString"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnJetPreviewSizeStringChanged(string? oldValue, string newValue);
-        /// <summary>Executes the logic for when <see cref="IsModeIndicatorExpanded"/> is changing.</summary>
-        /// <param name="value">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="IsModeIndicatorExpanded"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnIsModeIndicatorExpandedChanging(bool value);
-        /// <summary>Executes the logic for when <see cref="IsModeIndicatorExpanded"/> is changing.</summary>
-        /// <param name="oldValue">The previous property value that is being replaced.</param>
-        /// <param name="newValue">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="IsModeIndicatorExpanded"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnIsModeIndicatorExpandedChanging(bool oldValue, bool newValue);
-        /// <summary>Executes the logic for when <see cref="IsModeIndicatorExpanded"/> just changed.</summary>
-        /// <param name="value">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="IsModeIndicatorExpanded"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnIsModeIndicatorExpandedChanged(bool value);
-        /// <summary>Executes the logic for when <see cref="IsModeIndicatorExpanded"/> just changed.</summary>
-        /// <param name="oldValue">The previous property value that was replaced.</param>
-        /// <param name="newValue">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="IsModeIndicatorExpanded"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnIsModeIndicatorExpandedChanged(bool oldValue, bool newValue);
         /// <summary>Executes the logic for when <see cref="CurrentMode"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="CurrentMode"/> is changed.</remarks>

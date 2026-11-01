@@ -90,9 +90,9 @@ public class DustCurvesTests
   [InlineData(1, 3, 1.0)] // number exponent −1
   public void SizePdfs_IntegrateToOne(double d, double f, double q)
   {
-    var (a, b) = DustCurves.RadiusBoundsUm(d, f);
-    Assert.Equal(d / 2 / f, a, 12);
-    Assert.Equal(d / 2 * f, b, 9);
+    var (a, b) = DustCurves.DiameterBoundsUm(d, f);
+    Assert.Equal(d / f, a, 12);
+    Assert.Equal(d * f, b, 9);
     Assert.Equal(1.0, Integrate(s => DustCurves.SizePdf(s, d, f, q), a, b), 4);
     Assert.Equal(1.0, Integrate(s => DustCurves.CrossSectionPdf(s, d, f, q), a, b), 4);
   }
@@ -108,12 +108,12 @@ public class DustCurvesTests
   }
 
   [Fact]
-  public void SizePlot_TwoLabelledLogLogCurves_OverTheRadiusRange()
+  public void SizePlot_TwoLabelledLogLogCurves_OverTheDiameterRange()
   {
     var m = DustCurves.SizeDistributionPlot(100, 10, 3.5);
     Assert.True(m.XLog && m.YLog);
-    Assert.Equal(5.0, m.XMin, 12);
-    Assert.Equal(500.0, m.XMax, 9);
+    Assert.Equal(10.0, m.XMin, 12);
+    Assert.Equal(1000.0, m.XMax, 9);
     Assert.Equal(new[] { "by number", "by cross-section (brightness)" }, m.Series.Select(s => s.Label));
     Assert.All(m.Series, s => Assert.All(s.Points, p => Assert.InRange(p.Y, m.YMin, m.YMax)));
     Assert.True(m.XTicks.Count >= 2);

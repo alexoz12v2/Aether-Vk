@@ -213,10 +213,10 @@ public static class DustCurves
   /// <summary>Smallest F the plots use: F = 1 is a single size (a delta), not a curve.</summary>
   public const double MinPlotSizeRange = 1.01;
 
-  /// <summary>Grain radius bounds s₀/F, s₀·F in µm (s₀ = diameter / 2).</summary>
-  public static (double Min, double Max) RadiusBoundsUm(double diameterUm, double sizeRange)
+  /// <summary>Grain diameter bounds D/F, D·F in µm: the smallest and largest simulated grain (F floored at the plot minimum).</summary>
+  public static (double Min, double Max) DiameterBoundsUm(double diameterUm, double sizeRange)
   {
-    double s0 = diameterUm * 0.5;
+    double s0 = diameterUm;
     double f = Math.Max(sizeRange, MinPlotSizeRange);
     return (s0 / f, s0 * f);
   }
@@ -232,10 +232,10 @@ public static class DustCurves
     return e / (Math.Pow(b, e) - Math.Pow(a, e));
   }
 
-  /// <summary>Number density n(s) ∝ s^−q on [s₀/F, s₀·F], unit area, per µm; 0 outside.</summary>
+  /// <summary>Number density n(s) ∝ s^−q on [D/F, D·F], unit area, per µm; 0 outside.</summary>
   public static double SizePdf(double sUm, double diameterUm, double sizeRange, double q)
   {
-    var (a, b) = RadiusBoundsUm(diameterUm, sizeRange);
+    var (a, b) = DiameterBoundsUm(diameterUm, sizeRange);
     if (sUm < a || sUm > b) return 0.0;
     return PowerLawNorm(-q, a, b) * Math.Pow(sUm, -q);
   }
@@ -243,7 +243,7 @@ public static class DustCurves
   /// <summary>Cross-section-weighted density s²·n(s) ∝ s^(2−q), unit area, per µm; 0 outside.</summary>
   public static double CrossSectionPdf(double sUm, double diameterUm, double sizeRange, double q)
   {
-    var (a, b) = RadiusBoundsUm(diameterUm, sizeRange);
+    var (a, b) = DiameterBoundsUm(diameterUm, sizeRange);
     if (sUm < a || sUm > b) return 0.0;
     return PowerLawNorm(2.0 - q, a, b) * Math.Pow(sUm, 2.0 - q);
   }
@@ -263,11 +263,11 @@ public static class DustCurves
 
   /// <summary>
   /// The size distribution plot: by number n(s) and by cross-section s²n(s) (what the brightness
-  /// follows), both normalised to unit area, log–log over [s₀/F, s₀·F].
+  /// follows), both normalised to unit area, log–log over [D/F, D·F].
   /// </summary>
   public static CurvePlotModel SizeDistributionPlot(double diameterUm, double sizeRange, double q)
   {
-    var (a, b) = RadiusBoundsUm(diameterUm, sizeRange);
+    var (a, b) = DiameterBoundsUm(diameterUm, sizeRange);
     var byNumber = SampleLog(a, b, s => SizePdf(s, diameterUm, sizeRange, q));
     var byArea = SampleLog(a, b, s => CrossSectionPdf(s, diameterUm, sizeRange, q));
     var all = new List<PlotPoint>(byNumber.Count + byArea.Count);
@@ -287,7 +287,7 @@ public static class DustCurves
       YMax = yMax,
       XLog = true,
       YLog = true,
-      XLabel = "grain radius s (µm)",
+      XLabel = "grain diameter d (µm)",
       YLabel = "probability density (1/µm)",
       XTicks = LogTicks(a, b),
       YTicks = LogTicks(yMin, yMax),

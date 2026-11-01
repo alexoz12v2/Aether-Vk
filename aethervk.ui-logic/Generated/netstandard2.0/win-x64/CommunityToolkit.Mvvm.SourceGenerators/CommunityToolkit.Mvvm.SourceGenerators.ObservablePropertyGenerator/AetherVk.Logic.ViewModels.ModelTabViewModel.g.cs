@@ -218,6 +218,90 @@ namespace AetherVk.Logic.ViewModels
             }
         }
 
+        /// <inheritdoc cref="_sizeRangeNote"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public string SizeRangeNote
+        {
+            get => _sizeRangeNote;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<string>.Default.Equals(_sizeRangeNote, value))
+                {
+                    OnSizeRangeNoteChanging(value);
+                    OnSizeRangeNoteChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.SizeRangeNote);
+                    _sizeRangeNote = value;
+                    OnSizeRangeNoteChanged(value);
+                    OnSizeRangeNoteChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.SizeRangeNote);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_jetSizeRangeNote"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public string JetSizeRangeNote
+        {
+            get => _jetSizeRangeNote;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<string>.Default.Equals(_jetSizeRangeNote, value))
+                {
+                    OnJetSizeRangeNoteChanging(value);
+                    OnJetSizeRangeNoteChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.JetSizeRangeNote);
+                    _jetSizeRangeNote = value;
+                    OnJetSizeRangeNoteChanged(value);
+                    OnJetSizeRangeNoteChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.JetSizeRangeNote);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_sizeRangeError"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public string SizeRangeError
+        {
+            get => _sizeRangeError;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<string>.Default.Equals(_sizeRangeError, value))
+                {
+                    OnSizeRangeErrorChanging(value);
+                    OnSizeRangeErrorChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.SizeRangeError);
+                    _sizeRangeError = value;
+                    OnSizeRangeErrorChanged(value);
+                    OnSizeRangeErrorChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.SizeRangeError);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_jetSizeRangeError"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public string JetSizeRangeError
+        {
+            get => _jetSizeRangeError;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<string>.Default.Equals(_jetSizeRangeError, value))
+                {
+                    OnJetSizeRangeErrorChanging(value);
+                    OnJetSizeRangeErrorChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.JetSizeRangeError);
+                    _jetSizeRangeError = value;
+                    OnJetSizeRangeErrorChanged(value);
+                    OnJetSizeRangeErrorChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.JetSizeRangeError);
+                }
+            }
+        }
+
         /// <inheritdoc cref="_dustRateNowText"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
@@ -671,6 +755,94 @@ namespace AetherVk.Logic.ViewModels
         /// <remarks>This method is invoked right after the value of <see cref="JetSizeDistributionPlot"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnJetSizeDistributionPlotChanged(global::AetherVk.Logic.Utils.CurvePlotModel? oldValue, global::AetherVk.Logic.Utils.CurvePlotModel? newValue);
+        /// <summary>Executes the logic for when <see cref="SizeRangeNote"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="SizeRangeNote"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnSizeRangeNoteChanging(string value);
+        /// <summary>Executes the logic for when <see cref="SizeRangeNote"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="SizeRangeNote"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnSizeRangeNoteChanging(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="SizeRangeNote"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="SizeRangeNote"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnSizeRangeNoteChanged(string value);
+        /// <summary>Executes the logic for when <see cref="SizeRangeNote"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="SizeRangeNote"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnSizeRangeNoteChanged(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="JetSizeRangeNote"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="JetSizeRangeNote"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnJetSizeRangeNoteChanging(string value);
+        /// <summary>Executes the logic for when <see cref="JetSizeRangeNote"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="JetSizeRangeNote"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnJetSizeRangeNoteChanging(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="JetSizeRangeNote"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="JetSizeRangeNote"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnJetSizeRangeNoteChanged(string value);
+        /// <summary>Executes the logic for when <see cref="JetSizeRangeNote"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="JetSizeRangeNote"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnJetSizeRangeNoteChanged(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="SizeRangeError"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="SizeRangeError"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnSizeRangeErrorChanging(string value);
+        /// <summary>Executes the logic for when <see cref="SizeRangeError"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="SizeRangeError"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnSizeRangeErrorChanging(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="SizeRangeError"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="SizeRangeError"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnSizeRangeErrorChanged(string value);
+        /// <summary>Executes the logic for when <see cref="SizeRangeError"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="SizeRangeError"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnSizeRangeErrorChanged(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="JetSizeRangeError"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="JetSizeRangeError"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnJetSizeRangeErrorChanging(string value);
+        /// <summary>Executes the logic for when <see cref="JetSizeRangeError"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="JetSizeRangeError"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnJetSizeRangeErrorChanging(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="JetSizeRangeError"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="JetSizeRangeError"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnJetSizeRangeErrorChanged(string value);
+        /// <summary>Executes the logic for when <see cref="JetSizeRangeError"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="JetSizeRangeError"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnJetSizeRangeErrorChanged(string? oldValue, string newValue);
         /// <summary>Executes the logic for when <see cref="DustRateNowText"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="DustRateNowText"/> is changed.</remarks>

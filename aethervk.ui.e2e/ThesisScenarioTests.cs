@@ -268,8 +268,11 @@ public sealed class ThesisScenarioTests(ITestOutputHelper output)
     }
     if (sc.GrainSizeRange is { } f)
     {
-      s.Expand("SizeDistributionAdvancedExpander", "SizeRangeBox");
-      s.TypeInto(s.Find("SizeRangeBox"), Ui.Num(f));
+      // the engine's (D, F) of the scenario (D = the default 100 um) as the smallest / largest diameter
+      const double d0 = 100;
+      s.Expand("DustSection", "DustMinDiameterBox");
+      s.TypeInto(s.Find("DustMinDiameterBox"), Ui.Num(d0 / f));
+      s.TypeInto(s.Find("DustMaxDiameterBox"), Ui.Num(d0 * f));
     }
     for (int k = 0; k < sc.Jets.Count; k++)
     {
@@ -291,8 +294,11 @@ public sealed class ThesisScenarioTests(ITestOutputHelper output)
       // the jet's own grain and activity (else the defaults it was added with)
       if (sc.Jets[k].DiametreUm is { } diametre)
       {
-        s.Expand("JetGrainExpander", "JetDiametreUm");
-        s.TypeInto(s.Find("JetDiametreUm"), Ui.Num(diametre));
+        s.Expand("JetGrainExpander", "JetMinDiameterUm");
+        // D with the inherited F: keep the jet's F, state the range D/F..D*F
+        double fr = sc.GrainSizeRange ?? 10; // the F the jet inherited from the defaults
+        s.TypeInto(s.Find("JetMinDiameterUm"), Ui.Num(diametre / fr));
+        s.TypeInto(s.Find("JetMaxDiameterUm"), Ui.Num(diametre * fr));
       }
       if (sc.Jets[k].DustRate1AuKgs is { } rate0)
       {

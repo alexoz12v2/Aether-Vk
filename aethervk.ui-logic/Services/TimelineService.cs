@@ -2,6 +2,7 @@
 using System;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Threading.Tasks;
 
 namespace AetherVk.Logic.Services;
 
@@ -40,7 +41,8 @@ public sealed class TimelineService : IDisposable
   private readonly Subject<System.Reactive.Unit> _snapshotRestoreSubject = new();
   private readonly Subject<System.Reactive.Unit> _seekedSubject = new();
   private readonly Subject<DateTimeOffset> _modelRangeRequestSubject = new();
-  private readonly Subject<System.Reactive.Unit> _recommitRequestSubject = new();
+  private readonly Subject<RecommitRequest> _recommitRequestSubject = new();
+  private readonly Subject<ObservationRunRequest> _observationRunSubject = new();
   private readonly IDisposable _listenerToken;
 
 
@@ -203,12 +205,59 @@ public sealed class TimelineService : IDisposable
 
   /// <summary>
   /// "Recommit with this range" (the Comet tab's range section, while the range is locked): the Comet tab runs its
-  /// Download &amp; Commit with the proposed range (it decommits first, so the lock does not apply).
+  /// Download &amp; Commit with the proposed range (it decommits first, so the lock does not apply) and
+  /// completes the request.
   /// </summary>
-  public IObservable<System.Reactive.Unit> RecommitRequests =>
+  public IObservable<RecommitRequest> RecommitRequests =>
     _recommitRequestSubject.ObserveOn(_schedulerProvider.MainThread);
 
-  public void RequestRecommit() => _recommitRequestSubject.OnNext(System.Reactive.Unit.Default);
+  public void RequestRecommit() => _ = RequestRecommitAsync();
+
+  /// <summary>
+  /// Asks the Comet tab to commit the comet with the proposed range; true when it is committed with
+  /// it afterwards. False at once without a Comet tab listening.
+  /// </summary>
+  public Task<bool> RequestRecommitAsync()
+  {
+    if (!_recommitRequestSubject.HasObservers)
+      return Task.FromResult(false);
+    var request = new RecommitRequest();
+    _recommitRequestSubject.OnNext(request);
+    return request.Completion;
+  }
+
+  // ── The observation chain (reviewer feedback 2026-10-31, slide 1) ─────────
+
+  /// <summary>
+  /// "Run at this date" requests (the mode bar's Model with a FITS image): the Comet tab's range
+  /// entry proposes N rotations ending at the date, recommits, seeks to the date and sets up the
+  /// comparison, then completes the request. One implementation for the tab's button and the bar.
+  /// </summary>
+  public IObservable<ObservationRunRequest> ObservationRunRequests =>
+    _observationRunSubject.ObserveOn(_schedulerProvider.MainThread);
+
+  /// <summary>Runs the observation chain at <paramref name="utc"/>; <see cref="ObservationRunResult.NoHandler"/> without a Comet tab.</summary>
+  public Task<ObservationRunResult> RunAtObservationAsync(DateTimeOffset utc)
+  {
+    if (!_observationRunSubject.HasObservers)
+      return Task.FromResult(ObservationRunResult.NoHandler);
+    var request = new ObservationRunRequest(utc);
+    _observationRunSubject.OnNext(request);
+    return request.Completion;
+  }
+
+  /// <summary>
+  /// The loaded telescope image the chain compares with ("from image", the comparison step): the
+  /// Settings tab's billboards set it; null, or a null result, when there is none.
+  /// </summary>
+  public Func<IObservationImage?>? ObservationImageSource { get; set; }
+
+  /// <summary>The current observation image, or null.</summary>
+  public IObservationImage? ObservationImage()
+  {
+    try { return ObservationImageSource?.Invoke(); }
+    catch { return null; }
+  }
 
   /// <summary>The longest dust lead time: the jet TTL (JET_TTL_US, 30 d) and the SPK margin before the start.</summary>
   public const double MaxDustLeadDays = 30;
@@ -275,5 +324,6 @@ public sealed class TimelineService : IDisposable
     _seekedSubject.Dispose();
     _modelRangeRequestSubject.Dispose();
     _recommitRequestSubject.Dispose();
+    _observationRunSubject.Dispose();
   }
 }

@@ -131,6 +131,7 @@ public partial interface ISettingsTabViewModel
     string StrHelpViewProportionsLock { get; set; }
     string StrHelpHeaderViewShowBehindCamera { get; set; }
     string StrHelpViewShowBehindCamera { get; set; }
+    string StrPhysicalLighting { get; set; }
     string StrHelpHeaderViewPhysicalLighting { get; set; }
     string StrHelpViewPhysicalLighting { get; set; }
     string StrHelpHeaderViewNucleusFromEarth { get; set; }
@@ -156,4 +157,13 @@ public partial interface ISettingsTabViewModel
     string StrPlayPreviewBalanced { get; set; }
     string StrPlayPreviewQuality { get; set; }
     string StrHelpPlayPreview { get; set; }
+    string StrStarBackground { get; set; }
+    string StrStarBackgroundAuto { get; set; }
+    string StrStarBackgroundOn { get; set; }
+    string StrStarBackgroundOff { get; set; }
+    string StrHelpHeaderViewStarBackground { get; set; }
+    string StrHelpViewStarBackground { get; set; }
+    string StrOrbitLines { get; set; }
+    string StrHelpHeaderViewOrbitLines { get; set; }
+    string StrHelpViewOrbitLines { get; set; }
 }

@@ -61,6 +61,12 @@ public sealed class TimelineDto
   /// <summary>Days the jets ignite before the committed start; absent in older saves (the default,
   /// one TTL: their jets ignited at the start, which left no tail until the end was reached).</summary>
   public double? DustLeadDays { get; set; }
+  /// <summary>The Observation block's N rotations before the observation date; absent in older
+  /// saves (the default, 3).</summary>
+  public int? ObservationRotations { get; set; }
+  /// <summary>The Observation block's date, UTC ISO-8601 text; absent in older saves (they show
+  /// the committed end).</summary>
+  public string? ObservationEpochUtc { get; set; }
 }
 
 public sealed class SpkDto
@@ -142,6 +148,10 @@ public sealed class ModelDto
   public float GeometricAlbedo { get; set; } = 0.04f;
   public float SizeQ { get; set; } = 3.5f;
   public float SizeRange { get; set; } = 10;
+  /// <summary>Smallest / largest simulated grain diameter (µm), what the UI states (D = √(min·max), F = √(max/min)).
+  /// Null in saves written before: the diameter range is then derived from <see cref="DiametreUm"/> and <see cref="SizeRange"/>.</summary>
+  public float? MinDiameterUm { get; set; }
+  public float? MaxDiameterUm { get; set; }
   // the dust production law: Q_d(r_h) = min(max, Q_d₀ · r_h^−k), 0 beyond the cutoff. Null only in
   // saves written before Q_d replaced Afρ: the legacy fields below are converted then
   [JsonPropertyName("dust_rate_1au_kgs")]
@@ -196,6 +206,9 @@ public sealed class JetDto
   public float? GeometricAlbedo { get; set; }
   public float? SizeQ { get; set; }
   public float? SizeRange { get; set; }
+  // the jet's smallest / largest grain diameter (µm); null: derived from its (or the model's) D and F
+  public float? MinDiameterUm { get; set; }
+  public float? MaxDiameterUm { get; set; }
   /// <summary>This jet's Q_d at 1 AU (kg/s); null in saves written before it (inherits or converts).</summary>
   [JsonPropertyName("dust_rate_1au_kgs")]
   public float? DustRate1AuKgs { get; set; }

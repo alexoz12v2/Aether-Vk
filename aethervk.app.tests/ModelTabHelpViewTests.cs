@@ -31,12 +31,12 @@ public class ModelTabHelpViewTests
     // selected jet
     "JetLatitudeSliderHelp", "JetLongitudeSliderHelp", "JetApertureHelp", "JetVelocityHelp", "JetVelocityStdHelp",
     "JetStreamColorHelp", "JetBetaHelp", "JetQDustHelp",
-    "JetGrainHelp", "JetDiametreUmHelp", "JetDensityHelp", "JetQprHelp", "JetAlbedoHelp", "JetSizeQHelp", "JetSizeRangeHelp",
+    "JetGrainHelp", "JetMinDiameterUmHelp", "JetMaxDiameterUmHelp", "JetDensityHelp", "JetQprHelp", "JetAlbedoHelp", "JetSizeQHelp",
     "JetActivityHelp", "JetDustRate0Help", "CopyGrainToAllJetsButtonHelp",
     // defaults for new jets
-    "JetDefaultsHelp", "DustDensityHelp", "DustDiameterHelp", "DustQprHelp", "DustAlbedoHelp",
+    "JetDefaultsHelp", "DustDensityHelp", "DustMinDiameterHelp", "DustMaxDiameterHelp", "DustQprHelp", "DustAlbedoHelp",
     "ActivityAdvancedHelp", "DustRate0BoxHelp", "DustRatePowerBoxHelp", "DustRateCutoffBoxHelp", "DustRateMaxBoxHelp",
-    "SizeDistributionAdvancedHelp", "SizeRangeBoxHelp",
+    "SizeDistributionAdvancedHelp",
   };
 
   /// <summary>Controls whose tooltip moved into a "?".</summary>
@@ -47,9 +47,9 @@ public class ModelTabHelpViewTests
     "SphereGizmoVisibleCheckBox", "GizmoGridCheckBox", "GizmoBodyAxesCheckBox", "GizmoSpinAxisCheckBox",
     "GizmoSunCheckBox", "GizmoVelocityCheckBox", "ShowJetAnglesCheckBox",
     "JetLatitudeSlider", "JetLongitudeSlider", "JetStreamColorPicker", "JetBetaBox", "JetQDustBox",
-    "JetDiametreUm", "JetDensity", "JetQpr", "JetAlbedo", "JetSizeQ", "JetSizeRange", "JetDustRate0",
+    "JetMinDiameterUm", "JetMaxDiameterUm", "JetDensity", "JetQpr", "JetAlbedo", "JetSizeQ", "JetDustRate0",
     "CopyGrainToAllJetsButton", "DustQprBox", "TotalActivityText",
-    "DustRate0Box", "DustRatePowerBox", "DustRateCutoffBox", "DustRateMaxBox", "SizeRangeBox",
+    "DustRate0Box", "DustRatePowerBox", "DustRateCutoffBox", "DustRateMaxBox", "DustMinDiameterBox", "DustMaxDiameterBox",
   };
 
   private static List<Control> All(Control root) =>
@@ -90,7 +90,7 @@ public class ModelTabHelpViewTests
     }
 
     // the jet panel's ?s read the tab's strings although their DataContext is the jet
-    Assert.Equal(vm.StrHelpJetDiameter, ById<PropertyHelpButton>(view, "JetDiametreUmHelp").HelpContent);
+    Assert.Equal(vm.StrHelpJetMinDiameter, ById<PropertyHelpButton>(view, "JetMinDiameterUmHelp").HelpContent);
     Assert.Equal(vm.StrLatitude, ById<PropertyHelpButton>(view, "JetLatitudeSliderHelp").HelpHeader);
 
     // the gizmo group has one ? that names every part

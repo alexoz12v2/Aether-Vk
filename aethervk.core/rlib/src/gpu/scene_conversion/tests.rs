@@ -482,6 +482,23 @@ fn jet_angle_arcs_measure_latitude_and_longitude() {
   assert!(jet_angle_arcs([0.0; 3], gizmo_r).is_none());
 }
 
+/// The jet angle labels name their axis ("lon" / "lat") and are drawn at the pole labels' size
+/// in white; the arcs keep their colour.
+#[test]
+fn jet_angle_labels_are_prefixed_and_readable() {
+  use super::{
+    JET_ANGLE_COLOR, JET_ANGLE_LABEL_COLOR, JET_ANGLE_LABEL_PT, jet_angle_arcs,
+  };
+  for site in [[1.0, 1.0, 1.0], [-3.0, 2.0, -1.0], [0.0, 0.0, 5.0]] {
+    let a = jet_angle_arcs(site, 10.0).expect("arcs");
+    assert!(a.arcs[0].label.starts_with("lon "), "{}", a.arcs[0].label);
+    assert!(a.arcs[1].label.starts_with("lat "), "{}", a.arcs[1].label);
+  }
+  assert_eq!(JET_ANGLE_LABEL_PT, 16.0);
+  assert_eq!(JET_ANGLE_LABEL_COLOR, [1.0, 1.0, 1.0, 1.0]);
+  assert_ne!(JET_ANGLE_LABEL_COLOR, JET_ANGLE_COLOR);
+}
+
 /// An orthographic camera shows what lies behind its eye unless `CAMERA_HIDE_BEHIND` is set:
 /// the macro layer mirrors its slab and object slabs keep a negative near; with the bit the near
 /// is clamped at the eye. Perspective is never changed.

@@ -159,7 +159,7 @@ public partial class ViewModeBarViewModel : ObservableObject, IDisposable
     if (Camera is not { } camera)
       return;
     var fits = FitsImage();
-    if (fits is null)
+    if (fits?.ObservationUtc is not { } utc)
     {
       camera.EnterModelView();
       Hint = StrNoFitsHint;
@@ -170,11 +170,10 @@ public partial class ViewModeBarViewModel : ObservableObject, IDisposable
     try
     {
       Hint = string.Empty;
-      // end = the image's mid-exposure date, start = N rotations back (the Timeline's N)
-      if (fits.RequestModelRangeCommand.CanExecute(null))
-        fits.RequestModelRangeCommand.Execute(null);
-      await fits.SetUpComparisonCommand.ExecuteAsync(null);
-      Hint = fits.StatusMessage;
+      // the Comet tab's "Run at this date" chain, one implementation: N rotations ending at the
+      // image's date, recommit, seek to the date, set up the comparison
+      var result = await _timeline.RunAtObservationAsync(utc);
+      Hint = result.Status;
     }
     finally
     {
@@ -184,12 +183,7 @@ public partial class ViewModeBarViewModel : ObservableObject, IDisposable
   }
 
   /// <summary>The first FITS billboard, one with an observation date first.</summary>
-  private FitsImageViewModel? FitsImage() =>
-    _billboards?.Items
-      .Select(i => i.Fits)
-      .Where(f => f is not null)
-      .OrderByDescending(f => f!.ObservationUtc is not null)
-      .FirstOrDefault();
+  private FitsImageViewModel? FitsImage() => _billboards?.ObservationImage();
 
   /// <summary>The Timeline's "Recommit with this range" (the Comet tab's Download &amp; Commit).</summary>
   [RelayCommand]

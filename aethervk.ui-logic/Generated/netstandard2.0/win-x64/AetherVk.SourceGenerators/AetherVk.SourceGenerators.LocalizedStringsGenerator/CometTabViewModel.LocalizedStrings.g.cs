@@ -342,6 +342,66 @@ partial class CometTabViewModel
         }
     }
 
+    private string _strObservationDate = string.Empty;
+    public string StrObservationDate
+    {
+        get => _strObservationDate;
+        set
+        {
+            if (_strObservationDate == value) return;
+            _strObservationDate = value;
+            OnPropertyChanged(nameof(StrObservationDate));
+        }
+    }
+
+    private string _strFromImage = string.Empty;
+    public string StrFromImage
+    {
+        get => _strFromImage;
+        set
+        {
+            if (_strFromImage == value) return;
+            _strFromImage = value;
+            OnPropertyChanged(nameof(StrFromImage));
+        }
+    }
+
+    private string _strRotationsBefore = string.Empty;
+    public string StrRotationsBefore
+    {
+        get => _strRotationsBefore;
+        set
+        {
+            if (_strRotationsBefore == value) return;
+            _strRotationsBefore = value;
+            OnPropertyChanged(nameof(StrRotationsBefore));
+        }
+    }
+
+    private string _strRunAtDate = string.Empty;
+    public string StrRunAtDate
+    {
+        get => _strRunAtDate;
+        set
+        {
+            if (_strRunAtDate == value) return;
+            _strRunAtDate = value;
+            OnPropertyChanged(nameof(StrRunAtDate));
+        }
+    }
+
+    private string _strAdvancedRange = string.Empty;
+    public string StrAdvancedRange
+    {
+        get => _strAdvancedRange;
+        set
+        {
+            if (_strAdvancedRange == value) return;
+            _strAdvancedRange = value;
+            OnPropertyChanged(nameof(StrAdvancedRange));
+        }
+    }
+
     private string _strHelpHeaderDustLead = string.Empty;
     public string StrHelpHeaderDustLead
     {
@@ -577,6 +637,11 @@ partial class CometTabViewModel
         StrHelpRecommit = _translationService.GetString("Tabs_Comet_HelpRecommit");
         StrHelpHeaderModelRange = _translationService.GetString("Tabs_Comet_HelpHeaderModelRange");
         StrHelpModelRange = _translationService.GetString("Tabs_Comet_HelpModelRange");
+        StrObservationDate = _translationService.GetString("Tabs_Comet_ObservationDate");
+        StrFromImage = _translationService.GetString("Tabs_Comet_FromImage");
+        StrRotationsBefore = _translationService.GetString("Tabs_Comet_RotationsBefore");
+        StrRunAtDate = _translationService.GetString("Tabs_Comet_RunAtDate");
+        StrAdvancedRange = _translationService.GetString("Tabs_Comet_AdvancedRange");
         StrHelpHeaderDustLead = _translationService.GetString("Tabs_Comet_HelpHeaderDustLead");
         StrHelpDustLead = _translationService.GetString("Tabs_Comet_HelpDustLead");
         StrHelpHeaderReferenceOrbit = _translationService.GetString("Tabs_Comet_HelpHeaderReferenceOrbit");

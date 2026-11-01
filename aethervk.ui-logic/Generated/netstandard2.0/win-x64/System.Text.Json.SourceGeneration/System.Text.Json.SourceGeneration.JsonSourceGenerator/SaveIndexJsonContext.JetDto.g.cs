@@ -46,7 +46,7 @@ namespace AetherVk.Logic.SaveFile
 
         private static global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[] JetDtoPropInit(global::System.Text.Json.JsonSerializerOptions options)
         {
-            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[16];
+            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[18];
 
             var info0 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<float>
             {
@@ -337,6 +337,46 @@ namespace AetherVk.Logic.SaveFile
                 IsVirtual = false,
                 DeclaringType = typeof(global::AetherVk.Logic.SaveFile.JetDto),
                 Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.JetDto)obj).MinDiameterUm,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.JetDto)obj).MinDiameterUm = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "MinDiameterUm",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.JetDto).GetProperty("MinDiameterUm", InstanceMemberBindingFlags, null, typeof(float?), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[14] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<float?>(options, info14);
+
+            var info15 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<float?>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.JetDto),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.JetDto)obj).MaxDiameterUm,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.JetDto)obj).MaxDiameterUm = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "MaxDiameterUm",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.JetDto).GetProperty("MaxDiameterUm", InstanceMemberBindingFlags, null, typeof(float?), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[15] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<float?>(options, info15);
+
+            var info16 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<float?>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.JetDto),
+                Converter = null,
                 Getter = static obj => ((global::AetherVk.Logic.SaveFile.JetDto)obj).DustRate1AuKgs,
                 Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.JetDto)obj).DustRate1AuKgs = value!,
                 IgnoreCondition = null,
@@ -348,9 +388,9 @@ namespace AetherVk.Logic.SaveFile
                 AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.JetDto).GetProperty("DustRate1AuKgs", InstanceMemberBindingFlags, null, typeof(float?), global::System.Array.Empty<global::System.Type>(), null),
             };
             
-            properties[14] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<float?>(options, info14);
+            properties[16] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<float?>(options, info16);
 
-            var info15 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<float?>
+            var info17 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<float?>
             {
                 IsProperty = true,
                 IsPublic = true,
@@ -368,7 +408,7 @@ namespace AetherVk.Logic.SaveFile
                 AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.JetDto).GetProperty("Afrho0Cm", InstanceMemberBindingFlags, null, typeof(float?), global::System.Array.Empty<global::System.Type>(), null),
             };
             
-            properties[15] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<float?>(options, info15);
+            properties[17] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<float?>(options, info17);
 
             return properties;
         }
@@ -406,6 +446,10 @@ namespace AetherVk.Logic.SaveFile
             global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.SaveFile.JetDto)value).SizeQ, NullableSingle);
             writer.WritePropertyName(PropName_size_range);
             global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.SaveFile.JetDto)value).SizeRange, NullableSingle);
+            writer.WritePropertyName(PropName_min_diameter_um);
+            global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.SaveFile.JetDto)value).MinDiameterUm, NullableSingle);
+            writer.WritePropertyName(PropName_max_diameter_um);
+            global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.SaveFile.JetDto)value).MaxDiameterUm, NullableSingle);
             writer.WritePropertyName(PropName_dust_rate_1au_kgs);
             global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.SaveFile.JetDto)value).DustRate1AuKgs, NullableSingle);
             float? __value_Afrho0Cm = ((global::AetherVk.Logic.SaveFile.JetDto)value).Afrho0Cm;

@@ -258,18 +258,6 @@ partial class ModelTabViewModel
         }
     }
 
-    private string _strDustDiameter = string.Empty;
-    public string StrDustDiameter
-    {
-        get => _strDustDiameter;
-        set
-        {
-            if (_strDustDiameter == value) return;
-            _strDustDiameter = value;
-            OnPropertyChanged(nameof(StrDustDiameter));
-        }
-    }
-
     private string _strAlbedo = string.Empty;
     public string StrAlbedo
     {
@@ -318,15 +306,99 @@ partial class ModelTabViewModel
         }
     }
 
-    private string _strSizeRange = string.Empty;
-    public string StrSizeRange
+    private string _strMinDiameter = string.Empty;
+    public string StrMinDiameter
     {
-        get => _strSizeRange;
+        get => _strMinDiameter;
         set
         {
-            if (_strSizeRange == value) return;
-            _strSizeRange = value;
-            OnPropertyChanged(nameof(StrSizeRange));
+            if (_strMinDiameter == value) return;
+            _strMinDiameter = value;
+            OnPropertyChanged(nameof(StrMinDiameter));
+        }
+    }
+
+    private string _strMaxDiameter = string.Empty;
+    public string StrMaxDiameter
+    {
+        get => _strMaxDiameter;
+        set
+        {
+            if (_strMaxDiameter == value) return;
+            _strMaxDiameter = value;
+            OnPropertyChanged(nameof(StrMaxDiameter));
+        }
+    }
+
+    private string _strHelpMinDiameter = string.Empty;
+    public string StrHelpMinDiameter
+    {
+        get => _strHelpMinDiameter;
+        set
+        {
+            if (_strHelpMinDiameter == value) return;
+            _strHelpMinDiameter = value;
+            OnPropertyChanged(nameof(StrHelpMinDiameter));
+        }
+    }
+
+    private string _strHelpMaxDiameter = string.Empty;
+    public string StrHelpMaxDiameter
+    {
+        get => _strHelpMaxDiameter;
+        set
+        {
+            if (_strHelpMaxDiameter == value) return;
+            _strHelpMaxDiameter = value;
+            OnPropertyChanged(nameof(StrHelpMaxDiameter));
+        }
+    }
+
+    private string _strHelpJetMinDiameter = string.Empty;
+    public string StrHelpJetMinDiameter
+    {
+        get => _strHelpJetMinDiameter;
+        set
+        {
+            if (_strHelpJetMinDiameter == value) return;
+            _strHelpJetMinDiameter = value;
+            OnPropertyChanged(nameof(StrHelpJetMinDiameter));
+        }
+    }
+
+    private string _strHelpJetMaxDiameter = string.Empty;
+    public string StrHelpJetMaxDiameter
+    {
+        get => _strHelpJetMaxDiameter;
+        set
+        {
+            if (_strHelpJetMaxDiameter == value) return;
+            _strHelpJetMaxDiameter = value;
+            OnPropertyChanged(nameof(StrHelpJetMaxDiameter));
+        }
+    }
+
+    private string _strGrainRangeMinAboveMax = string.Empty;
+    public string StrGrainRangeMinAboveMax
+    {
+        get => _strGrainRangeMinAboveMax;
+        set
+        {
+            if (_strGrainRangeMinAboveMax == value) return;
+            _strGrainRangeMinAboveMax = value;
+            OnPropertyChanged(nameof(StrGrainRangeMinAboveMax));
+        }
+    }
+
+    private string _strGrainRangeRatioTooLarge = string.Empty;
+    public string StrGrainRangeRatioTooLarge
+    {
+        get => _strGrainRangeRatioTooLarge;
+        set
+        {
+            if (_strGrainRangeRatioTooLarge == value) return;
+            _strGrainRangeRatioTooLarge = value;
+            OnPropertyChanged(nameof(StrGrainRangeRatioTooLarge));
         }
     }
 
@@ -474,18 +546,6 @@ partial class ModelTabViewModel
         }
     }
 
-    private string _strHelpHeaderJetDiameter = string.Empty;
-    public string StrHelpHeaderJetDiameter
-    {
-        get => _strHelpHeaderJetDiameter;
-        set
-        {
-            if (_strHelpHeaderJetDiameter == value) return;
-            _strHelpHeaderJetDiameter = value;
-            OnPropertyChanged(nameof(StrHelpHeaderJetDiameter));
-        }
-    }
-
     private string _strHelpHeaderQpr = string.Empty;
     public string StrHelpHeaderQpr
     {
@@ -507,18 +567,6 @@ partial class ModelTabViewModel
             if (_strHelpHeaderSizeLawQ == value) return;
             _strHelpHeaderSizeLawQ = value;
             OnPropertyChanged(nameof(StrHelpHeaderSizeLawQ));
-        }
-    }
-
-    private string _strHelpHeaderSizeRangeF = string.Empty;
-    public string StrHelpHeaderSizeRangeF
-    {
-        get => _strHelpHeaderSizeRangeF;
-        set
-        {
-            if (_strHelpHeaderSizeRangeF == value) return;
-            _strHelpHeaderSizeRangeF = value;
-            OnPropertyChanged(nameof(StrHelpHeaderSizeRangeF));
         }
     }
 
@@ -834,18 +882,6 @@ partial class ModelTabViewModel
         }
     }
 
-    private string _strHelpJetDiameter = string.Empty;
-    public string StrHelpJetDiameter
-    {
-        get => _strHelpJetDiameter;
-        set
-        {
-            if (_strHelpJetDiameter == value) return;
-            _strHelpJetDiameter = value;
-            OnPropertyChanged(nameof(StrHelpJetDiameter));
-        }
-    }
-
     private string _strHelpJetDensity = string.Empty;
     public string StrHelpJetDensity
     {
@@ -891,18 +927,6 @@ partial class ModelTabViewModel
             if (_strHelpJetSizeQ == value) return;
             _strHelpJetSizeQ = value;
             OnPropertyChanged(nameof(StrHelpJetSizeQ));
-        }
-    }
-
-    private string _strHelpJetSizeRange = string.Empty;
-    public string StrHelpJetSizeRange
-    {
-        get => _strHelpJetSizeRange;
-        set
-        {
-            if (_strHelpJetSizeRange == value) return;
-            _strHelpJetSizeRange = value;
-            OnPropertyChanged(nameof(StrHelpJetSizeRange));
         }
     }
 
@@ -975,18 +999,6 @@ partial class ModelTabViewModel
             if (_strHelpDustDensity == value) return;
             _strHelpDustDensity = value;
             OnPropertyChanged(nameof(StrHelpDustDensity));
-        }
-    }
-
-    private string _strHelpDustDiameter = string.Empty;
-    public string StrHelpDustDiameter
-    {
-        get => _strHelpDustDiameter;
-        set
-        {
-            if (_strHelpDustDiameter == value) return;
-            _strHelpDustDiameter = value;
-            OnPropertyChanged(nameof(StrHelpDustDiameter));
         }
     }
 
@@ -1086,18 +1098,6 @@ partial class ModelTabViewModel
         }
     }
 
-    private string _strHelpSizeRange = string.Empty;
-    public string StrHelpSizeRange
-    {
-        get => _strHelpSizeRange;
-        set
-        {
-            if (_strHelpSizeRange == value) return;
-            _strHelpSizeRange = value;
-            OnPropertyChanged(nameof(StrHelpSizeRange));
-        }
-    }
-
     // ── formatted strings (implement the partial methods below) ─────────────
     private string _strJetNeverLit = string.Empty;
     public string StrJetNeverLit
@@ -1108,6 +1108,30 @@ partial class ModelTabViewModel
             if (_strJetNeverLit == value) return;
             _strJetNeverLit = value;
             OnPropertyChanged(nameof(StrJetNeverLit));
+        }
+    }
+
+    private string _strSimulatedGrainsNote = string.Empty;
+    public string StrSimulatedGrainsNote
+    {
+        get => _strSimulatedGrainsNote;
+        set
+        {
+            if (_strSimulatedGrainsNote == value) return;
+            _strSimulatedGrainsNote = value;
+            OnPropertyChanged(nameof(StrSimulatedGrainsNote));
+        }
+    }
+
+    private string _strGrainRangeOutOfBounds = string.Empty;
+    public string StrGrainRangeOutOfBounds
+    {
+        get => _strGrainRangeOutOfBounds;
+        set
+        {
+            if (_strGrainRangeOutOfBounds == value) return;
+            _strGrainRangeOutOfBounds = value;
+            OnPropertyChanged(nameof(StrGrainRangeOutOfBounds));
         }
     }
 
@@ -1135,12 +1159,18 @@ partial class ModelTabViewModel
         StrSpinAxisPA = _translationService.GetString("Tabs_Model_SpinAxisPA");
         StrSpinAxisInclination = _translationService.GetString("Tabs_Model_SpinAxisInclination");
         StrDustDensity = _translationService.GetString("Tabs_Model_DustDensity");
-        StrDustDiameter = _translationService.GetString("Tabs_Model_DustDiameter");
         StrAlbedo = _translationService.GetString("Tabs_Model_Albedo");
         StrScatteringEfficiency = _translationService.GetString("Tabs_Model_ScatteringEfficiency");
         StrGeometricAlbedo = _translationService.GetString("Tabs_Model_GeometricAlbedo");
         StrSizeQ = _translationService.GetString("Tabs_Model_SizeQ");
-        StrSizeRange = _translationService.GetString("Tabs_Model_SizeRange");
+        StrMinDiameter = _translationService.GetString("Tabs_Model_MinDiameter");
+        StrMaxDiameter = _translationService.GetString("Tabs_Model_MaxDiameter");
+        StrHelpMinDiameter = _translationService.GetString("Tabs_Model_HelpMinDiameter");
+        StrHelpMaxDiameter = _translationService.GetString("Tabs_Model_HelpMaxDiameter");
+        StrHelpJetMinDiameter = _translationService.GetString("Tabs_Model_HelpJetMinDiameter");
+        StrHelpJetMaxDiameter = _translationService.GetString("Tabs_Model_HelpJetMaxDiameter");
+        StrGrainRangeMinAboveMax = _translationService.GetString("Tabs_Model_GrainRangeMinAboveMax");
+        StrGrainRangeRatioTooLarge = _translationService.GetString("Tabs_Model_GrainRangeRatioTooLarge");
         StrBeta = _translationService.GetString("Tabs_Model_Beta");
         StrAcceleration = _translationService.GetString("Tabs_Model_Acceleration");
         StrSpeed = _translationService.GetString("Tabs_Model_Speed");
@@ -1153,10 +1183,8 @@ partial class ModelTabViewModel
         StrHelpHeaderStreamColor = _translationService.GetString("Tabs_Model_HelpHeaderStreamColor");
         StrHelpHeaderJetBeta = _translationService.GetString("Tabs_Model_HelpHeaderJetBeta");
         StrHelpHeaderJetQDust = _translationService.GetString("Tabs_Model_HelpHeaderJetQDust");
-        StrHelpHeaderJetDiameter = _translationService.GetString("Tabs_Model_HelpHeaderJetDiameter");
         StrHelpHeaderQpr = _translationService.GetString("Tabs_Model_HelpHeaderQpr");
         StrHelpHeaderSizeLawQ = _translationService.GetString("Tabs_Model_HelpHeaderSizeLawQ");
-        StrHelpHeaderSizeRangeF = _translationService.GetString("Tabs_Model_HelpHeaderSizeRangeF");
         StrHelpHeaderJetGrain = _translationService.GetString("Tabs_Model_HelpHeaderJetGrain");
         StrHelpHeaderJetActivity = _translationService.GetString("Tabs_Model_HelpHeaderJetActivity");
         StrHelpHeaderQd1Au = _translationService.GetString("Tabs_Model_HelpHeaderQd1Au");
@@ -1183,19 +1211,16 @@ partial class ModelTabViewModel
         StrHelpJetStreamColor = _translationService.GetString("Tabs_Model_HelpJetStreamColor");
         StrHelpJetBeta = _translationService.GetString("Tabs_Model_HelpJetBeta");
         StrHelpJetQDust = _translationService.GetString("Tabs_Model_HelpJetQDust");
-        StrHelpJetDiameter = _translationService.GetString("Tabs_Model_HelpJetDiameter");
         StrHelpJetDensity = _translationService.GetString("Tabs_Model_HelpJetDensity");
         StrHelpJetQpr = _translationService.GetString("Tabs_Model_HelpJetQpr");
         StrHelpJetAlbedo = _translationService.GetString("Tabs_Model_HelpJetAlbedo");
         StrHelpJetSizeQ = _translationService.GetString("Tabs_Model_HelpJetSizeQ");
-        StrHelpJetSizeRange = _translationService.GetString("Tabs_Model_HelpJetSizeRange");
         StrHelpJetGrain = _translationService.GetString("Tabs_Model_HelpJetGrain");
         StrHelpJetActivity = _translationService.GetString("Tabs_Model_HelpJetActivity");
         StrHelpJetDustRate0 = _translationService.GetString("Tabs_Model_HelpJetDustRate0");
         StrHelpCopyGrain = _translationService.GetString("Tabs_Model_HelpCopyGrain");
         StrHelpJetDefaults = _translationService.GetString("Tabs_Model_HelpJetDefaults");
         StrHelpDustDensity = _translationService.GetString("Tabs_Model_HelpDustDensity");
-        StrHelpDustDiameter = _translationService.GetString("Tabs_Model_HelpDustDiameter");
         StrHelpScatteringEfficiency = _translationService.GetString("Tabs_Model_HelpScatteringEfficiency");
         StrHelpDustAlbedo = _translationService.GetString("Tabs_Model_HelpDustAlbedo");
         StrHelpActivity = _translationService.GetString("Tabs_Model_HelpActivity");
@@ -1204,10 +1229,13 @@ partial class ModelTabViewModel
         StrHelpDustRateCutoff = _translationService.GetString("Tabs_Model_HelpDustRateCutoff");
         StrHelpDustRateMax = _translationService.GetString("Tabs_Model_HelpDustRateMax");
         StrHelpSizeDistribution = _translationService.GetString("Tabs_Model_HelpSizeDistribution");
-        StrHelpSizeRange = _translationService.GetString("Tabs_Model_HelpSizeRange");
         { var r = string.Empty; FormatStr_JetNeverLit(ref r); StrJetNeverLit = r; }
+        { var r = string.Empty; FormatStr_SimulatedGrainsNote(ref r); StrSimulatedGrainsNote = r; }
+        { var r = string.Empty; FormatStr_GrainRangeOutOfBounds(ref r); StrGrainRangeOutOfBounds = r; }
     }
 
     // ── Implement these in your hand-written partial class ───────────────────
     partial void FormatStr_JetNeverLit(ref string result);
+    partial void FormatStr_SimulatedGrainsNote(ref string result);
+    partial void FormatStr_GrainRangeOutOfBounds(ref string result);
 }

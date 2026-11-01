@@ -186,7 +186,7 @@ pub fn spawn_earth_visual(
 
 /// Roots of the subtrees `camera` must not draw: entities whose [`RenderLayerComponent`] shares no
 /// bit with the camera's [`crate::scene::CameraRenderMaskComponent`] (default
-/// [`crate::scene::RENDER_LAYER_DEFAULT`]).
+/// [`crate::scene::DEFAULT_CAMERA_RENDER_MASK`]).
 pub fn masked_roots(scene: &Scene, camera: EntityId) -> alloc::vec::Vec<EntityId> {
   let mask = camera_mask(scene, camera);
   scene
@@ -200,7 +200,7 @@ pub fn masked_roots(scene: &Scene, camera: EntityId) -> alloc::vec::Vec<EntityId
 pub fn camera_mask(scene: &Scene, camera: EntityId) -> u32 {
   scene
     .with_component(camera, |m: &crate::scene::CameraRenderMaskComponent| m.0)
-    .unwrap_or(crate::scene::RENDER_LAYER_DEFAULT)
+    .unwrap_or(crate::scene::DEFAULT_CAMERA_RENDER_MASK)
 }
 
 /// Body-local (km) ends of the polar axis, north first: `(0, 0, ±length_factor · radius_km)` in

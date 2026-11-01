@@ -46,7 +46,7 @@ namespace AetherVk.Logic.SaveFile
 
         private static global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[] TimelineDtoPropInit(global::System.Text.Json.JsonSerializerOptions options)
         {
-            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[9];
+            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[11];
 
             var info0 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<global::AetherVk.Logic.SaveFile.EpochParts>
             {
@@ -228,6 +228,46 @@ namespace AetherVk.Logic.SaveFile
             
             properties[8] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<double?>(options, info8);
 
+            var info9 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<int?>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.TimelineDto),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.TimelineDto)obj).ObservationRotations,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.TimelineDto)obj).ObservationRotations = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "ObservationRotations",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.TimelineDto).GetProperty("ObservationRotations", InstanceMemberBindingFlags, null, typeof(int?), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[9] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<int?>(options, info9);
+
+            var info10 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<string>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.TimelineDto),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.TimelineDto)obj).ObservationEpochUtc,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.TimelineDto)obj).ObservationEpochUtc = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "ObservationEpochUtc",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.TimelineDto).GetProperty("ObservationEpochUtc", InstanceMemberBindingFlags, null, typeof(string), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[10] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<string>(options, info10);
+
             return properties;
         }
 
@@ -257,6 +297,9 @@ namespace AetherVk.Logic.SaveFile
             global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.SaveFile.TimelineDto)value).Speed, NullableInt32);
             writer.WritePropertyName(PropName_dust_lead_days);
             global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.SaveFile.TimelineDto)value).DustLeadDays, NullableDouble);
+            writer.WritePropertyName(PropName_observation_rotations);
+            global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.SaveFile.TimelineDto)value).ObservationRotations, NullableInt32);
+            writer.WriteString(PropName_observation_epoch_utc, ((global::AetherVk.Logic.SaveFile.TimelineDto)value).ObservationEpochUtc);
 
             writer.WriteEndObject();
         }

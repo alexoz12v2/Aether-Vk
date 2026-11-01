@@ -1,0 +1,26 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:CompileBindings="False"
+             x:Class="AetherVk.UI.GizmoLegendView">
+  <!-- The viewport legend: the Nucleus view's gizmo rows, or the Model / Orbit views' orbit lines.
+       DataContext: SphereGizmoLegendViewModel. -->
+  <StackPanel Spacing="4" IsVisible="{ReflectionBinding IsShown}">
+    <TextBlock AutomationProperties.AutomationId="GizmoLegendTitle"
+               Text="{ReflectionBinding Title}" FontWeight="SemiBold"
+               Foreground="{DynamicResource Text.Primary}" />
+    <ItemsControl AutomationProperties.AutomationId="GizmoLegendRows" ItemsSource="{ReflectionBinding Rows}">
+      <ItemsControl.ItemTemplate>
+        <DataTemplate>
+          <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,1"
+                      AutomationProperties.AutomationId="{ReflectionBinding Key, StringFormat=GizmoLegendRow_{0}}">
+            <Border Width="18" Height="4" VerticalAlignment="Center" CornerRadius="2"
+                    BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1"
+                    Background="{ReflectionBinding ColorHex}" />
+            <TextBlock Text="{ReflectionBinding Label}" FontSize="12"
+                       Foreground="{DynamicResource Text.Primary}" />
+          </StackPanel>
+        </DataTemplate>
+      </ItemsControl.ItemTemplate>
+    </ItemsControl>
+  </StackPanel>
+</UserControl>

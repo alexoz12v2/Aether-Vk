@@ -1518,6 +1518,18 @@ partial class SettingsTabViewModel
         }
     }
 
+    private string _strPhysicalLighting = string.Empty;
+    public string StrPhysicalLighting
+    {
+        get => _strPhysicalLighting;
+        set
+        {
+            if (_strPhysicalLighting == value) return;
+            _strPhysicalLighting = value;
+            OnPropertyChanged(nameof(StrPhysicalLighting));
+        }
+    }
+
     private string _strHelpHeaderViewPhysicalLighting = string.Empty;
     public string StrHelpHeaderViewPhysicalLighting
     {
@@ -1818,6 +1830,114 @@ partial class SettingsTabViewModel
         }
     }
 
+    private string _strStarBackground = string.Empty;
+    public string StrStarBackground
+    {
+        get => _strStarBackground;
+        set
+        {
+            if (_strStarBackground == value) return;
+            _strStarBackground = value;
+            OnPropertyChanged(nameof(StrStarBackground));
+        }
+    }
+
+    private string _strStarBackgroundAuto = string.Empty;
+    public string StrStarBackgroundAuto
+    {
+        get => _strStarBackgroundAuto;
+        set
+        {
+            if (_strStarBackgroundAuto == value) return;
+            _strStarBackgroundAuto = value;
+            OnPropertyChanged(nameof(StrStarBackgroundAuto));
+        }
+    }
+
+    private string _strStarBackgroundOn = string.Empty;
+    public string StrStarBackgroundOn
+    {
+        get => _strStarBackgroundOn;
+        set
+        {
+            if (_strStarBackgroundOn == value) return;
+            _strStarBackgroundOn = value;
+            OnPropertyChanged(nameof(StrStarBackgroundOn));
+        }
+    }
+
+    private string _strStarBackgroundOff = string.Empty;
+    public string StrStarBackgroundOff
+    {
+        get => _strStarBackgroundOff;
+        set
+        {
+            if (_strStarBackgroundOff == value) return;
+            _strStarBackgroundOff = value;
+            OnPropertyChanged(nameof(StrStarBackgroundOff));
+        }
+    }
+
+    private string _strHelpHeaderViewStarBackground = string.Empty;
+    public string StrHelpHeaderViewStarBackground
+    {
+        get => _strHelpHeaderViewStarBackground;
+        set
+        {
+            if (_strHelpHeaderViewStarBackground == value) return;
+            _strHelpHeaderViewStarBackground = value;
+            OnPropertyChanged(nameof(StrHelpHeaderViewStarBackground));
+        }
+    }
+
+    private string _strHelpViewStarBackground = string.Empty;
+    public string StrHelpViewStarBackground
+    {
+        get => _strHelpViewStarBackground;
+        set
+        {
+            if (_strHelpViewStarBackground == value) return;
+            _strHelpViewStarBackground = value;
+            OnPropertyChanged(nameof(StrHelpViewStarBackground));
+        }
+    }
+
+    private string _strOrbitLines = string.Empty;
+    public string StrOrbitLines
+    {
+        get => _strOrbitLines;
+        set
+        {
+            if (_strOrbitLines == value) return;
+            _strOrbitLines = value;
+            OnPropertyChanged(nameof(StrOrbitLines));
+        }
+    }
+
+    private string _strHelpHeaderViewOrbitLines = string.Empty;
+    public string StrHelpHeaderViewOrbitLines
+    {
+        get => _strHelpHeaderViewOrbitLines;
+        set
+        {
+            if (_strHelpHeaderViewOrbitLines == value) return;
+            _strHelpHeaderViewOrbitLines = value;
+            OnPropertyChanged(nameof(StrHelpHeaderViewOrbitLines));
+        }
+    }
+
+    private string _strHelpViewOrbitLines = string.Empty;
+    public string StrHelpViewOrbitLines
+    {
+        get => _strHelpViewOrbitLines;
+        set
+        {
+            if (_strHelpViewOrbitLines == value) return;
+            _strHelpViewOrbitLines = value;
+            OnPropertyChanged(nameof(StrHelpViewOrbitLines));
+        }
+    }
+
     /// <summary>Called once on construction and on every culture change.</summary>
     private void RefreshStrings()
     {
@@ -1947,6 +2067,7 @@ partial class SettingsTabViewModel
         StrHelpViewProportionsLock = _translationService.GetString("Tabs_Settings_HelpViewProportionsLock");
         StrHelpHeaderViewShowBehindCamera = _translationService.GetString("Tabs_Settings_HelpHeaderViewShowBehindCamera");
         StrHelpViewShowBehindCamera = _translationService.GetString("Tabs_Settings_HelpViewShowBehindCamera");
+        StrPhysicalLighting = _translationService.GetString("Tabs_Settings_PhysicalLighting");
         StrHelpHeaderViewPhysicalLighting = _translationService.GetString("Tabs_Settings_HelpHeaderViewPhysicalLighting");
         StrHelpViewPhysicalLighting = _translationService.GetString("Tabs_Settings_HelpViewPhysicalLighting");
         StrHelpHeaderViewNucleusFromEarth = _translationService.GetString("Tabs_Settings_HelpHeaderViewNucleusFromEarth");
@@ -1972,5 +2093,14 @@ partial class SettingsTabViewModel
         StrPlayPreviewBalanced = _translationService.GetString("Tabs_Settings_PlayPreviewBalanced");
         StrPlayPreviewQuality = _translationService.GetString("Tabs_Settings_PlayPreviewQuality");
         StrHelpPlayPreview = _translationService.GetString("Tabs_Settings_HelpPlayPreview");
+        StrStarBackground = _translationService.GetString("Tabs_Settings_StarBackground");
+        StrStarBackgroundAuto = _translationService.GetString("Tabs_Settings_StarBackgroundAuto");
+        StrStarBackgroundOn = _translationService.GetString("Tabs_Settings_StarBackgroundOn");
+        StrStarBackgroundOff = _translationService.GetString("Tabs_Settings_StarBackgroundOff");
+        StrHelpHeaderViewStarBackground = _translationService.GetString("Tabs_Settings_HelpHeaderViewStarBackground");
+        StrHelpViewStarBackground = _translationService.GetString("Tabs_Settings_HelpViewStarBackground");
+        StrOrbitLines = _translationService.GetString("Tabs_Settings_OrbitLines");
+        StrHelpHeaderViewOrbitLines = _translationService.GetString("Tabs_Settings_HelpHeaderViewOrbitLines");
+        StrHelpViewOrbitLines = _translationService.GetString("Tabs_Settings_HelpViewOrbitLines");
     }
 }

@@ -157,6 +157,8 @@ public static class SaveIndexMapping
     GeometricAlbedo = m.GeometricAlbedo,
     SizeQ = m.SizeQ,
     SizeRange = m.SizeRange,
+    MinDiameterUm = GrainDiameterRange.MinOf(m.DiametreUm, m.SizeRange),
+    MaxDiameterUm = GrainDiameterRange.MaxOf(m.DiametreUm, m.SizeRange),
     DustRate1AuKgs = m.DustRate1AuKgs,
     DustRatePower = m.DustRatePower,
     DustRateCutoffAu = m.DustRateCutoffAu,
@@ -221,6 +223,8 @@ public static class SaveIndexMapping
     m.GeometricAlbedo = d.GeometricAlbedo;
     m.SizeQ = d.SizeQ;
     m.SizeRange = d.SizeRange;
+    if (d.MinDiameterUm is { } lo && d.MaxDiameterUm is { } hi && GrainDiameterRange.Validate(lo, hi) == GrainRangeError.None)
+      (m.DiametreUm, m.SizeRange) = GrainDiameterRange.ToEngine(lo, hi);
     m.DustRate1AuKgs = DustRate1AuOf(d);
     m.DustRatePower = d.DustRatePower ?? d.AfrhoPower ?? 2f;
     m.DustRateCutoffAu = d.DustRateCutoffAu ?? d.AfrhoCutoffAu ?? 15f;
@@ -255,6 +259,8 @@ public static class SaveIndexMapping
     GeometricAlbedo = j.GeometricAlbedo,
     SizeQ = j.SizeQ,
     SizeRange = j.SizeRange,
+    MinDiameterUm = GrainDiameterRange.MinOf(j.DiametreUm, j.SizeRange),
+    MaxDiameterUm = GrainDiameterRange.MaxOf(j.DiametreUm, j.SizeRange),
     DustRate1AuKgs = j.DustRate1AuKgs,
   };
 
@@ -272,6 +278,8 @@ public static class SaveIndexMapping
     float densityGCm3 = d.DensityGCm3 ?? m.DensityGCm3;
     float albedo = d.GeometricAlbedo ?? m.GeometricAlbedo;
     float sizeRange = d.SizeRange ?? m.SizeRange;
+    if (d.MinDiameterUm is { } lo && d.MaxDiameterUm is { } hi && GrainDiameterRange.Validate(lo, hi) == GrainRangeError.None)
+      (diametreUm, sizeRange) = GrainDiameterRange.ToEngine(lo, hi);
     float rate = d.DustRate1AuKgs ?? (d.Afrho0Cm is { } afrho
       ? (float)LegacyAfrho.DustRateKgs(afrho, diametreUm, densityGCm3, d.VelocityMeanMs, d.VelocityStdMs, albedo, sizeRange)
       : m.DustRate1AuKgs);

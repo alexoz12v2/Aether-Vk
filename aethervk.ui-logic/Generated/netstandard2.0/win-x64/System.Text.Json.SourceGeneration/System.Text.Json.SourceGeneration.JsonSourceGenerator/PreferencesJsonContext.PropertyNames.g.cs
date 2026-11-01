@@ -32,5 +32,8 @@ namespace AetherVk.Logic.Services
         private static readonly global::System.Text.Json.JsonEncodedText PropName_hud_orbit_expanded = global::System.Text.Json.JsonEncodedText.Encode("hud_orbit_expanded");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_show_diagnostic_panels = global::System.Text.Json.JsonEncodedText.Encode("show_diagnostic_panels");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_time_scale = global::System.Text.Json.JsonEncodedText.Encode("time_scale");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_physical_lighting = global::System.Text.Json.JsonEncodedText.Encode("physical_lighting");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_star_background = global::System.Text.Json.JsonEncodedText.Encode("star_background");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_orbit_lines = global::System.Text.Json.JsonEncodedText.Encode("orbit_lines");
     }
 }

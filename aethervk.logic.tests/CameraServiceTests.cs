@@ -1312,8 +1312,8 @@ public class CameraServiceTests
       t.PivotEntityId == 42UL && t.PosX == 0 && t.PosY == 0 && Math.Abs(t.PosZ - expectedZ) < 1e-9)), Times.Once);
   }
 
-  /// The comet label is shown in Earth observer and UpZenith modes while a comet is committed,
-  /// hidden in CometOrbiting and without a comet.
+  /// The comet label (and its line) is shown in the Orbit (UpZenith) mode only, while a comet is
+  /// committed.
   [Fact]
   public void CometIndicator_ShownInEarthObserverAndUpZenithWithAComet()
   {
@@ -1331,8 +1331,9 @@ public class CameraServiceTests
     Assert.NotEqual(true, last);
     committed.OnNext(true);
     service.SetCameraMode(CameraMode.UpZenith);
-    service.SetCameraMode(CameraMode.EarthPosition);
     Assert.Equal(true, last);
+    service.SetCameraMode(CameraMode.EarthPosition); // Model view: no label, no line
+    Assert.Equal(false, last);
     service.SetCameraMode(CameraMode.UpZenith);
     Assert.Equal(true, last);
     service.SetCameraMode(CameraMode.CometOrbiting);
@@ -1343,7 +1344,54 @@ public class CameraServiceTests
     scheduler.AdvanceBy(1);
     Assert.Equal(false, last);
     Assert.True(CameraService.ShowsCometLabel(CameraMode.UpZenith));
+    Assert.False(CameraService.ShowsCometLabel(CameraMode.EarthPosition));
     Assert.False(CameraService.ShowsCometLabel(CameraMode.CometOrbiting));
+  }
+
+  /// The lighting choice is a preference: default on, a switch-off is stored and applied to a new
+  /// viewport's camera, a switch made in the settings is stored.
+  [Fact]
+  public void PhysicalLighting_Preference_RoundTrips()
+  {
+    var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "avk_pl_" + Guid.NewGuid().ToString("N"), "preferences.json");
+    try
+    {
+      var prefs = new PreferencesService(path, new AetherVk.Logic.Input.InputRegistry());
+      prefs.Load();
+      Assert.True(prefs.PhysicalLighting);
+
+      var (service, runtime, _) = BuildService();
+      var schedulers = new AetherVk.Logic.Tests.Mocks.TestSchedulerProvider();
+      var vm = new AetherVk.Logic.ViewModels.ViewportSettingsViewModel(100UL, 0, runtime.Object, schedulers, service, prefs);
+      Assert.True(vm.IsPhysicalLighting);
+      Assert.True(service.PhysicalLighting);
+
+      vm.IsPhysicalLighting = false;
+      Assert.False(service.PhysicalLighting);
+      Assert.False(prefs.PhysicalLighting);
+
+      var reloaded = new PreferencesService(path, new AetherVk.Logic.Input.InputRegistry());
+      reloaded.Load();
+      Assert.False(reloaded.PhysicalLighting);
+
+      var (service2, runtime2, _) = BuildService();
+      var vm2 = new AetherVk.Logic.ViewModels.ViewportSettingsViewModel(100UL, 0, runtime2.Object, schedulers, service2, reloaded);
+      Assert.False(vm2.IsPhysicalLighting);
+      Assert.False(service2.PhysicalLighting);
+    }
+    finally
+    {
+      try { System.IO.Directory.Delete(System.IO.Path.GetDirectoryName(path)!, true); } catch (System.IO.IOException) { }
+    }
+  }
+
+  /// Physical lighting is on by default (nucleus view terminator follows the Sun).
+  [Fact]
+  public void PhysicalLighting_IsOnByDefault()
+  {
+    var (service, _, _) = BuildService();
+    Assert.True(service.PhysicalLighting);
+    Assert.Equal(CameraService.ShadingPhysical, CameraService.ShadingFor(CameraMode.CometOrbiting, service.PhysicalLighting));
   }
 
   /// Plan A-9: every mode transition sends this viewport camera's render mask; only UpZenith draws
@@ -1351,13 +1399,19 @@ public class CameraServiceTests
   [Fact]
   public void RenderMask_FollowsTheCameraMode()
   {
-    const uint def = CameraService.RenderLayerDefault;
-    const uint up = CameraService.RenderLayerDefault | CameraService.RenderLayerUpZenithOnly;
+    const uint sky = CameraService.RenderLayerSky;
+    const uint orbits = CameraService.RenderLayerOrbits;
+    // the Model (Earth observer) view has no star field by default; the others keep it
+    const uint model = CameraService.RenderLayerDefault | orbits;
+    const uint nucleus = CameraService.RenderLayerDefault | sky | orbits;
+    const uint up = CameraService.RenderLayerDefault | CameraService.RenderLayerUpZenithOnly | sky | orbits;
     Assert.Equal(1u, CameraService.RenderLayerDefault);
     Assert.Equal(2u, CameraService.RenderLayerUpZenithOnly);
+    Assert.Equal(4u, sky);
+    Assert.Equal(8u, orbits);
     Assert.Equal(up, CameraService.RenderMaskFor(CameraMode.UpZenith));
-    Assert.Equal(def, CameraService.RenderMaskFor(CameraMode.EarthPosition));
-    Assert.Equal(def, CameraService.RenderMaskFor(CameraMode.CometOrbiting));
+    Assert.Equal(model, CameraService.RenderMaskFor(CameraMode.EarthPosition));
+    Assert.Equal(nucleus, CameraService.RenderMaskFor(CameraMode.CometOrbiting));
 
     var (service, runtime, _) = BuildService();
     // the viewport became ready in UpZenith (the initial mode): its camera got the UpZenith mask
@@ -1379,8 +1433,115 @@ public class CameraServiceTests
     service.SetCameraMode(CameraMode.UpZenith); // no transition: nothing sent
     service.CycleCameraMode(); // UpZenith → CometOrbiting
     Assert.Equal(CameraMode.CometOrbiting, service.CurrentMode);
-    // sent on change only: EarthPosition → CometOrbiting keeps the default mask
-    Assert.Equal(new List<(ulong, uint)> { (100UL, def), (100UL, up), (100UL, def) }, sent);
+    // sent on change only
+    Assert.Equal(new List<(ulong, uint)> { (100UL, model), (100UL, nucleus), (100UL, up), (100UL, nucleus) }, sent);
+  }
+
+  [Fact]
+  public void RenderMask_HidesStarsInModelViewByDefault()
+  {
+    Assert.Equal(0u, CameraService.RenderMaskFor(CameraMode.EarthPosition) & CameraService.RenderLayerSky);
+    Assert.NotEqual(0u, CameraService.RenderMaskFor(CameraMode.UpZenith) & CameraService.RenderLayerSky);
+    Assert.NotEqual(0u, CameraService.RenderMaskFor(CameraMode.CometOrbiting) & CameraService.RenderLayerSky);
+  }
+
+  [Theory]
+  [InlineData(CameraMode.EarthPosition)]
+  [InlineData(CameraMode.UpZenith)]
+  [InlineData(CameraMode.CometOrbiting)]
+  public void RenderMask_StarBackgroundOn_AppliesEverywhere(CameraMode mode) =>
+    Assert.NotEqual(0u, CameraService.RenderMaskFor(mode, true) & CameraService.RenderLayerSky);
+
+  [Theory]
+  [InlineData(CameraMode.EarthPosition)]
+  [InlineData(CameraMode.UpZenith)]
+  [InlineData(CameraMode.CometOrbiting)]
+  public void RenderMask_StarBackgroundOff_AppliesEverywhere(CameraMode mode) =>
+    Assert.Equal(0u, CameraService.RenderMaskFor(mode, false) & CameraService.RenderLayerSky);
+
+  [Fact]
+  public void RenderMask_OrbitLinesOff_DropsTheOrbitsLayer()
+  {
+    foreach (var mode in new[] { CameraMode.EarthPosition, CameraMode.UpZenith, CameraMode.CometOrbiting })
+    {
+      Assert.NotEqual(0u, CameraService.RenderMaskFor(mode) & CameraService.RenderLayerOrbits);
+      Assert.Equal(0u, CameraService.RenderMaskFor(mode, null, false) & CameraService.RenderLayerOrbits);
+      Assert.NotEqual(0u, CameraService.RenderMaskFor(mode, null, false) & CameraService.RenderLayerDefault);
+    }
+  }
+
+  [Fact]
+  public void RenderMask_Setters_ResendTheMask()
+  {
+    var (service, runtime, _) = BuildService();
+    var sent = new List<uint>();
+    runtime
+      .Setup(r => r.SetCameraRenderMask(It.IsAny<ulong>(), It.IsAny<uint>()))
+      .Callback<ulong, uint>((_, m) => sent.Add(m))
+      .Returns(true);
+    service.SetOrbitLines(false);
+    service.SetStarBackground(false);
+    service.SetStarBackground(null);
+    service.SetOrbitLines(true);
+    const uint up = CameraService.RenderLayerDefault | CameraService.RenderLayerUpZenithOnly;
+    Assert.Equal(
+      new List<uint>
+      {
+        up | CameraService.RenderLayerSky,
+        up,
+        up | CameraService.RenderLayerSky,
+        up | CameraService.RenderLayerSky | CameraService.RenderLayerOrbits,
+      },
+      sent);
+  }
+
+  /// Star background (nullable) and orbit lines are preferences applied to a new viewport's camera.
+  [Fact]
+  public void StarBackgroundAndOrbitLines_Preferences_RoundTrip()
+  {
+    var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "avk_sb_" + Guid.NewGuid().ToString("N"), "preferences.json");
+    try
+    {
+      var prefs = new PreferencesService(path, new AetherVk.Logic.Input.InputRegistry());
+      prefs.Load();
+      Assert.Null(prefs.StarBackground);
+      Assert.True(prefs.OrbitLines);
+
+      var (service, runtime, _) = BuildService();
+      var schedulers = new AetherVk.Logic.Tests.Mocks.TestSchedulerProvider();
+      var vm = new AetherVk.Logic.ViewModels.ViewportSettingsViewModel(100UL, 0, runtime.Object, schedulers, service, prefs);
+      Assert.Equal(0, vm.StarBackgroundChoice);
+      Assert.Null(service.StarBackground);
+      Assert.True(service.OrbitLines);
+
+      vm.StarBackgroundChoice = 2;
+      vm.IsOrbitLinesShown = false;
+      Assert.False(service.StarBackground);
+      Assert.False(service.OrbitLines);
+
+      var reloaded = new PreferencesService(path, new AetherVk.Logic.Input.InputRegistry());
+      reloaded.Load();
+      Assert.False(reloaded.StarBackground);
+      Assert.False(reloaded.OrbitLines);
+
+      var (service2, runtime2, _) = BuildService();
+      var vm2 = new AetherVk.Logic.ViewModels.ViewportSettingsViewModel(100UL, 0, runtime2.Object, schedulers, service2, reloaded);
+      Assert.Equal(2, vm2.StarBackgroundChoice);
+      Assert.False(vm2.IsOrbitLinesShown);
+      Assert.False(service2.StarBackground);
+      Assert.False(service2.OrbitLines);
+
+      vm2.StarBackgroundChoice = 1;
+      Assert.True(service2.StarBackground);
+      vm2.StarBackgroundChoice = 0;
+      var again = new PreferencesService(path, new AetherVk.Logic.Input.InputRegistry());
+      again.Load();
+      Assert.Null(again.StarBackground);
+    }
+    finally
+    {
+      try { System.IO.Directory.Delete(System.IO.Path.GetDirectoryName(path)!, true); } catch (System.IO.IOException) { }
+    }
   }
 
   /// A refused mask (no native scene yet) is sent again on the next transition.
@@ -1418,7 +1579,8 @@ public class CameraServiceTests
     ((System.Reactive.Subjects.BehaviorSubject<bool>)typeof(CometConfigService)
       .GetField("_isCommittedSubject", flags)!.GetValue(cometConfig)!).OnNext(true);
 
-    service.PhysicalLighting = true; // UpZenith: flags stay 0 (resent: the loose mock refused the first send)
+    service.PhysicalLighting = false; // UpZenith: flags stay 0 (resent: the loose mock refused the first send)
+    service.PhysicalLighting = true;
     service.SetCameraMode(CameraMode.CometOrbiting);
     service.PhysicalLighting = false;
     service.PhysicalLighting = true;

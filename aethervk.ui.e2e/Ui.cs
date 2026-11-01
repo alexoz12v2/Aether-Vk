@@ -134,8 +134,20 @@ public static partial class Ui
   public static void OpenRangeEntry(this AppSession s, string childId = "StartEpochBox")
   {
     s.SelectTab("CometTab");
-    s.Expand("SimulatedRangeSection", childId);
+    // the Observation block is at the top of the section; Start/End, Restore, Recommit and the
+    // proposed range sit in its "Advanced" expander (reviewer 2026-10-31, slide 1)
+    s.Expand("SimulatedRangeSection", "ModelEndEpochBox");
+    if (AdvancedRangeIds.Contains(childId))
+      s.Expand("RangeAdvancedExpander", childId);
+    else
+      s.ScrollIntoView(s.Find(childId));
   }
+
+  private static readonly HashSet<string> AdvancedRangeIds =
+  [
+    "StartEpochBox", "EndEpochBox", "RestoreButton", "RecommitWithRangeButton", "ProposedRangeText",
+    "TimelineErrorText", "RangeLockedPanel", "ApplyModelRangeButton", "StartEpochLabel", "EndEpochLabel",
+  ];
 
   /// <summary>Selects the tab, clicking again while its content has not appeared (a click can be lost).</summary>
   public static void SelectTab(this AppSession s, string tab)
