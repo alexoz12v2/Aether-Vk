@@ -269,7 +269,7 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
 
   /// <summary>Comet debug: physical nucleus lighting instead of the display shading.</summary>
   [ObservableProperty]
-  private bool _isPhysicalLighting = true;
+  private bool _isPhysicalLighting = false;
 
   partial void OnIsPhysicalLightingChanged(bool value)
   {
@@ -412,7 +412,7 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
     _preferences = preferences;
     // the stored lighting choice (default on) applies to this viewport's camera
     _loadingPreferences = true;
-    IsPhysicalLighting = preferences?.PhysicalLighting ?? true;
+    IsPhysicalLighting = preferences?.PhysicalLighting ?? false;
     _cameraService.PhysicalLighting = IsPhysicalLighting;
     StarBackgroundChoice = preferences?.StarBackground switch { true => 1, false => 2, _ => 0 };
     _cameraService.SetStarBackground(preferences?.StarBackground);

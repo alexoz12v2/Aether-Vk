@@ -1358,26 +1358,26 @@ public class CameraServiceTests
     {
       var prefs = new PreferencesService(path, new AetherVk.Logic.Input.InputRegistry());
       prefs.Load();
-      Assert.True(prefs.PhysicalLighting);
+      Assert.False(prefs.PhysicalLighting);
 
       var (service, runtime, _) = BuildService();
       var schedulers = new AetherVk.Logic.Tests.Mocks.TestSchedulerProvider();
       var vm = new AetherVk.Logic.ViewModels.ViewportSettingsViewModel(100UL, 0, runtime.Object, schedulers, service, prefs);
-      Assert.True(vm.IsPhysicalLighting);
-      Assert.True(service.PhysicalLighting);
-
-      vm.IsPhysicalLighting = false;
+      Assert.False(vm.IsPhysicalLighting);
       Assert.False(service.PhysicalLighting);
-      Assert.False(prefs.PhysicalLighting);
+
+      vm.IsPhysicalLighting = true;
+      Assert.True(service.PhysicalLighting);
+      Assert.True(prefs.PhysicalLighting);
 
       var reloaded = new PreferencesService(path, new AetherVk.Logic.Input.InputRegistry());
       reloaded.Load();
-      Assert.False(reloaded.PhysicalLighting);
+      Assert.True(reloaded.PhysicalLighting);
 
       var (service2, runtime2, _) = BuildService();
       var vm2 = new AetherVk.Logic.ViewModels.ViewportSettingsViewModel(100UL, 0, runtime2.Object, schedulers, service2, reloaded);
-      Assert.False(vm2.IsPhysicalLighting);
-      Assert.False(service2.PhysicalLighting);
+      Assert.True(vm2.IsPhysicalLighting);
+      Assert.True(service2.PhysicalLighting);
     }
     finally
     {
@@ -1385,13 +1385,13 @@ public class CameraServiceTests
     }
   }
 
-  /// Physical lighting is on by default (nucleus view terminator follows the Sun).
+  /// Physical lighting is off by default (the display shading); the setting turns it on.
   [Fact]
-  public void PhysicalLighting_IsOnByDefault()
+  public void PhysicalLighting_IsOffByDefault()
   {
     var (service, _, _) = BuildService();
-    Assert.True(service.PhysicalLighting);
-    Assert.Equal(CameraService.ShadingPhysical, CameraService.ShadingFor(CameraMode.CometOrbiting, service.PhysicalLighting));
+    Assert.False(service.PhysicalLighting);
+    Assert.Equal(0u, CameraService.ShadingFor(CameraMode.CometOrbiting, service.PhysicalLighting));
   }
 
   /// Plan A-9: every mode transition sends this viewport camera's render mask; only UpZenith draws

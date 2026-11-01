@@ -306,6 +306,7 @@ public class ModelTabViewModelTests
   [Fact]
   public void DustTracers_SendFlagsAndPersist_WithoutRestore()
   {
+    // flags include 8: the 1/ρ normalisation is on by default
     var s = new TestSetup();
     s.Runtime.Invocations.Clear();
     Assert.False(s.Vm.DustTracers);
@@ -314,11 +315,11 @@ public class ModelTabViewModelTests
     Assert.False(s.Session.DustFlow);
 
     s.Vm.DustTracers = true;
-    s.Runtime.Verify(r => r.SetDustViewFlags(1u), Times.Once);
+    s.Runtime.Verify(r => r.SetDustViewFlags(9u), Times.Once);
     Assert.True(s.Session.DustTracers);
 
     s.Vm.DustTracers = false;
-    s.Runtime.Verify(r => r.SetDustViewFlags(0u), Times.Once);
+    s.Runtime.Verify(r => r.SetDustViewFlags(8u), Times.Once);
     Assert.Equal(0u, ModelTabViewModel.DustViewFlags(false, false, false, false));
     s.Runtime.Verify(r => r.RestoreSnapshotSync(), Times.Never);
   }
@@ -330,15 +331,16 @@ public class ModelTabViewModelTests
   [Fact]
   public void DustFlow_IsOffByDefault_ToggleSendsFlagAndPersists()
   {
+    // flags include 8: the 1/ρ normalisation is on by default
     var s = new TestSetup();
     s.Runtime.Invocations.Clear();
     s.Vm.DustFlow = true;
-    s.Runtime.Verify(r => r.SetDustViewFlags(2u), Times.Once);
+    s.Runtime.Verify(r => r.SetDustViewFlags(10u), Times.Once);
     Assert.True(s.Session.DustFlow);
     s.Vm.DustTracers = true;
-    s.Runtime.Verify(r => r.SetDustViewFlags(3u), Times.Once);
+    s.Runtime.Verify(r => r.SetDustViewFlags(11u), Times.Once);
     s.Vm.DustFlow = false;
-    s.Runtime.Verify(r => r.SetDustViewFlags(1u), Times.Once);
+    s.Runtime.Verify(r => r.SetDustViewFlags(9u), Times.Once);
     Assert.False(s.Session.DustFlow);
     Assert.Equal(3u, ModelTabViewModel.DustViewFlags(true, true, false, false));
     s.Runtime.Verify(r => r.RestoreSnapshotSync(), Times.Never);
@@ -362,29 +364,30 @@ public class ModelTabViewModelTests
   {
     var s = new TestSetup();
     s.Runtime.Invocations.Clear();
+    // 1/ρ normalisation is on by default, trajectories off
     Assert.False(s.Vm.DustTrajectories);
-    Assert.False(s.Vm.DustRhoNorm);
+    Assert.True(s.Vm.DustRhoNorm);
     Assert.False(s.Session.DustTrajectories);
-    Assert.False(s.Session.DustRhoNorm);
-
-    s.Vm.DustTrajectories = true;
-    s.Runtime.Verify(r => r.SetDustViewFlags(4u), Times.Once);
-    Assert.True(s.Session.DustTrajectories);
-
-    s.Vm.DustRhoNorm = true;
-    s.Runtime.Verify(r => r.SetDustViewFlags(12u), Times.Once);
     Assert.True(s.Session.DustRhoNorm);
 
-    s.Vm.DustTracers = true;
-    s.Runtime.Verify(r => r.SetDustViewFlags(13u), Times.Once);
-
-    s.Vm.DustTrajectories = false;
-    s.Runtime.Verify(r => r.SetDustViewFlags(9u), Times.Once);
-    Assert.False(s.Session.DustTrajectories);
+    s.Vm.DustTrajectories = true;
+    s.Runtime.Verify(r => r.SetDustViewFlags(12u), Times.Once);
+    Assert.True(s.Session.DustTrajectories);
 
     s.Vm.DustRhoNorm = false;
-    s.Runtime.Verify(r => r.SetDustViewFlags(1u), Times.Once);
+    s.Runtime.Verify(r => r.SetDustViewFlags(4u), Times.Once);
     Assert.False(s.Session.DustRhoNorm);
+
+    s.Vm.DustTracers = true;
+    s.Runtime.Verify(r => r.SetDustViewFlags(5u), Times.Once);
+
+    s.Vm.DustTrajectories = false;
+    s.Runtime.Verify(r => r.SetDustViewFlags(1u), Times.Once);
+    Assert.False(s.Session.DustTrajectories);
+
+    s.Vm.DustRhoNorm = true;
+    s.Runtime.Verify(r => r.SetDustViewFlags(9u), Times.Once);
+    Assert.True(s.Session.DustRhoNorm);
     s.Runtime.Verify(r => r.RestoreSnapshotSync(), Times.Never);
   }
 

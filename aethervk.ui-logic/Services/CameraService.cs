@@ -2496,11 +2496,11 @@ public sealed class CameraService : IDisposable
   /// (<c>scene::CAMERA_HIDE_BEHIND</c>).</summary>
   public const uint HideBehindCamera = 1u << 1;
 
-  private bool _physicalLighting = true;
+  private bool _physicalLighting = false;
 
   /// <summary>
   /// The nucleus lit physically (direct sunlight at (1 AU / r)², no ambient fill, the
-  /// surface the Sun does not reach in a dark tint) instead of the display shading; on by default
+  /// surface the Sun does not reach in a dark tint) instead of the display shading; off by default
   /// (reviewer feedback: the terminator then follows the Sun direction). Applies in
   /// <see cref="CameraMode.CometOrbiting"/> only, where the setting is offered.
   /// </summary>

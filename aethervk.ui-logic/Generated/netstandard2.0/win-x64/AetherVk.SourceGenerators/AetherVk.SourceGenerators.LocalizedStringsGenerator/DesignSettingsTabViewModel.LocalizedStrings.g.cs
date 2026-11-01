@@ -138,7 +138,7 @@ public partial class DesignSettingsTabViewModel : ISettingsTabViewModel
     public string StrHelpViewShowBehindCamera { get; set; } = "Orthographic only: also draws the geometry behind the camera plane (within the far distance), as a telescope image does.\n\nDust behind the camera is not drawn. A perspective view cannot show it.";
     public string StrPhysicalLighting { get; set; } = "Physical lighting";
     public string StrHelpHeaderViewPhysicalLighting { get; set; } = "Physical lighting";
-    public string StrHelpViewPhysicalLighting { get; set; } = "Direct sunlight only, scaled with the comet's heliocentric distance r as (1 AU / r)², and exposed so that a white surface facing the Sun at 1 AU is drawn white. No ambient fill.\n\nThe surface the Sun does not reach is drawn in dark indigo.\n\nOn by default in the nucleus view; your choice is remembered.";
+    public string StrHelpViewPhysicalLighting { get; set; } = "Direct sunlight only, scaled with the comet's heliocentric distance r as (1 AU / r)², and exposed so that a white surface facing the Sun at 1 AU is drawn white. No ambient fill.\n\nThe surface the Sun does not reach is drawn in dark indigo.\n\nOff by default; your choice is remembered.";
     public string StrHelpHeaderViewNucleusFromEarth { get; set; } = "Nucleus from Earth";
     public string StrHelpViewNucleusFromEarth { get; set; } = "Switches to the Earth observer tracking the comet, celestial north up, with a field a few nucleus diameters tall: the nucleus lit by the Sun as seen from Earth.";
     public string StrHelpHeaderViewNucleusExposure { get; set; } = "Nucleus exposure";

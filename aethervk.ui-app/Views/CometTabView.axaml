@@ -317,7 +317,7 @@
               <WrapPanel Orientation="Horizontal">
                 <TextBox AutomationProperties.AutomationId="ModelRotationsBox" Margin="0,0,6,4" Width="48">
                   <i:Interaction.Behaviors>
-                    <b:NumericTextBoxBehavior Value="{Binding Range.ModelRotations}" Minimum="1" Maximum="1000" Format="0" />
+                    <b:NumericTextBoxBehavior Value="{Binding Range.ModelRotations}" Minimum="1" Maximum="1000" Format="0" LiveCommit="True" />
                   </i:Interaction.Behaviors>
                 </TextBox>
                 <TextBlock Classes="label" Text="{Binding StrRotationsBefore}" Margin="0,0,6,4" />
