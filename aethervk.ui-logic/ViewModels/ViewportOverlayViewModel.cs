@@ -1,9 +1,11 @@
 using System;
 using System.Collections.ObjectModel;
+using System.Linq;
 using System.Numerics;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
+using AetherVk.Logic.Models;
 using AetherVk.Logic.Services;
 using AetherVk.Logic.Utils;
 using AetherVk.Logic.ViewModels.Debug;
@@ -23,6 +25,10 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
   private readonly ITabStateService<TimelineSession> _timelineSessionService;
   private readonly CometConfigService _cometConfigService;
   private readonly Viewport3DViewModel _viewportVm;
+  private readonly ITabStateService<ModelSession> _modelSessionService;
+
+  /// <summary>The Nucleus view's gizmo legend (shown with the gizmo on; rows follow its parts).</summary>
+  public SphereGizmoLegendViewModel GizmoLegend { get; }
 
   [ObservableProperty]
   [NotifyPropertyChangedFor(nameof(FrameLabel))]
@@ -86,25 +92,13 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
       IsDustRendering = rendering;
   }
 
-  [ObservableProperty]
-  private string _jetPreviewSizeString = string.Empty;
-
   private readonly CompositeDisposable _disposables = [];
   private CameraProjectionState? _currentProjection;
   private double? _earthCometDistanceAu;
 
-  // ── Camera Mode Badge ──────────────────────────────────────────────────────
+  // The mode buttons moved to the main window's mode bar (ViewModeBarViewModel).
   [ObservableProperty]
-  private bool _isModeIndicatorExpanded;
-
-  [ObservableProperty]
-  [NotifyPropertyChangedFor(
-    nameof(CameraModeName),
-    nameof(IsModeEarthPosition),
-    nameof(IsModeUpZenith),
-    nameof(IsModeCometOrbiting),
-    nameof(FrameLabel)
-  )]
+  [NotifyPropertyChangedFor(nameof(FrameLabel))]
   private EarthObserverState _currentMode = EarthObserverState.UpZenith;
 
   /// <summary>The Earth observer's up, for <see cref="FrameLabel"/>.</summary>
@@ -139,30 +133,6 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
     };
     return frame.Length == 0 || string.IsNullOrWhiteSpace(epoch) ? frame : $"{frame} · {epoch}";
   }
-
-  // ── Mode buttons (feedback #20): Orbit / Nucleus / Model ─────────────────────
-  [RelayCommand]
-  private void SelectOrbitView() => _cameraService.SetCameraMode(CameraMode.UpZenith);
-
-  [RelayCommand]
-  private void SelectNucleusView() => _cameraService.SetCameraMode(CameraMode.CometOrbiting);
-
-  [RelayCommand]
-  private void SelectModelView() => _cameraService.EnterModelView();
-
-  public string CameraModeName =>
-    CurrentMode switch
-    {
-      EarthObserverState.EarthPositioning => "Earth Position",
-      EarthObserverState.UpZenith => "Up Zenith",
-      EarthObserverState.CometOrbiting => "Comet Orbiting",
-      _ => string.Empty,
-    };
-
-  public bool IsModeEarthPosition => CurrentMode == EarthObserverState.EarthPositioning;
-  public bool IsModeUpZenith => CurrentMode == EarthObserverState.UpZenith;
-  public bool IsModeCometOrbiting => CurrentMode == EarthObserverState.CometOrbiting;
-
 
   // Measurement indicator
   [ObservableProperty]
@@ -201,8 +171,6 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
   /// </summary>
   public CometOrbitDebugViewModel CometOrbitDebug { get; }
 
-  private int _modeIndicatorChangeId;
-
 
 
   public ViewportOverlayViewModel(
@@ -229,6 +197,9 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
     _timelineSessionService = timelineSessionService;
     _cometConfigService = cometConfigService;
     _viewportVm = viewportVm;
+    _modelSessionService = modelSessionService;
+    GizmoLegend = new SphereGizmoLegendViewModel(translationService, _dispatcher.Dispatch);
+    _disposables.Add(GizmoLegend);
 #if DEBUG
     RenderDoc        = new RenderDocCaptureViewModel(runtimeService, timelineService, modelSessionService, schedulerProvider);
     DebugTelemetry   = new DebugTelemetryPanelViewModel(runtimeService);
@@ -278,6 +249,7 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
         _dispatcher.Dispatch(() =>
         {
           ApplyDustRenderState(dustState);
+          RefreshGizmoLegend();
           var targetId = new SessionId(typeof(TimelineSession), _viewportVm.SessionId.Number);
           var session = _timelineSessionService.GetSession(targetId);
           if (session != null && session.CurrentEpochString != CurrentEpochString)
@@ -292,15 +264,10 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
       })
       .AddDisposableTo(_disposables);
 
-    // Sync Comet radius for Jet Preview string
+    // Nucleus radius: the orbit debug panel's orthographic extent follows it
     _cometConfigService
       .NucleusRadiusKm.Subscribe(r =>
       {
-        // The Rust native runtime sets the jet preview sphere radius to exactly 1/50th of the nucleus radius.
-        // radius_km / 50.0 = preview_radius_km
-        // To display in meters, we multiply by 1000: (r / 50.0) * 1000 = r * 20.0 meters.
-        JetPreviewSizeString = r > 0 ? $"Jet Preview Size: {r * 20.0:F1} m" : string.Empty;
-        
         if (_currentProjection is { } p)
         {
           _dispatcher.DispatchAsync(() =>
@@ -326,15 +293,7 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
           _ => EarthObserverState.UpZenith,
         };
         
-        int changeId = ++_modeIndicatorChangeId;
-        IsModeIndicatorExpanded = true;
-        
-        _ = Task.Delay(1800)
-          .ContinueWith(_ => _dispatcher.Dispatch(() =>
-          {
-            if (_modeIndicatorChangeId == changeId)
-              IsModeIndicatorExpanded = false;
-          }));
+        RefreshGizmoLegend();
 
         // Show/hide the comet orbit debug panel.
         CometOrbitDebug.IsVisible = mode == CameraMode.CometOrbiting;
@@ -394,6 +353,19 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
         });
       })
       .AddDisposableTo(_disposables);
+  }
+
+  /// <summary>Feeds the legend the model session's gizmo choices (the session raises no change
+  /// event: read on the 100 ms tick and on a mode change; the legend rebuilds only on a change).</summary>
+  private void RefreshGizmoLegend()
+  {
+    var session = _modelSessionService.GetSession(new SessionId(typeof(ModelSession), 1));
+    bool visible = session?.SphereGizmoVisible ?? true;
+    uint parts = session?.SphereGizmoParts ?? SphereGizmoPart.Default;
+    (int Index, Vector4 Color)[] jets = session is null
+      ? Array.Empty<(int, Vector4)>()
+      : session.Jets.Select(j => (j.DisplayIndex, j.StreamColor)).ToArray();
+    GizmoLegend.Refresh(new LegendContext(CurrentMode, visible, parts, jets, _cameraService.OrbitLines));
   }
 
   public void Dispose()

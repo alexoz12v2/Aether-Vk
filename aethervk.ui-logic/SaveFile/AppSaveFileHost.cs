@@ -106,6 +106,8 @@ public sealed class AppSaveFileHost : ISaveFileHost
       ProposedScale = TimeScaleService.KeyOf(_timeScale.ScaleOf(timeline)),
       Speed = timeline.Speed,
       DustLeadDays = timeline.DustLeadDays,
+      ObservationRotations = timeline.ObservationRotations,
+      ObservationEpochUtc = timeline.ObservationEpochUtc,
     };
     LiveComet? live = null;
     if (inputs is not null)
@@ -305,6 +307,10 @@ public sealed class AppSaveFileHost : ISaveFileHost
     if (timeline.Speed is { } speed) session.Speed = speed;
     session.DustLeadDays = timeline.DustLeadDays;
     _timeline.DustLeadDays = timeline.DustLeadDays ?? TimelineService.MaxDustLeadDays;
+    // the Observation block (additive): absent in older saves, whose range entry then shows N = 3
+    // and the committed end
+    session.ObservationRotations = timeline.ObservationRotations;
+    session.ObservationEpochUtc = timeline.ObservationEpochUtc;
     if (committed && timeline.CommittedStart is { } cs && timeline.CommittedEnd is { } ce)
     {
       session.CommittedStartEpoch = EpochText(cs, session.ProposedStartEpoch, scale);

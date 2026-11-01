@@ -55,17 +55,17 @@ public class DustParameterViewTests
     Assert.Contains("DustRateMaxBox", inActivity);
     Assert.Contains("DustRateCurvePlot", inActivity);
     Assert.Contains("ActivityAdvancedHelp", inActivity);
-    Assert.DoesNotContain("DustDiameterBox", inActivity);
+    Assert.DoesNotContain("DustMinDiameterBox", inActivity);
 
     var inSize = Ids(size);
     Assert.DoesNotContain("SizeQBox", Ids(view)); // q is per jet only (JetSizeQ)
-    Assert.Contains("SizeRangeBox", inSize);
+    Assert.Contains("SizeRangeNote", inSize);
     Assert.Contains("SizeDistributionPlot", inSize);
     Assert.Contains("SizeDistributionAdvancedHelp", inSize);
 
     // the physical grain parameters stay outside both expanders, each with its "?" flyout
     var outside = Ids(view).Except(inActivity).Except(inSize).ToList();
-    foreach (var id in new[] { "DustDiameterBox", "DustDensityBox", "DustAlbedoBox", "DustDiameterHelp", "DustDensityHelp", "DustAlbedoHelp" })
+    foreach (var id in new[] { "DustMinDiameterBox", "DustMaxDiameterBox", "SizeRangeError", "DustDensityBox", "DustAlbedoBox", "DustMinDiameterHelp", "DustMaxDiameterHelp", "DustDensityHelp", "DustAlbedoHelp" })
       Assert.Contains(id, outside);
 
     var help = All(activity).OfType<PropertyHelpButton>().Single(h => AutomationProperties.GetAutomationId(h) == "ActivityAdvancedHelp");
@@ -111,7 +111,7 @@ public class DustParameterViewTests
     Assert.False(activity.IsExpanded);
 
     var inGrain = Ids(grain);
-    foreach (var id in new[] { "JetDiametreUm", "JetDensity", "JetQpr", "JetAlbedo", "JetSizeQ", "JetSizeRange",
+    foreach (var id in new[] { "JetMinDiameterUm", "JetMaxDiameterUm", "JetSizeRangeError", "JetSizeRangeNote", "JetDensity", "JetQpr", "JetAlbedo", "JetSizeQ",
                "JetSizeDistributionPlot", "JetGrainHelp" })
       Assert.Contains(id, inGrain);
     var inActivity = Ids(activity);
@@ -125,8 +125,8 @@ public class DustParameterViewTests
     // the boxes are bound to the selected jet, not to the defaults
     grain.IsExpanded = true;
     Dispatcher.UIThread.RunJobs();
-    var diameter = All(grain).OfType<TextBox>().Single(t => AutomationProperties.GetAutomationId(t) == "JetDiametreUm");
-    Assert.Equal("250", diameter.Text);
+    var diameter = All(grain).OfType<TextBox>().Single(t => AutomationProperties.GetAutomationId(t) == "JetMinDiameterUm");
+    Assert.Equal("25", diameter.Text); // D 250, F 10: 25-2500 um
     var help = All(grain).OfType<PropertyHelpButton>().Single(h => AutomationProperties.GetAutomationId(h) == "JetGrainHelp");
     Assert.Contains("q = 3.5", help.HelpContent);
     window.Close();

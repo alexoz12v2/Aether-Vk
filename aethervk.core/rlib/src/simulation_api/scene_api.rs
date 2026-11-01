@@ -258,6 +258,11 @@ impl SimulationContext {
       let orbit = scene.spawn_entity(alloc::format!("{}_orbit", name));
       scene.set_parent(orbit, Some(root_entity));
       scene.add_component(orbit, crate::scene::TransformComponent::default());
+      // orbit lines are an opt-out layer (`CameraRenderMaskComponent`)
+      let _ = scene.add_component(
+        orbit,
+        crate::scene::RenderLayerComponent(crate::scene::RENDER_LAYER_ORBITS),
+      );
 
       // Comet appearance is decoupled from the physical body: the default procedural sphere
       // (and later any custom mesh) lives on a `Comet_visual` child, see `comet_appearance`.
@@ -402,6 +407,11 @@ impl SimulationContext {
     let sky_entity = scene.spawn_entity("sky");
     scene.set_parent(sky_entity, Some(root_entity));
     scene.add_component(sky_entity, crate::scene::SkyComponent {})?;
+    // the decorative star field is an opt-out layer (`CameraRenderMaskComponent`)
+    let _ = scene.add_component(
+      sky_entity,
+      crate::scene::RenderLayerComponent(crate::scene::RENDER_LAYER_SKY),
+    );
     let sky_id = Some(sky_entity);
 
     let time_state = {
@@ -443,6 +453,10 @@ impl SimulationContext {
     let _ = scene.add_component(
       effective_comet_trajectory,
       crate::scene::TransformComponent::default(),
+    );
+    let _ = scene.add_component(
+      effective_comet_trajectory,
+      crate::scene::RenderLayerComponent(crate::scene::RENDER_LAYER_ORBITS),
     );
     // both comet lines follow the light-time displacement of the Earth observer's view
     for track in [comet.orbit, effective_comet_trajectory] {
@@ -1440,7 +1454,8 @@ impl SimulationContext {
   /// Sets the render layers the camera `camera_entity` (FFI id) draws
   /// (`CameraRenderMaskComponent`, bits `crate::scene::RENDER_LAYER_*`): the UI gives an UpZenith
   /// camera `RENDER_LAYER_DEFAULT | RENDER_LAYER_UPZENITH_ONLY` and every other camera
-  /// `RENDER_LAYER_DEFAULT`. Synchronous; false when the scene is missing or the entity has no
+  /// `RENDER_LAYER_DEFAULT`, each plus `RENDER_LAYER_SKY` / `RENDER_LAYER_ORBITS` unless the
+  /// star background / orbit lines are off. Synchronous; false when the scene is missing or the entity has no
   /// camera.
   pub fn set_camera_render_mask(&self, scene_id: u64, camera_entity: u64, mask: u32) -> bool {
     let Some(scene_arc) = self.scenes.read().get_scene(scene_id) else {

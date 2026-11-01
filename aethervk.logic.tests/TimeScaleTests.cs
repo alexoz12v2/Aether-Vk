@@ -316,7 +316,7 @@ public class TimeScaleTests
     rig.Flush();
 
     Assert.True(rig.Fake.UtcToTdbCalls > calls, "the request did not go through the converter");
-    Assert.Equal(MidUtcText, rig.Vm.Range.ModelEndEpoch); // UTC mode: the image's own DATE-OBS text
+    Assert.Equal(MidUtcText, rig.Vm.Range.ObservationEpoch); // the Observation box is UTC: the image's own DATE-OBS text
     Assert.Equal(MidUtcText, rig.Vm.Range.EndEpoch);
     Assert.False(rig.Vm.Range.HasError);
     var proposal = rig.Vm.ProposedRangeForCommit!;
@@ -337,7 +337,8 @@ public class TimeScaleTests
     rig.Timeline.RequestModelRange(MidUtc);
     rig.Flush();
 
-    Assert.Equal("2021-12-27T00:15:56", rig.Vm.Range.ModelEndEpoch); // the box format has no fraction
+    Assert.Equal(MidUtcText, rig.Vm.Range.ObservationEpoch); // the Observation box stays UTC in TDB mode
+    Assert.Equal("2021-12-27T00:15:56", rig.Vm.Range.EndEpoch); // the End box shows it as TDB; the box format has no fraction
     Assert.False(rig.Vm.Range.HasError);
     var proposal = rig.Vm.ProposedRangeForCommit!;
     // the boxes hold the second: the proposal is the box's text, 184 ms before the converted instant

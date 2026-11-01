@@ -1027,11 +1027,32 @@
                   <!-- ── CometOrbiting (comet debug): physical nucleus lighting ── -->
                   <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding IsCometOrbitingMode}">
                     <CheckBox AutomationProperties.AutomationId="PhysicalLightingToggle"
-                              Content="Physical lighting"
+                              Content="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrPhysicalLighting}"
                               IsChecked="{Binding IsPhysicalLighting}" />
                     <controls:PropertyHelpButton AutomationProperties.AutomationId="PhysicalLightingToggleHelp" VerticalAlignment="Center"
                                                  HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderViewPhysicalLighting}"
                                                  HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpViewPhysicalLighting}" FlyoutMaxWidth="300" />
+                  </StackPanel>
+
+                  <!-- ── Backdrop and orbit lines (every view) ── -->
+                  <StackPanel Orientation="Horizontal" Spacing="4">
+                    <TextBlock VerticalAlignment="Center" Text="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrStarBackground}" />
+                    <ComboBox AutomationProperties.AutomationId="StarBackgroundBox" SelectedIndex="{Binding StarBackgroundChoice}" MinWidth="200">
+                      <ComboBoxItem Content="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrStarBackgroundAuto}" />
+                      <ComboBoxItem Content="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrStarBackgroundOn}" />
+                      <ComboBoxItem Content="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrStarBackgroundOff}" />
+                    </ComboBox>
+                    <controls:PropertyHelpButton AutomationProperties.AutomationId="StarBackgroundBoxHelp" VerticalAlignment="Center"
+                                                 HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderViewStarBackground}"
+                                                 HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpViewStarBackground}" FlyoutMaxWidth="300" />
+                  </StackPanel>
+                  <StackPanel Orientation="Horizontal" Spacing="4">
+                    <CheckBox AutomationProperties.AutomationId="OrbitLinesCheckBox"
+                              Content="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrOrbitLines}"
+                              IsChecked="{Binding IsOrbitLinesShown}" />
+                    <controls:PropertyHelpButton AutomationProperties.AutomationId="OrbitLinesCheckBoxHelp" VerticalAlignment="Center"
+                                                 HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderViewOrbitLines}"
+                                                 HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpViewOrbitLines}" FlyoutMaxWidth="300" />
                   </StackPanel>
 
                   <Grid ColumnDefinitions="*,4,Auto">

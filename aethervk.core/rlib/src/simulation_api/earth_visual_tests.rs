@@ -4,7 +4,8 @@
 use super::*;
 use crate::{
   scene::{
-    CameraRenderMaskComponent, HiddenComponent, RENDER_LAYER_DEFAULT, ReferenceFrameComponent,
+    CameraRenderMaskComponent, DEFAULT_CAMERA_RENDER_MASK, HiddenComponent, RENDER_LAYER_DEFAULT,
+  RENDER_LAYER_ORBITS, RENDER_LAYER_SKY, ReferenceFrameComponent,
     ReferenceFrameType, SphereGizmoComponent,
   },
   simulation::{
@@ -287,7 +288,7 @@ fn render_layers_hide_the_earth_from_non_upzenith_cameras_only() {
   assert_eq!(masked, want);
   assert_eq!(masked_roots(&f.scene, cam_explicit).len(), 2);
   assert!(masked_roots(&f.scene, cam_up).is_empty());
-  assert_eq!(camera_mask(&f.scene, cam_default), RENDER_LAYER_DEFAULT);
+  assert_eq!(camera_mask(&f.scene, cam_default), DEFAULT_CAMERA_RENDER_MASK);
 
   // nothing else is layered: the bodies, frames and the comet stay drawn for every camera
   for e in [f.root, f.earth_subtree, f.earth_body, f.comet_visual] {
@@ -295,6 +296,36 @@ fn render_layers_hide_the_earth_from_non_upzenith_cameras_only() {
   }
   // and the layer mechanism is independent of the scene-wide HiddenComponent
   assert!(f.scene.with_component(f.earth.visual, |_: &HiddenComponent| ()).is_none());
+}
+
+#[test]
+fn sky_and_orbit_layers_are_opt_out_per_camera() {
+  let f = fixture(true);
+  let sky = f.scene.spawn_entity("sky_layered");
+  let _ = f.scene.add_component(sky, RenderLayerComponent(RENDER_LAYER_SKY));
+  let orbit = f.scene.spawn_entity("orbit_layered");
+  let _ = f.scene.add_component(orbit, RenderLayerComponent(RENDER_LAYER_ORBITS));
+
+  let with_mask = |name: &str, mask: u32| {
+    let c = f.scene.spawn_entity(name);
+    let _ = f.scene.add_component(c, CameraRenderMaskComponent(mask));
+    c
+  };
+  let no_sky = with_mask("no_sky", RENDER_LAYER_DEFAULT | RENDER_LAYER_ORBITS);
+  let no_orbits = with_mask("no_orbits", RENDER_LAYER_DEFAULT | RENDER_LAYER_SKY);
+  let default_only = with_mask("default_only", RENDER_LAYER_DEFAULT);
+  let no_mask = f.scene.spawn_entity("no_mask");
+
+  let has = |cam, e| masked_roots(&f.scene, cam).contains(&e);
+  assert!(has(no_sky, sky) && !has(no_sky, orbit));
+  assert!(has(no_orbits, orbit) && !has(no_orbits, sky));
+  assert!(has(default_only, sky) && has(default_only, orbit));
+  // a camera without a mask component keeps drawing the sky and the orbit lines
+  assert!(!has(no_mask, sky) && !has(no_mask, orbit));
+  // content in the default layer is never masked by either opt-out
+  for e in [f.root, f.earth_body, f.comet_visual] {
+    assert!(!has(no_sky, e) && !has(no_orbits, e));
+  }
 }
 
 #[test]

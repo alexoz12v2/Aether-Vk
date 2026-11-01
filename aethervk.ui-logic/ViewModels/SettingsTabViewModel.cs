@@ -127,6 +127,14 @@ public partial class SettingsTabViewModel
       translationService);
     // the main window's Model button runs the FITS comparison through these rows
     modeBar?.AttachBillboards(Billboards).AddDisposableTo(_disposables);
+    // the Comet tab's Observation block ("from image", the comparison step) finds the image here
+    Func<IObservationImage?> imageSource = Billboards.ObservationImage;
+    timelineService.ObservationImageSource = imageSource;
+    System.Reactive.Disposables.Disposable.Create(() =>
+    {
+      if (ReferenceEquals(timelineService.ObservationImageSource, imageSource))
+        timelineService.ObservationImageSource = null;
+    }).AddDisposableTo(_disposables);
 
     Icon = "⚙";
 
@@ -143,7 +151,7 @@ public partial class SettingsTabViewModel
           {
             int nextIndex = ActiveViewports.Count;
             var vm = new ViewportSettingsViewModel(
-              cameraId, nextIndex, _runtimeService, _schedulerProvider, cameraService);
+              cameraId, nextIndex, _runtimeService, _schedulerProvider, cameraService, _preferences);
             ActiveViewports.Add(vm);
             HasActiveViewport = true;
             Billboards.AttachViewport(new CameraBillboardProbe(cameraService));

@@ -55,6 +55,15 @@ public sealed class PreferencesFile
   /// "tdb"; missing = utc.</summary>
   [JsonPropertyName("time_scale")]
   public string? TimeScale { get; set; }
+  /// <summary>Physical lighting of the nucleus view (Settings › View); missing = on.</summary>
+  [JsonPropertyName("physical_lighting")]
+  public bool? PhysicalLighting { get; set; }
+  /// <summary>Background stars (Settings › Viewport): missing = automatic (off in the Model view).</summary>
+  [JsonPropertyName("star_background")]
+  public bool? StarBackground { get; set; }
+  /// <summary>Orbit lines drawn; missing = on.</summary>
+  [JsonPropertyName("orbit_lines")]
+  public bool? OrbitLines { get; set; }
 }
 
 public sealed class BindingDto
@@ -146,6 +155,15 @@ public sealed class PreferencesService
   public bool HudCameraExpanded => _file.HudCameraExpanded ?? true;
 
   public bool HudOrbitExpanded => _file.HudOrbitExpanded ?? true;
+
+  /// <summary>The nucleus view's physical lighting; on when the file has none.</summary>
+  public bool PhysicalLighting => _file.PhysicalLighting ?? true;
+
+  /// <summary>Background stars override; null = automatic (off in the Model view only).</summary>
+  public bool? StarBackground => _file.StarBackground;
+
+  /// <summary>Orbit lines drawn; on when the file has none.</summary>
+  public bool OrbitLines => _file.OrbitLines ?? true;
 
   /// <summary>Forces <see cref="ShowDiagnosticPanels"/> on (the e2e reads the observer line).</summary>
   public const string DiagnosticPanelsEnvVar = "AETHERVK_DIAGNOSTIC_PANELS";
@@ -268,6 +286,24 @@ public sealed class PreferencesService
     _file.ShowDiagnosticPanels = shown;
     Save();
     ShowDiagnosticPanelsChanged?.Invoke(ShowDiagnosticPanels);
+  }
+
+  public void SetPhysicalLighting(bool on)
+  {
+    _file.PhysicalLighting = on;
+    Save();
+  }
+
+  public void SetStarBackground(bool? value)
+  {
+    _file.StarBackground = value;
+    Save();
+  }
+
+  public void SetOrbitLines(bool shown)
+  {
+    _file.OrbitLines = shown;
+    Save();
   }
 
   public void SetTimeScale(TimeScale scale)

@@ -84,6 +84,11 @@ public partial class DesignModelTabViewModel
     AetherVk.Logic.Utils.DustCurves.DustRatePlot(2, 2, 15, 2000, 1.3);
   public AetherVk.Logic.Utils.CurvePlotModel? JetSizeDistributionPlot { get; } =
     AetherVk.Logic.Utils.DustCurves.SizeDistributionPlot(100, 10, 3.5);
+
+  public string SizeRangeNote { get; } = "Simulated grains: diameters 10-1000 µm. The continuous dust assumes q = 3.5 over this range; your q changes only the bright specks.";
+  public string JetSizeRangeNote { get; } = "Simulated grains: diameters 10-1000 µm. The continuous dust assumes q = 3.5 over this range; your q changes only the bright specks.";
+  public string SizeRangeError { get; } = "";
+  public string JetSizeRangeError { get; } = "";
   public string DustRateNowText { get; } =
     AetherVk.Logic.Utils.DustCurves.DustRateNowText(1.3, 2, 2, 15, 2000, 1);
   public string TotalActivityText { get; } =

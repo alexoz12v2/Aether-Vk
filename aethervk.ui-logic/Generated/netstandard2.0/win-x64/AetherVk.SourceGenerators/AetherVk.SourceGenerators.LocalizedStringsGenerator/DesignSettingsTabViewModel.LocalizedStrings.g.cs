@@ -136,8 +136,9 @@ public partial class DesignSettingsTabViewModel : ISettingsTabViewModel
     public string StrHelpViewProportionsLock { get; set; } = "Keeps the half-width to half-height ratio equal to the viewport's shape, also when the window is resized, so the image is never stretched.\n\nRestore Proportions recomputes the half-width from the half-height once.";
     public string StrHelpHeaderViewShowBehindCamera { get; set; } = "Show objects behind camera";
     public string StrHelpViewShowBehindCamera { get; set; } = "Orthographic only: also draws the geometry behind the camera plane (within the far distance), as a telescope image does.\n\nDust behind the camera is not drawn. A perspective view cannot show it.";
+    public string StrPhysicalLighting { get; set; } = "Physical lighting";
     public string StrHelpHeaderViewPhysicalLighting { get; set; } = "Physical lighting";
-    public string StrHelpViewPhysicalLighting { get; set; } = "Direct sunlight only, scaled with the comet's heliocentric distance r as (1 AU / r)², and exposed so that a white surface facing the Sun at 1 AU is drawn white. No ambient fill.\n\nThe surface the Sun does not reach is drawn in dark indigo.";
+    public string StrHelpViewPhysicalLighting { get; set; } = "Direct sunlight only, scaled with the comet's heliocentric distance r as (1 AU / r)², and exposed so that a white surface facing the Sun at 1 AU is drawn white. No ambient fill.\n\nThe surface the Sun does not reach is drawn in dark indigo.\n\nOn by default in the nucleus view; your choice is remembered.";
     public string StrHelpHeaderViewNucleusFromEarth { get; set; } = "Nucleus from Earth";
     public string StrHelpViewNucleusFromEarth { get; set; } = "Switches to the Earth observer tracking the comet, celestial north up, with a field a few nucleus diameters tall: the nucleus lit by the Sun as seen from Earth.";
     public string StrHelpHeaderViewNucleusExposure { get; set; } = "Nucleus exposure";
@@ -161,5 +162,14 @@ public partial class DesignSettingsTabViewModel : ISettingsTabViewModel
     public string StrPlayPreviewBalanced { get; set; } = "Balanced";
     public string StrPlayPreviewQuality { get; set; } = "Quality";
     public string StrHelpPlayPreview { get; set; } = "While the simulation plays, and for 2 s after a pause or a seek, the dust is drawn as a preview: coarser, redrawn every frame (no temporal reuse), with the flow marks moving out of the nucleus. The flow marks are a visual aid: they travel along the real velocity field, faster than the dust at slow speeds; the particles stay where the physics puts them.\n\nSmooth is the fastest, Quality the finest; Off draws the full render while playing too.\n\nWhen the preview ends the full render starts and refines. \"Render full\" on the viewport starts it at once. Saved for the next start.";
+    public string StrStarBackground { get; set; } = "Background stars";
+    public string StrStarBackgroundAuto { get; set; } = "Auto (off in Model view)";
+    public string StrStarBackgroundOn { get; set; } = "On";
+    public string StrStarBackgroundOff { get; set; } = "Off";
+    public string StrHelpHeaderViewStarBackground { get; set; } = "Background stars";
+    public string StrHelpViewStarBackground { get; set; } = "The stars are a decorative procedural field; they do not match the real sky, and their field of view is fixed.\n\nAuto draws them in every view except the Model (Earth observer) view, which then has a black backdrop. On or Off applies to every view.";
+    public string StrOrbitLines { get; set; } = "Orbit lines";
+    public string StrHelpHeaderViewOrbitLines { get; set; } = "Orbit lines";
+    public string StrHelpViewOrbitLines { get; set; } = "Draws the comet's reference orbit (red), the Earth's orbit (light blue) and the path travelled in this run (yellow). The legend lists them in the Model and Orbit views.";
 }
 #endif

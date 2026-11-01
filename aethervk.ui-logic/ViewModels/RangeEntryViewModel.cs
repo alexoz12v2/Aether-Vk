@@ -1,5 +1,6 @@
 using System;
 using System.Reactive.Disposables;
+using System.Threading.Tasks;
 using AetherVk.Logic.Messages;
 using AetherVk.Logic.Services;
 using AetherVk.Logic.Utils;
@@ -63,11 +64,14 @@ public partial class RangeEntryViewModel : ObservableObject, IDisposable
       _timeline.ModelRangeRequests
         .Subscribe(end =>
         {
-          // the request is a UTC instant (the image's mid-exposure): shown in the chosen scale
-          var (c, ns) = _timeScale.FromUtc(end);
-          ModelEndEpoch = _timeScale.Format(c, ns, TimeScaleService.IsoSecondsFormat);
+          // the request is a UTC instant (the image's mid-exposure): the Observation date box is UTC
+          ObservationEpoch = FormatUtc(end);
           ApplyModelRange();
         })
+        .AddDisposableTo(_disposables);
+      // the mode bar's Model: the same chain as the Run at this date button
+      _timeline.ObservationRunRequests
+        .Subscribe(async request => request.Complete(await RunAtAsync(request.Utc)))
         .AddDisposableTo(_disposables);
     }
 
@@ -220,15 +224,201 @@ public partial class RangeEntryViewModel : ObservableObject, IDisposable
 
   private static UtcStatus Worse(UtcStatus a, UtcStatus b) => (int)a >= (int)b ? a : b;
 
-  // ── Model range (feedback #20): N rotations ending at the image epoch ─────────
+  // ── Observation (feedback #20, reviewer slide 1 of 2026-10-31): the date and N rotations before it ──
 
-  /// <summary>End of the model range (the image's epoch); empty: the end box.</summary>
-  [ObservableProperty]
-  private string _modelEndEpoch = string.Empty;
+  /// <summary>The default N rotations (old saves, a fresh session).</summary>
+  public const int DefaultRotations = 3;
 
-  /// <summary>Nucleus rotations the model range spans.</summary>
+  /// <summary>The box format of the observation date, UTC.</summary>
+  public const string UtcBoxFormat = "yyyy-MM-ddTHH:mm:ss";
+
+  /// <summary>
+  /// The observation date, UTC ("yyyy-MM-ddTHH:mm:ss", the image's mid-exposure); empty: the end
+  /// box's instant. Separate from the generation period (N rotations) so another date over the
+  /// weeks of a campaign does not mean redoing the model.
+  /// </summary>
   [ObservableProperty]
-  private int _modelRotations = 3;
+  private string _observationEpoch = string.Empty;
+
+  partial void OnObservationEpochChanged(string value)
+  {
+    if (!_reloading)
+      Update(s => s.ObservationEpochUtc = value);
+  }
+
+  /// <summary>Nucleus rotations the range spans before the observation date (N ≥ 1).</summary>
+  [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(ModelSpanText))]
+  private int _modelRotations = DefaultRotations;
+
+  partial void OnModelRotationsChanged(int value)
+  {
+    if (!_reloading)
+      Update(s => s.ObservationRotations = value);
+  }
+
+  /// <summary>The rotation period from the comet's rate, hours (0: none).</summary>
+  private double PeriodHours()
+  {
+    double rate = _rotRateDegDay();
+    return rate == 0 || double.IsNaN(rate) || double.IsInfinity(rate) ? 0 : 360.0 * 24.0 / Math.Abs(rate);
+  }
+
+  /// <summary>"= x d": the span N rotations make (at least <see cref="MinRangeDays"/>); empty without a period.</summary>
+  public string ModelSpanText
+  {
+    get
+    {
+      double periodHours = PeriodHours();
+      if (ModelRange(new DateTimeOffset(2000, 1, 1, 12, 0, 0, TimeSpan.Zero), ModelRotations, periodHours) is not { } r)
+        return string.Empty;
+      double days = (r.End - r.Start).TotalDays;
+      bool floored = ModelRotations * periodHours < MinRangeDays * 24.0;
+      return string.Format(System.Globalization.CultureInfo.InvariantCulture, floored ? "= {0:0.##} d (minimum)" : "= {0:0.##} d", days);
+    }
+  }
+
+  /// <summary>The rotation rate changed (the Comet tab's Rotational Model): the span text follows.</summary>
+  public void RefreshModelSpan() => OnPropertyChanged(nameof(ModelSpanText));
+
+  /// <summary>A UTC instant in the observation box format.</summary>
+  public static string FormatUtc(DateTimeOffset utc) =>
+    utc.UtcDateTime.ToString(UtcBoxFormat, System.Globalization.CultureInfo.InvariantCulture);
+
+  /// <summary>The loaded image's date (a FITS billboard with an observation date), or null.</summary>
+  public DateTimeOffset? ImageObservationUtc() => _timeline?.ObservationImage()?.ObservationUtc;
+
+  /// <summary>"From image": the observation date of the loaded FITS image into the box.</summary>
+  [RelayCommand]
+  private void FromImage()
+  {
+    if (ImageObservationUtc() is { } utc)
+    {
+      ObservationEpoch = FormatUtc(utc);
+      RunStatus = string.Empty;
+    }
+    else
+    {
+      RunStatus = NoImageText;
+    }
+  }
+
+  public const string NoImageText = "No telescope image with an observation date is loaded (Settings › Billboards, a FITS file).";
+
+  // ── Run at this date: propose → recommit → seek → compare ──────────────────
+
+  /// <summary>The chain is running (the block shows a spinner; the buttons wait).</summary>
+  [ObservableProperty]
+  [NotifyCanExecuteChangedFor(nameof(RunAtDateCommand))]
+  private bool _isRunning;
+
+  /// <summary>The chain's progress, then its outcome (one line under the block).</summary>
+  [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(HasRunStatus))]
+  private string _runStatus = string.Empty;
+
+  public bool HasRunStatus => RunStatus.Length > 0;
+
+  private bool CanRun() => !IsRunning;
+
+  /// <summary>
+  /// The button: N rotations ending at the observation date are proposed, the comet is committed
+  /// again with them (the SPK is downloaded only when the current one does not cover the range),
+  /// the clock is sought to the date, and the comparison with the loaded image is set up.
+  /// </summary>
+  [RelayCommand(CanExecute = nameof(CanRun))]
+  private Task RunAtDateAsync() => RunAtAsync(null);
+
+  /// <summary>
+  /// The one implementation of the chain (the button, the mode bar's Model through
+  /// <see cref="TimelineService.RunAtObservationAsync"/>): <paramref name="utc"/> replaces the box
+  /// when given. Never throws; the outcome is in the result and in <see cref="RunStatus"/>.
+  /// </summary>
+  public async Task<ObservationRunResult> RunAtAsync(DateTimeOffset? utc)
+  {
+    if (IsRunning)
+      return new ObservationRunResult(false, false, false, false, "A run is already in progress.");
+    IsRunning = true;
+    bool proposed = false, committed = false, seeked = false, compared = false;
+    try
+    {
+      if (utc is { } given)
+        ObservationEpoch = FormatUtc(given);
+      RunStatus = "Proposing the range…";
+      if (!TryApplyModelRange() || HasError)
+        return Finish(proposed, committed, seeked, compared, ErrorMessage);
+      proposed = true;
+      if (_timeline is null)
+        return Finish(proposed, committed, seeked, compared, "No timeline service.");
+      if (!TryObservationTdb(out short c, out ulong ns, out string? reason))
+        return Finish(proposed, committed, seeked, compared, reason ?? "Observation date: not a date.");
+
+      RunStatus = "Committing the comet with this range…";
+      committed = await _timeline.RequestRecommitAsync();
+      if (!committed)
+        return Finish(proposed, committed, seeked, compared,
+          "The comet was not committed: pick a comet and an SPK record in this tab, then run again.");
+
+      RunStatus = "Seeking to the observation date…";
+      seeked = await _timeline.SeekAsync(c, ns);
+      if (!seeked)
+        return Finish(proposed, committed, seeked, compared, "Committed, but the seek to the date was refused.");
+
+      var image = _timeline.ObservationImage();
+      if (image is null)
+        return Finish(proposed, committed, seeked, compared, string.Concat("Committed and at ", ObservationEpoch, " UTC. ", NoImageText));
+      if (!image.CanSetUpComparison)
+        return Finish(proposed, committed, seeked, compared, string.Concat("Committed and at ", ObservationEpoch, " UTC; the image has no viewport to compare in."));
+      RunStatus = "Setting up the comparison with the image…";
+      await image.SetUpComparisonAsync();
+      compared = true;
+      return Finish(proposed, committed, seeked, compared, image.StatusMessage);
+    }
+    catch (Exception ex)
+    {
+      return Finish(proposed, committed, seeked, compared, string.Concat("Error: ", ex.Message));
+    }
+    finally
+    {
+      IsRunning = false;
+    }
+  }
+
+  private ObservationRunResult Finish(bool proposed, bool committed, bool seeked, bool compared, string status)
+  {
+    RunStatus = status;
+    return new ObservationRunResult(proposed, committed, seeked, compared, status);
+  }
+
+  /// <summary>The observation box (or the end box when empty) as TDB parts; false with the reason.</summary>
+  private bool TryObservationTdb(out short centuries, out ulong nanoseconds, out string? reason)
+  {
+    centuries = 0;
+    nanoseconds = 0;
+    reason = null;
+    if (string.IsNullOrWhiteSpace(ObservationEpoch))
+    {
+      if (_timeScale.TryParse(EndEpoch, out centuries, out nanoseconds, out _))
+        return true;
+      reason = "The end epoch is not a date.";
+      return false;
+    }
+    if (!TimeUtils.TryParseIso8601(ObservationEpoch, out var utc))
+    {
+      reason = "Observation date: use yyyy-MM-ddTHH:mm:ss (UTC).";
+      return false;
+    }
+    try
+    {
+      (centuries, nanoseconds) = _timeScale.FromUtc(utc);
+      return true;
+    }
+    catch (Exception ex)
+    {
+      reason = string.Concat("Observation date: ", ex.Message);
+      return false;
+    }
+  }
 
   /// <summary>
   /// The range <paramref name="rotations"/> sidereal periods of <paramref name="periodHours"/>
@@ -244,32 +434,55 @@ public partial class RangeEntryViewModel : ObservableObject, IDisposable
   }
 
   /// <summary>
-  /// Proposes <see cref="ModelRotations"/> rotations ending at <see cref="ModelEndEpoch"/> (or the
-  /// end box), the period from the comet's rotation rate. Commit as usual. The span is measured
-  /// in TDB (uniform time); the boxes show both ends in the chosen scale.
+  /// Proposes <see cref="ModelRotations"/> rotations ending at <see cref="ObservationEpoch"/> (UTC;
+  /// empty: the end box), the period from the comet's rotation rate. Commit as usual (Run at this
+  /// date does). The span is measured in TDB (uniform time); the boxes show both ends in the
+  /// chosen scale. False (with <see cref="ErrorMessage"/>) when nothing was proposed.
   /// </summary>
   [RelayCommand]
-  private void ApplyModelRange()
+  private void ApplyModelRange() => TryApplyModelRange();
+
+  /// <summary>The command's body: the boxes from the Observation block; false when nothing was proposed.</summary>
+  public bool TryApplyModelRange()
   {
-    string endText = string.IsNullOrWhiteSpace(ModelEndEpoch) ? EndEpoch : ModelEndEpoch;
-    if (!_timeScale.TryParse(endText, out var endParts))
+    short ec;
+    ulong en;
+    if (string.IsNullOrWhiteSpace(ObservationEpoch))
     {
-      SetProposalError("Model range: the end epoch is not a date (yyyy-MM-ddTHH:mm:ss).");
-      return;
+      if (!_timeScale.TryParse(EndEpoch, out ec, out en, out _))
+      {
+        SetProposalError("Observation date: enter a date (yyyy-MM-ddTHH:mm:ss, UTC), or a valid End epoch.");
+        return false;
+      }
     }
-    double rate = _rotRateDegDay();
-    double periodHours = rate == 0 || double.IsNaN(rate) ? 0 : 360.0 * 24.0 / Math.Abs(rate);
-    var endTdb = TimeUtils.FromTdbParts(endParts.Centuries, endParts.Nanoseconds);
+    else if (!TryObservationTdb(out ec, out en, out string? reason))
+    {
+      SetProposalError(reason ?? "Observation date: not a date.");
+      return false;
+    }
+    double periodHours = PeriodHours();
+    var endTdb = TimeUtils.FromTdbParts(ec, en);
     if (ModelRange(endTdb, ModelRotations, periodHours) is not { } r)
     {
       SetProposalError(ModelRotations < 1
         ? "Model range: at least one rotation."
         : "Model range: the comet has no rotation period (Rotational Model).");
-      return;
+      return false;
     }
     var (sc, sn) = TimeUtils.ToTdbParts(r.Start);
-    StartEpoch = _timeScale.Format(sc, sn, TimeScaleService.IsoSecondsFormat);
-    EndEpoch = _timeScale.Format(endParts.Centuries, endParts.Nanoseconds, TimeScaleService.IsoSecondsFormat);
+    // both boxes first, then one proposal (a box-by-box proposal would persist a mixed range)
+    _suppressPropose = true;
+    try
+    {
+      StartEpoch = _timeScale.Format(sc, sn, TimeScaleService.IsoSecondsFormat);
+      EndEpoch = _timeScale.Format(ec, en, TimeScaleService.IsoSecondsFormat);
+    }
+    finally
+    {
+      _suppressPropose = false;
+    }
+    TryPropose();
+    return !HasError;
   }
 
   // ── Dust lead time (R3) ────────────────────────────────────────────────────
@@ -326,7 +539,13 @@ public partial class RangeEntryViewModel : ObservableObject, IDisposable
     ReloadBoxes();
 
     _reloading = true;
-    try { DustLeadDays = session.DustLeadDays ?? TimelineService.MaxDustLeadDays; }
+    try
+    {
+      DustLeadDays = session.DustLeadDays ?? TimelineService.MaxDustLeadDays;
+      // the Observation block: a save without it (older) shows N = 3 and the committed end as UTC
+      ModelRotations = session.ObservationRotations is { } n && n >= 1 ? n : DefaultRotations;
+      ObservationEpoch = session.ObservationEpochUtc ?? CommittedEndUtcText(session);
+    }
     finally { _reloading = false; }
 
     HasError = false;
@@ -337,6 +556,25 @@ public partial class RangeEntryViewModel : ObservableObject, IDisposable
     RefreshCommittedState();
     RefreshProposedState();
     CheckProposedVsCommitted();
+  }
+
+  /// <summary>The session's committed end as a UTC box text; empty without one or without a converter.</summary>
+  private string CommittedEndUtcText(TimelineSession session)
+  {
+    if (string.IsNullOrEmpty(session.CommittedEndEpoch))
+      return string.Empty;
+    if (!_timeScale.TryParse(session.CommittedEndEpoch, _timeScale.ScaleOf(session), out short c, out ulong ns, out _))
+      return string.Empty;
+    try
+    {
+      string text = _timeScale.Format(c, ns, UtcBoxFormat, Services.TimeScale.Utc);
+      // without a converter the text is the TDB one labelled " TDB": not a UTC date
+      return TimeUtils.TryParseIso8601(text, out _) ? text : string.Empty;
+    }
+    catch
+    {
+      return string.Empty;
+    }
   }
 
   /// <summary>The boxes from the session's texts (the committed range, else the proposal), without proposing.</summary>

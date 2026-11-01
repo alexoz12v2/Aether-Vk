@@ -642,27 +642,42 @@
                           x:DataType="vm:JetViewModel">
 
                       <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="4">
-                        <TextBlock Text="Diameter" />
-                        <controls:PropertyHelpButton AutomationProperties.AutomationId="JetDiametreUmHelp"
-                                                     HelpHeader="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpHeaderJetDiameter}"
-                                                     HelpContent="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpJetDiameter}" />
+                        <TextBlock Text="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrMinDiameter}" />
+                        <controls:PropertyHelpButton AutomationProperties.AutomationId="JetMinDiameterUmHelp"
+                                                     HelpHeader="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrMinDiameter}"
+                                                     HelpContent="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpJetMinDiameter}" />
                       </StackPanel>
                       <Panel Grid.Row="0" Grid.Column="2" Classes="unit-overlay">
-                        <TextBox AutomationProperties.AutomationId="JetDiametreUm">
+                        <TextBox AutomationProperties.AutomationId="JetMinDiameterUm">
                           <i:Interaction.Behaviors>
-                            <b:NumericTextBoxBehavior Value="{Binding DiametreUm}" Minimum="0.0001" Maximum="10000" />
+                            <b:NumericTextBoxBehavior Value="{Binding MinDiameterUm}" Minimum="0.01" Maximum="10000" />
                           </i:Interaction.Behaviors>
                         </TextBox>
                         <TextBlock Classes="unit-of-measurement" Text="μm" />
                       </Panel>
 
                       <StackPanel Grid.Row="2" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                        <TextBlock Text="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrMaxDiameter}" />
+                        <controls:PropertyHelpButton AutomationProperties.AutomationId="JetMaxDiameterUmHelp"
+                                                     HelpHeader="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrMaxDiameter}"
+                                                     HelpContent="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpJetMaxDiameter}" />
+                      </StackPanel>
+                      <Panel Grid.Row="2" Grid.Column="2" Classes="unit-overlay">
+                        <TextBox AutomationProperties.AutomationId="JetMaxDiameterUm">
+                          <i:Interaction.Behaviors>
+                            <b:NumericTextBoxBehavior Value="{Binding MaxDiameterUm}" Minimum="0.01" Maximum="10000" />
+                          </i:Interaction.Behaviors>
+                        </TextBox>
+                        <TextBlock Classes="unit-of-measurement" Text="μm" />
+                      </Panel>
+
+                      <StackPanel Grid.Row="4" Grid.Column="0" Orientation="Horizontal" Spacing="4">
                         <TextBlock Text="Density" />
                         <controls:PropertyHelpButton AutomationProperties.AutomationId="JetDensityHelp"
                                                      HelpHeader="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrDensity}"
                                                      HelpContent="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpJetDensity}" />
                       </StackPanel>
-                      <Panel Grid.Row="2" Grid.Column="2" Classes="unit-overlay">
+                      <Panel Grid.Row="4" Grid.Column="2" Classes="unit-overlay">
                         <TextBox AutomationProperties.AutomationId="JetDensity">
                           <i:Interaction.Behaviors>
                             <b:NumericTextBoxBehavior Value="{Binding DensityGCm3}" Minimum="0.00001" Maximum="7.0" />
@@ -671,55 +686,49 @@
                         <TextBlock Classes="unit-of-measurement" Text="g/cm³" />
                       </Panel>
 
-                      <StackPanel Grid.Row="4" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                      <StackPanel Grid.Row="6" Grid.Column="0" Orientation="Horizontal" Spacing="4">
                         <TextBlock Text="Q_pr" />
                         <controls:PropertyHelpButton AutomationProperties.AutomationId="JetQprHelp"
                                                      HelpHeader="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpHeaderQpr}"
                                                      HelpContent="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpJetQpr}" />
                       </StackPanel>
-                      <TextBox Grid.Row="4" Grid.Column="2" AutomationProperties.AutomationId="JetQpr">
+                      <TextBox Grid.Row="6" Grid.Column="2" AutomationProperties.AutomationId="JetQpr">
                         <i:Interaction.Behaviors>
                           <b:NumericTextBoxBehavior Value="{Binding ScatteringEfficiency}" Minimum="0.5" Maximum="2" />
                         </i:Interaction.Behaviors>
                       </TextBox>
 
-                      <StackPanel Grid.Row="6" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                      <StackPanel Grid.Row="8" Grid.Column="0" Orientation="Horizontal" Spacing="4">
                         <TextBlock Text="Albedo" />
                         <controls:PropertyHelpButton AutomationProperties.AutomationId="JetAlbedoHelp"
                                                      HelpHeader="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrAlbedo}"
                                                      HelpContent="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpJetAlbedo}" />
                       </StackPanel>
-                      <TextBox Grid.Row="6" Grid.Column="2" AutomationProperties.AutomationId="JetAlbedo">
+                      <TextBox Grid.Row="8" Grid.Column="2" AutomationProperties.AutomationId="JetAlbedo">
                         <i:Interaction.Behaviors>
                           <b:NumericTextBoxBehavior Value="{Binding GeometricAlbedo}" Minimum="0.01" Maximum="0.5" />
                         </i:Interaction.Behaviors>
                       </TextBox>
 
-                      <StackPanel Grid.Row="8" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                      <StackPanel Grid.Row="10" Grid.Column="0" Orientation="Horizontal" Spacing="4">
                         <TextBlock Text="Size law q" />
                         <controls:PropertyHelpButton AutomationProperties.AutomationId="JetSizeQHelp"
                                                      HelpHeader="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpHeaderSizeLawQ}"
                                                      HelpContent="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpJetSizeQ}" />
                       </StackPanel>
-                      <TextBox Grid.Row="8" Grid.Column="2" AutomationProperties.AutomationId="JetSizeQ">
+                      <TextBox Grid.Row="10" Grid.Column="2" AutomationProperties.AutomationId="JetSizeQ">
                         <i:Interaction.Behaviors>
                           <b:NumericTextBoxBehavior Value="{Binding SizeQ}" Minimum="2" Maximum="5" />
                         </i:Interaction.Behaviors>
                       </TextBox>
-
-                      <StackPanel Grid.Row="10" Grid.Column="0" Orientation="Horizontal" Spacing="4">
-                        <TextBlock Text="Size range F" />
-                        <controls:PropertyHelpButton AutomationProperties.AutomationId="JetSizeRangeHelp"
-                                                     HelpHeader="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpHeaderSizeRangeF}"
-                                                     HelpContent="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpJetSizeRange}" />
-                      </StackPanel>
-                      <TextBox Grid.Row="10" Grid.Column="2" AutomationProperties.AutomationId="JetSizeRange">
-                        <i:Interaction.Behaviors>
-                          <b:NumericTextBoxBehavior Value="{Binding SizeRange}" Minimum="1" Maximum="1000" />
-                        </i:Interaction.Behaviors>
-                      </TextBox>
                     </Grid>
                   </Border>
+
+                  <TextBlock AutomationProperties.AutomationId="JetSizeRangeError"
+                             Text="{Binding JetSizeRangeError}"
+                             IsVisible="{Binding JetSizeRangeError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                             TextWrapping="Wrap" FontSize="11"
+                             Foreground="{DynamicResource Sem.Error}" />
 
                   <controls:CurvePlot AutomationProperties.AutomationId="JetSizeDistributionPlot"
                                     Model="{Binding JetSizeDistributionPlot}"
@@ -730,6 +739,10 @@
                                     MarkerBrush="{DynamicResource Sem.Warning}"
                                     AxisBrush="{DynamicResource Text.Disabled}"
                                     TextBrush="{DynamicResource Text.Secondary}" />
+                  <TextBlock AutomationProperties.AutomationId="JetSizeRangeNote"
+                             Text="{Binding JetSizeRangeNote}"
+                             TextWrapping="Wrap" FontSize="11"
+                             Foreground="{DynamicResource Text.Secondary}" />
                 </StackPanel>
               </Expander>
 
@@ -812,7 +825,7 @@
             </Border>
 
             <Grid ColumnDefinitions="*,12,1.6*"
-                  RowDefinitions="Auto,8,Auto,8,Auto,8,Auto"
+                  RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto"
                   Margin="12,8,12,8">
 
               <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="4">
@@ -829,47 +842,66 @@
                 </TextBox>
                 <TextBlock Classes="unit-of-measurement" Text="g/cm³" />
               </Panel>
-
               <StackPanel Grid.Row="2" Grid.Column="0" Orientation="Horizontal" Spacing="4">
-                <TextBlock Text="{Binding StrDustDiameter}" />
-                <controls:PropertyHelpButton AutomationProperties.AutomationId="DustDiameterHelp"
-                                             HelpHeader="{Binding StrDustDiameter}"
-                                             HelpContent="{Binding StrHelpDustDiameter}" />
+                <TextBlock Text="{Binding StrMinDiameter}" />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="DustMinDiameterHelp"
+                                             HelpHeader="{Binding StrMinDiameter}"
+                                             HelpContent="{Binding StrHelpMinDiameter}" />
               </StackPanel>
               <Panel Grid.Row="2" Grid.Column="2" Classes="unit-overlay">
-                <TextBox AutomationProperties.AutomationId="DustDiameterBox">
+                <TextBox AutomationProperties.AutomationId="DustMinDiameterBox">
                   <i:Interaction.Behaviors>
-                    <b:NumericTextBoxBehavior Value="{Binding CurrentSession.DiametreUm}" Minimum="0.0001" Maximum="10000" />
+                    <b:NumericTextBoxBehavior Value="{Binding CurrentSession.MinDiameterUm}" Minimum="0.01" Maximum="10000" />
                   </i:Interaction.Behaviors>
                 </TextBox>
                 <TextBlock Classes="unit-of-measurement" Text="μm" />
               </Panel>
 
               <StackPanel Grid.Row="4" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                <TextBlock Text="{Binding StrMaxDiameter}" />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="DustMaxDiameterHelp"
+                                             HelpHeader="{Binding StrMaxDiameter}"
+                                             HelpContent="{Binding StrHelpMaxDiameter}" />
+              </StackPanel>
+              <Panel Grid.Row="4" Grid.Column="2" Classes="unit-overlay">
+                <TextBox AutomationProperties.AutomationId="DustMaxDiameterBox">
+                  <i:Interaction.Behaviors>
+                    <b:NumericTextBoxBehavior Value="{Binding CurrentSession.MaxDiameterUm}" Minimum="0.01" Maximum="10000" />
+                  </i:Interaction.Behaviors>
+                </TextBox>
+                <TextBlock Classes="unit-of-measurement" Text="μm" />
+              </Panel>
+
+              <StackPanel Grid.Row="6" Grid.Column="0" Orientation="Horizontal" Spacing="4">
                 <TextBlock Text="{Binding StrScatteringEfficiency}" />
                 <controls:PropertyHelpButton AutomationProperties.AutomationId="DustQprHelp"
                                              HelpHeader="{Binding StrScatteringEfficiency}"
                                              HelpContent="{Binding StrHelpScatteringEfficiency}" />
               </StackPanel>
-              <TextBox Grid.Row="4" Grid.Column="2" AutomationProperties.AutomationId="DustQprBox">
+              <TextBox Grid.Row="6" Grid.Column="2" AutomationProperties.AutomationId="DustQprBox">
                 <i:Interaction.Behaviors>
                   <b:NumericTextBoxBehavior Value="{Binding CurrentSession.ScatteringEfficiency}" Minimum="0.5" Maximum="2" />
                 </i:Interaction.Behaviors>
               </TextBox>
 
-              <StackPanel Grid.Row="6" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+              <StackPanel Grid.Row="8" Grid.Column="0" Orientation="Horizontal" Spacing="4">
                 <TextBlock Text="{Binding StrGeometricAlbedo}" />
                 <controls:PropertyHelpButton AutomationProperties.AutomationId="DustAlbedoHelp"
                                              HelpHeader="{Binding StrGeometricAlbedo}"
                                              HelpContent="{Binding StrHelpDustAlbedo}" />
               </StackPanel>
-              <TextBox Grid.Row="6" Grid.Column="2" AutomationProperties.AutomationId="DustAlbedoBox">
+              <TextBox Grid.Row="8" Grid.Column="2" AutomationProperties.AutomationId="DustAlbedoBox">
                 <i:Interaction.Behaviors>
                   <b:NumericTextBoxBehavior Value="{Binding CurrentSession.GeometricAlbedo}" Minimum="0.01" Maximum="0.5" />
                 </i:Interaction.Behaviors>
               </TextBox>
 
             </Grid>
+            <TextBlock AutomationProperties.AutomationId="SizeRangeError"
+                       Text="{Binding SizeRangeError}"
+                       IsVisible="{Binding SizeRangeError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                       TextWrapping="Wrap" FontSize="11" Margin="12,0,12,8"
+                       Foreground="{DynamicResource Sem.Error}" />
 
             <!-- Activity law: rarely changed, out of the way (it is not a grain-size law) -->
             <Expander AutomationProperties.AutomationId="ActivityAdvancedExpander" Margin="12,0,12,8">
@@ -972,20 +1004,7 @@
                 </StackPanel>
               </Expander.Header>
               <StackPanel Spacing="8">
-                <!-- q is per jet only (jet Grain panel; reviewer 2026-10-29): new jets start at 3.5 -->
-                <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto">
-                  <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="4">
-                    <TextBlock Text="{Binding StrSizeRange}" />
-                    <controls:PropertyHelpButton AutomationProperties.AutomationId="SizeRangeBoxHelp"
-                                                 HelpHeader="{Binding StrSizeRange}"
-                                                 HelpContent="{Binding StrHelpSizeRange}" />
-                  </StackPanel>
-                  <TextBox Grid.Row="0" Grid.Column="2" AutomationProperties.AutomationId="SizeRangeBox">
-                    <i:Interaction.Behaviors>
-                      <b:NumericTextBoxBehavior Value="{Binding CurrentSession.SizeRange}" Minimum="1" Maximum="1000" />
-                    </i:Interaction.Behaviors>
-                  </TextBox>
-                </Grid>
+                <!-- the smallest / largest diameters are in the defaults grid above (its error text is under it); q is per jet only -->
 
                 <controls:CurvePlot AutomationProperties.AutomationId="SizeDistributionPlot"
                                     Model="{Binding SizeDistributionPlot}"
@@ -996,6 +1015,10 @@
                                     MarkerBrush="{DynamicResource Sem.Warning}"
                                     AxisBrush="{DynamicResource Text.Disabled}"
                                     TextBrush="{DynamicResource Text.Secondary}" />
+                <TextBlock AutomationProperties.AutomationId="SizeRangeNote"
+                           Text="{Binding SizeRangeNote}"
+                           TextWrapping="Wrap" FontSize="11"
+                           Foreground="{DynamicResource Text.Secondary}" />
               </StackPanel>
             </Expander>
           </StackPanel>

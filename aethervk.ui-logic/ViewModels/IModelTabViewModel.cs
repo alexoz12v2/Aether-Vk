@@ -85,6 +85,18 @@ public partial interface IModelTabViewModel : ICursorWarpingViewModel
   /// <summary>Grain size PDFs of the selected jet; null without a selection.</summary>
   AetherVk.Logic.Utils.CurvePlotModel? JetSizeDistributionPlot { get; }
 
+  /// <summary>"Simulated grains: diameters a-b. ..." under the defaults' size plot.</summary>
+  string SizeRangeNote { get; }
+
+  /// <summary>The same note under the selected jet's size plot.</summary>
+  string JetSizeRangeNote { get; }
+
+  /// <summary>Error text of the defaults' smallest / largest diameters (empty when valid).</summary>
+  string SizeRangeError { get; }
+
+  /// <summary>Error text of the selected jet's smallest / largest diameters (empty when valid).</summary>
+  string JetSizeRangeError { get; }
+
   /// <summary>"Q_d now (r_h X AU): Y kg/s" read-out of the selected jet, under its Q_d plot.</summary>
   string DustRateNowText { get; }
 
