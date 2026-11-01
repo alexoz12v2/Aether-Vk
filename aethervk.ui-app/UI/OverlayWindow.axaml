@@ -17,108 +17,6 @@
 
   <Panel Name="TransparentRoot" Background="Transparent">
 
-    <!-- Restored Camera Mode Indicator -->
-    <Border HorizontalAlignment="Right" VerticalAlignment="Top"
-            Margin="10,10,10,0"
-            CornerRadius="10"
-            Background="{DynamicResource Bg.Surface}" Opacity="0.85"
-            BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1"
-            ClipToBounds="True"
-            Classes.expanded="{Binding IsModeIndicatorExpanded}">
-      <Border.Styles>
-        <Style Selector="Border">
-          <Setter Property="MaxWidth" Value="122"/>
-        </Style>
-        <Style Selector="Border.expanded">
-          <Setter Property="MaxWidth" Value="290"/>
-        </Style>
-        <Style Selector="Button.mode">
-          <Setter Property="Background" Value="Transparent"/>
-          <Setter Property="Padding" Value="5"/>
-          <Setter Property="Margin" Value="0"/>
-          <Setter Property="CornerRadius" Value="6"/>
-          <Setter Property="Opacity" Value="0.55"/>
-        </Style>
-        <Style Selector="Button.mode.active">
-          <Setter Property="Background" Value="{DynamicResource Bg.Outline}"/>
-          <Setter Property="Opacity" Value="1"/>
-        </Style>
-      </Border.Styles>
-      <Border.Transitions>
-        <Transitions>
-          <DoubleTransition Property="MaxWidth" Duration="0:0:0.32" Easing="CubicEaseInOut"/>
-        </Transitions>
-      </Border.Transitions>
-
-      <!-- Three mode buttons (feedback #20): Orbit (UpZenith), Nucleus (CometOrbiting), Model (Earth observer) -->
-      <StackPanel Orientation="Horizontal" Spacing="2" Margin="6,4">
-        <Button Classes="mode" Classes.active="{Binding IsModeUpZenith}"
-                AutomationProperties.AutomationId="ModeOrbitButton"
-                Command="{Binding SelectOrbitViewCommand}"
-                ToolTip.Tip="Orbit: the ecliptic seen from above (Numpad 2)">
-          <Viewbox Width="20" Height="20" Stretch="Uniform">
-            <Canvas Width="16" Height="16">
-              <Path Stroke="{DynamicResource Text.Primary}" StrokeThickness="1.2"
-                    StrokeLineCap="Round" StrokeJoin="Round" Fill="Transparent"
-                    Data="M 0 15 L 16 15
-                    M 8 13 L 8 2
-                    M 4 7 L 8 2 L 12 7"/>
-            </Canvas>
-          </Viewbox>
-        </Button>
-
-        <Button Classes="mode" Classes.active="{Binding IsModeCometOrbiting}"
-                AutomationProperties.AutomationId="ModeNucleusButton"
-                Command="{Binding SelectNucleusViewCommand}"
-                ToolTip.Tip="Nucleus: orbit the nucleus in its body frame (Numpad 3)">
-          <Viewbox Width="20" Height="20" Stretch="Uniform">
-            <Canvas Width="16" Height="16">
-              <Path Stroke="{DynamicResource Text.Primary}" StrokeThickness="1.2" Fill="Transparent"
-                    Data="M 1 8 A 7 3.5 0 0 1 15 8 A 7 3.5 0 0 1 1 8 Z"/>
-              <Ellipse Canvas.Left="11" Canvas.Top="5" Width="4" Height="4"
-                       Fill="{DynamicResource Text.Primary}"/>
-            </Canvas>
-          </Viewbox>
-        </Button>
-
-        <Button Classes="mode" Classes.active="{Binding IsModeEarthPosition}"
-                AutomationProperties.AutomationId="ModeModelButton"
-                Command="{Binding SelectModelViewCommand}"
-                ToolTip.Tip="Model: the comet seen from Earth, celestial north up, as in a telescope image">
-          <Viewbox Width="20" Height="20" Stretch="Uniform">
-            <Canvas Width="16" Height="16">
-              <Path Stroke="{DynamicResource Text.Primary}" StrokeThickness="1.2" Fill="Transparent"
-                    Data="M 8 1 A 7 7 0 1 1 7.999 1 Z
-                    M 1 8 L 15 8
-                    M 8 1 C 12 1 12 15 8 15
-                    M 8 1 C 4 1 4 15 8 15"/>
-            </Canvas>
-          </Viewbox>
-        </Button>
-
-        <TextBlock Text="{Binding CameraModeName}"
-                   FontSize="13" FontWeight="SemiBold"
-                   Foreground="{DynamicResource Text.Primary}"
-                   VerticalAlignment="Center"
-                   Margin="8,0,0,0"
-                   Classes.expanded="{Binding IsModeIndicatorExpanded}">
-          <TextBlock.Styles>
-            <Style Selector="TextBlock">
-              <Setter Property="Opacity" Value="0"/>
-            </Style>
-            <Style Selector="TextBlock.expanded">
-              <Setter Property="Opacity" Value="1"/>
-            </Style>
-          </TextBlock.Styles>
-          <TextBlock.Transitions>
-            <Transitions>
-              <DoubleTransition Property="Opacity" Duration="0:0:0.18"/>
-            </Transitions>
-          </TextBlock.Transitions>
-        </TextBlock>
-      </StackPanel>
-    </Border>
-
     <!-- The ephemeris at the shown epoch (whenever a comet is committed) and the camera position
          tracker (all builds, polled at 2 Hz; Settings › viewport › "Show diagnostic panels") -->
     <controls:CollapsibleHudPanel x:CompileBindings="False"
@@ -127,8 +25,21 @@
             IsExpanded="{ReflectionBinding IsExpanded, Mode=TwoWay}"
             ToggleAutomationId="CameraHudCollapseButton"
             HorizontalAlignment="Right" VerticalAlignment="Top"
-            Margin="10,60,10,0">
+            Margin="10,10,10,0">
       <ui:CameraMatrixDebugPanel />
+    </controls:CollapsibleHudPanel>
+
+    <!-- Legend: the Nucleus view's gizmo rows (follow the gizmo parts; one per jet), or the orbit lines
+         in the Model and Orbit views -->
+    <controls:CollapsibleHudPanel x:CompileBindings="False"
+            AutomationProperties.AutomationId="GizmoLegendPanel"
+            DataContext="{ReflectionBinding GizmoLegend}"
+            IsVisible="{ReflectionBinding IsShown}"
+            IsExpanded="{ReflectionBinding IsExpanded, Mode=TwoWay}"
+            ToggleAutomationId="GizmoLegendCollapseButton"
+            HorizontalAlignment="Left" VerticalAlignment="Top"
+            Margin="10,10,0,0">
+      <ui:GizmoLegendView />
     </controls:CollapsibleHudPanel>
 
     <ItemsControl ItemsSource="{Binding Billboards}">
@@ -377,15 +288,6 @@
     <TextBlock AutomationProperties.AutomationId="ViewportFrameLabel" Text="{Binding FrameLabel}"
                HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,2"
                Foreground="LightGray" FontSize="11" IsHitTestVisible="False" />
-
-    <!-- Jet Preview Size Overlay -->
-    <ContentControl Content="{Binding JetPreviewSizeString}" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,10,10,0">
-      <ContentControl.DataTemplates>
-        <DataTemplate DataType="{x:Type x:String}">
-          <TextBlock Text="{Binding}" Foreground="LightGray" FontSize="12" IsVisible="{Binding Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-        </DataTemplate>
-      </ContentControl.DataTemplates>
-    </ContentControl>
 
   </Panel>
 </Window>

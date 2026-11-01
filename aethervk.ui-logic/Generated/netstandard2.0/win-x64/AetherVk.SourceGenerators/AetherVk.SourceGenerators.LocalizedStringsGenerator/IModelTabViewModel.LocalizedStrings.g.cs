@@ -27,12 +27,20 @@ public partial interface IModelTabViewModel
     string StrSpinAxisPA { get; set; }
     string StrSpinAxisInclination { get; set; }
     string StrDustDensity { get; set; }
-    string StrDustDiameter { get; set; }
     string StrAlbedo { get; set; }
     string StrScatteringEfficiency { get; set; }
     string StrGeometricAlbedo { get; set; }
     string StrSizeQ { get; set; }
-    string StrSizeRange { get; set; }
+    string StrMinDiameter { get; set; }
+    string StrMaxDiameter { get; set; }
+    string StrHelpMinDiameter { get; set; }
+    string StrHelpMaxDiameter { get; set; }
+    string StrHelpJetMinDiameter { get; set; }
+    string StrHelpJetMaxDiameter { get; set; }
+    string StrSimulatedGrainsNote { get; set; }
+    string StrGrainRangeOutOfBounds { get; set; }
+    string StrGrainRangeMinAboveMax { get; set; }
+    string StrGrainRangeRatioTooLarge { get; set; }
     string StrBeta { get; set; }
     string StrAcceleration { get; set; }
     string StrSpeed { get; set; }
@@ -45,10 +53,8 @@ public partial interface IModelTabViewModel
     string StrHelpHeaderStreamColor { get; set; }
     string StrHelpHeaderJetBeta { get; set; }
     string StrHelpHeaderJetQDust { get; set; }
-    string StrHelpHeaderJetDiameter { get; set; }
     string StrHelpHeaderQpr { get; set; }
     string StrHelpHeaderSizeLawQ { get; set; }
-    string StrHelpHeaderSizeRangeF { get; set; }
     string StrHelpHeaderJetGrain { get; set; }
     string StrHelpHeaderJetActivity { get; set; }
     string StrHelpHeaderQd1Au { get; set; }
@@ -75,19 +81,16 @@ public partial interface IModelTabViewModel
     string StrHelpJetStreamColor { get; set; }
     string StrHelpJetBeta { get; set; }
     string StrHelpJetQDust { get; set; }
-    string StrHelpJetDiameter { get; set; }
     string StrHelpJetDensity { get; set; }
     string StrHelpJetQpr { get; set; }
     string StrHelpJetAlbedo { get; set; }
     string StrHelpJetSizeQ { get; set; }
-    string StrHelpJetSizeRange { get; set; }
     string StrHelpJetGrain { get; set; }
     string StrHelpJetActivity { get; set; }
     string StrHelpJetDustRate0 { get; set; }
     string StrHelpCopyGrain { get; set; }
     string StrHelpJetDefaults { get; set; }
     string StrHelpDustDensity { get; set; }
-    string StrHelpDustDiameter { get; set; }
     string StrHelpScatteringEfficiency { get; set; }
     string StrHelpDustAlbedo { get; set; }
     string StrHelpActivity { get; set; }
@@ -96,5 +99,4 @@ public partial interface IModelTabViewModel
     string StrHelpDustRateCutoff { get; set; }
     string StrHelpDustRateMax { get; set; }
     string StrHelpSizeDistribution { get; set; }
-    string StrHelpSizeRange { get; set; }
 }

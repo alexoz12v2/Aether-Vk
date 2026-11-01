@@ -25,7 +25,7 @@ public sealed record FitsFactItem(string Label, string Value, string? Automation
 /// switches the viewport to the Earth observer itself, then runs every step it has the header facts
 /// for.</para>
 /// </summary>
-public partial class FitsImageViewModel : ObservableObject
+public partial class FitsImageViewModel : ObservableObject, IObservationImage
 {
   private static readonly CultureInfo Ci = CultureInfo.InvariantCulture;
 
@@ -355,8 +355,12 @@ public partial class FitsImageViewModel : ObservableObject
   }
 
   /// <summary>The observation epoch, UTC: the middle of the exposure, else DATE-OBS.</summary>
-  internal DateTimeOffset? ObservationUtc =>
+  public DateTimeOffset? ObservationUtc =>
     (FactsData.DateMidUtc ?? FactsData.DateObs) is { } s && TimeUtils.TryParseIso8601(s, out var t) ? t : null;
+
+  // the observation chain (the Comet tab's Run at this date, the mode bar's Model)
+  bool IObservationImage.CanSetUpComparison => CanSetUpComparison();
+  Task IObservationImage.SetUpComparisonAsync() => SetUpComparisonCommand.ExecuteAsync(null);
 
   private bool CanRequestModelRange() => _row.Owner?.CanRequestModelRange == true && ObservationUtc is not null;
 

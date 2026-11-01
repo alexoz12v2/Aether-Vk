@@ -223,6 +223,17 @@ public partial class DesktopBillboardsViewModel : ObservableObject, IDisposable
 
   public ObservableCollection<DesktopBillboardItemViewModel> Items { get; } = [];
 
+  /// <summary>
+  /// The telescope image the observation chain works with (the mode bar's Model, the Comet tab's
+  /// "from image"): the first FITS row, one with an observation date first; null without a FITS row.
+  /// </summary>
+  public FitsImageViewModel? ObservationImage() =>
+    Items
+      .Select(i => i.Fits)
+      .Where(f => f is not null)
+      .OrderByDescending(f => f!.ObservationUtc is not null)
+      .FirstOrDefault();
+
   [ObservableProperty]
   [NotifyCanExecuteChangedFor(nameof(CreateCommand))]
   private ImportedAsset? _selectedTexture;

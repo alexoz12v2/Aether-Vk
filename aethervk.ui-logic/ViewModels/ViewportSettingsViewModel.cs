@@ -269,13 +269,42 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
 
   /// <summary>Comet debug: physical nucleus lighting instead of the display shading.</summary>
   [ObservableProperty]
-  private bool _isPhysicalLighting;
+  private bool _isPhysicalLighting = true;
 
   partial void OnIsPhysicalLightingChanged(bool value)
   {
     if (_cameraService is not null)
       _cameraService.PhysicalLighting = value;
+    // a user choice sticks across sessions (not the initial load from the preference)
+    if (!_loadingPreferences)
+      _preferences?.SetPhysicalLighting(value);
   }
+
+  /// <summary>Background stars choice: 0 = automatic (off in the Model view), 1 = on, 2 = off.</summary>
+  [ObservableProperty]
+  private int _starBackgroundChoice;
+
+  partial void OnStarBackgroundChoiceChanged(int value)
+  {
+    bool? v = value switch { 1 => true, 2 => false, _ => null };
+    _cameraService?.SetStarBackground(v);
+    if (!_loadingPreferences)
+      _preferences?.SetStarBackground(v);
+  }
+
+  /// <summary>Orbit lines (comet orbit, Earth orbit, travelled path) drawn; on by default.</summary>
+  [ObservableProperty]
+  private bool _isOrbitLinesShown = true;
+
+  partial void OnIsOrbitLinesShownChanged(bool value)
+  {
+    _cameraService?.SetOrbitLines(value);
+    if (!_loadingPreferences)
+      _preferences?.SetOrbitLines(value);
+  }
+
+  private readonly PreferencesService? _preferences;
+  private bool _loadingPreferences;
 
   public bool IsEarthObserverMode => CurrentCameraMode == CameraMode.EarthPosition;
 
@@ -373,12 +402,23 @@ public partial class ViewportSettingsViewModel : ObservableObject, IDisposable
     int index,
     INativeRuntimeService runtimeService,
     ISchedulerProvider schedulerProvider,
-    CameraService cameraService
+    CameraService cameraService,
+    PreferencesService? preferences = null
   )
   {
     _runtimeService = runtimeService;
     _schedulerProvider = schedulerProvider;
     _cameraService = cameraService;
+    _preferences = preferences;
+    // the stored lighting choice (default on) applies to this viewport's camera
+    _loadingPreferences = true;
+    IsPhysicalLighting = preferences?.PhysicalLighting ?? true;
+    _cameraService.PhysicalLighting = IsPhysicalLighting;
+    StarBackgroundChoice = preferences?.StarBackground switch { true => 1, false => 2, _ => 0 };
+    _cameraService.SetStarBackground(preferences?.StarBackground);
+    IsOrbitLinesShown = preferences?.OrbitLines ?? true;
+    _cameraService.SetOrbitLines(IsOrbitLinesShown);
+    _loadingPreferences = false;
     CameraId = cameraId;
     ViewportName = $"Viewport {index + 1}";
     // telescope images are desktop billboards now (FITS rows in Settings > Billboards): nothing

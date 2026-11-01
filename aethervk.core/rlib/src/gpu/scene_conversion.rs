@@ -1591,7 +1591,6 @@ impl SceneConversionExt2 for Scene {
       // degree label; the font is the body labels' (any `ReferentialIndicatorComponent`).
       {
         const ARC_PX: f32 = 1.5;
-        const ARC_LABEL_PT: f32 = 13.0;
         let mut font: Option<(alloc::sync::Arc<text::FontAtlas>, u64)> = None;
         self.query1(|_, r: &crate::scene::ReferentialIndicatorComponent| {
           if font.is_none() {
@@ -1644,8 +1643,8 @@ impl SceneConversionExt2 for Scene {
                 continue;
               };
               let style = text::TextStyle {
-                size_pt: ARC_LABEL_PT,
-                color: JET_ANGLE_COLOR,
+                size_pt: JET_ANGLE_LABEL_PT,
+                color: JET_ANGLE_LABEL_COLOR,
                 style_flags: 2,
               };
               text::push_text_to_batch(
@@ -2106,6 +2105,14 @@ fn vec3_f64(v: Vec3f32) -> [f64; 3] {
 
 /// Colour of the jet angle arcs and their labels.
 pub(crate) const JET_ANGLE_COLOR: [f32; 4] = [1.0, 0.85, 0.35, 1.0];
+/// Colour of the jet angle labels' text: white, readable on any background (the arc keeps
+/// [`JET_ANGLE_COLOR`]).
+pub(crate) const JET_ANGLE_LABEL_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+/// Size of the jet angle labels, pt: as the pole labels.
+pub(crate) const JET_ANGLE_LABEL_PT: f32 = 16.0;
+/// Label prefixes: "lon 45.0°" / "lat -30.0°".
+pub(crate) const JET_ANGLE_LON_PREFIX: &str = "lon ";
+pub(crate) const JET_ANGLE_LAT_PREFIX: &str = "lat ";
 /// Segments of a 90° jet angle arc (proportionally fewer for a smaller angle, at least 2).
 pub(crate) const JET_ANGLE_ARC_SEGMENTS_PER_RIGHT_ANGLE: usize = 24;
 /// Radius of the jet angle arcs over the gizmo radius: inside the jet line (`1.125 ×`).
@@ -2181,12 +2188,12 @@ pub(crate) fn jet_angle_arcs(site: [f64; 3], gizmo_radius_km: f64) -> Option<Jet
   let lon_arc = JetAngleArc {
     points: sweep(lon_n, &|t| at(0.0, lon * t)),
     label_at: at(0.0, lon * 0.5),
-    label: alloc::format!("lon {:.1}°", lon.to_degrees()),
+    label: alloc::format!("{JET_ANGLE_LON_PREFIX}{:.1}°", lon.to_degrees()),
   };
   let lat_arc = JetAngleArc {
     points: sweep(lat_n, &|t| at(lat * t, lon)),
     label_at: at(lat * 0.5, lon),
-    label: alloc::format!("lat {:.1}°", lat.to_degrees()),
+    label: alloc::format!("{JET_ANGLE_LAT_PREFIX}{:.1}°", lat.to_degrees()),
   };
   Some(JetAngleArcs {
     lat_rad: lat,

@@ -364,10 +364,19 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
 
     // "Recommit with this range" (the range section here, while locked): the same Download & Commit, with the proposed range
     _timeline.RecommitRequests
-      .Subscribe(_ =>
+      .Subscribe(async request =>
       {
-        if (DownloadAndCommitCommand.CanExecute(null))
-          DownloadAndCommitCommand.Execute(null);
+        try
+        {
+          if (DownloadAndCommitCommand.CanExecute(null))
+            await DownloadAndCommitCommand.ExecuteAsync(null);
+          // a request with nothing to commit (the same range again) counts as committed with it
+          request.Complete(IsAlmanacCommitted && !Range.IsRangeLocked);
+        }
+        catch
+        {
+          request.Complete(false);
+        }
       })
       .AddDisposableTo(_disposables);
 
@@ -685,6 +694,70 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
     }
   }
 
+  // ── SPK coverage (reviewer slide 1: another date must not redo the download) ──
+
+  /// <summary>
+  /// The window the SPK on disk was requested for (<see cref="HorizonJplService.SpkRequestDays"/>:
+  /// the range's days widened by the margin), per comet designation and record.
+  /// </summary>
+  internal sealed record SpkCoverage(string Designation, string RecordId, string FilePath, DateTimeOffset Start, DateTimeOffset Stop);
+
+  private SpkCoverage? _spkCoverage;
+
+  /// <summary>Test / diagnostics: the coverage the next commit checks.</summary>
+  internal SpkCoverage? CurrentSpkCoverage => SpkCoverageNow();
+
+  /// <summary>Tests: the coverage of an SPK already on disk (as a download of this run leaves it).</summary>
+  internal void NoteSpkCoverage(SpkCoverage? coverage) => _spkCoverage = coverage;
+
+  /// <summary>The coverage of a download made for the days <paramref name="startDay"/>..<paramref name="stopDay"/> (yyyy-MM-dd).</summary>
+  internal static SpkCoverage? SpkCoverageOf(string designation, string recordId, string filePath, string startDay, string stopDay)
+  {
+    var (a, b) = HorizonJplService.SpkRequestDays(startDay, stopDay);
+    var ci = System.Globalization.CultureInfo.InvariantCulture;
+    const System.Globalization.DateTimeStyles Utc = System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal;
+    if (!DateTimeOffset.TryParseExact(a, "yyyy-MM-dd", ci, Utc, out var start)
+        || !DateTimeOffset.TryParseExact(b, "yyyy-MM-dd", ci, Utc, out var stop))
+      return null;
+    return new SpkCoverage(designation, recordId, filePath, start, stop);
+  }
+
+  /// <summary>
+  /// True when <paramref name="range"/> lies inside <paramref name="coverage"/> for the same
+  /// comet and record and the file is still there. Compared as instants: the window's days start
+  /// at midnight, so an end later on the window's last day is outside.
+  /// </summary>
+  internal static bool SpkCovers(SpkCoverage coverage, string designation, string recordId, TimeRange range)
+  {
+    if (coverage.Designation != designation || coverage.RecordId != recordId)
+      return false;
+    if (string.IsNullOrEmpty(coverage.FilePath) || !System.IO.File.Exists(coverage.FilePath))
+      return false;
+    var start = TimeUtils.FromTdbParts(range.StartCenturies, range.StartNs);
+    var end = TimeUtils.FromTdbParts(range.EndCenturies, range.EndNs);
+    // TDB parts read as UTC digits: a minute of slack covers the 69 s scale offset
+    var slack = TimeSpan.FromMinutes(2);
+    return start - slack >= coverage.Start && end + slack <= coverage.Stop;
+  }
+
+  /// <summary>
+  /// The coverage known now: the last download of this run, else (a reopened save) the committed
+  /// SPK, which was fetched for at least the committed range widened by the margin.
+  /// </summary>
+  private SpkCoverage? SpkCoverageNow()
+  {
+    if (_spkCoverage is not null)
+      return _spkCoverage;
+    var session = CurrentSession;
+    if (!IsAlmanacCommitted || _cometConfig.CommittedInputs is not { } inputs || session is null
+        || string.IsNullOrEmpty(session.CommittedSpkRecordId) || string.IsNullOrEmpty(inputs.SpkFilePath))
+      return null;
+    var (a, b) = SpkDownloadDays(inputs.Range);
+    return SpkCoverageOf(session.CommittedDesignation, session.CommittedSpkRecordId, inputs.SpkFilePath, a, b);
+  }
+
+  partial void OnRotRateDegDayChanged(double value) => Range?.RefreshModelSpan();
+
   private bool CanDownloadAndCommit =>
     SelectedComet is not null
     && SelectedSpkRecord is not null
@@ -739,20 +812,31 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
       }
       var (startStr, endStr) = SpkDownloadDays(_currentProposedTimeRange);
 
-      DownloadStatus = string.Concat("Downloading SPK for ", SelectedComet.Name, "…");
-
-      string? filePath = await _jpl.DownloadSpkByIdAsync(
-        SelectedComet.PrimaryDesignation,
-        SelectedSpkRecord.RecordId,
-        savePath,
-        startStr,
-        endStr
-      );
-
-      if (filePath is null)
+      string? filePath;
+      var coverage = SpkCoverageNow();
+      if (coverage is not null && SpkCovers(coverage, SelectedComet.PrimaryDesignation, SelectedSpkRecord.RecordId, _currentProposedTimeRange))
       {
-        DownloadStatus = "SPK download failed.";
-        return;
+        // the SPK on disk was fetched for a window holding this range: no download (another
+        // observation date over a campaign does not redo the fetch)
+        DownloadStatus = "The downloaded SPK already covers this range: no download.";
+        filePath = coverage.FilePath;
+      }
+      else
+      {
+        DownloadStatus = string.Concat("Downloading SPK for ", SelectedComet.Name, "…");
+        filePath = await _jpl.DownloadSpkByIdAsync(
+          SelectedComet.PrimaryDesignation,
+          SelectedSpkRecord.RecordId,
+          savePath,
+          startStr,
+          endStr
+        );
+        if (filePath is null)
+        {
+          DownloadStatus = "SPK download failed.";
+          return;
+        }
+        _spkCoverage = SpkCoverageOf(SelectedComet.PrimaryDesignation, SelectedSpkRecord.RecordId, filePath, startStr, endStr);
       }
 
       DownloadStatus = "Committing to simulation…";

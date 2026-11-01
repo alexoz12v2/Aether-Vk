@@ -7,6 +7,7 @@
              xmlns:controls="using:AetherVk.Controls"
              xmlns:i="using:Avalonia.Xaml.Interactivity"
              xmlns:ia="using:Avalonia.Xaml.Interactions.Core"
+             xmlns:b="using:AetherVk.Behaviors"
              mc:Ignorable="d" d:DesignWidth="450" d:DesignHeight="900"
              x:Class="AetherVk.Views.CometTabView"
              x:DataType="vm:ICometTabViewModel">
@@ -296,6 +297,62 @@
         ═══════════════════════════════════════════════════════════════ -->
         <Expander Header="{Binding StrSimulatedRange}" AutomationProperties.AutomationId="SimulatedRangeSection" IsExpanded="True">
           <StackPanel Spacing="6" Margin="4,4,4,4">
+            <!-- Observation (reviewer 2026-10-31, slide 1): the date apart from the generation period (N rotations).
+                 The date box is UTC always (an image header's date); Start/End below are in the chosen scale.
+                 Ids ModelRotationsBox / ModelEndEpochBox are kept for the e2e. -->
+            <StackPanel AutomationProperties.AutomationId="ObservationBlock" Spacing="4">
+              <StackPanel Orientation="Horizontal" Spacing="4">
+                <TextBlock Classes="label" Text="{Binding StrObservationDate}" Margin="0" />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="ModelRangeHelp"
+                                             HelpHeader="{Binding StrHelpHeaderModelRange}"
+                                             HelpContent="{Binding StrHelpModelRange}" FlyoutMaxWidth="340" />
+              </StackPanel>
+              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="4">
+                <TextBox Grid.Column="0" AutomationProperties.AutomationId="ModelEndEpochBox"
+                         Text="{Binding Range.ObservationEpoch}" Watermark="yyyy-MM-ddTHH:mm:ss (empty: End)"
+                         FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" />
+                <Button Grid.Column="1" AutomationProperties.AutomationId="FromImageButton" Content="{Binding StrFromImage}"
+                        Command="{Binding Range.FromImageCommand}" />
+              </Grid>
+              <WrapPanel Orientation="Horizontal">
+                <TextBox AutomationProperties.AutomationId="ModelRotationsBox" Margin="0,0,6,4" Width="48">
+                  <i:Interaction.Behaviors>
+                    <b:NumericTextBoxBehavior Value="{Binding Range.ModelRotations}" Minimum="1" Maximum="1000" Format="0" />
+                  </i:Interaction.Behaviors>
+                </TextBox>
+                <TextBlock Classes="label" Text="{Binding StrRotationsBefore}" Margin="0,0,6,4" />
+                <TextBlock AutomationProperties.AutomationId="ModelSpanText" Classes="label" Text="{Binding Range.ModelSpanText}"
+                           Foreground="{DynamicResource Text.Secondary}" Margin="0,0,6,4" />
+              </WrapPanel>
+              <!-- R3: jets ignite this long before the committed start, so the tail exists when play starts -->
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <StackPanel Orientation="Horizontal" Spacing="4">
+                  <TextBlock Classes="label" Text="Dust lead time:" Margin="0" />
+                  <controls:PropertyHelpButton AutomationProperties.AutomationId="DustLeadDaysBoxHelp"
+                                               HelpHeader="{Binding StrHelpHeaderDustLead}"
+                                               HelpContent="{Binding StrHelpDustLead}" FlyoutMaxWidth="300" />
+                </StackPanel>
+                <TextBox AutomationProperties.AutomationId="DustLeadDaysBox"
+                         Text="{Binding Range.DustLeadDays}" Width="56" />
+                <TextBlock Classes="label" Text="days before the start" />
+              </StackPanel>
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button AutomationProperties.AutomationId="RunAtDateButton" Content="{Binding StrRunAtDate}"
+                        Command="{Binding Range.RunAtDateCommand}" Classes="accent" />
+                <ProgressBar AutomationProperties.AutomationId="RunAtDateBusy" IsIndeterminate="True" Width="80" Height="6"
+                             VerticalAlignment="Center" IsVisible="{Binding Range.IsRunning}" />
+              </StackPanel>
+              <TextBlock AutomationProperties.AutomationId="RunAtDateStatus" Text="{Binding Range.RunStatus}"
+                         IsVisible="{Binding Range.HasRunStatus}" FontSize="11" TextWrapping="Wrap"
+                         Foreground="{DynamicResource Text.Secondary}" />
+            </StackPanel>
+
+            <!-- Advanced: the hand-typed Start/End, Restore and Recommit (ids kept) -->
+            <Expander AutomationProperties.AutomationId="RangeAdvancedExpander" Margin="0,2">
+              <Expander.Header>
+                <TextBlock Text="{Binding StrAdvancedRange}" />
+              </Expander.Header>
+              <StackPanel Spacing="6" Margin="4,4,4,4">
             <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" RowSpacing="4" ColumnSpacing="8">
               <!-- the boxes are in the chosen time scale (Settings › Time scale for dates; UTC by default) -->
               <!-- one ? for the Start/End pair -->
@@ -359,35 +416,10 @@
               </StackPanel>
             </StackPanel>
 
-            <!-- "Model" preset (feedback #20): N nucleus rotations ending at the image epoch -->
-            <!-- one ? for the row (rotations, end epoch, Set range); it also carries the mode bar's Model explanation -->
-            <WrapPanel Orientation="Horizontal">
-              <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,0,6,4">
-                <TextBlock Classes="label" Text="Model range:" Margin="0" />
-                <controls:PropertyHelpButton AutomationProperties.AutomationId="ModelRangeHelp"
-                                             HelpHeader="{Binding StrHelpHeaderModelRange}"
-                                             HelpContent="{Binding StrHelpModelRange}" FlyoutMaxWidth="320" />
+            <!-- "Set range" without a run: the boxes from the Observation block (the e2e uses it) -->
+            <Button AutomationProperties.AutomationId="ApplyModelRangeButton" Content="Set range" Command="{Binding Range.ApplyModelRangeCommand}" />
               </StackPanel>
-              <TextBox AutomationProperties.AutomationId="ModelRotationsBox" Margin="0,0,6,4"
-                       Text="{Binding Range.ModelRotations}" Width="48" />
-              <TextBlock Classes="label" Text="rotations ending at" Margin="0,0,6,4" />
-              <TextBox AutomationProperties.AutomationId="ModelEndEpochBox" Margin="0,0,6,4"
-                       Text="{Binding Range.ModelEndEpoch}" Width="170" Watermark="image epoch (empty: End)" />
-              <Button AutomationProperties.AutomationId="ApplyModelRangeButton" Content="Set range" Command="{Binding Range.ApplyModelRangeCommand}" Margin="0,0,0,4" />
-            </WrapPanel>
-
-            <!-- R3: jets ignite this long before the committed start, so the tail exists when play starts -->
-            <StackPanel Orientation="Horizontal" Spacing="6">
-              <StackPanel Orientation="Horizontal" Spacing="4">
-                <TextBlock Classes="label" Text="Dust lead time:" Margin="0" />
-                <controls:PropertyHelpButton AutomationProperties.AutomationId="DustLeadDaysBoxHelp"
-                                             HelpHeader="{Binding StrHelpHeaderDustLead}"
-                                             HelpContent="{Binding StrHelpDustLead}" FlyoutMaxWidth="300" />
-              </StackPanel>
-              <TextBox AutomationProperties.AutomationId="DustLeadDaysBox"
-                       Text="{Binding Range.DustLeadDays}" Width="56" />
-              <TextBlock Classes="label" Text="days before the start" />
-            </StackPanel>
+            </Expander>
           </StackPanel>
         </Expander>
 

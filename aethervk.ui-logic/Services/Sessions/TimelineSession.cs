@@ -40,6 +40,14 @@ public sealed class TimelineSession : ITabSession
   /// spinner).</summary>
   public bool IsRunningToEnd { get; set; }
 
+  /// <summary>The Observation block's N: nucleus rotations the range spans before the observation
+  /// date (reviewer feedback 2026-10-31, slide 1); null: the default (<c>RangeEntryViewModel.DefaultRotations</c>).</summary>
+  public int? ObservationRotations { get; set; }
+
+  /// <summary>The Observation block's date, UTC ISO-8601 text ("yyyy-MM-ddTHH:mm:ss"); null: not
+  /// chosen yet (a save without it shows the committed end).</summary>
+  public string? ObservationEpochUtc { get; set; }
+
   // ── Snapshot Restore fields ──────────────────────────────────────────────
 
   /// <summary>ISO string of the epoch when simulation was last started.</summary>

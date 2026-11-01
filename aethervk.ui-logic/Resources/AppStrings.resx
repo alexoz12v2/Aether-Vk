@@ -295,9 +295,6 @@
   <data name="Tabs_Model_DustDensity" xml:space="preserve">
     <value>Dust Density</value>
   </data>
-  <data name="Tabs_Model_DustDiameter" xml:space="preserve">
-    <value>Dust Diameter</value>
-  </data>
   <data name="Tabs_Model_Albedo" xml:space="preserve">
     <value>Albedo</value>
   </data>
@@ -310,8 +307,35 @@
   <data name="Tabs_Model_SizeQ" xml:space="preserve">
     <value>Size law exponent q (specks)</value>
   </data>
-  <data name="Tabs_Model_SizeRange" xml:space="preserve">
-    <value>Size range factor F</value>
+  <data name="Tabs_Model_MinDiameter" xml:space="preserve">
+    <value>Smallest grain diameter</value>
+  </data>
+  <data name="Tabs_Model_MaxDiameter" xml:space="preserve">
+    <value>Largest grain diameter</value>
+  </data>
+  <data name="Tabs_Model_HelpMinDiameter" xml:space="preserve">
+    <value>Diameter of the smallest simulated grain of new jets, in µm (0.01 to 10000). The simulated grains run from this to the largest diameter, with number density n(d) ∝ d^−q.&#10;&#10;Equal smallest and largest diameters simulate a single grain size. Each jet then has its own (its Grain panel).</value>
+  </data>
+  <data name="Tabs_Model_HelpMaxDiameter" xml:space="preserve">
+    <value>Diameter of the largest simulated grain of new jets, in µm (0.01 to 10000), at most 1,000,000 times the smallest. It must not be below the smallest diameter: an invalid pair is not applied (an error is shown) and the two diameters are never swapped.&#10;&#10;Each jet then has its own (its Grain panel).</value>
+  </data>
+  <data name="Tabs_Model_HelpJetMinDiameter" xml:space="preserve">
+    <value>Diameter of the smallest simulated grain of this jet, in µm (0.01 to 10000). The simulated grains run from this to the largest diameter, with number density n(d) ∝ d^−q.&#10;&#10;With density and Q_pr, the geometric mean of the two diameters sets β, the radiation-pressure push: smaller or lighter grains curve away from the Sun faster. Equal smallest and largest diameters simulate a single grain size.</value>
+  </data>
+  <data name="Tabs_Model_HelpJetMaxDiameter" xml:space="preserve">
+    <value>Diameter of the largest simulated grain of this jet, in µm (0.01 to 10000), at most 1,000,000 times the smallest. It must not be below the smallest diameter: an invalid pair is not applied (an error is shown) and the two diameters are never swapped.</value>
+  </data>
+  <data name="Tabs_Model_SimulatedGrainsNote" xml:space="preserve">
+    <value>Simulated grains: diameters {0}-{1} µm. The continuous dust assumes q = 3.5 over this range; your q changes only the bright specks.</value>
+  </data>
+  <data name="Tabs_Model_GrainRangeOutOfBounds" xml:space="preserve">
+    <value>Grain diameters must be numbers between {0} and {1} µm. Nothing was changed.</value>
+  </data>
+  <data name="Tabs_Model_GrainRangeMinAboveMax" xml:space="preserve">
+    <value>The smallest diameter must not exceed the largest. Nothing was changed.</value>
+  </data>
+  <data name="Tabs_Model_GrainRangeRatioTooLarge" xml:space="preserve">
+    <value>The largest diameter can be at most 1,000,000 times the smallest. Nothing was changed.</value>
   </data>
   <data name="Tabs_Model_Beta" xml:space="preserve">
     <value>Beta</value>
@@ -690,16 +714,33 @@ It does not change the running simulation. Restore puts the committed range back
 Until then the simulation keeps the committed range.</value>
   </data>
   <data name="Tabs_Comet_HelpHeaderModelRange" xml:space="preserve">
-    <value>Model range</value>
+    <value>Observation</value>
   </data>
   <data name="Tabs_Comet_HelpModelRange" xml:space="preserve">
-    <value>A range for the comparison with a telescope image (the Model view): it ends at the image epoch and starts N full nucleus rotations earlier, so the simulated dust history covers N full spins before the image.
+    <value>The observation date is separate from the generation period: the simulated range ends at the date and starts N full nucleus rotations earlier, so the dust history covers N spins before the image. Another date over the weeks of a campaign only needs a new run, not a new model.
 
-Rotations: N, a whole number of at least 1. One rotation lasts the rotation period (Rotational Model: 360° divided by the rotation rate).
+Observation date (UTC): the epoch of your telescope image. "From image" takes it from the loaded FITS file (the middle of the exposure). Empty: the End box.
 
-Ending at: normally the epoch of your telescope image (the FITS "Model range" button fills it with the observation epoch). Leave it empty to use the End box.
+Rotations before it: N, a whole number of at least 1; one rotation lasts the rotation period (Rotational Model: 360° divided by the rotation rate). The span is never less than 1 day.
 
-Set range: sets Start and End (N × period, never less than 1 day). It only proposes the range: Download &amp; Commit applies it.</value>
+Run at this date: proposes the range, commits the comet with it (the SPK is downloaded only when the current one does not cover the range), moves the clock to the date and sets up the comparison with the image when one is loaded. The mode bar's Model button does the same.
+
+Advanced: the Start / End boxes, Restore and Recommit for a hand-typed range.</value>
+  </data>
+  <data name="Tabs_Comet_ObservationDate" xml:space="preserve">
+    <value>Observation date (UTC):</value>
+  </data>
+  <data name="Tabs_Comet_FromImage" xml:space="preserve">
+    <value>From image</value>
+  </data>
+  <data name="Tabs_Comet_RotationsBefore" xml:space="preserve">
+    <value>rotations before it</value>
+  </data>
+  <data name="Tabs_Comet_RunAtDate" xml:space="preserve">
+    <value>Run at this date</value>
+  </data>
+  <data name="Tabs_Comet_AdvancedRange" xml:space="preserve">
+    <value>Advanced: Start / End, Restore, Recommit</value>
   </data>
   <data name="Tabs_Comet_HelpHeaderDustLead" xml:space="preserve">
     <value>Dust lead time</value>
@@ -846,17 +887,11 @@ Type an epoch inside the committed range and press Enter, or Go, to jump there; 
   <data name="Tabs_Model_HelpHeaderJetQDust" xml:space="preserve">
     <value>Q_dust @ 1 AU</value>
   </data>
-  <data name="Tabs_Model_HelpHeaderJetDiameter" xml:space="preserve">
-    <value>Diameter</value>
-  </data>
   <data name="Tabs_Model_HelpHeaderQpr" xml:space="preserve">
     <value>Q_pr</value>
   </data>
   <data name="Tabs_Model_HelpHeaderSizeLawQ" xml:space="preserve">
     <value>Size law q</value>
-  </data>
-  <data name="Tabs_Model_HelpHeaderSizeRangeF" xml:space="preserve">
-    <value>Size range F</value>
   </data>
   <data name="Tabs_Model_HelpHeaderJetGrain" xml:space="preserve">
     <value>Grain (this jet)</value>
@@ -936,9 +971,6 @@ Type an epoch inside the committed range and press Enter, or Go, to jump there; 
   <data name="Tabs_Model_HelpJetQDust" xml:space="preserve">
     <value>Computed, read-only. The dust mass production rate at 1 AU from the Sun, in kg/s, as the engine applies it: this jet's Q_d at 1 AU clamped to the model-wide max (Q_d max).</value>
   </data>
-  <data name="Tabs_Model_HelpJetDiameter" xml:space="preserve">
-    <value>Reference grain diameter of this jet, in µm. With density and Q_pr it sets β, the radiation-pressure push: smaller or lighter grains curve away from the Sun faster.&#10;&#10;The size law spans radii from s₀/F to s₀·F around s₀, half the diameter.</value>
-  </data>
   <data name="Tabs_Model_HelpJetDensity" xml:space="preserve">
     <value>Bulk density of this jet's grains, in g/cm³ (cometary dust about 0.5 to 1). It enters β and the dust mass a given brightness needs.</value>
   </data>
@@ -949,13 +981,10 @@ Type an epoch inside the committed range and press Enter, or Go, to jump there; 
     <value>Geometric albedo of this jet's dust (0.01 to 0.5; cometary dust 0.03 to 0.06). It scales the brightness only; the amount of dust is the jet's production rate Q_d.</value>
   </data>
   <data name="Tabs_Model_HelpJetSizeQ" xml:space="preserve">
-    <value>Exponent q of this jet's grain size law n(s) ∝ s^−q (2 to 5; 3.5 is the usual value). A larger q means more small grains.&#10;&#10;Limitation: q only changes the individual bright specks; the continuous dust rendering assumes q = 3.5.</value>
-  </data>
-  <data name="Tabs_Model_HelpJetSizeRange" xml:space="preserve">
-    <value>Range factor F of this jet's grains (1 to 1000): radii span from s₀/F to s₀·F, where s₀ is half the diameter. A larger F means a wider spread of grain sizes.</value>
+    <value>Exponent q of this jet's grain size law n(d) ∝ d^−q over the simulated diameters (2 to 5; 3.5 is the usual value). A larger q means more small grains.&#10;&#10;Limitation: q only changes the individual bright specks; the continuous dust rendering assumes q = 3.5 over the same range.</value>
   </data>
   <data name="Tabs_Model_HelpJetGrain" xml:space="preserve">
-    <value>This jet's own dust grains: every jet has its own, and a new jet starts from the defaults further down.&#10;&#10;Grain radii follow n(s) ∝ s^−q from s₀/F to s₀·F, s₀ = diameter/2 (q = 3.5, F = 10, 100 µm → radii 5–500 µm).&#10;&#10;Diameter, density and Q_pr set β ∝ Q_pr/(ρ·s), how hard sunlight pushes the grains away from the Sun. The albedo sets how bright they are; the amount of dust is the jet's production rate Q_d (Advanced: activity).&#10;&#10;Each field has its own ? with its range.&#10;&#10;Limitation: q only changes the individual bright specks; the continuous dust rendering is built for q = 3.5 whatever q is.</value>
+    <value>This jet's own dust grains: every jet has its own, and a new jet starts from the defaults further down.&#10;&#10;Simulated grains have diameters d from the smallest to the largest, with number density n(d) ∝ d^−q (default 10-1000 µm, q = 3.5).&#10;&#10;The grain diameters, density and Q_pr set β ∝ Q_pr/(ρ·s), how hard sunlight pushes the grains away from the Sun. The albedo sets how bright they are; the amount of dust is the jet's production rate Q_d (Advanced: activity).&#10;&#10;Each field has its own ? with its range.&#10;&#10;Limitation: q only changes the individual bright specks; the continuous dust rendering assumes q = 3.5 over the same range.</value>
   </data>
   <data name="Tabs_Model_HelpJetActivity" xml:space="preserve">
     <value>This jet's dust mass production rate Q_d at 1 AU from the Sun, in kg/s: how much dust it produces. The jets add up: the comet's total is the Σ read-out under Advanced: activity (Q_d) in the defaults.&#10;&#10;Q_d(r) = min(max, Q_d₀ · r^−k), zero beyond the cutoff; the exponent k, the cutoff and the max are shared by every jet (Advanced: activity (Q_d) under Defaults for new jets).&#10;&#10;Q_d does not depend on the grain (density, size, albedo) or the speed: those set the brightness and β only.&#10;&#10;Comets range from well under 1 kg/s to thousands of kg/s.</value>
@@ -964,16 +993,13 @@ Type an epoch inside the committed range and press Enter, or Go, to jump there; 
     <value>This jet's dust mass production rate at 1 AU from the Sun, in kg/s. It scales as r_h^−k up to the max and stops beyond the cutoff (both shared by every jet).&#10;&#10;Comets range from well under 1 kg/s to thousands of kg/s.</value>
   </data>
   <data name="Tabs_Model_HelpCopyGrain" xml:space="preserve">
-    <value>Gives every other jet this jet's grain and activity: diameter, density, Q_pr, albedo, q, F and Q_d₀.&#10;&#10;Their sites, speeds and colours stay as they are.</value>
+    <value>Gives every other jet this jet's grain and activity: smallest and largest diameter, density, Q_pr, albedo, q and Q_d₀.&#10;&#10;Their sites, speeds and colours stay as they are.</value>
   </data>
   <data name="Tabs_Model_HelpJetDefaults" xml:space="preserve">
-    <value>Every jet has its own grain (diameter, density, Q_pr, albedo, q, F) and its own Q_d₀: edit them in the selected jet's Grain and Activity panels.&#10;&#10;The values here are what a newly added jet starts from; changing them does not change existing jets. Only the shape of the Q_d law (exponent, cutoff, max, under Advanced: activity) is shared by every jet.</value>
+    <value>Every jet has its own grain (smallest and largest diameter, density, Q_pr, albedo, q) and its own Q_d₀: edit them in the selected jet's Grain and Activity panels.&#10;&#10;The values here are what a newly added jet starts from; changing them does not change existing jets. Only the shape of the Q_d law (exponent, cutoff, max, under Advanced: activity) is shared by every jet.</value>
   </data>
   <data name="Tabs_Model_HelpDustDensity" xml:space="preserve">
     <value>Bulk density of the grains of new jets, in g/cm³ (cometary dust about 0.5 to 1). It enters β and the dust mass a given brightness needs.&#10;&#10;Each jet then has its own (its Grain panel).</value>
-  </data>
-  <data name="Tabs_Model_HelpDustDiameter" xml:space="preserve">
-    <value>Reference grain diameter of new jets, in µm. With density and Q_pr it sets β, the radiation-pressure push: smaller or lighter grains curve away from the Sun faster.&#10;&#10;Each jet then has its own (its Grain panel).</value>
   </data>
   <data name="Tabs_Model_HelpScatteringEfficiency" xml:space="preserve">
     <value>Radiation-pressure efficiency Q_pr of new jets' grains (0.5 to 2; 1 is a grey body). It scales β only, not the brightness.&#10;&#10;Each jet then has its own (its Grain panel).</value>
@@ -997,10 +1023,7 @@ Type an epoch inside the committed range and press Enter, or Go, to jump there; 
     <value>Upper limit on each jet's dust production rate, in kg/s, so that the emission does not grow without bound close to the Sun.&#10;&#10;Shared by every jet.</value>
   </data>
   <data name="Tabs_Model_HelpSizeDistribution" xml:space="preserve">
-    <value>The size range new jets start from. The exponent q is set per jet, in each jet's Grain panel (new jets start at q = 3.5).&#10;&#10;Grain radii follow n(s) ∝ s^−q from s₀/F to s₀·F, s₀ = diameter/2 (q = 3.5, F = 10, 100 µm → radii 5–500 µm).&#10;&#10;By number, small grains dominate; by cross-section (what sets brightness) the law is s^(2−q), so brightness favours small grains only slowly.&#10;&#10;The continuous dust rendering is built for q = 3.5; changing q only affects the individual bright specks.</value>
-  </data>
-  <data name="Tabs_Model_HelpSizeRange" xml:space="preserve">
-    <value>Default range factor F for new jets (1 to 1000): grain radii span from s₀/F to s₀·F, where s₀ is half the reference diameter. A larger F means a wider spread of grain sizes.&#10;&#10;Each jet then has its own (its Grain panel).</value>
+    <value>The grain size range new jets start from: the smallest and largest grain diameter, in µm. The exponent q is set per jet, in each jet's Grain panel (new jets start at q = 3.5).&#10;&#10;Simulated grains have diameters d from the smallest to the largest, with number density n(d) ∝ d^−q (default 10-1000 µm, q = 3.5). The plot shows exactly this range.&#10;&#10;By number, small grains dominate; by cross-section (what sets brightness) the law is d^(2−q), so brightness favours small grains only slowly.&#10;&#10;The continuous dust rendering assumes q = 3.5 over the whole range; changing q only affects the individual bright specks.</value>
   </data>
   <data name="Tabs_Settings_HelpDisplayMode" xml:space="preserve">
     <value>Default: draws the nucleus as a plain procedural sphere of the nucleus radius.&#10;&#10;Custom mesh: draws an imported 3D mesh with its textures, chosen below (import meshes in the Imports tab).&#10;&#10;Appearance only: the simulation is unaffected. The choice locks while the simulation plays.</value>
@@ -1185,11 +1208,14 @@ Type an epoch inside the committed range and press Enter, or Go, to jump there; 
   <data name="Tabs_Settings_HelpViewShowBehindCamera" xml:space="preserve">
     <value>Orthographic only: also draws the geometry behind the camera plane (within the far distance), as a telescope image does.&#10;&#10;Dust behind the camera is not drawn. A perspective view cannot show it.</value>
   </data>
+  <data name="Tabs_Settings_PhysicalLighting" xml:space="preserve">
+    <value>Physical lighting</value>
+  </data>
   <data name="Tabs_Settings_HelpHeaderViewPhysicalLighting" xml:space="preserve">
     <value>Physical lighting</value>
   </data>
   <data name="Tabs_Settings_HelpViewPhysicalLighting" xml:space="preserve">
-    <value>Direct sunlight only, scaled with the comet's heliocentric distance r as (1 AU / r)², and exposed so that a white surface facing the Sun at 1 AU is drawn white. No ambient fill.&#10;&#10;The surface the Sun does not reach is drawn in dark indigo.</value>
+    <value>Direct sunlight only, scaled with the comet's heliocentric distance r as (1 AU / r)², and exposed so that a white surface facing the Sun at 1 AU is drawn white. No ambient fill.&#10;&#10;The surface the Sun does not reach is drawn in dark indigo.&#10;&#10;On by default in the nucleus view; your choice is remembered.</value>
   </data>
   <data name="Tabs_Settings_HelpHeaderViewNucleusFromEarth" xml:space="preserve">
     <value>Nucleus from Earth</value>
@@ -1268,5 +1294,65 @@ Type an epoch inside the committed range and press Enter, or Go, to jump there; 
   </data>
   <data name="Overlay_DustRendering" xml:space="preserve">
     <value>Rendering the full image…</value>
+  </data>
+  <data name="Overlay_LegendTitle" xml:space="preserve">
+    <value>Legend</value>
+  </data>
+  <data name="Overlay_LegendGrid" xml:space="preserve">
+    <value>Latitude / longitude grid</value>
+  </data>
+  <data name="Overlay_LegendBodyX" xml:space="preserve">
+    <value>Body X axis</value>
+  </data>
+  <data name="Overlay_LegendBodyY" xml:space="preserve">
+    <value>Body Y axis</value>
+  </data>
+  <data name="Overlay_LegendSpin" xml:space="preserve">
+    <value>Spin axis (body Z)</value>
+  </data>
+  <data name="Overlay_LegendSun" xml:space="preserve">
+    <value>Direction of the Sun</value>
+  </data>
+  <data name="Overlay_LegendVelocity" xml:space="preserve">
+    <value>Velocity direction (heliocentric)</value>
+  </data>
+  <data name="Overlay_LegendJet" xml:space="preserve">
+    <value>Jet {0} direction</value>
+  </data>
+  <data name="Overlay_LegendCometOrbit" xml:space="preserve">
+    <value>Comet orbit (reference, from the orbital elements)</value>
+  </data>
+  <data name="Overlay_LegendEarthOrbit" xml:space="preserve">
+    <value>Earth orbit</value>
+  </data>
+  <data name="Overlay_LegendTravelledPath" xml:space="preserve">
+    <value>Path travelled in this run</value>
+  </data>
+  <data name="Tabs_Settings_StarBackground" xml:space="preserve">
+    <value>Background stars</value>
+  </data>
+  <data name="Tabs_Settings_StarBackgroundAuto" xml:space="preserve">
+    <value>Auto (off in Model view)</value>
+  </data>
+  <data name="Tabs_Settings_StarBackgroundOn" xml:space="preserve">
+    <value>On</value>
+  </data>
+  <data name="Tabs_Settings_StarBackgroundOff" xml:space="preserve">
+    <value>Off</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewStarBackground" xml:space="preserve">
+    <value>Background stars</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewStarBackground" xml:space="preserve">
+    <value>The stars are a decorative procedural field; they do not match the real sky, and their field of view is fixed.&#10;&#10;Auto draws them in every view except the Model (Earth observer) view, which then has a black backdrop. On or Off applies to every view.</value>
+  </data>
+  <data name="Tabs_Settings_OrbitLines" xml:space="preserve">
+    <value>Orbit lines</value>
+  </data>
+  <data name="Tabs_Settings_HelpHeaderViewOrbitLines" xml:space="preserve">
+    <value>Orbit lines</value>
+  </data>
+  <data name="Tabs_Settings_HelpViewOrbitLines" xml:space="preserve">
+    <value>Draws the comet's reference orbit (red), the Earth's orbit (light blue) and the path travelled in this run (yellow). The legend lists them in the Model and Orbit views.</value>
   </data>
 </root>
