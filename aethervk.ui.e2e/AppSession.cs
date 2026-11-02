@@ -147,7 +147,7 @@ public sealed class AppSession : IDisposable
   /// its stdout / stderr (the C# console and the core's log callback) are written there.
   /// </summary>
   public static AppSession Launch(string? logPath = null, TimeSpan? startupTimeout = null, bool diagnosticPanels = true,
-    bool perfLog = false)
+    bool perfLog = false, string? culture = null)
   {
     EnsureDriver();
     var exe = AppPath();
@@ -171,6 +171,9 @@ public sealed class AppSession : IDisposable
       process.StartInfo.Environment["AETHERVK_DIAGNOSTIC_PANELS"] = "1";
     if (perfLog)
       process.StartInfo.Environment["AETHERVK_PERF_LOG"] = "1";
+    // the interface language and locale regardless of the OS (documentation screenshots: "en-US")
+    if (culture is not null)
+      process.StartInfo.Environment["AETHERVK_UI_CULTURE"] = culture;
     if (logPath is not null)
     {
       Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);

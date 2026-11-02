@@ -20,6 +20,39 @@ The `.sty` and the sample were compiled once here with LuaLaTeX (MiKTeX, siunitx
 the thesis' `commands.tex`, hyperref, booktabs, amssymb) to catch errors. The thesis itself
 was not built.
 
+> **Update (current state).** The output is now **AsciiDoc plus tagged PNGs**, not LaTeX
+> callouts (`aethervk-manual.sty`, `*.callouts.tex` and the `.tex` sample are superseded).
+> Where §2 and §3 say `Crop.cs`, `img/` or `callouts.tex`, read this:
+>
+> - Code: `aethervk.ui.e2e/Manual/ManualCaptureTests.cs` (the walk), `Shots.cs` (the shot list as
+>   data), `ShotTools.cs` (PNG with a 150 dpi `pHYs`, round numbered markers, manifest),
+>   `Win32.Manual.cs` (a few extra user32 calls). No stitching: tall sections are cropped at the
+>   window edge (`clipped` in the manifest) or split into several shots.
+> - Per shot, in `TestResults/e2e/manual/<yyyyMMdd-HHmm>/`: `<key>--<state>--light.png` (clean crop),
+>   `<key>--<state>--light--tagged.png` (numbered markers just left of each control),
+>   `<key>--<state>--light.callouts.json` (`[{n, id, label, x, y, w, h, type, help_id}]`, relative to
+>   the crop; every AutomationId inside the crop, `*Help` buttons attached to their property, at
+>   most 15, top to bottom), and `manifest.json` (version, commit, date, culture, monitor, per-shot
+>   rect and status). A failing shot is logged, saved as `<key>--<state>--FAILED.png` and skipped.
+> - The app is launched with `AETHERVK_UI_CULTURE=en-US`, diagnostic panels off, the `theme`
+>   preference patched (the file is backed up and restored), on the primary monitor, maximised
+>   once and never moved.
+> - Run (the machine must be idle: the fixture owns the mouse and keyboard):
+>
+>   ```
+>   $env:AETHERVK_MANUAL_CAPTURE=1
+>   dotnet test aethervk.ui.e2e/aethervk.ui.e2e.csproj -p:BuildE2E=true --filter FullyQualifiedName~ManualCaptureTests
+>   # a subset: $env:AETHERVK_MANUAL_ONLY='^settings-viewport'   (regex on "key--state")
+>   py -3 -I docs/manual/tools/axaml_inventory.py --repo . --out docs/manual/inventory.md --splice --json docs/manual/tools/inventory.json
+>   py -3 -I docs/manual/tools/make_adoc.py --capture TestResults/e2e/manual/<stamp> --sync
+>   ```
+>
+>   `make_adoc.py` writes `docs/manual/adoc/{main,comet,timeline,model,settings,imports,viewport,dialogs}.adoc`
+>   and `index.adoc` (help texts from `AppStrings.resx` through `inventory.json`; `// TODO` where
+>   a control has none), and `--sync` copies the PNGs into `docs/manual/img/`.
+> - Not captured: `dlg-manage-imports`, `dlg-spawn-mesh`, `dlg-spawn-image` (no UI path opens them).
+>   `dlg-fatal` is best effort (the crash switch may write a report instead of showing the window).
+
 ---
 
 ## 1. Inventory method

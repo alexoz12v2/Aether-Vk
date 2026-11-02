@@ -1,0 +1,32 @@
+== Dialogs and pop-ups
+:imagesdir: ..
+
+[[splash]]
+=== Splash window
+Location:: Splash window
+Shown:: at launch
+
+.Splash window
+The splash window is shown while the application starts and loads.
+
+image::img/splash--launch--light--tagged.png[Splash window,width=500,pdfwidth=85mm]
+
+[[combo-dropdown]]
+=== Drop-down list
+Location:: Drop-down list
+Shown:: drop-down open, committed comet
+
+.Drop-down list
+Drop-down lists open below their box. The screenshot shows the speed list of the Timeline.
+
+image::img/combo-dropdown--dropdown--light--tagged.png[Drop-down list,width=250,pdfwidth=42mm]
+
+[[dlg-settings]]
+=== Settings window
+Location:: Settings window
+Shown:: dialog open, committed comet
+
+.Settings window
+The Settings window, opened from Edit > Settings, holds the same settings sections as the Settings tab.
+
+image::img/dlg-settings--dialog--light--tagged.png[Settings window,width=894,pdfwidth=151mm]

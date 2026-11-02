@@ -21,5 +21,6 @@ public partial class DesignCameraMatrixDebugViewModel : ICameraMatrixDebugViewMo
     public string StrElongation { get; set; } = "Elongation (Sun–Earth–comet)";
     public string StrSunPa { get; set; } = "Sun PA (N→E)";
     public string StrDebug { get; set; } = "Debug (camera position)";
+    public string StrViewportRect { get; set; } = "Viewport on the desktop (x, y, w, h px)";
 }
 #endif

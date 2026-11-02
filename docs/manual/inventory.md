@@ -83,6 +83,7 @@ builds only.
 | — | control | TextBlock | `ModeBarHintText` | ? | — |
 | — | control | TextBlock | `ModeBarRangeLockText` | ? | — |
 | — | control | Button | `ModeBarRecommitButton` | Recommit with this range | — |
+| — | control | TextBlock | `ViewportDesktopRect` | ? | — |
 
 ## TabGroupNodeView  (`aethervk.ui-app/Views/TabGroupNodeView.axaml`)
 
@@ -488,6 +489,8 @@ builds only.
 | — | control | StackPanel | `CameraHudDiagnostics` | — | — |
 | — | section | Expander | `CameraHudDebugExpander` | Debug (camera position) | — |
 | — | control | TextBlock | `EarthObserverStatus` | ? | — |
+| — | control | TextBlock | `DiagnosticsViewportDesktopRectLabel` | Viewport on the desktop (x, y, w, h px) | — |
+| — | control | TextBlock | `DiagnosticsViewportDesktopRect` | ? | — |
 | — | control | TextBlock | `DustHistoryText` | ? | — |
 
 ## CometTabDebugView  (`aethervk.ui-app/Views/CometTabDebugView.axaml`)
