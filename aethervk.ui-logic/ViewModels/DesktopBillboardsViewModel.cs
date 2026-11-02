@@ -369,8 +369,11 @@ public partial class DesktopBillboardsViewModel : ObservableObject, IDisposable
   }
 
   /// <summary>The viewport's rectangle on the desktop, physical px, "x,y,w,h" (invariant dot
-  /// decimals; x is negative on a monitor left of the primary). Empty until it is laid out. Read
-  /// by the end-to-end test, whose UI automation locations are unreliable on a second monitor.</summary>
+  /// decimals; x is negative on a monitor left of the primary). Empty until it is laid out. Not
+  /// shown in the Billboards section: the main window's mode bar carries it as an automation-only
+  /// element (<see cref="ViewModeBarViewModel.ViewportDesktopRect"/>), read by the end-to-end test,
+  /// whose UI automation locations are unreliable on a second monitor; the diagnostic panel shows
+  /// the same rectangle (<see cref="Debug.CameraMatrixDebugViewModel.ViewportDesktopRect"/>).</summary>
   [ObservableProperty]
   private string _viewportDesktopRect = string.Empty;
 

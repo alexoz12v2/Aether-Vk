@@ -48,229 +48,8 @@ public sealed class SaveArchiveX11Tests : IDisposable
   {
   }
 
-  /// <summary>Answers the next file dialog with a queued path (null = cancelled).</summary>
-  private sealed class ScriptedFileDialogs : IFileDialogService
-  {
-    private readonly Queue<string?> _answers = new();
-    public List<string> Requests { get; } = [];
-
-    public void Answer(string? path) => _answers.Enqueue(path);
-
-    private Task<string?> Next(string kind, string title)
-    {
-      Requests.Add($"{kind}: {title}");
-      return Task.FromResult(_answers.Count > 0 ? _answers.Dequeue() : null);
-    }
-
-    public Task<string?> ShowOpenFileDialogAsync(string title, string[]? filters = null) => Next("open", title);
-
-    public Task<string?> ShowSaveFileDialogAsync(string title, string defaultExtension, string[]? filters = null) =>
-      Next("save", title);
-
-    public Task<string?> PickFolderAsync(string title) => Next("folder", title);
-  }
-
-  /// <summary>The unsaved-changes prompt must not appear in these steps: it cancels and records.</summary>
-  private sealed class RecordingPrompt : IUnsavedChangesPrompt
-  {
-    public int Asked;
-
-    public Task<UnsavedChoice> AskAsync(string saveName)
-    {
-      Interlocked.Increment(ref Asked);
-      return Task.FromResult(UnsavedChoice.Cancel);
-    }
-  }
-
-  /// <summary>The application composition under an isolated HOME, with the main window shown.</summary>
-  private sealed class Rig : IDisposable
-  {
-    private static bool _stylesAdded;
-    private readonly string? _homeBefore;
-
-    public string Root { get; }
-    public string Home { get; }
-    public string SavesDir { get; }
-    public IHost Host { get; }
-    public ScriptedFileDialogs Dialogs { get; } = new();
-    public RecordingPrompt Prompt { get; } = new();
-    public MainWindowViewModel Vm { get; private set; }
-    public MainWindow Main { get; private set; }
-    public SaveFileService Saves => Host.Services.GetRequiredService<SaveFileService>();
-    public PreferencesService Preferences => Host.Services.GetRequiredService<PreferencesService>();
-
-    public Rig()
-    {
-      Root = Path.Combine(Path.GetTempPath(), "aethervk-x11-save-" + Guid.NewGuid().ToString("N")[..8]);
-      Home = Path.Combine(Root, "home");
-      SavesDir = Path.Combine(Root, "saves");
-      Directory.CreateDirectory(Home);
-      Directory.CreateDirectory(SavesDir);
-      // LocalStorageService, PreferencesService and SaveArchive.DefaultWorkRoot() read the user
-      // profile (HOME) when they are built: set it before the container resolves anything
-      _homeBefore = Environment.GetEnvironmentVariable("HOME");
-      Environment.SetEnvironmentVariable("HOME", Home);
-
-      Host = Microsoft.Extensions.Hosting.Host.CreateDefaultBuilder([])
-        .ConfigureServices(services =>
-        {
-          services.AddCommonServices();
-          services.AddViewModels();
-          // the test's file pickers (registered last: wins the single resolution)
-          services.AddSingleton<IFileDialogService>(Dialogs);
-          services.AddSingleton<IUnsavedChangesPrompt>(Prompt);
-        })
-        .Build();
-      App.Host = Host;
-      Host.Start();
-
-      Ui(() =>
-      {
-        var app = Application.Current!;
-        if (!_stylesAdded)
-        {
-          // what App.axaml gives the real application (the test process runs X11TestApp)
-          _stylesAdded = true;
-          app.Styles.Add(new FluentTheme());
-          foreach (var src in new[]
-          {
-            "avares://Avalonia.Controls.DataGrid/Themes/Fluent.xaml",
-            "avares://Avalonia.Controls.ColorPicker/Themes/Fluent/Fluent.xaml",
-            "avares://AetherVk/Styles/Controls.axaml",
-            "avares://AetherVk/Styles/Specs.axaml",
-          })
-            app.Styles.Add(new StyleInclude(new Uri("avares://AetherVk/")) { Source = new Uri(src) });
-          app.Resources.MergedDictionaries.Add(
-            new ResourceInclude(new Uri("avares://AetherVk/")) { Source = new Uri("avares://AetherVk/Styles/Colors.axaml") });
-          app.DataTemplates.Add(new ViewLocator());
-        }
-      });
-
-      // the core, off the UI thread as the splash screen does it
-      _ = Host.Services.GetRequiredService<INativeRuntimeService>();
-
-      Vm = null!;
-      Main = null!;
-      Ui(() =>
-      {
-        Preferences.Load();
-        Vm = Host.Services.GetRequiredService<MainWindowViewModel>();
-        Main = new MainWindow
-        {
-          DataContext = Vm,
-          Width = 1600,
-          Height = 1000,
-          Position = new PixelPoint(0, 0),
-        };
-        if (Application.Current!.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
-          desktop.MainWindow = Main;
-        Main.Show();
-      });
-      Assert.True(WaitFor(() => XWinInfo(MainXid).Viewable, 20_000), "main window mapped");
-      XDo($"windowfocus --sync {Hex(MainXid)}");
-      Settle(1000);
-    }
-
-    public nint MainXid => Ui(() => Main.TryGetPlatformHandle()!.Handle);
-
-    /// <summary>The window title as the X server has it.</summary>
-    public string XTitle => Run("xdotool", $"getwindowname {Hex(MainXid)}").Trim();
-
-    public T? Find<T>(string automationId) where T : Control =>
-      Ui(() => Main.GetVisualDescendants().OfType<T>()
-        .FirstOrDefault(c => AutomationProperties.GetAutomationId(c) == automationId));
-
-    public T Require<T>(string automationId) where T : Control
-    {
-      Assert.True(WaitFor(() => Ui(() => Main.GetVisualDescendants().OfType<T>()
-        .Any(c => AutomationProperties.GetAutomationId(c) == automationId && c.IsVisible)), 10_000), $"{automationId} visible");
-      return Find<T>(automationId)!;
-    }
-
-    /// <summary>A real left click at the control's centre (it must be on screen).</summary>
-    public void Click(Control c)
-    {
-      var p = Ui(() =>
-      {
-        var b = c.Bounds;
-        return c.PointToScreen(new Point(b.Width / 2, b.Height / 2));
-      });
-      XDo($"mousemove {p.X} {p.Y} sleep 0.1 click 1");
-      Settle(300);
-    }
-
-    /// <summary>The top-level File menu item (built by MenuMapper from the view model).</summary>
-    public MenuItem TopMenu(string header) =>
-      Ui(() => Main.GetVisualDescendants().OfType<Menu>().First().Items.OfType<MenuItem>()
-        .First(m => string.Equals(m.Header as string, header, StringComparison.Ordinal)));
-
-    public static MenuItem Child(MenuItem parent, string header) =>
-      Ui(() => parent.Items.OfType<MenuItem>()
-        .First(m => string.Equals(m.Header as string, header, StringComparison.Ordinal)));
-
-    /// <summary>Opens the top-level menu by clicking it and clicks the entry (both real clicks).</summary>
-    public MenuItem Menu(string top, string entry)
-    {
-      var menu = TopMenu(top);
-      Click(menu);
-      Assert.True(WaitFor(() => Ui(() => menu.IsSubMenuOpen)), $"{top} menu open");
-      var item = Child(menu, entry);
-      Assert.True(WaitFor(() => Ui(() => item.IsVisible && item.GetVisualRoot() is not null)), $"{top} › {entry} shown");
-      Click(item);
-      return item;
-    }
-
-    public void CloseMenus()
-    {
-      XDo("key Escape sleep 0.1 key Escape");
-      Settle(300);
-    }
-
-    public void Dispose()
-    {
-      try
-      {
-        var done = Task.Run(() =>
-        {
-          Ui(() =>
-          {
-            // as App does at shutdown: the viewport goes before its window
-            var runtime = Host.Services.GetService<INativeRuntimeService>();
-            if (runtime?.PresentationEngineId is ulong pe)
-              runtime.RemoveViewport(pe);
-            if (Application.Current!.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
-              desktop.MainWindow = null;
-            Main.Close();
-          });
-          Settle(300);
-          // stop, not dispose: the Avalonia loop outlives this rig (the app's ends first), and
-          // its timers (title, camera) would read disposed services; the process exits after the run
-          Host.StopAsync().Wait();
-        });
-        done.Wait(TimeSpan.FromSeconds(30));
-      }
-      catch (Exception)
-      {
-        // a shutdown hang must not take the test result with it
-      }
-      finally
-      {
-        App.Host = null;
-        Environment.SetEnvironmentVariable("HOME", _homeBefore);
-      }
-    }
-  }
-
-  private static string RepoRoot()
-  {
-    var dir = new DirectoryInfo(AppContext.BaseDirectory);
-    while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "AetherVk.sln")))
-      dir = dir.Parent;
-    return dir?.FullName ?? throw new InvalidOperationException("AetherVk.sln not found above the test output");
-  }
-
   private static string FixtureIndex() =>
-    Path.Combine(RepoRoot(), "test_assets", "saves", "review_67p_2021-12", SaveIndex.FileName);
+    Path.Combine(AppRig.RepoRoot(), "test_assets", "saves", "review_67p_2021-12", SaveIndex.FileName);
 
   private static int JetCount(string avk)
   {
@@ -291,7 +70,7 @@ public sealed class SaveArchiveX11Tests : IDisposable
   public void SaveAsThenSaveThenRefuseTruncatedArchive()
   {
     Skip.IfNot(File.Exists(FixtureIndex()), $"fixture missing: {FixtureIndex()}");
-    using var rig = new Rig();
+    using var rig = new AppRig();
     var avk = Path.Combine(rig.SavesDir, "x.avk");
 
     // ── 1. open the fixture folder, Save As x.avk ───────────────────────────────────────────
@@ -326,7 +105,7 @@ public sealed class SaveArchiveX11Tests : IDisposable
     var file = rig.TopMenu("File");
     rig.Click(file);
     Assert.True(WaitFor(() => Ui(() => file.IsSubMenuOpen)), "File menu open");
-    var recent = Rig.Child(file, "Open Recent");
+    var recent = AppRig.Child(file, "Open Recent");
     rig.Click(recent);
     Assert.True(WaitFor(() => Ui(() => recent.IsSubMenuOpen)), "Open Recent open");
     var recentHeaders = Ui(() => recent.Items.OfType<MenuItem>().Where(m => m.IsVisible)

@@ -421,9 +421,12 @@ pub unsafe extern "C" fn avkSimulationContext_addViewport(
 
 /// # Safety
 /// FFI Contract
-// TODO handle windowed, main thread callback to delete swapchain and surface. Shuld rely on either
-// timelnie semaphore or present fence. (Actually queue wait idle is affordable here cause you don't
-// do this often)
+/// - Synchronous: when it returns, the render thread has stopped using the presentation engine,
+///   the GPU is past its frames, and its swapchain and surface are destroyed (on this thread).
+///   Only then may the caller destroy the native window or close the display connection the
+///   surface was created on.
+/// - Windowed engines: call it from the UI thread, the one `avkSimulationContext_addViewport`
+///   created the surface from (macOS destroys a surface on the main thread).
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn avkSimulationContext_removeViewport(

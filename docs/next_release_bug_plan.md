@@ -250,7 +250,12 @@ with the same image. Second, smaller: the controller's raise threshold at 1.0 ×
 the 1070 at Balanced, which is at the cap). Both need the GPU reference tests
 (`gpu_dust_*_matches_reference`) and the propagate skip tests.
 
-**Open:** the e2e's 1 d/s phase hit the committed range's end 8 s in (epoch 693921600) in one of
+**Resolved (2026-11-02, Windows e2e pending):**
+- The e2e now reads the committed range, runs its UIA searches before the Play click, and refuses
+  to measure a stopped clock (`PlaybackPerfTests.CheckRoom`).
+- A play session now starts at the previous session's stride (`PlayStride::play`).
+
+The original note follows. **Open:** the e2e's 1 d/s phase hit the committed range's end 8 s in (epoch 693921600) in one of
 five runs (and in the 17:26 run) after the seek to start + 1 h: the comment's "16 days" margin does not hold for this
 save; `dust_frame` and the clock then freeze and the fast-movement check fails for a reason that
 is not perf. Also the Play-click transient (one dropped physics step per Play) could be avoided by

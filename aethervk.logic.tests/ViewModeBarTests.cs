@@ -204,6 +204,32 @@ public class ViewModeBarTests
     Assert.Equal(ObservationRunResult.NoHandler.Status, rig.Bar.Hint);
   }
 
+  /// <summary>The main window's automation-only <c>ViewportDesktopRect</c> (the end-to-end test
+  /// reads it there, whichever tab is shown): the attached billboards' rectangle, followed as the
+  /// viewport moves, empty once they are detached.</summary>
+  [Fact]
+  public void ViewportDesktopRect_FollowsTheAttachedBillboards_AndClearsOnDetach()
+  {
+    var rig = new CameraRig();
+    var fits = new FitsBillboardTests.Rig();
+    Assert.Equal(string.Empty, rig.Bar.ViewportDesktopRect);
+    fits.Probe.ViewportFrame = new ViewportFrame(new PointD(0, 0), 1920, 1080, 1.0);
+    fits.Vm.Probe();
+    var attached = rig.Bar.AttachBillboards(fits.Vm);
+    Assert.Equal("0.000,0.000,1920.000,1080.000", rig.Bar.ViewportDesktopRect); // read at once
+
+    // the window moved to a monitor left of the primary
+    fits.Probe.ViewportFrame = new ViewportFrame(new PointD(-1920 + 534, 130), 1386, 950.5, 1.0);
+    fits.Vm.Probe();
+    Assert.Equal("-1386.000,130.000,1386.000,950.500", rig.Bar.ViewportDesktopRect);
+
+    attached.Dispose();
+    Assert.Equal(string.Empty, rig.Bar.ViewportDesktopRect);
+    fits.Probe.ViewportFrame = new ViewportFrame(new PointD(10, 20), 800, 600, 1.0);
+    fits.Vm.Probe();
+    Assert.Equal(string.Empty, rig.Bar.ViewportDesktopRect); // no longer followed
+  }
+
   [Fact]
   public void Highlight_FollowsModeChangesMadeElsewhere()
   {

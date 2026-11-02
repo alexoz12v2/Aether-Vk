@@ -206,7 +206,8 @@ public partial class ViewportOverlayViewModel : ObservableObject, IDisposable
 #endif
     CameraMatrixDebug = new CameraMatrixDebugViewModel(runtimeService, schedulerProvider, preferences,
       () => (_cameraService.GetCometScreenPosition(), _cameraService.ViewportWidthPx, _cameraService.ViewportHeightPx),
-      translationService);
+      translationService,
+      () => _cameraService.ViewportDesktopFrame);
     CometOrbitDebug   = new CometOrbitDebugViewModel(preferences);
     if (translationService is not null)
     {

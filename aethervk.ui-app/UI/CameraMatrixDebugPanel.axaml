@@ -138,6 +138,19 @@
                Foreground="{DynamicResource Text.Primary}"/>
   </StackPanel>
 
+  <!-- The viewport's rectangle on the desktop (physical px: x, y, width, height; x negative on a
+       monitor left of the primary), where the billboards are placed from -->
+  <StackPanel Spacing="1" IsVisible="{ReflectionBinding ViewportDesktopRect, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+    <TextBlock Text="{ReflectionBinding StrViewportRect}"
+               AutomationProperties.AutomationId="DiagnosticsViewportDesktopRectLabel"
+               FontWeight="Bold" FontSize="9"
+               Foreground="{DynamicResource Accent.Primary}"
+               Margin="0,0,0,3"/>
+    <TextBlock AutomationProperties.AutomationId="DiagnosticsViewportDesktopRect" Text="{ReflectionBinding ViewportDesktopRect}"
+               FontFamily="Consolas,Monospace" FontSize="9"
+               Foreground="{DynamicResource Text.Primary}"/>
+  </StackPanel>
+
   <!-- Dust history per age tier (live/capacity, age span present, band) -->
   <StackPanel Spacing="1" IsVisible="{ReflectionBinding DustHistory, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
     <TextBlock Text="DUST HISTORY"

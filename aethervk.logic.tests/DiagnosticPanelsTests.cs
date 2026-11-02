@@ -4,6 +4,7 @@ using System.IO;
 using System.Threading;
 using AetherVk.Logic.Input;
 using AetherVk.Logic.Services;
+using AetherVk.Logic.Utils;
 using AetherVk.Logic.ViewModels.Debug;
 using AetherVk.Logic.Tests.Mocks;
 using Moq;
@@ -156,6 +157,30 @@ public sealed class DiagnosticPanelsTests : IDisposable
 
     int after = runtime.Invocations.Count(i => i.Method.Name == nameof(INativeRuntimeService.EarthObserverStatus));
     Assert.Equal(before, after);
+  }
+
+  /// <summary>The viewport's desktop rectangle (moved here from Settings › Billboards): read from
+  /// the camera's frame on the UI thread at each 500 ms tick, "x,y,w,h" in invariant px, followed
+  /// as the window moves although nothing else in the panel changes.</summary>
+  [Fact]
+  public void TheCameraPanel_ShowsTheViewportsDesktopRect_AndFollowsAMove()
+  {
+    var schedulers = new TestSchedulerProvider();
+    ViewportFrame? frame = null;
+    using var vm = new CameraMatrixDebugViewModel(new Mock<INativeRuntimeService>().Object, schedulers,
+      viewportFrame: () => frame);
+    var half = TimeSpan.FromMilliseconds(500).Ticks;
+    schedulers.MainThread.AdvanceBy(half);
+    Assert.Equal(string.Empty, vm.ViewportDesktopRect); // not laid out yet
+
+    frame = new ViewportFrame(new PointD(-1920 + 534, 130), 1386, 950.5, 1.0);
+    Assert.Equal(string.Empty, vm.ViewportDesktopRect); // not before the tick
+    schedulers.MainThread.AdvanceBy(half);
+    Assert.Equal("-1386.000,130.000,1386.000,950.500", vm.ViewportDesktopRect);
+
+    frame = new ViewportFrame(new PointD(0, 0), 1920, 1080, 1.0);
+    schedulers.MainThread.AdvanceBy(half);
+    Assert.Equal("0.000,0.000,1920.000,1080.000", vm.ViewportDesktopRect);
   }
 
   [Fact]
