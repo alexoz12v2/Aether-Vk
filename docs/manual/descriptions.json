@@ -1,0 +1,577 @@
+{
+ "shots": {
+  "main": "The main window holds the viewport in the middle and the Settings, Comet, Model, Imports and Timeline panes around it. The screenshot shows the layout before a comet is committed; the committed state shows a loaded comet with its dust.",
+  "main--empty": "The main window of a new session: no comet is committed, so the viewport is empty and the Timeline only shows the range typed in the Comet tab.",
+  "main--committed": "The main window with a comet committed and the Model view active: the dust, the legend, the ephemeris table and the timeline controls are filled in.",
+  "main-modebar": "The mode bar above the dock selects what the viewport shows: Orbit, Nucleus or Model. The screenshot shows the three mode buttons and the text that appears beside them.",
+  "main-modebar--orbit": "Orbit mode: the viewport shows the comet's orbit in the Solar System, animated over the chosen range.",
+  "main-modebar--nucleus": "Nucleus mode: the viewport shows the nucleus with its orientation, the Sun direction, illumination and the jets.",
+  "main-modebar--model": "Model mode: the viewport is set up to compare with a telescope image, ending at the image date. Without a FITS image, a hint tells you to import one.",
+  "main-modebar--locked": "The mode bar after the range was edited while a comet is committed: a lock message and a Recommit button appear beside the mode buttons.",
+  "menu-file": "The File menu creates, opens and saves sessions. The screenshot lists its entries.",
+  "menu-edit": "The Edit menu opens the Settings window and switches between the light and dark theme.",
+  "docking": "Each pane of the window is a group of tabs. The tab strip has a button to add a tab, a button to swap the pane and a button to close it.",
+  "comet-guided": "The four numbered steps at the top of the Comet tab show what to do, in order: search a comet, pick an SPK record, set the range, commit. The text below them explains the current step.",
+  "comet-guided--empty": "Before any comet is committed, the first step is highlighted and the help text tells you what to do next.",
+  "comet-guided--committed": "After the commit all four steps are ticked and the text tells you to press Play in the Timeline tab.",
+  "comet-selection": "Comet Selection searches the JPL small-body database by name or designation and lists the ephemeris (SPK) records of the comet you pick.",
+  "comet-selection--empty": "The search for \"67P\" has returned a list of comets; the SPK records appear once you select one.",
+  "comet-selection--committed": "After the commit a banner shows the committed comet and an Undo button, above the search box and the record list.",
+  "comet-commit": "Choose the reference orbit and press Download & Commit to fetch the selected SPK record and attach it to the simulation. A status line reports the result.",
+  "comet-commit--empty": "Before the first commit the reference orbit is chosen here and the button is ready.",
+  "comet-commit--committed": "After the commit the status line shows the committed comet, and the reference orbit is locked.",
+  "comet-simulated-range": "Simulated range sets the observation date and how many nucleus rotations before it the simulation starts. Use it when you compare the model with a telescope image.",
+  "comet-simulated-range--committed": "The range as committed: the date, the number of rotations and the resulting span in days.",
+  "comet-simulated-range--locked": "After the number of rotations was changed while a comet is committed, the range is locked: the simulation keeps the committed range until you recommit or run at the new date.",
+  "comet-range-advanced": "The advanced part of the range lets you type the Start and End epochs by hand, restore the committed range, or set a range without running.",
+  "comet-nucleus": "The Nucleus section holds the nucleus radius. The jets start on a sphere of this radius, so it must be known before you add jets.",
+  "comet-rotation": "Rotational Model sets the spin axis, the rotation phase and the spin rate of the nucleus. It is available after a comet is committed, and changes are applied live.",
+  "timeline": "The Timeline pane shows the simulated range and, once a comet is committed, plays it: speed, reset, play or pause, run to end, and a box to jump to an epoch.",
+  "timeline--empty": "Before a commit the Timeline only shows the range typed in the Comet tab and a note to commit there; the playback controls are hidden.",
+  "timeline--committed": "After the commit the Timeline shows the committed range, the speed selector, the playback buttons, the progress bar and the current epoch.",
+  "timeline--playing": "While the simulation plays, the progress bar fills and the current epoch advances. The Play button turns into Pause.",
+  "model-dust": "The Dust section of the Model tab controls how the dust is displayed, the gizmo around the nucleus, the list of jets and the grain and activity defaults for new jets.",
+  "model-dust--empty": "Before a comet is committed no jets can be added; the section shows its display options and a hint to commit a comet first.",
+  "model-dust--committed": "With a comet committed, the jet list is available. The + button adds a jet and selecting a jet opens its properties.",
+  "model-dust-jet": "The properties of the selected jet: where it sits on the nucleus, its cone and speed, its colour and the computed beta and dust rate, with its own Grain and Activity panels.",
+  "model-dust-defaults": "The values that new jets start from, under Advanced: the dust production law (Q_d) and the grain size distribution, each with a plot. Existing jets keep their own values.",
+  "imports": "The Imports pane loads meshes (OBJ, PLY, glTF, GLB) and textures (PNG, JPEG, KTX2) from disk and lists what was imported.",
+  "imports--empty": "Before anything is imported both lists are empty.",
+  "imports--committed": "The pane with imported items: the loaded textures are listed with their size and can be used in the Settings tab.",
+  "settings-time-scale": "Time scale for dates chooses whether dates you type and read are in UTC or in TDB.",
+  "settings-particle-rendering": "Particle rendering sets how finely the dust is drawn. A quality slider presets the detail values; the playback preview quality sets how the dust looks while playing.",
+  "settings-input-bindings": "Input bindings lists the keys and mouse buttons of each action. You can rebind them, add more than one for an action, and reset a group to its defaults.",
+  "settings-comet-appearance": "Comet Appearance chooses how the nucleus is drawn: a plain sphere or an imported mesh with textures. This changes the look only, not the simulation.",
+  "settings-comet-appearance--committed": "The default display mode: the nucleus is drawn as a procedural sphere.",
+  "settings-comet-appearance--custom": "Custom mesh mode: you pick an imported mesh and its texture channels, and set its rotation and offset.",
+  "settings-billboards": "Billboards show an imported image in its own window over the desktop, so you can place a telescope image next to the model. This is where you create one and set its position, size, opacity and rotation.",
+  "settings-billboards-fits": "For a FITS image the billboard has a FITS section with the key header facts, the full header, the stretch settings, and buttons that set up the comparison with the model.",
+  "settings-viewport": "The viewport settings are the camera and display options of the active view: comparison lock, projection, background stars and orbit lines. The sections shown depend on the mode.",
+  "settings-viewport--orbit": "In Orbit mode the section shows the projection type and its advanced values, the background and orbit-line options, and buttons to fly above the Sun, the comet or the Earth.",
+  "settings-viewport--nucleus": "In Nucleus mode the section also shows the nucleus lighting and exposure controls.",
+  "settings-viewport--model": "In Model mode the camera is the Earth observer, so the section shows the observer settings.",
+  "settings-viewport-persp": "Advanced projection for a perspective camera: the field of view with its units, and the near and far clip planes.",
+  "settings-viewport-ortho": "Advanced projection for an orthographic camera: the half-width and half-height of the view, the near and far planes, and a lock for the proportions.",
+  "settings-viewport-nucleus": "The viewport settings in Nucleus mode: projection, lighting and exposure of the nucleus.",
+  "settings-viewport-observer": "The Earth observer settings: switch to the view of the nucleus from Earth, set the exposure, choose a site on the Earth's surface and the look direction, and read the telescope scale.",
+  "help-flyout": "Many settings have a small ? button. Pressing it opens a flyout with the full explanation of the setting.",
+  "combo-dropdown": "Drop-down lists open below their box. The screenshot shows the speed list of the Timeline.",
+  "dlg-settings": "The Settings window, opened from Edit > Settings, holds the same settings sections as the Settings tab.",
+  "billboard-window": "A billboard window shows the imported image over the desktop. Drag it with the left mouse button; the right button cycles the move, rotate and scale handles.",
+  "viewport": "The 3D viewport shows the simulation for the selected mode.",
+  "viewport--orbit": "Orbit mode: the comet and its dust seen along its orbit, with the Earth orbit and the path travelled in the run.",
+  "viewport--nucleus": "Nucleus mode: a close view of the nucleus with its jets and the dust leaving it.",
+  "viewport--model": "Model mode: the dust as the Earth observer sees it, to compare with a telescope image.",
+  "overlay": "The overlay is the information drawn over the viewport: the legend, the ephemeris table, the scale ruler, the epoch and the reference frame.",
+  "overlay--orbit": "The overlay in Orbit mode: the orbit legend, the ephemeris table, the scale ruler and the epoch label.",
+  "overlay--model": "The overlay in Model mode: the legend, the ephemeris table, the scale ruler, the epoch and the reference frame of the Earth view.",
+  "splash": "The splash window is shown while the application starts and loads.",
+  "dlg-fatal": "The error window appears when the application meets an error it cannot recover from, and shows the message."
+ },
+ "controls": {
+  "ReferenceOrbitPicker": {
+   "label": "Reference orbit",
+   "text": "Chooses the two-body orbit drawn next to the true SPK path: the SBDB solution at its own epoch, or osculating at the start epoch. Required before the first commit."
+  },
+  "DownloadCommitButton": {
+   "label": "Download & Commit",
+   "text": "Downloads the selected SPK record and attaches it to the simulation with the proposed range."
+  },
+  "DownloadStatusText": {
+   "label": "Status",
+   "text": "Shows the result of the download and commit, for example the name of the committed comet."
+  },
+  "GuidedStepHelpText": {
+   "label": "Current step",
+   "text": "Explains what to do in the current step of the guided flow."
+  },
+  "NucleusSection": {
+   "label": "Nucleus",
+   "text": "Section with the physical parameters of the nucleus, here its radius."
+  },
+  "NucleusRadiusSlider": {
+   "label": "Nucleus Radius",
+   "text": "Sets the radius of the nucleus in km, from 0.1 to 100; it is filled from Horizons when a comet is committed. The jets start on this sphere."
+  },
+  "RangeAdvancedExpander": {
+   "label": "Advanced: Start / End, Restore, Recommit",
+   "text": "Opens the hand-typed Start and End epochs, the Restore button and the range lock controls."
+  },
+  "StartEpochBox": {
+   "label": "Start",
+   "text": "Type the start epoch of the simulated range in ISO 8601 form, in the chosen time scale. It only proposes a range until you commit."
+  },
+  "EndEpochBox": {
+   "label": "End",
+   "text": "Type the end epoch of the simulated range in ISO 8601 form, in the chosen time scale. It must be at least 1 day after the start."
+  },
+  "RestoreButton": {
+   "label": "Restore",
+   "text": "Puts the committed range back in the Start and End boxes and drops your edit."
+  },
+  "ProposedRangeText": {
+   "label": "Proposed",
+   "text": "Shows the range in the Start and End boxes, which the next commit or recommit will use."
+  },
+  "ApplyModelRangeButton": {
+   "label": "Set range",
+   "text": "Applies the range from the observation date and rotation count without running the simulation."
+  },
+  "RotationalModelSection": {
+   "label": "Rotational Model",
+   "text": "Section with the spin axis, rotation phase and spin rate of the nucleus. It is available once a comet is committed."
+  },
+  "PoleRaSlider": {
+   "label": "Pole RA",
+   "text": "Right ascension of the spin axis (J2000), in degrees. Together with Pole Dec it sets where the axis points."
+  },
+  "PoleDecSlider": {
+   "label": "Pole Dec",
+   "text": "Declination of the spin axis (J2000), in degrees. Together with Pole RA it sets where the axis points."
+  },
+  "PrimeMeridianSlider": {
+   "label": "Prime Meridian",
+   "text": "Rotation angle of the nucleus at J2000, in degrees; it sets which side faces where at a given time."
+  },
+  "RotPeriodSlider": {
+   "label": "Rotation Period (h)",
+   "text": "Sidereal rotation period of the nucleus in hours. It changes the rotation rate below and the length of one rotation in the range."
+  },
+  "PolePrecessionExpander": {
+   "label": "Advanced: rates (precession, °/day)",
+   "text": "Opens the precession rates of the spin axis and the rotation rate in degrees per day."
+  },
+  "RotRateSlider": {
+   "label": "Rotation Rate (°/day)",
+   "text": "Spin rate of the nucleus in degrees per day; the sign gives prograde or retrograde. It is the same spin as the period."
+  },
+  "CommittedCometName": {
+   "label": "Committed comet",
+   "text": "Shows the name of the comet attached to the simulation."
+  },
+  "CometSearchBox": {
+   "label": "Search comets",
+   "text": "Type a comet name or designation, for example 67P, and press Enter or Search."
+  },
+  "CometSearchButton": {
+   "label": "Search",
+   "text": "Searches for comets that match the text in the box."
+  },
+  "CometResultsList": {
+   "label": "Search results",
+   "text": "Lists the comets that match the search. Select one to list its ephemeris (SPK) records."
+  },
+  "SpkRecordsList": {
+   "label": "Available SPK Records",
+   "text": "Lists the ephemeris records of the selected comet, each a separate fit of its orbit. Select one before you commit."
+  },
+  "SimulatedRangeSection": {
+   "label": "Simulated range",
+   "text": "Section for the observation date, the number of rotations before it, the dust lead time and Run at this date."
+  },
+  "ModelEndEpochBox": {
+   "label": "Observation date (UTC)",
+   "text": "Type the date of your telescope image in UTC. The simulated range ends at this date."
+  },
+  "FromImageButton": {
+   "label": "From image",
+   "text": "Takes the observation date from the loaded FITS image."
+  },
+  "ModelRotationsBox": {
+   "label": "Rotations before it",
+   "text": "Number of full nucleus rotations before the observation date at which the simulation starts, from 1 to 1000."
+  },
+  "ModelSpanText": {
+   "label": "Span",
+   "text": "Shows the length of the simulated range in days, from the number of rotations and the rotation period."
+  },
+  "DustLeadDaysBox": {
+   "label": "Dust lead time",
+   "text": "Days before the start epoch at which the jets begin to emit, from 0 to 30. The default is 30, so the tail already exists at the start."
+  },
+  "RunAtDateButton": {
+   "label": "Run at this date",
+   "text": "Sets the range from the observation date, commits the comet again and seeks to the date; with a FITS image it also sets up the comparison."
+  },
+  "RunAtDateStatus": {
+   "label": "Run status",
+   "text": "Shows what Run at this date is doing or what it did."
+  },
+  "TimeScaleSection": {
+   "label": "Time scale for dates",
+   "text": "Section that chooses the time scale used for the dates you type and read."
+  },
+  "TimeScalePicker": {
+   "label": "Time scale",
+   "text": "Chooses UTC or TDB for the Start and End boxes, the Timeline epoch box and the viewport epoch label. UTC is the default."
+  },
+  "ImportButton": {
+   "label": "Import…",
+   "text": "Opens a file dialog to import meshes (OBJ, PLY, glTF, GLB) or textures (PNG, JPEG, KTX2)."
+  },
+  "CometAppearanceSection": {
+   "label": "Comet Appearance",
+   "text": "Section that sets how the nucleus is drawn. It changes the look only, not the simulation."
+  },
+  "BillboardTexturePicker": {
+   "label": "Texture",
+   "text": "Chooses the imported texture to show in a new billboard window."
+  },
+  "BillboardX": {
+   "label": "Centre (desktop px), X",
+   "text": "Horizontal position of the billboard centre, in desktop pixels."
+  },
+  "BillboardY": {
+   "label": "Centre (desktop px), Y",
+   "text": "Vertical position of the billboard centre, in desktop pixels."
+  },
+  "BillboardWidth": {
+   "label": "Size (px), width",
+   "text": "Width of the billboard in pixels, at least 16."
+  },
+  "BillboardHeight": {
+   "label": "Size (px), height",
+   "text": "Height of the billboard in pixels, at least 16."
+  },
+  "BillboardAspectLock": {
+   "label": "Keep aspect",
+   "text": "When on, changing the width or the height also changes the other so the image keeps its proportions."
+  },
+  "BillboardAlpha": {
+   "label": "Opacity",
+   "text": "Opacity of the billboard, from 0 (transparent) to 1 (opaque)."
+  },
+  "BillboardRotation": {
+   "label": "Rotation (°)",
+   "text": "Rotation of the billboard about its centre, in degrees from -180 to 180."
+  },
+  "BillboardVisible": {
+   "label": "Visible",
+   "text": "Shows or hides the billboard window without deleting it."
+  },
+  "BillboardImageHeightKm": {
+   "label": "Image height at the comet (km)",
+   "text": "Physical height of the image at the comet's distance, in km. When set, it takes precedence over the plate scale."
+  },
+  "BillboardArcsecPerPx": {
+   "label": "Plate scale (″/px)",
+   "text": "Angular size of one image pixel in arcseconds. A FITS image fills it from its header."
+  },
+  "BillboardNucleusX": {
+   "label": "Nucleus pixel, X",
+   "text": "Column of the nucleus in the image in pixels, counted from the left. Empty means the image centre."
+  },
+  "BillboardNucleusY": {
+   "label": "Nucleus pixel, Y",
+   "text": "Row of the nucleus in the image in pixels, counted from the top. Empty means the image centre."
+  },
+  "BillboardDetectNucleus": {
+   "label": "Detect",
+   "text": "Finds the nucleus in the image as the brightest spot in its central third and fills the nucleus pixel."
+  },
+  "BillboardsSection": {
+   "label": "Billboards",
+   "text": "Section to create billboard windows that show imported images over the desktop."
+  },
+  "BillboardFitsSection": {
+   "label": "FITS image",
+   "text": "Section for a FITS billboard: key header facts, the header, the stretch and the comparison buttons."
+  },
+  "BillboardFitsFlipLon": {
+   "label": "Flip longitude sign",
+   "text": "Uses the opposite sign for the longitude of the observing site, for headers that give west as a positive value."
+  },
+  "BillboardFitsHeader": {
+   "label": "Header",
+   "text": "Table of the FITS header cards with their key, value and comment."
+  },
+  "CometDisplayModeDefault": {
+   "label": "Procedural sphere",
+   "text": "Draws the nucleus as a plain sphere of the nucleus radius."
+  },
+  "CometDisplayModeCustom": {
+   "label": "Custom mesh",
+   "text": "Draws an imported 3D mesh with its textures instead of the sphere."
+  },
+  "InputBindingsSection": {
+   "label": "Input bindings",
+   "text": "Section that lists the key and mouse bindings of each action and lets you change them."
+  },
+  "ParticleRenderingSection": {
+   "label": "Particle rendering",
+   "text": "Section that sets how finely the dust is drawn, live and saved for the next start."
+  },
+  "ParticleQualitySlider": {
+   "label": "Quality",
+   "text": "Dust drawing quality from 1 (lowest, fastest) to 5 (ultra). It presets the four detail values below it."
+  },
+  "PlayPreviewPicker": {
+   "label": "Playback preview quality",
+   "text": "Chooses how the dust is drawn while playing and for 2 s after a pause or seek: Off (full render), Smooth, Balanced or Quality."
+  },
+  "ViewportSettingsSection": {
+   "label": "Viewport 1",
+   "text": "Section with the camera and display settings of the viewport; the options shown depend on the mode."
+  },
+  "ViewNucleusFromEarthButton": {
+   "label": "Nucleus from Earth",
+   "text": "Switches to the Earth observer tracking the comet, with north up and a field a few nucleus diameters tall."
+  },
+  "NucleusExposureSlider": {
+   "label": "Nucleus exposure",
+   "text": "Brightness of the sunlit nucleus in stops (EV); each whole step doubles or halves it."
+  },
+  "PlayPauseButton": {
+   "label": "Play / Pause",
+   "text": "Starts the simulation at the chosen speed, or pauses it and keeps the current epoch."
+  },
+  "RunToEndButton": {
+   "label": "Run to End",
+   "text": "Jumps to the end epoch of the committed range without animating; the dust is rebuilt there."
+  },
+  "SeekToEpochButton": {
+   "label": "Go",
+   "text": "Jumps to the epoch typed in the Epoch box, within the committed range."
+  },
+  "ModeBarOrbitButton": {
+   "label": "Orbit",
+   "text": "Shows the comet's orbit in the Solar System, animated over the chosen range."
+  },
+  "ModeBarNucleusButton": {
+   "label": "Nucleus",
+   "text": "Shows the nucleus with its orientation, the Sun direction, illumination and jets."
+  },
+  "ModeBarModelButton": {
+   "label": "Model",
+   "text": "Sets the view up to compare the model with a telescope image; the end date is the image date."
+  },
+  "ModeBarHintText": {
+   "label": "Mode hint",
+   "text": "Shows a message after you choose Model mode: a hint to import a FITS image, or the result of the comparison set-up."
+  },
+  "Tab.SettingsTab": {
+   "label": "Settings",
+   "text": "Tab with time scale, comet appearance, billboards, particle rendering, input bindings and viewport settings."
+  },
+  "Tab.CometTab": {
+   "label": "Comet",
+   "text": "Tab to search and commit a comet, set the simulated range and nucleus radius, and edit the rotational model."
+  },
+  "Tab.ModelTab": {
+   "label": "Model",
+   "text": "Tab with the dust display options, the gizmo, the jets and the dust grain and activity defaults."
+  },
+  "DustSection": {
+   "label": "Dust",
+   "text": "Section with the dust display options, the gizmo, the jet list and the defaults for new jets."
+  },
+  "TimelineStartEpochBox": {
+   "label": "Start Epoch",
+   "text": "Shows the start of the simulated range in the chosen time scale. It is read-only here; change it in the Comet tab."
+  },
+  "TimelineEndEpochBox": {
+   "label": "End Epoch",
+   "text": "Shows the end of the simulated range in the chosen time scale. It is read-only here; change it in the Comet tab."
+  },
+  "ShowReferenceErrorToggle": {
+   "label": "show reference-position error",
+   "text": "Draws two lines from the comet to its reference orbit when it is more than 10 nucleus radii away. Display only."
+  },
+  "DustVisibilitySlider": {
+   "label": "Dust visibility",
+   "text": "Display stretch of the dust, from 0.00001 to 1. Smaller values show the faint old tail; 1 is close to linear brightness. Display only."
+  },
+  "DustRhoNormToggle": {
+   "label": "Coma 1/ρ normalisation",
+   "text": "Divides the dust brightness by the distance from the nucleus so the inner coma and the outer jets share one exposure. On by default; display only."
+  },
+  "DustTrajectoriesToggle": {
+   "label": "Trajectory lines",
+   "text": "Draws as lines the paths of about 200 grains since they left the nucleus, one colour per jet."
+  },
+  "DustExposureSlider": {
+   "label": "Dust exposure",
+   "text": "Brightens or darkens the dust in stops (EV), from -6 to +6. One stop doubles or halves the brightness."
+  },
+  "DustTracersToggle": {
+   "label": "Particle tracers",
+   "text": "Draws one dust cluster in 256 as bright dots at the positions of its grains to follow them. Display only."
+  },
+  "DustFlowSpeedSlider": {
+   "label": "Flow time-lapse",
+   "text": "Speed factor of the flow marks, from 1 to 10000 on a log scale. 1 moves them with the dust; larger values move them faster. Display only."
+  },
+  "SphereGizmoVisibleCheckBox": {
+   "label": "Show sphere gizmo",
+   "text": "Shows the wireframe sphere and axes around the nucleus; the boxes below choose its parts."
+  },
+  "GizmoGridCheckBox": {
+   "label": "Grid",
+   "text": "Shows the latitude and longitude wireframe of the gizmo."
+  },
+  "GizmoBodyAxesCheckBox": {
+   "label": "Body X/Y",
+   "text": "Shows the body-fixed X (red) and Y (green) axes, which turn with the nucleus."
+  },
+  "GizmoSpinAxisCheckBox": {
+   "label": "Spin axis",
+   "text": "Shows the rotation axis of the nucleus (body Z, blue)."
+  },
+  "GizmoSunCheckBox": {
+   "label": "Sun",
+   "text": "Shows the arrow pointing to the Sun."
+  },
+  "GizmoVelocityCheckBox": {
+   "label": "Velocity",
+   "text": "Shows the direction of the comet's heliocentric velocity (magenta)."
+  },
+  "AddJetButton": {
+   "label": "+",
+   "text": "Adds a new dust jet that starts from the defaults. It needs a committed comet and a known nucleus radius."
+  },
+  "ActivityAdvancedExpander": {
+   "label": "Advanced: activity (Q_d)",
+   "text": "Opens the dust production law shared by all jets and the default rate for new jets."
+  },
+  "TotalActivityText": {
+   "label": "Total activity",
+   "text": "Shows the sum of the dust production rates of all jets at 1 AU and at the current distance from the Sun, in kg/s."
+  },
+  "DustRate0Box": {
+   "label": "Q_d at 1 AU (kg/s)",
+   "text": "Default dust production rate at 1 AU for new jets, in kg/s. Each jet then has its own."
+  },
+  "DustRatePowerBox": {
+   "label": "Q_d law exponent",
+   "text": "Exponent k of the law Q_d = Q_d0 times r to the power -k, from 1 to 4; 2 is the usual value. Shared by all jets."
+  },
+  "DustRateCutoffBox": {
+   "label": "Cutoff (AU)",
+   "text": "Distance from the Sun in AU, from 3 to 100, beyond which no dust is emitted. Shared by all jets."
+  },
+  "DustRateMaxBox": {
+   "label": "Q_d max (kg/s)",
+   "text": "Upper limit of each jet's production rate in kg/s, so that it stays finite close to the Sun. Shared by all jets."
+  },
+  "SizeDistributionAdvancedExpander": {
+   "label": "Advanced: grain size distribution",
+   "text": "Opens the plot of the grain size range that new jets start from."
+  },
+  "SizeRangeNote": {
+   "label": "Grain size range",
+   "text": "States the simulated grain diameters and that the continuous dust assumes q = 3.5 over that range."
+  },
+  "JetLatitudeSlider": {
+   "label": "Latitude",
+   "text": "Latitude of the jet source on the nucleus in degrees: +90 is the north pole of the spin axis, 0 the equator."
+  },
+  "JetLongitudeSlider": {
+   "label": "Longitude",
+   "text": "Longitude of the jet source in degrees from the prime meridian, from -180 to 180. The spin carries it around."
+  },
+  "JetApertureSlider": {
+   "label": "Aperture",
+   "text": "Half-angle of the emission cone of the jet."
+  },
+  "JetVelocityBox": {
+   "label": "Velocity",
+   "text": "Mean ejection speed of the grains of the jet."
+  },
+  "JetVelocityStdBox": {
+   "label": "Vel. σ",
+   "text": "Standard deviation of the ejection speed."
+  },
+  "JetBetaBox": {
+   "label": "β (beta)",
+   "text": "Read-only ratio of the solar radiation pressure to solar gravity on the reference grain; larger values curve the dust away from the Sun faster."
+  },
+  "JetQDustBox": {
+   "label": "Q_dust @ 1 AU",
+   "text": "Read-only dust production rate of the jet at 1 AU in kg/s, as the engine applies it after the model-wide maximum."
+  },
+  "JetGrainExpander": {
+   "label": "Grain",
+   "text": "Opens the grain properties of the selected jet: diameters, density, Q_pr, albedo and size law."
+  },
+  "JetMinDiameterUm": {
+   "label": "Smallest grain diameter",
+   "text": "Diameter of the smallest simulated grain of this jet in µm, from 0.01 to 10000."
+  },
+  "JetMaxDiameterUm": {
+   "label": "Largest grain diameter",
+   "text": "Diameter of the largest simulated grain of this jet in µm, from 0.01 to 10000. It must not be below the smallest."
+  },
+  "JetDensity": {
+   "label": "Density",
+   "text": "Bulk density of this jet's grains in g/cm³, typically 0.5 to 1 for cometary dust."
+  },
+  "JetQpr": {
+   "label": "Q_pr",
+   "text": "Radiation-pressure efficiency of this jet's grains, from 0.5 to 2; 1 is a grey body. It scales β only."
+  },
+  "JetAlbedo": {
+   "label": "Albedo",
+   "text": "Geometric albedo of this jet's dust, from 0.01 to 0.5. It scales the brightness only."
+  },
+  "JetSizeQ": {
+   "label": "Size law q",
+   "text": "Exponent q of the grain size law n(d) ∝ d^-q, from 2 to 5; 3.5 is the usual value. A larger q means more small grains."
+  },
+  "ViewportRulerText": {
+   "label": "Scale ruler",
+   "text": "Shows the length in km that the bar beside it covers at the comet in the current view."
+  },
+  "ViewportEpochLabel": {
+   "label": "Epoch",
+   "text": "Shows the current simulation epoch in the chosen time scale."
+  },
+  "ViewportFrameLabel": {
+   "label": "Reference frame",
+   "text": "Describes the view, for example from Earth with celestial north up, and repeats the epoch."
+  },
+  "EphemerisEpoch": {
+   "label": "Epoch (UTC)",
+   "text": "Epoch of the ephemeris values shown in the table."
+  },
+  "EphemerisRa": {
+   "label": "RA (J2000)",
+   "text": "Right ascension of the comet as seen from the Earth, in hours, minutes and seconds."
+  },
+  "EphemerisDec": {
+   "label": "Dec (J2000)",
+   "text": "Declination of the comet as seen from the Earth, in degrees, arcminutes and arcseconds."
+  },
+  "EphemerisR": {
+   "label": "r (Sun–comet)",
+   "text": "Distance between the Sun and the comet, in AU."
+  },
+  "EphemerisDelta": {
+   "label": "Δ (Earth–comet)",
+   "text": "Distance between the Earth and the comet, in AU."
+  },
+  "EphemerisPhase": {
+   "label": "Phase (Sun–comet–Earth)",
+   "text": "Angle at the comet between the Sun and the Earth, in degrees."
+  },
+  "EphemerisElongation": {
+   "label": "Elongation (Sun–Earth–comet)",
+   "text": "Angle at the Earth between the Sun and the comet, in degrees."
+  },
+  "EphemerisSunPa": {
+   "label": "Sun PA (N→E)",
+   "text": "Position angle on the sky of the direction from the Sun to the comet, from north through east, in degrees; the tail points near it."
+  },
+  "SpeedPicker": {
+   "label": "Speed",
+   "text": "Chooses how fast simulated time runs while playing, as simulated time per real second, for example 1 h/s."
+  },
+  "ResetButton": {
+   "label": "Reset",
+   "text": "Goes back to the start epoch of the committed range and rebuilds the dust there. It is hidden while playing."
+  },
+  "CurrentEpochBox": {
+   "label": "Epoch",
+   "text": "Shows the current epoch; type an epoch inside the committed range and press Enter or Go to jump there."
+  }
+ }
+}

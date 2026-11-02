@@ -1,0 +1,33 @@
+== Imports tab
+:imagesdir: ..
+
+[[imports]]
+=== Imports
+Location:: Imports
+Shown:: no comet loaded
+
+.Imports
+Before anything is imported both lists are empty.
+
+image::img/imports--empty--light--tagged.png[Imports,width=303,pdfwidth=51mm]
+
+. *Imports* -- // TODO: describe
+. *Import…* -- Opens a file dialog to import meshes (OBJ, PLY, glTF, GLB) or textures (PNG, JPEG, KTX2).
+
+// TODO: some controls have no help text and no description
+
+[[imports-committed]]
+=== Imports
+Location:: Imports
+Shown:: committed comet (67P, December 2021)
+
+.Imports
+The pane with imported items: the loaded textures are listed with their size and can be used in the Settings tab.
+
+image::img/imports--committed--light--tagged.png[Imports,width=303,pdfwidth=51mm]
+
+. *Imports* -- // TODO: describe
+. *Import…* -- Opens a file dialog to import meshes (OBJ, PLY, glTF, GLB) or textures (PNG, JPEG, KTX2).
+. *Run to End* -- Jumps to the end epoch of the committed range without animating; the dust is rebuilt there.
+
+// TODO: some controls have no help text and no description

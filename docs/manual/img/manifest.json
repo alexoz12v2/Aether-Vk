@@ -1,0 +1,931 @@
+{
+  "app_version": "1.0.0+7afdd82740d13078d11a0690176a766d87f21045",
+  "git_commit": "7afdd82740d13078d11a0690176a766d87f21045",
+  "date": "2026-11-02 20:44:53Z",
+  "culture": "en-US",
+  "theme": "light",
+  "monitor": "0,0 1920x1080",
+  "scaling": 1,
+  "dpi": 150,
+  "warnings": [],
+  "shots": [
+    {
+      "key": "dlg-manage-imports",
+      "state": "-",
+      "file": "-",
+      "status": "skipped",
+      "reason": "no menu, button or hot key opens the Manage Imports window (the command exists in MainWindowViewModel only)",
+      "x": 0,
+      "y": 0,
+      "w": 0,
+      "h": 0,
+      "clipped": false,
+      "callouts": 0,
+      "calibration": null
+    },
+    {
+      "key": "dlg-spawn-mesh",
+      "state": "-",
+      "file": "-",
+      "status": "skipped",
+      "reason": "no UI path opens the Spawn Mesh Instance window",
+      "x": 0,
+      "y": 0,
+      "w": 0,
+      "h": 0,
+      "clipped": false,
+      "callouts": 0,
+      "calibration": null
+    },
+    {
+      "key": "dlg-spawn-image",
+      "state": "-",
+      "file": "-",
+      "status": "skipped",
+      "reason": "no UI path opens the Spawn Image Billboard window",
+      "x": 0,
+      "y": 0,
+      "w": 0,
+      "h": 0,
+      "clipped": false,
+      "callouts": 0,
+      "calibration": null
+    },
+    {
+      "key": "splash",
+      "state": "launch",
+      "file": "splash--launch--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 710,
+      "y": 370,
+      "w": 500,
+      "h": 300,
+      "clipped": false,
+      "callouts": 0,
+      "calibration": null
+    },
+    {
+      "key": "main",
+      "state": "empty",
+      "file": "main--empty--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 0,
+      "y": 0,
+      "w": 1920,
+      "h": 1040,
+      "clipped": false,
+      "callouts": 15,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "comet-guided",
+      "state": "empty",
+      "file": "comet-guided--empty--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 3,
+      "y": 157,
+      "w": 499,
+      "h": 30,
+      "clipped": false,
+      "callouts": 1,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "comet-selection",
+      "state": "empty",
+      "file": "comet-selection--empty--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 8,
+      "y": 183,
+      "w": 489,
+      "h": 230,
+      "clipped": false,
+      "callouts": 3,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "comet-commit",
+      "state": "empty",
+      "file": "comet-commit--empty--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 7,
+      "y": 714,
+      "w": 491,
+      "h": 91,
+      "clipped": false,
+      "callouts": 2,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "timeline",
+      "state": "empty",
+      "file": "timeline--empty--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 554,
+      "y": 818,
+      "w": 1366,
+      "h": 222,
+      "clipped": false,
+      "callouts": 3,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "model-dust",
+      "state": "empty",
+      "file": "model-dust--empty--light.png",
+      "status": "ok",
+      "reason": "cropped at the window edge",
+      "x": 26,
+      "y": 87,
+      "w": 469,
+      "h": 953,
+      "clipped": true,
+      "callouts": 15,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "imports",
+      "state": "empty",
+      "file": "imports--empty--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 1709,
+      "y": 52,
+      "w": 211,
+      "h": 988,
+      "clipped": false,
+      "callouts": 2,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "main",
+      "state": "committed",
+      "file": "main--committed--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 0,
+      "y": 0,
+      "w": 1920,
+      "h": 1040,
+      "clipped": false,
+      "callouts": 15,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "main-modebar",
+      "state": "orbit",
+      "file": "main-modebar--orbit--light.png",
+      "status": "ok",
+      "reason": "cropped at the window edge",
+      "x": 0,
+      "y": 21,
+      "w": 250,
+      "h": 36,
+      "clipped": true,
+      "callouts": 3,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "main-modebar",
+      "state": "nucleus",
+      "file": "main-modebar--nucleus--light.png",
+      "status": "ok",
+      "reason": "cropped at the window edge",
+      "x": 0,
+      "y": 21,
+      "w": 250,
+      "h": 36,
+      "clipped": true,
+      "callouts": 3,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "main-modebar",
+      "state": "model",
+      "file": "main-modebar--model--light.png",
+      "status": "ok",
+      "reason": "cropped at the window edge",
+      "x": 0,
+      "y": 21,
+      "w": 597,
+      "h": 36,
+      "clipped": true,
+      "callouts": 4,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "menu-file",
+      "state": "committed",
+      "file": "menu-file--committed--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 18,
+      "y": 0,
+      "w": 188,
+      "h": 212,
+      "clipped": false,
+      "callouts": 6,
+      "calibration": null
+    },
+    {
+      "key": "menu-edit",
+      "state": "committed",
+      "file": "menu-edit--committed--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 66,
+      "y": 0,
+      "w": 154,
+      "h": 91,
+      "clipped": false,
+      "callouts": 2,
+      "calibration": null
+    },
+    {
+      "key": "docking",
+      "state": "committed",
+      "file": "docking--committed--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 39,
+      "y": 54,
+      "w": 1878,
+      "h": 811,
+      "clipped": false,
+      "callouts": 15,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "comet-guided",
+      "state": "committed",
+      "file": "comet-guided--committed--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 19,
+      "y": 157,
+      "w": 483,
+      "h": 30,
+      "clipped": false,
+      "callouts": 1,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "comet-selection",
+      "state": "committed",
+      "file": "comet-selection--committed--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 24,
+      "y": 206,
+      "w": 473,
+      "h": 263,
+      "clipped": false,
+      "callouts": 5,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "comet-commit",
+      "state": "committed",
+      "file": "comet-commit--committed--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 23,
+      "y": 788,
+      "w": 475,
+      "h": 113,
+      "clipped": false,
+      "callouts": 3,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "comet-simulated-range",
+      "state": "committed",
+      "file": "comet-simulated-range--committed--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 21,
+      "y": 468,
+      "w": 479,
+      "h": 296,
+      "clipped": false,
+      "callouts": 9,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "comet-range-advanced",
+      "state": "committed",
+      "file": "comet-range-advanced--committed--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 26,
+      "y": 536,
+      "w": 469,
+      "h": 221,
+      "clipped": false,
+      "callouts": 6,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "comet-nucleus",
+      "state": "committed",
+      "file": "comet-nucleus--committed--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 5,
+      "y": 659,
+      "w": 495,
+      "h": 93,
+      "clipped": false,
+      "callouts": 2,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "comet-rotation",
+      "state": "committed",
+      "file": "comet-rotation--committed--light.png",
+      "status": "ok",
+      "reason": "cropped at the window edge",
+      "x": 21,
+      "y": 659,
+      "w": 479,
+      "h": 381,
+      "clipped": true,
+      "callouts": 7,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "timeline",
+      "state": "committed",
+      "file": "timeline--committed--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 554,
+      "y": 818,
+      "w": 1366,
+      "h": 222,
+      "clipped": false,
+      "callouts": 10,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "imports",
+      "state": "committed",
+      "file": "imports--committed--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 1709,
+      "y": 52,
+      "w": 211,
+      "h": 988,
+      "clipped": false,
+      "callouts": 3,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "model-dust",
+      "state": "committed",
+      "file": "model-dust--committed--light.png",
+      "status": "ok",
+      "reason": "cropped at the window edge",
+      "x": 26,
+      "y": 102,
+      "w": 469,
+      "h": 938,
+      "clipped": true,
+      "callouts": 15,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "model-dust-jet",
+      "state": "selected",
+      "file": "model-dust-jet--selected--light.png",
+      "status": "ok",
+      "reason": "cropped at the window edge",
+      "x": 52,
+      "y": 139,
+      "w": 417,
+      "h": 901,
+      "clipped": true,
+      "callouts": 15,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "model-dust-defaults",
+      "state": "committed",
+      "file": "model-dust-defaults--committed--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 52,
+      "y": 357,
+      "w": 417,
+      "h": 646,
+      "clipped": false,
+      "callouts": 8,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "settings-time-scale",
+      "state": "committed",
+      "file": "settings-time-scale--committed--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 10,
+      "y": 134,
+      "w": 485,
+      "h": 124,
+      "clipped": false,
+      "callouts": 2,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "settings-particle-rendering",
+      "state": "committed",
+      "file": "settings-particle-rendering--committed--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 26,
+      "y": 293,
+      "w": 470,
+      "h": 589,
+      "clipped": false,
+      "callouts": 3,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "settings-input-bindings",
+      "state": "committed",
+      "file": "settings-input-bindings--committed--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 10,
+      "y": 398,
+      "w": 485,
+      "h": 526,
+      "clipped": false,
+      "callouts": 1,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "settings-comet-appearance",
+      "state": "committed",
+      "file": "settings-comet-appearance--committed--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 10,
+      "y": 200,
+      "w": 485,
+      "h": 124,
+      "clipped": false,
+      "callouts": 3,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "settings-comet-appearance",
+      "state": "custom",
+      "file": "settings-comet-appearance--custom--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 10,
+      "y": 200,
+      "w": 485,
+      "h": 124,
+      "clipped": false,
+      "callouts": 3,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "settings-billboards",
+      "state": "committed",
+      "file": "settings-billboards--committed--light.png",
+      "status": "ok",
+      "reason": "cropped at the window edge",
+      "x": 26,
+      "y": 128,
+      "w": 470,
+      "h": 912,
+      "clipped": true,
+      "callouts": 15,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "settings-billboards-fits",
+      "state": "committed",
+      "file": "settings-billboards-fits--committed--light.png",
+      "status": "ok",
+      "reason": "cropped at the window edge",
+      "x": 74,
+      "y": 417,
+      "w": 374,
+      "h": 623,
+      "clipped": true,
+      "callouts": 3,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "settings-viewport",
+      "state": "orbit",
+      "file": "settings-viewport--orbit--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 10,
+      "y": 464,
+      "w": 485,
+      "h": 498,
+      "clipped": false,
+      "callouts": 10,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "settings-viewport",
+      "state": "nucleus",
+      "file": "settings-viewport--nucleus--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 10,
+      "y": 464,
+      "w": 485,
+      "h": 546,
+      "clipped": false,
+      "callouts": 12,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "settings-viewport",
+      "state": "model",
+      "file": "settings-viewport--model--light.png",
+      "status": "ok",
+      "reason": "cropped at the window edge",
+      "x": 26,
+      "y": 101,
+      "w": 470,
+      "h": 939,
+      "clipped": true,
+      "callouts": 15,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "settings-viewport-persp",
+      "state": "orbit",
+      "file": "settings-viewport-persp--orbit--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 54,
+      "y": 386,
+      "w": 413,
+      "h": 402,
+      "clipped": false,
+      "callouts": 8,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "settings-viewport-ortho",
+      "state": "orbit",
+      "file": "settings-viewport-ortho--orbit--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 54,
+      "y": 386,
+      "w": 413,
+      "h": 402,
+      "clipped": false,
+      "callouts": 8,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "settings-viewport-nucleus",
+      "state": "nucleus",
+      "file": "settings-viewport-nucleus--nucleus--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 10,
+      "y": 464,
+      "w": 485,
+      "h": 546,
+      "clipped": false,
+      "callouts": 12,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "help-flyout",
+      "state": "flyout",
+      "file": "-",
+      "status": "failed",
+      "reason": "TimeoutException: timed out waiting for element 'CameraModeText' in ViewportSettingsSection",
+      "x": 0,
+      "y": 0,
+      "w": 0,
+      "h": 0,
+      "clipped": false,
+      "callouts": 0,
+      "calibration": null
+    },
+    {
+      "key": "combo-dropdown",
+      "state": "dropdown",
+      "file": "combo-dropdown--dropdown--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 1445,
+      "y": 763,
+      "w": 158,
+      "h": 163,
+      "clipped": false,
+      "callouts": 0,
+      "calibration": null
+    },
+    {
+      "key": "dlg-settings",
+      "state": "dialog",
+      "file": "dlg-settings--dialog--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 559,
+      "y": 200,
+      "w": 802,
+      "h": 632,
+      "clipped": false,
+      "callouts": 0,
+      "calibration": null
+    },
+    {
+      "key": "billboard-window",
+      "state": "committed",
+      "file": "billboard-window--committed--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 711,
+      "y": 74,
+      "w": 776,
+      "h": 776,
+      "clipped": false,
+      "callouts": 0,
+      "calibration": null
+    },
+    {
+      "key": "viewport",
+      "state": "orbit",
+      "file": "viewport--orbit--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 534,
+      "y": 130,
+      "w": 1123,
+      "h": 670,
+      "clipped": false,
+      "callouts": 0,
+      "calibration": null
+    },
+    {
+      "key": "viewport",
+      "state": "nucleus",
+      "file": "viewport--nucleus--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 534,
+      "y": 130,
+      "w": 1123,
+      "h": 670,
+      "clipped": false,
+      "callouts": 0,
+      "calibration": null
+    },
+    {
+      "key": "viewport",
+      "state": "model",
+      "file": "viewport--model--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 534,
+      "y": 130,
+      "w": 1123,
+      "h": 670,
+      "clipped": false,
+      "callouts": 0,
+      "calibration": null
+    },
+    {
+      "key": "overlay",
+      "state": "orbit",
+      "file": "overlay--orbit--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 534,
+      "y": 130,
+      "w": 1123,
+      "h": 670,
+      "clipped": false,
+      "callouts": 3,
+      "calibration": null
+    },
+    {
+      "key": "overlay",
+      "state": "model",
+      "file": "overlay--model--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 534,
+      "y": 130,
+      "w": 1123,
+      "h": 670,
+      "clipped": false,
+      "callouts": 3,
+      "calibration": null
+    },
+    {
+      "key": "main-modebar",
+      "state": "locked",
+      "file": "main-modebar--locked--light.png",
+      "status": "ok",
+      "reason": "cropped at the window edge",
+      "x": 0,
+      "y": 21,
+      "w": 1214,
+      "h": 36,
+      "clipped": true,
+      "callouts": 6,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "comet-simulated-range",
+      "state": "locked",
+      "file": "comet-simulated-range--locked--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 21,
+      "y": 170,
+      "w": 479,
+      "h": 545,
+      "clipped": false,
+      "callouts": 15,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "settings-viewport-observer",
+      "state": "nucleus",
+      "file": "settings-viewport-observer--nucleus--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 52,
+      "y": 872,
+      "w": 417,
+      "h": 115,
+      "clipped": false,
+      "callouts": 2,
+      "calibration": [
+        0,
+        0
+      ]
+    },
+    {
+      "key": "timeline",
+      "state": "playing",
+      "file": "timeline--playing--light.png",
+      "status": "ok",
+      "reason": null,
+      "x": 554,
+      "y": 818,
+      "w": 1366,
+      "h": 222,
+      "clipped": false,
+      "callouts": 0,
+      "calibration": null
+    },
+    {
+      "key": "dlg-fatal",
+      "state": "dialog",
+      "file": "-",
+      "status": "failed",
+      "reason": "TimeoutException: AETHERVK_TEST_CRASH raised no 'Fatal Engine Error' window (it writes a crash report instead)",
+      "x": 0,
+      "y": 0,
+      "w": 0,
+      "h": 0,
+      "clipped": false,
+      "callouts": 0,
+      "calibration": null
+    }
+  ]
+}
