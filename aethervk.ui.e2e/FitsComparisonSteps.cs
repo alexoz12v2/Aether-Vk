@@ -252,18 +252,21 @@ public static partial class FitsComparisonSteps
   }
 
   /// <summary>
-  /// The viewport's rectangle on the desktop (physical px) as the app reports it in its
-  /// <c>ViewportDesktopRect</c> text ("x,y,w,h", invariant); null while the text is absent or empty.
+  /// The viewport's rectangle on the desktop (physical px) as the app reports it ("x,y,w,h",
+  /// invariant); null while it is absent or empty (the callers then use WinAppDriver's location).
+  /// First the main window's automation-only <c>ViewportDesktopRect</c> element: a transparent text
+  /// in the mode bar, in the main window's tree whichever tab is shown and with the diagnostic
+  /// panels off (no tab switch, no expander). Else the diagnostic panel's
+  /// <c>DiagnosticsViewportDesktopRect</c>, in the overlay window (a top-level window of its own:
+  /// the desktop session), present when the panels are shown and the camera HUD is expanded.
   /// </summary>
   public static (double X, double Y, double W, double H)? ReadViewportDesktopRect(AppSession s)
   {
-    if (s.App.FindElementsByAccessibilityId("ViewportDesktopRect").FirstOrDefault() is null)
-    {
-      s.SelectTab("SettingsTab");
-      s.Expand("BillboardsSection", "CreateBillboardButton");
-    }
-    var e = s.App.FindElementsByAccessibilityId("ViewportDesktopRect").FirstOrDefault();
-    return e is null ? null : ParseViewportDesktopRect(e.Text);
+    if (s.App.FindElementsByAccessibilityId("ViewportDesktopRect").FirstOrDefault() is { } main
+        && ParseViewportDesktopRect(main.Text) is { } r)
+      return r;
+    var diagnostics = s.Desktop.FindElementsByAccessibilityId("DiagnosticsViewportDesktopRect").FirstOrDefault();
+    return diagnostics is null ? null : ParseViewportDesktopRect(diagnostics.Text);
   }
 
   /// <summary>Parses "x,y,w,h" (invariant dot decimals, a leading minus allowed); null when it does not read.</summary>

@@ -250,5 +250,88 @@ public class ReviewFeedbackViewTests
     Assert.Equal(text, line.Text);
     window.Close();
   }
+
+  /// <summary>The viewport-rectangle object the diagnostic panel binds to (a reflection binding).</summary>
+  public sealed class ViewportRectSource : System.ComponentModel.INotifyPropertyChanged
+  {
+    private string _rect = string.Empty;
+
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+
+    public bool ShowDiagnostics => true;
+
+    public string StrViewportRect => "Viewport on the desktop (x, y, w, h px)";
+
+    public string ViewportDesktopRect
+    {
+      get => _rect;
+      set
+      {
+        _rect = value;
+        PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(ViewportDesktopRect)));
+      }
+    }
+  }
+
+  /// <summary>
+  /// The viewport's desktop rectangle is a diagnostic: the camera HUD's diagnostic section shows it
+  /// under its label (hidden until the viewport reports its place), and Settings › Billboards no
+  /// longer does.
+  /// </summary>
+  [AvaloniaFact]
+  public void ViewportDesktopRect_IsInTheDiagnostics_NotInSettingsBillboards()
+  {
+    var source = new ViewportRectSource();
+    var panel = new AetherVk.UI.CameraMatrixDebugPanel { DataContext = source };
+    var window = new Window { Content = panel, Width = 520, Height = 800 };
+    window.Show();
+    Dispatcher.UIThread.RunJobs();
+    var value = ById<TextBlock>(panel, "DiagnosticsViewportDesktopRect");
+    Assert.False(value.IsEffectivelyVisible);
+    source.ViewportDesktopRect = "-1386.000,130.000,1386.000,950.500";
+    Dispatcher.UIThread.RunJobs();
+    Assert.True(value.IsEffectivelyVisible);
+    Assert.Equal("-1386.000,130.000,1386.000,950.500", value.Text);
+    Assert.Equal(source.StrViewportRect, ById<TextBlock>(panel, "DiagnosticsViewportDesktopRectLabel").Text);
+    window.Close();
+
+    var settings = new SettingsTabView { DataContext = new DesignSettingsTabViewModel() };
+    var settingsWindow = new Window { Content = settings, Width = 520, Height = 1600 };
+    settingsWindow.Show();
+    foreach (var expander in All(settings).OfType<Expander>())
+      expander.IsExpanded = true;
+    Dispatcher.UIThread.RunJobs();
+    Assert.DoesNotContain(All(settings), c => AutomationProperties.GetAutomationId(c) == "ViewportDesktopRect");
+    settingsWindow.Close();
+  }
+
+  /// <summary>
+  /// The end-to-end test reads the rectangle from the main window, whichever tab is shown and with
+  /// the diagnostic panels off: the mode bar's transparent <c>ViewportDesktopRect</c> text, which
+  /// must have an automation peer (a control with IsVisible = false has none) whose name is the text.
+  /// </summary>
+  [AvaloniaFact]
+  public void ViewportDesktopRect_IsInTheMainWindowsAutomationTree_ButNotSeen()
+  {
+    var host = AetherVk.App.Host ?? throw new InvalidOperationException("DI host not initialised");
+    var vm = host.Services.GetRequiredService<MainWindowViewModel>();
+    var bar = vm.ModeBar ?? throw new InvalidOperationException("no mode bar");
+    var window = new MainWindow { DataContext = vm };
+    window.Show();
+    bar.ViewportDesktopRect = "-1386.000,130.000,1386.000,950.500";
+    Dispatcher.UIThread.RunJobs();
+
+    var text = ById<TextBlock>(window, "ViewportDesktopRect");
+    Assert.Equal("-1386.000,130.000,1386.000,950.500", text.Text);
+    Assert.Equal(0.0, text.Opacity);
+    Assert.False(text.IsHitTestVisible);
+
+    static IEnumerable<Avalonia.Automation.Peers.AutomationPeer> Peers(Avalonia.Automation.Peers.AutomationPeer p) =>
+      new[] { p }.Concat(p.GetChildren().SelectMany(Peers));
+    var root = Avalonia.Automation.Peers.ControlAutomationPeer.CreatePeerForElement(window);
+    var peer = Assert.Single(Peers(root), p => p.GetAutomationId() == "ViewportDesktopRect");
+    Assert.Equal("-1386.000,130.000,1386.000,950.500", peer.GetName());
+    window.Close();
+  }
 }
 #endif

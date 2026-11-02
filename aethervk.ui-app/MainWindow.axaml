@@ -125,6 +125,13 @@
         <Button Content="{Binding StrRecommit}" IsVisible="{Binding IsRangeLocked}"
                 AutomationProperties.AutomationId="ModeBarRecommitButton"
                 Command="{Binding RecommitWithRangeCommand}" FontSize="12" Padding="8,3"/>
+        <!-- Automation only: the viewport's rectangle on the desktop ("x,y,w,h" physical px) for the
+             end-to-end test, here because the mode bar is always in the main window's automation
+             tree. Transparent, not IsVisible=False: a hidden control has no automation peer. The
+             diagnostic panel shows the same rectangle to the user. -->
+        <TextBlock AutomationProperties.AutomationId="ViewportDesktopRect" Text="{Binding ViewportDesktopRect}"
+                   Opacity="0" IsHitTestVisible="False" Width="1" Height="1" FontSize="1"
+                   VerticalAlignment="Center"/>
       </StackPanel>
     </Border>
     <Border Grid.Row="2">

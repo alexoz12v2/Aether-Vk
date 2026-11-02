@@ -3797,3 +3797,49 @@ fn test_unload_then_load_of_the_same_spk_leaves_it_loaded() {
   }
   tx.try_send(LogicCommand::Shutdown).unwrap();
 }
+
+/// A presentation engine destroyed through the API is gone from the device when the call returns:
+/// the render thread retires it between two frame batches and the caller drains the main-thread
+/// cleanup queue. (Deferred to the discard pool, a windowed swapchain outlived the X11 window and
+/// the display connection it was created on, and the next acquire crashed in the driver.)
+#[test]
+fn test_destroy_presentation_engine_returns_after_the_device_released_it() {
+  let Ok(ctx) = SimulationContext::startup(None) else {
+    std::println!("Skipping test: Vulkan backend could not be initialized");
+    return;
+  };
+  let scene_id = ctx
+    .create_empty_scene(
+      true,
+      Epoch::from_gregorian_at_midnight(2020, 12, 25, hifitime::TimeScale::UTC),
+      Epoch::from_gregorian_at_midnight(2020, 12, 26, hifitime::TimeScale::UTC),
+    )
+    .unwrap();
+  assert!(ctx.threads.render_thread_running());
+
+  // frames flow on the engine while it is retired: the retirement interleaves with the batches
+  let pe = ctx.create_presentation_engine(scene_id, 64, 64).unwrap();
+  ctx.add_perspective_camera(scene_id, pe, "Camera", 1.0, 0.1, 1000.0).unwrap();
+  ctx
+    .threads
+    .logic_thread
+    .tx()
+    .try_send(LogicCommand::PlayScene {
+      scene_id,
+      speed: aethervk_oshal_rlib::os::time::v2::SimSpeed::Realtime,
+    })
+    .unwrap();
+  std::thread::sleep(std::time::Duration::from_millis(200));
+
+  ctx.destroy_presentation_engine(scene_id, pe).unwrap();
+  // gone from the device at once, not at a later discard sweep; and from the scene
+  assert!(ctx.with_device(|device| device.retire_presentation_engine(pe)).is_err());
+  assert!(ctx.destroy_presentation_engine(scene_id, pe).is_err());
+
+  // the render loop still takes commands afterwards
+  let pe2 = ctx.create_presentation_engine(scene_id, 64, 64).unwrap();
+  ctx.destroy_presentation_engine(scene_id, pe2).unwrap();
+  assert!(ctx.with_device(|device| device.retire_presentation_engine(pe2)).is_err());
+
+  ctx.threads.logic_thread.tx().try_send(LogicCommand::Shutdown).unwrap();
+}

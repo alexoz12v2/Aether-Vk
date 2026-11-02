@@ -7,9 +7,9 @@ namespace AetherVk.UI.E2E;
 
 /// <summary>
 /// Playback of the reviewer's 67P save, measured: 10 s at 10 s/s (the slowest speed: the dust's
-/// slow evolution must still show on screen) and 10 s at 1 d/s, each after a 2 s warm-up, at Low
-/// particle quality and the Balanced playback preview, image hidden, from two days past the
-/// committed start. Each second it captures the screen around the comet and reads the app's
+/// slow evolution must still show on screen; from 2.5 days past the committed start) and 10 s at
+/// 1 d/s (from 1 h past the committed start, see <see cref="CheckRoom"/>), each after a 2 s
+/// warm-up, at Low particle quality and the Balanced playback preview, image hidden. Each second it captures the screen around the comet and reads the app's
 /// <c>[perf]</c> line (<c>AETHERVK_PERF_LOG=1</c>): the picture must move, the dust frame rate and
 /// frame time must hold limits scaled by the machine's capability score (calibrated paused
 /// against perf_reference.json, a GTX 1070 = 1), the clock must run at the chosen speed and the
@@ -39,6 +39,20 @@ public sealed class PlaybackPerfTests(ITestOutputHelper output)
 
   /// <summary>How late a 1 s capture tick may start (the loop's own cost).</summary>
   private const double MaxTickLateS = 0.5;
+
+  // ── the committed range: the clock stops at its end ──
+
+  /// <summary>Where the 1 d/s phase starts: this far past the committed start.</summary>
+  private static readonly TimeSpan FastStartOffset = TimeSpan.FromHours(1);
+
+  /// <summary>Wall seconds from the start of the measurement (<c>since</c>) to its last perf line
+  /// (<c>until</c>): <see cref="Seconds"/> ticks, the last one up to <see cref="MaxTickLateS"/> late
+  /// (else the phase throws), plus the last tick's own capture (a BitBlt, the HUD text, a PNG).</summary>
+  private const double MeasureSpanMaxS = Seconds + MaxTickLateS + 1.0;
+
+  /// <summary>The range's end as the boxes show it may be in TDB or UTC (69.2 s apart): the end
+  /// is taken this much earlier.</summary>
+  private const double EndScaleMarginS = 70.0;
 
   /// <summary>The last frame that drew, drawn with every cluster (not strided).</summary>
   private static bool IsSettledFullFrame(PerfSample p) =>
@@ -152,12 +166,16 @@ public sealed class PlaybackPerfTests(ITestOutputHelper output)
       Assert.True(noise <= SteadyMad, $"the paused image never held still: {noise:0.00000} mean luminance change in 1 s after 20 s, limit {SteadyMad}");
 
       // ── 10 s/s, then 1 d/s ──
-      var slow = Run(s, artifacts, "10s-per-s", ReviewSave.TenSecondsPerSecondIndex, region);
-      // 1 d/s covers ~15 days in the phase: from the committed start, so it ends before the
-      // committed end (16 days later) and never measures a clock stopped at the end
-      SeekTo(s, ReviewSave.CommittedStartUtc.AddHours(1));
+      // the committed range as the app shows it (the Timeline's start and end boxes): at its end
+      // the clock stops, and a phase that reached it would measure a frozen clock
+      var (rangeStart, rangeEnd) = CommittedRange(s);
+      double endS = EpochS(rangeEnd) - EndScaleMarginS;
+      var slow = Run(s, artifacts, "10s-per-s", ReviewSave.TenSecondsPerSecondIndex, region, endS);
+      var fastStart = rangeStart + FastStartOffset;
+      CheckRoom(fastStart, endS, OneDayPerSecond);
+      SeekTo(s, fastStart);
       Thread.Sleep(3000);
-      var fast = Run(s, artifacts, "1d-per-s", ReviewSave.OneDayPerSecondIndex, region);
+      var fast = Run(s, artifacts, "1d-per-s", ReviewSave.OneDayPerSecondIndex, region, endS);
       WriteCsv(Path.Combine(artifacts, "perf.csv"), [("10s-per-s", slow), ("1d-per-s", fast)]);
 
       if (PerfReference.Recording)
@@ -190,28 +208,50 @@ public sealed class PlaybackPerfTests(ITestOutputHelper output)
   private sealed record Phase(
     string Name, double Speed, List<double[]> Frames, List<(double X, double Y)> Comet, List<PerfSample> Perf, int BacklogLines);
 
-  private Phase Run(AppSession s, string artifacts, string name, int speedIndex, Rect region)
+  /// <param name="endS">The committed range's end, perf-line seconds past J2000 TDB, less
+  /// <see cref="EndScaleMarginS"/>: the clock stops there.</param>
+  private Phase Run(AppSession s, string artifacts, string name, int speedIndex, Rect region, double endS)
   {
     s.SelectTab("TimelineTab");
     s.ChooseAt("SpeedPicker", speedIndex);
     double speed = speedIndex == ReviewSave.TenSecondsPerSecondIndex ? TenSecondsPerSecond : OneDayPerSecond;
+
+    // looked up once, and before Play: a desktop-wide UIA search takes seconds under load, a tick
+    // has one second (the HUD text read and two BitBlts stay well inside it), and at 1 d/s each
+    // second between the click and the measurement is a simulated day of the committed range
+    // (between the warm-up and the measurement these searches took the 1 d/s phase to the range's
+    // end 8 s into the measurement)
+    var vp = s.Find("ViewportHost");
+    var (vpAt, vpSize) = (vp.Location, vp.Size);
+    var hud = s.Desktop.FindElementsByAccessibilityId("EarthObserverStatus").FirstOrDefault();
+
     // playing is read from the perf line's clock, not the UI: ReviewSave.Play looks for the Reset
-    // button's absence, a whole-tree UIA search that takes seconds under load (at 1 d/s, days of
-    // the range gone before the measurement starts)
+    // button's absence, a whole-tree UIA search that takes seconds under load. Running = a perf
+    // line past the paused epoch (one 1 Hz line after the clock starts, not two)
+    double? pausedAt = PerfLog.Since(s, DateTime.UtcNow - TimeSpan.FromSeconds(5)).LastOrDefault(p => p.EpochS is not null)?.EpochS;
     var clicked = DateTime.UtcNow;
     s.Click("PlayPauseButton");
-    Ui.WaitUntil(() => PerfLog.Since(s, clicked).Select(p => p.EpochS).OfType<double>().Distinct().Count() >= 2,
-      TimeSpan.FromSeconds(10), $"[{name}] the clock to run");
+    Ui.WaitUntil(() =>
+    {
+      var epochs = PerfLog.Since(s, clicked).Select(p => p.EpochS).OfType<double>().ToList();
+      return pausedAt is { } p0 ? epochs.Any(e => e > p0 + 0.5) : epochs.Distinct().Count() >= 2;
+    }, TimeSpan.FromSeconds(10), $"[{name}] the clock to run");
     var warm = WarmUp - (DateTime.UtcNow - clicked);
     if (warm > TimeSpan.Zero)
       Thread.Sleep(warm);
 
-    // looked up once: a desktop-wide UIA search and a desktop screenshot take seconds each, a tick
-    // has one second (the HUD text read and two BitBlts stay well inside it)
-    var vp = s.Find("ViewportHost");
-    var (vpAt, vpSize) = (vp.Location, vp.Size);
-    var hud = s.Desktop.FindElementsByAccessibilityId("EarthObserverStatus").FirstOrDefault();
     var since = DateTime.UtcNow;
+    // the clock now (the last perf line, advanced at the chosen speed to this instant) must leave
+    // the whole measurement inside the committed range, or the phase would measure a stopped clock
+    var last = PerfLog.Since(s, clicked).LastOrDefault(p => p.EpochS is not null)
+      ?? throw new InvalidOperationException($"[{name}] no [perf] line with a clock since the Play click");
+    double nowS = last.EpochS!.Value + speed * Math.Max(0, (since - last.At).TotalSeconds);
+    double needS = speed * MeasureSpanMaxS;
+    if (endS - nowS < needS)
+      throw new InvalidOperationException(
+        $"[{name}] Play → measurement start took {(since - clicked).TotalSeconds:0.0} s: the clock is " +
+        $"{(endS - nowS) / 86400:0.00} d before the committed end, the {MeasureSpanMaxS} s measurement at {speed} s/s " +
+        $"needs {needS / 86400:0.00} d; it would measure a clock stopped at the end, not playback");
     var frames = new List<double[]>();
     var comet = new List<(double, double)>();
     var late = new List<double>();
@@ -235,6 +275,11 @@ public sealed class PlaybackPerfTests(ITestOutputHelper output)
         $"[{name}] the capture loop fell behind ({late.Max():0.00} s late at worst, limit {MaxTickLateS} s): the measurement is not {Seconds} s");
 
     var perf = PerfLog.Since(s, since).Where(p => p.At <= until).ToList();
+    // the proof on the data: no measured perf line reached the committed range's end
+    if (perf.FirstOrDefault(p => p.EpochS >= endS) is { } stopped)
+      throw new InvalidOperationException(
+        $"[{name}] the clock reached the committed end ({stopped.EpochS:0} s past J2000, end {endS + EndScaleMarginS:0}) " +
+        $"{(stopped.At - since).TotalSeconds:0.0} s into the measurement: it measured a stopped clock, not playback");
     // the measured seconds only: the Play click's first preview frame draws every cluster (stride 1,
     // 400–700 ms on the reference GPU) before the controller's first readback, and that one frame
     // drops a physics step inside the warm-up (a start transient, not the steady playback)
@@ -379,6 +424,50 @@ public sealed class PlaybackPerfTests(ITestOutputHelper output)
     double at = q * (sorted.Count - 1);
     int lo = (int)Math.Floor(at), hi = (int)Math.Ceiling(at);
     return sorted[lo] + (sorted[hi] - sorted[lo]) * (at - lo);
+  }
+
+  // ── the committed range ──
+
+  /// <summary>The committed range as the Timeline's start and end boxes show it (UTC by default;
+  /// a TDB display is 69.2 s later, covered by <see cref="EndScaleMarginS"/>).</summary>
+  private static (DateTime Start, DateTime End) CommittedRange(AppSession s)
+  {
+    s.SelectTab("TimelineTab");
+    var (start, end) = (ReviewSave.StartEpoch(s), ReviewSave.EndEpoch(s));
+    Assert.True(end > start, $"the committed range {start:u} → {end:u} is empty");
+    return (start, end);
+  }
+
+  /// <summary>A UTC date as the perf line's clock: seconds past J2000 TDB.</summary>
+  private static double EpochS(DateTime utc) => (utc - J2000).TotalSeconds + TdbMinusUtc2021;
+
+  /// <summary>
+  /// The phase fits in the committed range: checked before the seek, with a nominal lead; the
+  /// phase checks the real clock again where the measurement starts (<see cref="Run"/>). Why the
+  /// margin holds for the 1 d/s phase on the reviewer's save (committed 2021-12-12 → 2021-12-28):
+  /// <list type="bullet">
+  /// <item>room: 16 d − the 1 h start offset − the 70 s scale margin = 15.957 d, i.e. 15.96 s of
+  /// wall clock at 1 d/s;</item>
+  /// <item>the measurement: at most <see cref="MeasureSpanMaxS"/> = 11.5 s (10 ticks, the last
+  /// ≤ 0.5 s late or the phase throws, plus its capture) = 11.5 d;</item>
+  /// <item>so the lead, Play click → measurement start, may take up to 4.46 s. It is the 2 s
+  /// warm-up: the wait for the clock (the first 1 Hz perf line past the paused epoch, polled every
+  /// 250 ms) runs inside it, and the UIA searches (seconds each under load) are done before the
+  /// click. Before they were moved, they ran between the warm-up and the measurement: a lead of
+  /// ≈ 8 s, and the clock stopped at the end 8 s into the measurement (epoch 693921600 s = the
+  /// committed end, 2021-12-28 00:00 TDB).</item>
+  /// </list>
+  /// This check asks for the warm-up, the measurement and 1 s of slack (14.5 d at 1 d/s, 1.46 d
+  /// to spare); a lead past 4.46 s fails in <see cref="Run"/> with its duration, before any
+  /// measurement, instead of measuring a clock stopped at the end.
+  /// </summary>
+  private static void CheckRoom(DateTime start, double endS, double speed)
+  {
+    double roomS = endS - EpochS(start);
+    double needS = speed * (WarmUp.TotalSeconds + 1.0 + MeasureSpanMaxS);
+    Assert.True(roomS >= needS,
+      $"the committed range leaves {roomS / 86400:0.00} d from {start:u} to its end; the {speed} s/s phase " +
+      $"needs {needS / 86400:0.00} d (warm-up, measurement and 1 s slack): commit a longer range or a slower speed");
   }
 
   // ── steps ──

@@ -685,8 +685,18 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
     params: &PresentationEngineParams,
   ) -> GpuResult<PresentationEngineHandle>;
 
-  /// Destroys a swapchain
+  /// Destroys a swapchain, once the GPU is past the frames queued on it (deferred: the discard
+  /// pool releases it from the render thread's periodic sweep).
   fn destroy_presentation_engine(&self, handle: PresentationEngineHandle) -> GpuResult<()>;
+
+  /// Destroys a swapchain now: removes it from the live set, waits for every frame submitted on
+  /// it and frees its device objects on the calling thread. A windowed engine's swapchain and
+  /// surface are left on the main-thread cleanup queue, so the caller drains it
+  /// (`process_main_thread_cleanup_queue`) before the OS window or display connection goes.
+  ///
+  /// No frame may be in flight on the engine: call it from the render thread between frames
+  /// (`RenderCommand::RetirePresentationEngine`), or when no render thread is running.
+  fn retire_presentation_engine(&self, handle: PresentationEngineHandle) -> GpuResult<()>;
 
   /// Drains and executes all pending cleanup tasks that require main-thread affinity.
   ///

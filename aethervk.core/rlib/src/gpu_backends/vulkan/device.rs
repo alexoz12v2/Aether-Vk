@@ -1343,6 +1343,65 @@ pub enum QueueRole {
 static GRAPHICS_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 impl Device {
+  /// Takes presentation engine `handle` out of the live map, so no frame finds it any more.
+  /// Returns the engine and the next graphics submit value: every submission that referenced the
+  /// engine or the resources the device holds for it signals a value below that. Nothing is freed
+  /// here: see [`Self::release_presentation_engine_resources`].
+  ///
+  /// The render thread extracts an engine from the map for the span of an acquire or a present
+  /// (`extract_pe!`): a removal in that span finds nothing. The callers run between frames
+  /// (the render thread itself) or when no render thread exists, where the map is complete.
+  fn take_presentation_engine(
+    &self,
+    handle: PresentationEngineHandle,
+  ) -> GpuResult<(swapchain::PresentationState, u64)> {
+    let res = DebugTrackedRwLock::read(&self.res);
+    let presentation_engine = match res.live_presentation_engines.remove(&handle) {
+      Some((_, engine)) => engine,
+      None => {
+        return Err(GpuError::BackendSpecific(alloc::format!(
+          "[Vulkan RenderDevice] destroy_presentation_engine doesn't contain presentation engine {}",
+          handle.0
+        )));
+      }
+    };
+    let timeline = res.timeline_manager.get_next_submit_value();
+    Ok((presentation_engine, timeline))
+  }
+
+  /// Queues on the graphics discard pool, at `timeline`, what the device holds for presentation
+  /// engine `handle` besides the engine itself: the staging buffers of its pending windowless
+  /// downloads (written by the frame's copy on the graphics queue, so still referenced by that
+  /// frame's command buffer until it completes) and its dust view buffers (recorded in the
+  /// graphics frame: `frame_begin`, specks, splat, `cmd_dust_frame_end`). Nothing of a view is
+  /// touched by the compute queue (the compute queue only runs per-system emission), so the
+  /// graphics timeline alone orders their destruction. The pool destroys them once the graphics
+  /// timeline has reached `timeline`, never here.
+  fn release_presentation_engine_resources(&self, handle: PresentationEngineHandle, timeline: u64) {
+    let res = DebugTrackedRwLock::read(&self.res);
+    let allocator = res.allocator.allocator.as_allocator_view();
+    let mut pending_downloads = DebugTrackedRwLock::write(&res.pending_downloads);
+    let to_remove: Vec<u64> = pending_downloads
+      .iter()
+      .filter(|(_, download)| download.presentation_engine == Some(handle))
+      .map(|(&tid, _)| tid)
+      .collect();
+    for tid in to_remove {
+      if let Some(download) = pending_downloads.remove(&tid) {
+        res.discard_pool.discard_buffer(
+          allocator.as_allocator_view(),
+          download.staging_buffer,
+          download.allocation,
+          timeline,
+        );
+      }
+    }
+    drop(pending_downloads);
+    drop(res);
+    // the view's dust splat pyramid, readback and stride list
+    self.discard_dust_view(handle, timeline);
+  }
+
   /// Copies `len` bytes from `src` into this frame's half of the frame staging arena and returns
   /// their device address, for shaders that read per-draw data through a buffer reference.
   ///
@@ -3518,52 +3577,45 @@ impl RenderDevice for Device {
   // TODO windowless and windowed, there shouldn't be any validation errors
   #[named]
   fn destroy_presentation_engine(&self, handle: PresentationEngineHandle) -> GpuResult<()> {
-    // check existance
-    let presentation_engine = {
-      let res = DebugTrackedRwLock::read(&self.res);
-      let engines = &res.live_presentation_engines;
-      match engines.remove(&handle) {
-        Some((_, engine)) => engine,
-        None => {
-          return Err(GpuError::BackendSpecific(alloc::format!(
-            "[Vulkan RenderDevice] destroy_presentation_engine doesn't contain presentation engine {}",
-            handle.0
-          )));
-        }
+    let (presentation_engine, timeline) = self.take_presentation_engine(handle)?;
+    // Everything goes through the discard pool at the next submit value: the pool frees it once
+    // every frame queued so far has completed, never now.
+    self.release_presentation_engine_resources(handle, timeline);
+    DebugTrackedRwLock::read(&self.res)
+      .discard_pool
+      .discard_type_erased(presentation_engine, timeline);
+    Ok(())
+  }
+
+  #[named]
+  fn retire_presentation_engine(&self, handle: PresentationEngineHandle) -> GpuResult<()> {
+    let (mut presentation_engine, timeline) = self.take_presentation_engine(handle)?;
+    // every frame submitted so far (the last one signals `timeline - 1`) is done before anything
+    // of the engine goes: its fences, image views and swapchain images, its download staging
+    // buffers and its dust view. A lost device cannot signal; then the handles are destroyed
+    // anyway, and the pooled resources wait for the device's own flush.
+    let last_submitted = timeline.saturating_sub(1);
+    let semaphore = DebugTrackedRwLock::read(&self.res).timeline_manager.semaphore();
+    let waited = match self.device.wait_for_semaphore_value(semaphore, last_submitted, 5_000_000_000)
+    {
+      Ok(()) => true,
+      Err(e) => {
+        aethervk_oshal_rlib::log!(
+          "retire_presentation_engine: timeline wait for PE {:?} failed: {:?}",
+          handle,
+          e
+        );
+        false
       }
     };
-
-    let res_write = DebugTrackedRwLock::read(&self.res);
-    let timeline = res_write.timeline_manager.get_next_submit_value();
-
-    // Also, clear all pending windowless downloads for this presentation engine to free staging memory
-    let mut pending_downloads = DebugTrackedRwLock::write(&res_write.pending_downloads);
-    let mut to_remove = Vec::new();
-    for (&tid, download) in pending_downloads.iter() {
-      if let Some(p) = download.presentation_engine
-        && p == handle
-      {
-        to_remove.push(tid);
-      }
-    }
-    for tid in to_remove {
-      if let Some(mut download) = pending_downloads.remove(&tid) {
-        unsafe {
-          res_write
-            .allocator
-            .allocator
-            .destroy_buffer(download.staging_buffer, &mut download.allocation);
-        }
-      }
-    }
-
-    // Discard using the next submit value to ensure all currently queued frames are completed
-    res_write.discard_pool.discard_type_erased(presentation_engine, timeline);
-    drop(pending_downloads);
-    drop(res_write);
-    // the view's dust splat pyramid
-    self.discard_dust_view(handle, timeline);
-
+    // after the wait the pooled resources are already free to go: the next sweep takes them
+    self.release_presentation_engine_resources(
+      handle,
+      if waited { last_submitted } else { timeline },
+    );
+    // a windowless engine is destroyed here; a windowed one frees its device objects here and
+    // queues the swapchain and the surface on the main-thread cleanup queue
+    presentation_engine.cleanup(&self.device);
     Ok(())
   }
 

@@ -57,6 +57,11 @@ public sealed partial class CameraMatrixDebugViewModel : ObservableObject, IDisp
     /// poses the camera.</summary>
     [ObservableProperty] private string _earthObserver = string.Empty;
 
+    /// <summary>The viewport's rectangle on the desktop, physical px, "x,y,w,h" (invariant dot
+    /// decimals, <see cref="DesktopBillboardsViewModel.FormatViewportRect"/>; x is negative on a
+    /// monitor left of the primary); empty until the viewport reports its corner.</summary>
+    [ObservableProperty] private string _viewportDesktopRect = string.Empty;
+
     /// <summary>The "Debug" expander (the cartesian camera position and rotation) open; collapsed
     /// by default.</summary>
     [ObservableProperty] private bool _isDebugExpanded;
@@ -97,9 +102,13 @@ public sealed partial class CameraMatrixDebugViewModel : ObservableObject, IDisp
     /// line; null leaves it out.</param>
     /// <param name="translationService">The row labels' strings (<c>Ephemeris_*</c>); null leaves
     /// them empty.</param>
+    /// <param name="viewportFrame">The viewport's place on the desktop
+    /// (<see cref="CameraService.ViewportDesktopFrame"/>), read on the UI thread at each poll and
+    /// shown as <see cref="ViewportDesktopRect"/>; null leaves it empty.</param>
     public CameraMatrixDebugViewModel(INativeRuntimeService runtimeService, ISchedulerProvider schedulerProvider, PreferencesService? preferences = null,
         Func<(CometScreenPosition? Position, float WidthPx, float HeightPx)>? cometScreen = null,
-        ITranslationService? translationService = null)
+        ITranslationService? translationService = null,
+        Func<ViewportFrame?>? viewportFrame = null)
     {
         _preferences = preferences;
         _isExpanded = preferences?.HudCameraExpanded ?? true;
@@ -119,6 +128,16 @@ public sealed partial class CameraMatrixDebugViewModel : ObservableObject, IDisp
             preferences.ShowDiagnosticPanelsChanged += shown;
             _disposables.Add(Disposable.Create(() => preferences.ShowDiagnosticPanelsChanged -= shown));
         }
+        // the viewport's place: the camera's frame is written on the UI thread, so it is read there
+        // (no native call), on a timer of its own (a window move changes nothing the poll below sees)
+        if (viewportFrame is not null)
+            _disposables.Add(
+                Observable.Timer(TimeSpan.Zero, TimeSpan.FromMilliseconds(500), schedulerProvider.MainThread)
+                    .Subscribe(_ =>
+                    {
+                        if (viewportFrame() is { } frame)
+                            ViewportDesktopRect = DesktopBillboardsViewModel.FormatViewportRect(frame);
+                    }));
         _disposables.Add(
             Observable.Timer(TimeSpan.Zero, TimeSpan.FromMilliseconds(500), schedulerProvider.Background)
                 // stop polling the native runtime before it shuts down (a tick into a destroyed context crashes)

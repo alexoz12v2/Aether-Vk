@@ -326,7 +326,23 @@ impl SimulationContext {
     Ok(())
   }
 
-  /// TODO: Document this item
+  /// Removes presentation engine `handle` (and its camera) from `scene_id` and destroys it before
+  /// returning.
+  ///
+  /// The destruction runs on the render thread between two frame batches
+  /// (`structs::RetireRequests`), the one point where none of the engine's images is acquired,
+  /// being recorded or presented; this thread waits for it, then drains the main-thread cleanup
+  /// queue, which destroys a windowed engine's swapchain and surface. A caller on the UI thread
+  /// may therefore destroy the native window and close its display connection as soon as this
+  /// returns. (Deferred to the discard pool, the swapchain outlived its X11 window and display
+  /// connection: the render thread's next acquire crashed in the driver's surface query, and the
+  /// leftover destroyed at process exit crashed a worker.) Without a running render thread the
+  /// same happens inline.
+  ///
+  /// The camera goes last: the batches already queued for the engine are either rendered with it
+  /// (ahead of the retirement) or skipped (behind it). Removed first, every queued batch failed
+  /// in `build_render_scene`, and the render loop's failure backoff stretched the drain to 1 s
+  /// per batch.
   pub fn destroy_presentation_engine(
     &self,
     scene_id: u64,
@@ -352,15 +368,50 @@ impl SimulationContext {
       }
     };
 
+    // no scene lock is held from here: the render thread reads the scene for each frame
+    let retired = if self.retire_on_render_thread(handle) {
+      Ok(())
+    } else {
+      self.with_device(|render_device| render_device.retire_presentation_engine(handle))
+    };
+    // a windowed engine's swapchain and surface wait on the main-thread cleanup queue
+    self.with_device(|render_device| render_device.process_main_thread_cleanup_queue())?;
+
     if let Some(camera_internal_id) = camera_to_remove {
       let write_scene = scene_ctx.write();
       write_scene.scene.remove_entity(camera_internal_id);
     }
+    retired
+  }
 
-    self.with_device(|render_device| {
-      render_device.destroy_presentation_engine(handle)?;
-      Ok(())
-    })
+  /// Hands presentation engine `handle` to the render thread for destruction and waits until it
+  /// is done. `false` when no render thread runs (never spawned, or exited): the caller destroys
+  /// inline.
+  fn retire_on_render_thread(&self, handle: PresentationEngineHandle) -> bool {
+    use core::sync::atomic::{AtomicBool, Ordering};
+    if !self.threads.render_thread_running() {
+      return false;
+    }
+    let done = Arc::new(AtomicBool::new(false));
+    self.threads.retire_requests.lock().push((handle, Arc::clone(&done)));
+    // at most the batch in progress (an acquire is capped at 5 s); a stuck render thread is
+    // reported, as Device::drop does for its polling task
+    let started_us = os::time::get_monotonic_time();
+    let mut warned_s = 0;
+    while !done.load(Ordering::Acquire) {
+      os::native::this_thread::yield_now();
+      let waited_s = (os::time::get_monotonic_time() - started_us) / 1_000_000;
+      if waited_s >= warned_s + 5 {
+        warned_s = waited_s;
+        oshal::log!(
+          "destroy_presentation_engine: still waiting for the render thread to retire PE {:?} \
+           after {} s",
+          handle,
+          waited_s
+        );
+      }
+    }
+    true
   }
 
   /// Drains main-thread cleanup queue. Call from UI thread tick.
