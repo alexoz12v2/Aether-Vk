@@ -119,12 +119,33 @@ public partial class ViewModeBarViewModel : ObservableObject, IDisposable
   public IDisposable AttachBillboards(DesktopBillboardsViewModel billboards)
   {
     _billboards = billboards;
+    ViewportDesktopRect = billboards.ViewportDesktopRect;
+    void Follow(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+      if (e.PropertyName == nameof(DesktopBillboardsViewModel.ViewportDesktopRect) && ReferenceEquals(_billboards, billboards))
+        ViewportDesktopRect = billboards.ViewportDesktopRect;
+    }
+    billboards.PropertyChanged += Follow;
     return Disposable.Create(() =>
     {
+      billboards.PropertyChanged -= Follow;
       if (ReferenceEquals(_billboards, billboards))
+      {
         _billboards = null;
+        ViewportDesktopRect = string.Empty;
+      }
     });
   }
+
+  /// <summary>
+  /// The viewport's rectangle on the desktop, physical px, "x,y,w,h" (the attached billboards'
+  /// <see cref="DesktopBillboardsViewModel.ViewportDesktopRect"/>); empty while none are attached.
+  /// The main window keeps it as an automation-only element (transparent, AutomationId
+  /// <c>ViewportDesktopRect</c>): always in the main window's automation tree, whichever tab is
+  /// shown and whether or not the diagnostic panels are, for the end-to-end test.
+  /// </summary>
+  [ObservableProperty]
+  private string _viewportDesktopRect = string.Empty;
 
   private void BindCamera()
   {
