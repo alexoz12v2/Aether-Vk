@@ -308,7 +308,7 @@ public sealed class SaveFileService
     if (snap.Comet is not { } comet) return;
 
     var rel = "spk/" + Path.GetFileName(comet.SpkSourcePath);
-    var dest = Path.Combine(dir, rel);
+    var dest = Path.GetFullPath(Path.Combine(dir, "spk", Path.GetFileName(comet.SpkSourcePath)));
     Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
     if (!SamePath(comet.SpkSourcePath, dest) && !SameFile(comet.SpkSourcePath, dest))
       File.Copy(comet.SpkSourcePath, dest, overwrite: true);

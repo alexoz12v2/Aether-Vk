@@ -365,6 +365,9 @@
                        Foreground="{DynamicResource Sem.Warning}"
                        IsVisible="{Binding !Billboards.HasTextures}" />
 
+            <TextBlock AutomationProperties.AutomationId="ViewportDesktopRect" Text="{Binding Billboards.ViewportDesktopRect}"
+                       Opacity="0.5" FontSize="10" />
+
             <Grid ColumnDefinitions="Auto,16,*,8,Auto">
               <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4">
                 <TextBlock Text="{Binding StrBillboardTexture}" />

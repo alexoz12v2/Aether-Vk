@@ -1,5 +1,7 @@
 using System;
+using System.Linq;
 using System.IO;
+using System.Threading;
 using AetherVk.Logic.Input;
 using AetherVk.Logic.Services;
 using AetherVk.Logic.ViewModels.Debug;
@@ -130,6 +132,30 @@ public sealed class DiagnosticPanelsTests : IDisposable
     runtime.Setup(r => r.CometEphemeris()).Returns((CometEphemeris?)null);
     Poll();
     Assert.False(vm.IsShown);
+  }
+
+  /// <summary>The 500 ms poller calls into the native runtime: after the runtime's shutdown token
+  /// is cancelled it must not tick again (a tick into a destroyed context crashed the process).</summary>
+  [Fact]
+  public void ThePoller_StopsCallingTheRuntime_OnceItsShutdownTokenIsCancelled()
+  {
+    var schedulers = new TestSchedulerProvider();
+    using var cts = new CancellationTokenSource();
+    var runtime = new Mock<INativeRuntimeService>();
+    runtime.SetupGet(r => r.ShutdownToken).Returns(cts.Token);
+    using var vm = new CameraMatrixDebugViewModel(runtime.Object, schedulers);
+    var half = TimeSpan.FromMilliseconds(500).Ticks;
+
+    schedulers.Background.AdvanceBy(half);
+    schedulers.Background.AdvanceBy(half);
+    runtime.Verify(r => r.EarthObserverStatus(), Times.AtLeast(2));
+    int before = runtime.Invocations.Count(i => i.Method.Name == nameof(INativeRuntimeService.EarthObserverStatus));
+
+    cts.Cancel();
+    schedulers.Background.AdvanceBy(half * 10);
+
+    int after = runtime.Invocations.Count(i => i.Method.Name == nameof(INativeRuntimeService.EarthObserverStatus));
+    Assert.Equal(before, after);
   }
 
   [Fact]

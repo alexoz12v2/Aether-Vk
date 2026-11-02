@@ -12349,8 +12349,24 @@ fn cad_life(host: &DustHostState, slot: u32) -> Option<u64> {
 /// the classified clusters. Prints per frame the fresh / shown counts, the footprint rule's rejections, the Σ
 /// ratio and the ghost share.
 #[test]
-fn cadence_keeps_the_light() {
+fn cadence_keeps_the_light_a() {
+  cad_run_a();
+}
+
+/// Run B of the former `cadence_keeps_the_light` (split in two so each half has its own kill budget).
+#[test]
+fn cadence_keeps_the_light_b() {
+  let t = std::time::Instant::now();
+  std::eprintln!("[progress] cadence run B: start (270 frames)");
+  cad_run_b(3.0, 270, false, "B");
+  std::eprintln!("[progress] cadence run B: done in {:.1} s", t.elapsed().as_secs_f64());
+}
+
+/// Run A of the former `cadence_keeps_the_light`: the static scene, word for word against the full draw.
+fn cad_run_a() {
   use super::cadence::CadenceConfig;
+  let t_run = std::time::Instant::now();
+  std::eprintln!("[progress] cadence run A: start (230 frames)");
   let px = 128u32;
   let layout = PyramidLayout::new(px, px);
   // ── Run A
@@ -12372,6 +12388,9 @@ fn cadence_keeps_the_light() {
       let fm = cad_frame_meta(view, t, anchor, unit);
       let (frame, _plan, rep) = cad_cadence_frame(&mut st, &fm, &mut tiers, &layout, inv_unit, None, &|_, _| {});
       std::eprintln!("[t8 time] cadence A {f}: cadence frame {:.3} s", t_frame.elapsed().as_secs_f64());
+      if f % 10 == 0 {
+        std::eprintln!("[progress] cadence run A: frame {f}/230, {:.1} s elapsed", t_run.elapsed().as_secs_f64());
+      }
       st.check_owner_bytes().unwrap_or_else(|e| panic!("run A frame {f}: {e}"));
       for (k, accepted, line) in &rep.d3_samples {
         if !d3_seen_a.contains(&(*k, *accepted)) {
@@ -12396,9 +12415,10 @@ fn cadence_keeps_the_light() {
     }
     assert!(swaps_with_content >= 4, "run A: the classes never showed an image ({swaps_with_content})");
   }
-  // ── Run B at 3 R: the light and the coverage (the coma fills the frame: the footprint rule rejects most build
+  std::eprintln!("[progress] cadence run A: done in {:.1} s", t_run.elapsed().as_secs_f64());
+  // Run B (3 R: the light and the coverage; the coma fills the frame: the footprint rule rejects most build
   // entries, so the scenario asserts are evaluated at 6 R, `cadence_keeps_the_light_whole_clusters`)
-  cad_run_b(3.0, 270, false, "B");
+  // is `cadence_keeps_the_light_b`.
 }
 
 /// T3's run B (see `cadence_keeps_the_light`): 60 s of simulation per frame on the 3-day coma, the
@@ -12421,7 +12441,7 @@ fn cad_run_b(dist_r: f64, frames: usize, scenario: bool, tag: &str) {
   // The scenario asserts the class histogram (every class >= 1 %). At 60 s a frame the light
   // tolerance's shape bound admits class 64 only for dust older than ~16.7 d (2 N dt <= theta age),
   // nearly none of this 30-day coma: 5 instead of 853 members at frame 5. The scenario therefore
-  // runs the A/B without the bound; `cadence_keeps_the_light` (scenario off) keeps the full config.
+  // runs the A/B without the bound; `cadence_keeps_the_light_b` (scenario off) keeps the full config.
   let light_tol = if scenario { 0.0 } else { super::cadence::DUST_CADENCE_LIGHT_TOL };
   let mut st = cad_state(CadenceConfig { light_tol, ..CadenceConfig::full() });
   st.trace_light = true;

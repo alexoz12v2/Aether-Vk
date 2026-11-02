@@ -181,7 +181,7 @@ public sealed class CometConfigService : IDisposable
         // LoadAlmanacFileAsync enqueues the load to the Rust logic thread and registers
         // its own one-shot listener. Our permanent listener (HandleAlmanacImportedCallback)
         // will also fire — we use the permanent listener to drive the commit sequence.
-        _ = _runtimeService.LoadAlmanacFileAsync(spkFilePath);
+        _ = _runtimeService.LoadAlmanacFileAsync(System.IO.Path.GetFullPath(spkFilePath));
         return await tcs.Task;
       }
     }
@@ -219,7 +219,7 @@ public sealed class CometConfigService : IDisposable
 
     bool unloadOk = true;
     if (_lastCommittedFilePath is not null)
-      unloadOk = _runtimeService.UnloadAlmanacFile(_lastCommittedFilePath);
+      unloadOk = _runtimeService.UnloadAlmanacFile(System.IO.Path.GetFullPath(_lastCommittedFilePath));
 
     _lastCommittedSpkId = 0;
     _lastCommittedFilePath = null;

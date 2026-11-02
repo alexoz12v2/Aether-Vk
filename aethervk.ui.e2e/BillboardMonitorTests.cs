@@ -59,7 +59,7 @@ public sealed class BillboardMonitorTests(ITestOutputHelper output)
       s.Desktop.SaveScreenshot(Path.Combine(artifacts, "02-second-monitor.png"));
 
       // saved there, reopened there: over the viewport, nucleus on the comet
-      s.Menu("File", "Save As...");
+      FileHotKey(s, (byte)'S', shift: true); // File › Save As...
       s.AnswerFileDialog(avk);
       Ui.WaitUntil(() => File.Exists(avk) && !s.WindowTitle.EndsWith('*'), TimeSpan.FromSeconds(90), "the .avk save");
       OpenSave(s, avk, "review_67p_second_monitor");
@@ -108,12 +108,26 @@ public sealed class BillboardMonitorTests(ITestOutputHelper output)
       var vp = s.Find("ViewportHost");
       var cometBefore = FitsComparisonSteps.CometScreenPx(s);
       int cx = vp.Location.X + vp.Size.Width / 2, cy = vp.Location.Y + vp.Size.Height / 2;
+      // the drag starts on the viewport off the FITS billboard's window (a drag on the billboard
+      // moves it instead of orbiting the camera); both ends in the viewport's rectangle, in the
+      // frame of the billboard's geometry, then back to the frame of WinAppDriver's location
+      const int dragDx = 150, dragDy = -70;
+      var fitsBefore = FitsComparisonSteps.ReadGeometry(s, FitsRow);
+      var rect = FitsComparisonSteps.ReadViewportDesktopRect(s) ?? (vp.Location.X, vp.Location.Y, vp.Size.Width, vp.Size.Height);
+      var (sx, sy) = DragStartOffTheBillboard(fitsBefore, rect, dragDx, dragDy);
+      int shiftX = vp.Location.X - (int)Math.Round(rect.X), shiftY = vp.Location.Y - (int)Math.Round(rect.Y);
+      int startX = (int)Math.Round(sx) + shiftX, startY = (int)Math.Round(sy) + shiftY;
+      output.WriteLine($"orbit drag from ({startX}, {startY}) by ({dragDx}, {dragDy}); billboard centre ({fitsBefore.CenterX:F1}, {fitsBefore.CenterY:F1}) {fitsBefore.Width:F0}×{fitsBefore.Height:F0}");
       Win32.SetForegroundWindow(s.MainWindow);
-      Win32.DragFromTo(cx - 60, cy + 40, cx + 90, cy - 30);
+      Win32.DragFromTo(startX, startY, startX + dragDx, startY + dragDy);
       Thread.Sleep(1500);
       var cometAfterOrbit = FitsComparisonSteps.CometScreenPx(s);
       output.WriteLine($"comet before the orbit {cometBefore}, after {cometAfterOrbit}");
       FitsComparisonSteps.WaitForSettledGeometry(s, FitsRow);
+      var fitsAfter = FitsComparisonSteps.ReadGeometry(s, FitsRow);
+      Assert.False(
+        Math.Abs(fitsAfter.CenterX - fitsBefore.CenterX - dragDx) < 5 && Math.Abs(fitsAfter.CenterY - fitsBefore.CenterY - dragDy) < 5,
+        $"the billboard moved by the drag's delta ({dragDx}, {dragDy}): the drag grabbed it instead of orbiting ({fitsBefore.CenterX:F1}, {fitsBefore.CenterY:F1}) → ({fitsAfter.CenterX:F1}, {fitsAfter.CenterY:F1})");
       FitsComparisonSteps.AssertNucleusOnComet(s, FitsRow);
       Win32.WheelAt(cx, cy, -3);
       Thread.Sleep(1500);
@@ -122,25 +136,26 @@ public sealed class BillboardMonitorTests(ITestOutputHelper output)
       FitsComparisonSteps.AssertNucleusOnComet(s, FitsRow);
       s.Desktop.SaveScreenshot(Path.Combine(artifacts, "01-after-orbit-and-zoom.png"));
 
-      // a free billboard: its offset from the viewport's corner survives a docked panel opening
+      // a free billboard: its offset from the viewport's corner survives the viewport moving and
+      // resizing on the desktop (the window restored to a smaller rectangle further right; the
+      // diagnostic panels used for this before are drawn in the overlay and never resize it)
       FitsComparisonSteps.ImportImage(s, png);
       int freeRow = FitsComparisonSteps.CreateBillboard(s, png);
       Thread.Sleep(1000);
       var (offsetBefore, vpBefore) = CornerOffset(s, freeRow);
-      s.SelectTab("SettingsTab");
-      s.Expand("ViewportSettingsSection", "DiagnosticPanelsCheckBox");
-      s.Click("DiagnosticPanelsCheckBox");
-      Thread.Sleep(2000);
+      var primary = Win32.Monitors()[0];
+      Win32.PlaceAt(s.MainWindow, primary.Left + 160, primary.Top + 40, primary.Width - 200, primary.Height - 100);
+      Thread.Sleep(3000);
       var (offsetAfter, vpAfter) = CornerOffset(s, freeRow);
       output.WriteLine($"viewport {vpBefore} → {vpAfter}; free billboard offset {offsetBefore} → {offsetAfter}");
-      Assert.True(vpBefore != vpAfter, $"the diagnostic panels did not resize the viewport ({vpBefore})");
+      Assert.True(vpBefore != vpAfter, $"the window move did not move the viewport ({vpBefore})");
       Assert.True(Math.Abs(offsetAfter.X - offsetBefore.X) <= 2 && Math.Abs(offsetAfter.Y - offsetBefore.Y) <= 2,
         $"the free billboard's corner offset went from {offsetBefore} to {offsetAfter}");
       FitsComparisonSteps.AssertNucleusOnComet(s, FitsRow); // the anchored one is still on the comet
-      s.Desktop.SaveScreenshot(Path.Combine(artifacts, "02-after-panel-resize.png"));
+      s.Desktop.SaveScreenshot(Path.Combine(artifacts, "02-after-window-move.png"));
 
       // saved and reopened with the same view: on the comet at once, not after a settle wait
-      s.Menu("File", "Save As...");
+      FileHotKey(s, (byte)'S', shift: true); // File › Save As...
       s.AnswerFileDialog(avk);
       Ui.WaitUntil(() => File.Exists(avk) && !s.WindowTitle.EndsWith('*'), TimeSpan.FromSeconds(90), "the .avk save");
       OpenSave(s, avk, "review_67p_same_view");
@@ -214,9 +229,21 @@ public sealed class BillboardMonitorTests(ITestOutputHelper output)
   }
 
   /// <summary>File › Open of <paramref name="path"/>, waited until the title names <paramref name="titlePart"/>.</summary>
+  /// <summary>
+  /// A File menu action by its hot key (Ctrl+O Open..., Ctrl+Shift+S Save As...): these tests move
+  /// the window, after which WinAppDriver still places the menu where the window was (by −1920 px
+  /// on the second monitor), so a click on "File" missed and the menu never opened (2026-11-02).
+  /// </summary>
+  private static void FileHotKey(AppSession s, byte key, bool shift = false)
+  {
+    Win32.SetForegroundWindow(s.MainWindow);
+    Thread.Sleep(300);
+    Win32.CtrlChord(key, shift);
+  }
+
   private static void OpenSave(AppSession s, string path, string titlePart)
   {
-    s.Menu("File", "Open...");
+    FileHotKey(s, (byte)'O'); // File › Open...
     Thread.Sleep(1000);
     s.AnswerFileDialog(path);
     Ui.WaitUntil(() => s.WindowTitle.Contains(titlePart, StringComparison.OrdinalIgnoreCase),
@@ -240,7 +267,7 @@ public sealed class BillboardMonitorTests(ITestOutputHelper output)
   }
 
   /// <summary>The row's centre as an offset from the viewport's top-left corner (physical px), with
-  /// the viewport's rectangle as WinAppDriver reports it.</summary>
+  /// the viewport's rectangle (its desktop place as the app reports it).</summary>
   private static ((double X, double Y) Offset, (int X, int Y, int W, int H) Viewport) CornerOffset(AppSession s, int row)
   {
     s.SelectTab("SettingsTab");
@@ -248,10 +275,38 @@ public sealed class BillboardMonitorTests(ITestOutputHelper output)
     FitsComparisonSteps.WaitForSettledGeometry(s, row);
     var g = FitsComparisonSteps.ReadGeometry(s, row);
     var vp = s.Find("ViewportHost");
-    return ((g.CenterX - vp.Location.X, g.CenterY - vp.Location.Y), (vp.Location.X, vp.Location.Y, vp.Size.Width, vp.Size.Height));
+    var at = FitsComparisonSteps.DesktopLocation(s, vp);
+    return ((g.CenterX - at.X, g.CenterY - at.Y), (at.X, at.Y, vp.Size.Width, vp.Size.Height));
   }
 
-  /// <summary>The FITS row's centre lies inside the viewport as WinAppDriver places it on screen.</summary>
+  /// <summary>
+  /// A drag start on the viewport (desktop px) clear of the billboard's rotated rectangle by 20 px,
+  /// with the drag's end <paramref name="dx"/>, <paramref name="dy"/> away still 10 px inside the
+  /// viewport: the first point of a grid over the viewport that qualifies, nearest the lower-left first.
+  /// </summary>
+  private static (double X, double Y) DragStartOffTheBillboard(
+    FitsComparisonSteps.BillboardGeometry g, (double X, double Y, double W, double H) vp, int dx, int dy)
+  {
+    double t = g.RotationDeg * Math.PI / 180.0, c = Math.Cos(t), sn = Math.Sin(t);
+    bool Clear(double x, double y)
+    {
+      // into the billboard's own axes (undo the clockwise rotation about its centre)
+      double rx = x - g.CenterX, ry = y - g.CenterY;
+      double lx = rx * c + ry * sn, ly = -rx * sn + ry * c;
+      return Math.Abs(lx) > g.Width / 2 + 20 || Math.Abs(ly) > g.Height / 2 + 20;
+    }
+    bool Inside(double x, double y) => x >= vp.X + 10 && x < vp.X + vp.W - 10 && y >= vp.Y + 10 && y < vp.Y + vp.H - 10;
+    for (int j = 0; j <= 10; j++)
+      for (int i = 0; i <= 10; i++)
+      {
+        double x = vp.X + 10 + (vp.W - 20) * i / 10.0, y = vp.Y + vp.H - 10 - (vp.H - 20) * j / 10.0;
+        if (Inside(x, y) && Inside(x + dx, y + dy) && Clear(x, y))
+          return (x, y);
+      }
+    throw new InvalidOperationException($"no point of the viewport {vp} is clear of the billboard {g}: nowhere to start an orbit drag");
+  }
+
+  /// <summary>The FITS row's centre lies inside the viewport's desktop rectangle (read from the app).</summary>
   private void AssertBillboardOverTheViewport(AppSession s, string when)
   {
     s.SelectTab("SettingsTab");
@@ -262,10 +317,10 @@ public sealed class BillboardMonitorTests(ITestOutputHelper output)
     // the billboard's centre is in desktop px: the viewport in the same frame
     var at = FitsComparisonSteps.DesktopLocation(s, vp);
     int vx = at.X, vy = at.Y, ox = vx - vp.Location.X, oy = vy - vp.Location.Y;
-    output.WriteLine($"{when}: billboard centre ({g.CenterX:F1}, {g.CenterY:F1}), viewport at ({vx}, {vy}) {vp.Size.Width}×{vp.Size.Height} (WinAppDriver ({vp.Location.X}, {vp.Location.Y}), window shift ({ox}, {oy}))");
+    output.WriteLine($"{when}: billboard centre ({g.CenterX:F1}, {g.CenterY:F1}), viewport at ({vx}, {vy}) {vp.Size.Width}×{vp.Size.Height} (app rectangle {FitsComparisonSteps.ReadViewportDesktopRect(s)}; WinAppDriver ({vp.Location.X}, {vp.Location.Y}), difference ({ox}, {oy}))");
     Assert.True(
       g.CenterX >= vx && g.CenterX < vx + vp.Size.Width
       && g.CenterY >= vy && g.CenterY < vy + vp.Size.Height,
-      $"{when}: the billboard's centre ({g.CenterX:F1}, {g.CenterY:F1}) is off the viewport at ({vx}, {vy}) {vp.Size.Width}×{vp.Size.Height} (window shift ({ox}, {oy}))");
+      $"{when}: the billboard's centre ({g.CenterX:F1}, {g.CenterY:F1}) is off the viewport at ({vx}, {vy}) {vp.Size.Width}×{vp.Size.Height} (WinAppDriver difference ({ox}, {oy}))");
   }
 }

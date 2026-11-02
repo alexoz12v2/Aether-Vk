@@ -362,8 +362,20 @@ public partial class DesktopBillboardsViewModel : ObservableObject, IDisposable
   internal void FollowViewport()
   {
     if (_probe?.ViewportFrame is { } frame)
+    {
       _service.FollowViewport(frame);
+      ViewportDesktopRect = FormatViewportRect(frame);
+    }
   }
+
+  /// <summary>The viewport's rectangle on the desktop, physical px, "x,y,w,h" (invariant dot
+  /// decimals; x is negative on a monitor left of the primary). Empty until it is laid out. Read
+  /// by the end-to-end test, whose UI automation locations are unreliable on a second monitor.</summary>
+  [ObservableProperty]
+  private string _viewportDesktopRect = string.Empty;
+
+  internal static string FormatViewportRect(ViewportFrame f) =>
+    string.Format(CultureInfo.InvariantCulture, "{0:F3},{1:F3},{2:F3},{3:F3}", f.Origin.X, f.Origin.Y, f.WidthPx, f.HeightPx);
 
   /// <summary>The window moved or was resized: the billboards follow the viewport's corner, then
   /// the comet-anchored ones go back on the comet where the moved viewport draws it.</summary>

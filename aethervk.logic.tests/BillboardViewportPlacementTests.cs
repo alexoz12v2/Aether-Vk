@@ -1,3 +1,4 @@
+using System.Globalization;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -224,6 +225,26 @@ public class BillboardViewportPlacementTests
     rig.Probe.ViewChangedNow();
     Near(new PointD(1000, 600), Nucleus(rig.Svc, bound.Id));
     Near(new PointD(1500, 900), Center(rig.Svc, plain.Id));
+  }
+
+  [Fact]
+  public void ViewportDesktopRect_ReadsTheViewportsPlaceInInvariantPx_WithNegativeXOnALeftMonitor()
+  {
+    var rig = new VmRig();
+    Assert.Equal("0.000,0.000,1920.000,1080.000", rig.Vm.ViewportDesktopRect);
+    rig.Probe.ViewportFrame = new ViewportFrame(new PointD(-1920 + 534, 130), 1386, 950.5, 1.0);
+    rig.Probe.Move();
+    Assert.Equal("-1386.000,130.000,1386.000,950.500", rig.Vm.ViewportDesktopRect);
+    var culture = CultureInfo.CurrentCulture;
+    try
+    {
+      CultureInfo.CurrentCulture = new CultureInfo("it-IT");
+      Assert.Equal("-1386.000,130.000,1386.000,950.500", DesktopBillboardsViewModel.FormatViewportRect(rig.Probe.ViewportFrame!.Value));
+    }
+    finally
+    {
+      CultureInfo.CurrentCulture = culture;
+    }
   }
 
   [Fact]

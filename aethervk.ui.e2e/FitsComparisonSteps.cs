@@ -172,6 +172,14 @@ public static partial class FitsComparisonSteps
     Assert.InRange(Num(c.Groups["ratio"].Value), g.Height / g.ImageHeight - 6e-4, g.Height / g.ImageHeight + 6e-4);
   }
 
+  /// <summary>The image's field at the comet (km), from the row's conversion text.</summary>
+  public static double FieldKmAtComet(AppSession s, int row = 0)
+  {
+    var c = ConversionRegex().Match(At(s, "BillboardConversion", row).Text);
+    Assert.True(c.Success, "no image → sky → viewport conversion shown");
+    return Num(c.Groups["km"].Value);
+  }
+
   /// <summary>The FITS import found the nucleus near the known pixel (not the image centre).</summary>
   public static void AssertNucleusDetected(AppSession s, int row = 0, double tolerancePx = 1.0)
   {
@@ -244,6 +252,34 @@ public static partial class FitsComparisonSteps
   }
 
   /// <summary>
+  /// The viewport's rectangle on the desktop (physical px) as the app reports it in its
+  /// <c>ViewportDesktopRect</c> text ("x,y,w,h", invariant); null while the text is absent or empty.
+  /// </summary>
+  public static (double X, double Y, double W, double H)? ReadViewportDesktopRect(AppSession s)
+  {
+    if (s.App.FindElementsByAccessibilityId("ViewportDesktopRect").FirstOrDefault() is null)
+    {
+      s.SelectTab("SettingsTab");
+      s.Expand("BillboardsSection", "CreateBillboardButton");
+    }
+    var e = s.App.FindElementsByAccessibilityId("ViewportDesktopRect").FirstOrDefault();
+    return e is null ? null : ParseViewportDesktopRect(e.Text);
+  }
+
+  /// <summary>Parses "x,y,w,h" (invariant dot decimals, a leading minus allowed); null when it does not read.</summary>
+  public static (double X, double Y, double W, double H)? ParseViewportDesktopRect(string? text)
+  {
+    var parts = (text ?? string.Empty).Trim().Replace('−', '-').Split(',');
+    if (parts.Length != 4)
+      return null;
+    var v = new double[4];
+    for (int i = 0; i < 4; i++)
+      if (!double.TryParse(parts[i], NumberStyles.Float, CultureInfo.InvariantCulture, out v[i]))
+        return null;
+    return (v[0], v[1], v[2], v[3]);
+  }
+
+  /// <summary>
   /// The comet on the desktop, physical px: the "· screen (x, y)" the Earth observer HUD appends
   /// (viewport px from its top-left corner, offset by the viewport's place on the screen) when it
   /// is there; else the viewport's centre, where comet tracking keeps the comet.
@@ -265,6 +301,10 @@ public static partial class FitsComparisonSteps
   /// </summary>
   public static System.Drawing.Point DesktopLocation(AppSession s, AppiumWebElement e)
   {
+    // the viewport: the app's own rectangle (WinAppDriver's element location is stale on a monitor
+    // left of the primary)
+    if (ReadViewportDesktopRect(s) is { } r)
+      return new System.Drawing.Point((int)Math.Round(r.X), (int)Math.Round(r.Y));
     var real = Win32.WindowCorner(s.MainWindow);
     var reported = s.App.Manage().Window.Position;
     return new System.Drawing.Point(e.Location.X + real.X - reported.X, e.Location.Y + real.Y - reported.Y);
