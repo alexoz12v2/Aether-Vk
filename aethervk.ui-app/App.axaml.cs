@@ -273,13 +273,10 @@ public partial class App : Application
         desktop.ShutdownRequested += (_, _) => DetachViewport();
 
         desktop.Exit += (sender, args) => {
-          // EDIT: I think it's not necessary to call dispose here, cause DI Container should handle
-          // that. This block will remain if there are special actions to be performed on closing
-          // the application
-
-          // All native services which are disposable should be disposed of here
-          // TODO ensure all dependencies which use the runtime service are cleaned up with a shutdown message?
-          // runtimeService.Dispose();
+          // Shut the native runtime down explicitly: it cancels ShutdownToken (which stops the
+          // polling timers), waits for the in-flight native queries and tears the context down, so
+          // the host teardown (which disposes it again, idempotently) finds it already shut down.
+          Host?.Services.GetService<INativeRuntimeService>()?.Dispose();
 
           // Note: Avoid calling Environment.Exit(0) here. Doing so will forcefully terminate the process
           // and prevent the generic host in Program.cs from executing its clean shutdown procedure

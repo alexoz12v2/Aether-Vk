@@ -1,0 +1,453 @@
+%% aethervk-manual.sty -- typographic conventions for the AetherVk user manual chapter.
+%%
+%% Engine: LuaLaTeX (fontspec). Falls back to pdfLaTeX without the UI fonts.
+%% Load it AFTER the thesis' commands.tex (which loads siunitx-v2 and xcolor), e.g.
+%%     \input{commands}
+%%     \usepackage[english]{aethervk-manual}   % or [italian]
+%%
+%% Options
+%%   english | italian   field names in property entries (default english)
+%%   menukeys            use the menukeys package for \menu (same "A > B" syntax)
+%%   nouifont            keep the document sans font for UI labels (no fontspec lookups)
+%%   placeholders        never include images, always draw the placeholder (draft builds)
+%%
+%% User commands (see STYLE.md for when to use which)
+%%   \uilabel{Text}             a label exactly as printed in the UI
+%%   \menu{A > B > C}           a navigation path:  A > B > C, rendered with \guilsinglright
+%%   \uikey{Ctrl+Shift+S}       a keyboard chord;   \uimouse{Right drag}
+%%   \uival{2021-12-12 00:00}   a value the user types or reads in a box
+%%   \uiid{FovSlider}           an AutomationId (for the reader who scripts the UI)
+%%   \resx{Tabs_Settings_HelpViewFov}  a key of AppStrings.resx (help-text source)
+%%   \unit, \qty                siunitx (v3 names; aliased to \si, \SI under siunitx-v2)
+%%   \callout{3}                a numbered marker in running text
+%%   \co{FovSlider}             the marker number given to that AutomationId in the
+%%                              current figure's screenshot (\uiusefigure{key} switches)
+%%   \uidefinecallout{panel}{id}{n}{x}{y}   (written by the ManualCapture fixture)
+%%   \uiscreenshot[opts]{panel}{file}       image + callout overlay, or a placeholder
+%%   \begin{uipanel}[opts]{Title} ... \end{uipanel}   one documented panel
+%%   \uisection[label]{Title}{AutomationId}            a group of properties in a panel
+%%   \begin{uiproperty}[opts]{Label} ... \end{uiproperty}   one property entry
+%%   \begin{uiexample} ... \end{uiexample}               worked example inside an entry
+%%   \begin{uihelptext} ... \end{uihelptext}             in-app help text, quoted
+%%   \panelref{key}  \propref{panel.key}  \sectionref{panel/label}   cross-references
+\NeedsTeXFormat{LaTeX2e}[2022/06/01]
+\ProvidesExplPackage{aethervk-manual}{2026/11/01}{0.1}{AetherVk manual conventions}
+
+\bool_new:N \g__avk_italian_bool
+\bool_new:N \g__avk_menukeys_bool
+\bool_new:N \g__avk_uifont_bool
+\bool_new:N \g__avk_placeholders_bool
+\bool_gset_true:N \g__avk_uifont_bool
+\DeclareOption{english}{\bool_gset_false:N \g__avk_italian_bool}
+\DeclareOption{italian}{\bool_gset_true:N \g__avk_italian_bool}
+\DeclareOption{menukeys}{\bool_gset_true:N \g__avk_menukeys_bool}
+\DeclareOption{nouifont}{\bool_gset_false:N \g__avk_uifont_bool}
+\DeclareOption{placeholders}{\bool_gset_true:N \g__avk_placeholders_bool}
+\ProcessOptions\relax
+
+\RequirePackage{iftex}
+\RequirePackage{xcolor}
+\RequirePackage{graphicx}
+\RequirePackage{tikz}
+\RequirePackage{tcolorbox}
+\tcbuselibrary{breakable}   % no skins / [most]: recent skins needs tikzfill, often missing
+
+% ---------------------------------------------------------------- siunitx
+% The thesis loads siunitx-v2 (v2 syntax: \si, \SI). Do not load a second copy.
+% \sisetup exists once either version is loaded
+\cs_if_exist:NF \sisetup {\RequirePackage{siunitx}}
+\providecommand\unit{\si}
+\providecommand\qty{\SI}
+% units as the app spells them (STYLE.md §5)
+\DeclareSIUnit\AU{AU}
+\DeclareSIUnit\pixel{px}
+\DeclareSIUnit\EV{EV}
+
+% ---------------------------------------------------------------- colours
+\definecolor{avkAccent}{HTML}{3B5BDB}      % callouts, panel rule
+\definecolor{avkPropBg}{HTML}{F7F8FA}
+\definecolor{avkPropFrame}{HTML}{C9CED6}
+\definecolor{avkMuted}{HTML}{5F6B7A}
+\definecolor{avkPhysics}{HTML}{C2410C}     % effect badges
+\definecolor{avkDisplay}{HTML}{1D4ED8}
+\definecolor{avkCamera}{HTML}{0F766E}
+\definecolor{avkAction}{HTML}{6D28D9}
+
+% ---------------------------------------------------------------- fonts
+\cs_new:Npn \__avk_uifont: {\sffamily}
+\cs_new:Npn \__avk_idfont: {\ttfamily}
+\bool_if:NT \g__avk_uifont_bool
+  {
+    \sys_if_engine_luatex:T
+      {
+        \RequirePackage{fontspec}
+        % the app renders with Inter (Avalonia Fluent default on Windows: Segoe UI)
+        \IfFontExistsTF{Inter}
+          {\newfontfamily\avkuifontfamily{Inter}[Scale=MatchLowercase]}
+          {\IfFontExistsTF{Segoe~UI}
+             {\newfontfamily\avkuifontfamily{Segoe~UI}[Scale=MatchLowercase]}
+             {\newfontfamily\avkuifontfamily{Latin~Modern~Sans}}}
+        \IfFontExistsTF{JetBrains~Mono}
+          {\newfontfamily\avkidfontfamily{JetBrains~Mono}[Scale=MatchLowercase]}
+          {\newfontfamily\avkidfontfamily{Latin~Modern~Mono}}
+        \cs_set:Npn \__avk_uifont: {\avkuifontfamily}
+        \cs_set:Npn \__avk_idfont: {\avkidfontfamily}
+      }
+  }
+
+% ---------------------------------------------------------------- field names
+\bool_if:NTF \g__avk_italian_bool
+  {
+    \tl_const:Nn \c__avk_type_tl {Tipo}
+    \tl_const:Nn \c__avk_unit_tl {Unità}
+    \tl_const:Nn \c__avk_range_tl {Intervallo}
+    \tl_const:Nn \c__avk_default_tl {Predefinito}
+    \tl_const:Nn \c__avk_effect_tl {Effetto}
+    \tl_const:Nn \c__avk_saved_tl {Salvato~in}
+    \tl_const:Nn \c__avk_visible_tl {Visibile~se}
+    \tl_const:Nn \c__avk_help_tl {Testo~di~aiuto}
+    \tl_const:Nn \c__avk_example_tl {Esempio}
+    \tl_const:Nn \c__avk_open_tl {Apertura}
+    \tl_const:Nn \c__avk_modes_tl {Modalità}
+    \tl_const:Nn \c__avk_pending_tl {Screenshot~da~acquisire}
+    \tl_const:Nn \c__avk_inapp_tl {Aiuto~nell'app}
+    \tl_const:Nn \c__avk_e_physics_tl {Fisica}
+    \tl_const:Nn \c__avk_e_display_tl {Visualizzazione}
+    \tl_const:Nn \c__avk_e_camera_tl {Camera}
+    \tl_const:Nn \c__avk_e_action_tl {Azione}
+    \tl_const:Nn \c__avk_s_file_tl {file~di~salvataggio}
+    \tl_const:Nn \c__avk_s_prefs_tl {preferenze~utente}
+    \tl_const:Nn \c__avk_s_none_tl {non~salvato}
+  }
+  {
+    \tl_const:Nn \c__avk_type_tl {Type}
+    \tl_const:Nn \c__avk_unit_tl {Unit}
+    \tl_const:Nn \c__avk_range_tl {Range}
+    \tl_const:Nn \c__avk_default_tl {Default}
+    \tl_const:Nn \c__avk_effect_tl {Effect}
+    \tl_const:Nn \c__avk_saved_tl {Stored~in}
+    \tl_const:Nn \c__avk_visible_tl {Shown~when}
+    \tl_const:Nn \c__avk_help_tl {Help~text}
+    \tl_const:Nn \c__avk_example_tl {Example}
+    \tl_const:Nn \c__avk_open_tl {Open}
+    \tl_const:Nn \c__avk_modes_tl {View~modes}
+    \tl_const:Nn \c__avk_pending_tl {Screenshot~pending}
+    \tl_const:Nn \c__avk_inapp_tl {In-app~help}
+    \tl_const:Nn \c__avk_e_physics_tl {Physics}
+    \tl_const:Nn \c__avk_e_display_tl {Display}
+    \tl_const:Nn \c__avk_e_camera_tl {Camera}
+    \tl_const:Nn \c__avk_e_action_tl {Action}
+    \tl_const:Nn \c__avk_s_file_tl {save~file}
+    \tl_const:Nn \c__avk_s_prefs_tl {user~preferences}
+    \tl_const:Nn \c__avk_s_none_tl {not~stored}
+  }
+
+% ---------------------------------------------------------------- inline markup
+\NewDocumentCommand \uilabel { m } {{\__avk_uifont:\bfseries #1}}
+\NewDocumentCommand \uival { m } {\mbox{{\__avk_idfont: #1}}}
+\NewDocumentCommand \uiid { m } {{\__avk_idfont:\footnotesize\color{avkMuted}\detokenize{#1}}}
+\NewDocumentCommand \resx { m } {{\__avk_idfont:\footnotesize\color{avkMuted}\detokenize{#1}}}
+
+% \menu{A > B > C}
+\cs_new_protected:Npn \__avk_menusep: {\nobreak\,\guilsinglright\,\allowbreak}
+\seq_new:N \l__avk_tmp_seq
+\bool_if:NTF \g__avk_menukeys_bool
+  {\RequirePackage{menukeys}}
+  {
+    \cs_if_exist:NF \menu
+      {
+        \NewDocumentCommand \menu { m }
+          {
+            \seq_set_split:Nnn \l__avk_tmp_seq { > } {#1}
+            \seq_map_indexed_inline:Nn \l__avk_tmp_seq
+              {\int_compare:nNnT {##1} > {1} {\__avk_menusep:}\mbox{\uilabel{##2}}}
+          }
+      }
+  }
+
+% \uikey{Ctrl+Shift+S}
+\tcbset{avkkey/.style={on~line, boxsep=0pt, left=2pt, right=2pt, top=1pt, bottom=1pt,
+    boxrule=0.4pt, arc=1pt, colback=white, colframe=avkMuted, fontupper=\__avk_uifont:\footnotesize}}
+\NewDocumentCommand \uikey { m }
+  {
+    \seq_set_split:Nnn \l__avk_tmp_seq { + } {#1}
+    \seq_map_indexed_inline:Nn \l__avk_tmp_seq
+      {\int_compare:nNnT {##1} > {1} {\,+\,}\tcbox[avkkey]{\strut ##2}}
+  }
+\NewDocumentCommand \uimouse { m } {\tcbox[avkkey]{\strut #1}}
+
+% ---------------------------------------------------------------- callouts
+\tikzset{avk~callout/.style={circle, fill=avkAccent, text=white, draw=white, line~width=0.6pt,
+    font=\__avk_uifont:\bfseries\scriptsize, inner~sep=0pt, minimum~size=1.35em}}
+\NewDocumentCommand \callout { m }
+  {\tikz[baseline=(c.base)]\node[avk~callout](c){#1};}
+
+\tl_new:N \l__avk_panel_tl     % the current panel key (set by uipanel): labels
+\tl_new:N \l__avk_fig_tl       % the figure whose callouts \co and entry headers look up
+% \uiusefigure{key}: following \co and property headers use the callouts of figure <key>
+\NewDocumentCommand \uiusefigure { m } {\tl_set:Nn \l__avk_fig_tl {#1}}
+\cs_new_protected:Npn \__avk_ensure_panel:n #1
+  {
+    \prop_if_exist:cF {g__avk_co_#1_prop}
+      {\prop_new:c {g__avk_co_#1_prop} \seq_new:c {g__avk_cos_#1_seq}}
+  }
+% \uidefinecallout{panel}{AutomationId}{number}{x}{y}; x, y in 0..1 from the image's top left
+\NewDocumentCommand \uidefinecallout { m m m m m }
+  {
+    \__avk_ensure_panel:n {#1}
+    \prop_gput:cnn {g__avk_co_#1_prop} {#2} {#3}
+    \seq_gput_right:cn {g__avk_cos_#1_seq} {{#3}{#4}{#5}}
+  }
+% \co[panel]{AutomationId}
+\NewDocumentCommand \co { O{\l__avk_fig_tl} m }
+  {
+    \tl_set:Nx \l_tmpa_tl {#1}
+    \prop_if_exist:cTF {g__avk_co_\l_tmpa_tl _prop}
+      {
+        \prop_get:cnNTF {g__avk_co_\l_tmpa_tl _prop} {#2} \l_tmpb_tl
+          {\callout{\l_tmpb_tl}}
+          {\__avk_missing_co:n {#2}}
+      }
+      {\__avk_missing_co:n {#2}}
+  }
+\cs_new_protected:Npn \__avk_missing_co:n #1
+  {
+    \textcolor{red}{\textbf{??}}
+    \msg_warning:nnn {aethervk-manual} {no-callout} {#1}
+  }
+\msg_new:nnn {aethervk-manual} {no-callout} {No~callout~for~'#1'~in~figure~'\l__avk_fig_tl'.}
+
+% ---------------------------------------------------------------- screenshots
+\dim_new:N \l__avk_w_dim
+\dim_new:N \l__avk_h_dim
+\box_new:N \l__avk_img_box
+\keys_define:nn {avk/shot}
+  {
+    width       .dim_set:N  = \l__avk_shot_width_dim,     % force a width
+    width       .initial:n  = 0pt,
+    placeholder .tl_set:N   = \l__avk_ph_tl,              % placeholder size "w,h" in \linewidth units
+    placeholder .initial:n  = {0.45,0.75},
+    callouts    .bool_set:N = \l__avk_callouts_bool,
+    callouts    .initial:n  = true,
+    callouts    .default:n  = true,
+  }
+% \uiscreenshot[opts]{panel}{file}: the image at its natural size (the fixture writes 150 dpi
+% into the PNG, so 1 UI pixel = 0.169 mm in every figure), capped to \linewidth; the callouts
+% of <panel> drawn over it.
+\bool_new:N \l__avk_have_img_bool
+\NewDocumentCommand \uiscreenshot { O{} m m }
+  {
+    \group_begin:
+    \keys_set:nn {avk/shot} {#1}
+    \bool_set_false:N \l__avk_have_img_bool
+    \bool_if:NF \g__avk_placeholders_bool
+      {\file_if_exist:nT {#3} {\bool_set_true:N \l__avk_have_img_bool}}
+    \bool_if:NTF \l__avk_have_img_bool
+      {
+        \dim_compare:nNnTF \l__avk_shot_width_dim > {0pt}
+          {\hbox_set:Nn \l__avk_img_box {\includegraphics[width=\l__avk_shot_width_dim]{#3}}}
+          {\hbox_set:Nn \l__avk_img_box {\includegraphics{#3}}}
+        \dim_compare:nNnT {\box_wd:N \l__avk_img_box} > \linewidth
+          {\hbox_set:Nn \l__avk_img_box {\includegraphics[width=\linewidth]{#3}}}
+      }
+      {
+        \seq_set_split:NnV \l__avk_tmp_seq {,} \l__avk_ph_tl
+        \dim_set:Nn \l__avk_w_dim {\fp_to_dim:n {(\seq_item:Nn \l__avk_tmp_seq {1}) * \linewidth}}
+        \dim_set:Nn \l__avk_h_dim {\fp_to_dim:n {(\seq_item:Nn \l__avk_tmp_seq {2}) * \linewidth}}
+        \hbox_set:Nn \l__avk_img_box
+          {
+            \fcolorbox{avkMuted}{avkPropBg}
+              {
+                \parbox[c][\l__avk_h_dim][c]{\l__avk_w_dim}
+                  {\centering\__avk_uifont:\footnotesize\color{avkMuted}
+                   \c__avk_pending_tl\\[2pt]{\__avk_idfont:\detokenize{#3}}}
+              }
+          }
+      }
+    \dim_set:Nn \l__avk_w_dim {\box_wd:N \l__avk_img_box}
+    \dim_set:Nn \l__avk_h_dim {\box_ht:N \l__avk_img_box + \box_dp:N \l__avk_img_box}
+    \__avk_draw:n {#2}
+    \group_end:
+  }
+\cs_generate_variant:Nn \seq_set_split:Nnn {NnV}
+% the box drawn with its south-west corner at (0,0) and the panel's callouts over it
+\cs_new_protected:Npn \__avk_draw:n #1
+  {
+    \begin{tikzpicture}[x=\l__avk_w_dim, y=\l__avk_h_dim]
+      \node[anchor=south~west, inner~sep=0pt] at (0,0) {\box_use:N \l__avk_img_box};
+      \bool_if:NT \l__avk_callouts_bool
+        {
+          \seq_if_exist:cT {g__avk_cos_#1_seq}
+            {\seq_map_inline:cn {g__avk_cos_#1_seq} {\__avk_one_callout:nnn ##1}}
+        }
+    \end{tikzpicture}
+  }
+\cs_new_protected:Npn \__avk_one_callout:nnn #1 #2 #3
+  {\node[avk~callout] at ({#2}, {1-(#3)}) {#1};}
+
+% ---------------------------------------------------------------- panels
+\keys_define:nn {avk/panel}
+  {
+    key     .tl_set:N = \l__avk_pkey_tl,
+    open    .tl_set:N = \l__avk_open_tl,     % how to open it (use \menu)
+    modes   .tl_set:N = \l__avk_modes_tl,    % view modes / states in which it is shown
+    level   .tl_set:N = \l__avk_level_tl,    % section | subsection | subsubsection
+    level   .initial:n = subsection,
+  }
+\NewDocumentEnvironment {uipanel} { O{} m }
+  {
+    \keys_set:nn {avk/panel} {#1}
+    \use:c {\l__avk_level_tl} {#2}
+    \tl_if_empty:NF \l__avk_pkey_tl {\label{panel:\l__avk_pkey_tl}}
+    \tl_gset_eq:NN \g__avk_panel_tl \l__avk_pkey_tl
+    \tl_set_eq:NN \l__avk_panel_tl \l__avk_pkey_tl
+    \tl_set_eq:NN \l__avk_fig_tl \l__avk_pkey_tl
+    \__avk_ensure_panel:n {\l__avk_pkey_tl}
+    \bool_lazy_and:nnF {\tl_if_empty_p:N \l__avk_open_tl} {\tl_if_empty_p:N \l__avk_modes_tl}
+      {
+        \begin{tcolorbox}[colback=white, colframe=avkAccent, boxrule=0pt,
+            leftrule=2pt, arc=0pt, left=2mm, top=1mm, bottom=1mm, fontupper=\small]
+          \tl_if_empty:NF \l__avk_open_tl
+            {\textbf{\c__avk_open_tl}:~\l__avk_open_tl\par}
+          \tl_if_empty:NF \l__avk_modes_tl
+            {\textbf{\c__avk_modes_tl}:~\l__avk_modes_tl\par}
+        \end{tcolorbox}
+      }
+  }
+  {}
+\tl_new:N \g__avk_panel_tl
+
+% \uisection[label]{Title}{AutomationId}: a property group (an expander of the panel)
+\NewDocumentCommand \uisection { o m m }
+  {
+    \par\medskip
+    \noindent{\__avk_uifont:\bfseries\large\color{avkAccent}\guilsinglright\enspace}%
+    {\__avk_uifont:\bfseries\large #2}
+    \tl_if_blank:nF {#3} {\hfill\uiid{#3}}
+    \IfValueT {#1}
+      {
+        \cs_if_exist_use:N \phantomsection
+        \protected@edef\@currentlabel{#2}
+        \label{panelsec:\l__avk_panel_tl/#1}
+      }
+    \par\nobreak\smallskip
+  }
+
+% ---------------------------------------------------------------- property entries
+\keys_define:nn {avk/prop}
+  {
+    key     .tl_set:N = \l__avk_key_tl,      % local key: label prop:<panel>.<key>
+    id      .tl_set:N = \l__avk_id_tl,       % AutomationId (also the callout lookup)
+    type    .tl_set:N = \l__avk_type_tl,     % check box, slider, ...
+    unit    .tl_set:N = \l__avk_unit_tl,
+    range   .tl_set:N = \l__avk_range_tl,
+    default .tl_set:N = \l__avk_default_tl,
+    effect  .choices:nn = {physics, display, camera, action}
+                           {\tl_set_eq:NN \l__avk_effect_tl \l_keys_choice_tl},
+    effectnote .tl_set:N = \l__avk_effectnote_tl,
+    saved   .choices:nn = {file, prefs, none}
+                           {\tl_set_eq:NN \l__avk_saved_tl \l_keys_choice_tl},
+    visible .tl_set:N = \l__avk_visible_tl,  % "Orthographic", "Model view only", ...
+    help    .tl_set:N = \l__avk_help_tl,     % resx key of the help text
+  }
+\tl_new:N \l__avk_effect_tl
+\tl_new:N \l__avk_saved_tl
+
+\cs_new_protected:Npn \__avk_field:Nn #1 #2
+  {
+    \tl_if_empty:NF #1
+      {{\small\noindent\makebox[6.6em][l]{\color{avkMuted}#2}#1\par}}
+  }
+\tl_new:N \l__avk_badge_tl
+\cs_new_protected:Npn \__avk_badge:n #1
+  {
+    \tl_set:Nx \l__avk_badge_tl
+      {\str_case:nn {#1} {{physics}{avkPhysics}{display}{avkDisplay}{camera}{avkCamera}{action}{avkAction}}}
+    \tcbox[on~line, boxsep=0pt, left=3pt, right=3pt, top=1pt, bottom=1pt, boxrule=0pt, arc=2pt,
+      colback=\l__avk_badge_tl, colframe=\l__avk_badge_tl, fontupper=\__avk_uifont:\bfseries\scriptsize\color{white}]
+      {\strut\use:c {c__avk_e_#1_tl}}
+  }
+
+\NewDocumentEnvironment {uiproperty} { O{} m }
+  {
+    \keys_set:nn {avk/prop} {#1}
+    \par\smallskip
+    \begin{tcolorbox}[breakable, colback=avkPropBg, colframe=avkPropFrame,
+        boxrule=0.4pt, arc=1mm, left=2.5mm, right=2.5mm, top=1.5mm, bottom=1.5mm,
+        before~upper={\parindent=0pt}]
+      % header: [callout] Label .................. AutomationId
+      \noindent
+      \tl_if_empty:NF \l__avk_id_tl
+        {
+          \prop_if_exist:cT {g__avk_co_\l__avk_fig_tl _prop}
+            {
+              \prop_get:cVNT {g__avk_co_\l__avk_fig_tl _prop} \l__avk_id_tl \l_tmpb_tl
+                {\callout{\l_tmpb_tl}\enspace}
+            }
+        }
+      {\large\uilabel{#2}}
+      \tl_if_empty:NF \l__avk_effect_tl {\enspace\__avk_badge:V \l__avk_effect_tl}
+      \tl_if_empty:NF \l__avk_id_tl {\hfill\exp_args:NV \uiid \l__avk_id_tl}
+      \tl_if_empty:NF \l__avk_key_tl
+        {
+          \cs_if_exist_use:N \phantomsection
+          \protected@edef\@currentlabel{#2}
+          \label{prop:\l__avk_panel_tl.\l__avk_key_tl}
+        }
+      \par\smallskip
+      \__avk_field:Nn \l__avk_type_tl    {\c__avk_type_tl}
+      \__avk_field:Nn \l__avk_unit_tl    {\c__avk_unit_tl}
+      \__avk_field:Nn \l__avk_range_tl   {\c__avk_range_tl}
+      \__avk_field:Nn \l__avk_default_tl {\c__avk_default_tl}
+      \tl_if_empty:NF \l__avk_effectnote_tl
+        {\__avk_field:Nn \l__avk_effectnote_tl {\c__avk_effect_tl}}
+      \tl_if_empty:NF \l__avk_saved_tl
+        {
+          \tl_set:Nx \l_tmpa_tl {\exp_not:c {c__avk_s_\l__avk_saved_tl _tl}}
+          \__avk_field:Nn \l_tmpa_tl {\c__avk_saved_tl}
+        }
+      \__avk_field:Nn \l__avk_visible_tl {\c__avk_visible_tl}
+      \tl_if_empty:NF \l__avk_help_tl
+        {
+          \tl_set:Nx \l_tmpa_tl {\exp_not:N \resx {\exp_not:V \l__avk_help_tl}}
+          \__avk_field:Nn \l_tmpa_tl {\c__avk_help_tl}
+        }
+      \smallskip
+  }
+  {\end{tcolorbox}}
+\cs_generate_variant:Nn \__avk_badge:n {V}
+\cs_generate_variant:Nn \prop_get:NnNT {cVNT}
+
+\NewDocumentEnvironment {uiexample} {}
+  {
+    \begin{tcolorbox}[breakable, colback=white, colframe=avkPropFrame, boxrule=0.3pt,
+        arc=0.5mm, left=2mm, right=2mm, top=1mm, bottom=1mm, fontupper=\small,
+        title={\c__avk_example_tl}, coltitle=avkMuted, colbacktitle=white,
+        fonttitle=\__avk_uifont:\bfseries\footnotesize, titlerule=0pt, toptitle=0.5mm, bottomtitle=0mm]
+  }
+  {\end{tcolorbox}}
+
+\NewDocumentEnvironment {uihelptext} {}
+  {
+    \par\noindent
+    \begin{tcolorbox}[breakable, colback=white, colframe=white, boxrule=0pt,
+        leftrule=1.5pt, colframe=avkMuted, arc=0pt, left=2mm, top=0.5mm, bottom=0.5mm,
+        fontupper=\small\itshape]
+    {\upshape\__avk_uifont:\bfseries\footnotesize\color{avkMuted}\c__avk_inapp_tl\par}
+  }
+  {\end{tcolorbox}}
+
+% ---------------------------------------------------------------- cross-references
+% \panelref{settings-viewport}       ->  Viewport (§ 4.3)
+% \sectionref{settings-viewport/projection}
+% \propref{settings-viewport.fov}    ->  FOV (p. 37)
+\NewDocumentCommand \panelref { m }
+  {
+    \cs_if_exist:NTF \nameref
+      {\nameref{panel:#1}~(\S\,\ref{panel:#1})}
+      {\S\,\ref{panel:#1}}
+  }
+\NewDocumentCommand \sectionref { m }
+  {\uilabel{\ref{panelsec:#1}}~(p.\,\pageref{panelsec:#1})}
+\NewDocumentCommand \propref { m }
+  {\uilabel{\ref{prop:#1}}~(p.\,\pageref{prop:#1})}

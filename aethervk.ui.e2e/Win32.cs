@@ -311,27 +311,75 @@ internal static partial class Win32
     return found.OrderBy(m => m.Left != 0 || m.Top != 0).ThenBy(m => m.Left).ToList();
   }
 
+  [DllImport("user32.dll")]
+  private static extern bool IsIconic(IntPtr hWnd);
+
   /// <summary>
   /// Moves a top-level window onto <paramref name="monitor"/> and maximises it there: restored
   /// first (a maximised window cannot be moved), placed inside the monitor, then maximised, which
-  /// Windows does on the monitor the window is on.
+  /// Windows does on the monitor the window is on. Checked afterwards and retried: once
+  /// (BillboardMonitorTests, 2026-11-01) the window ended minimised (WinAppDriver then reported it
+  /// at y = −32000 and every later step failed on that), so a placement that does not take throws
+  /// here, saying where the window is.
   /// </summary>
   public static void MaximizeOn(IntPtr hWnd, Monitor monitor)
   {
     const int SW_RESTORE = 9, SW_MAXIMIZE = 3;
     const uint SWP_NOZORDER = 0x0004, SWP_NOACTIVATE = 0x0010;
+    string state = "";
+    for (int attempt = 0; attempt < 3; attempt++)
+    {
+      ShowWindow(hWnd, SW_RESTORE);
+      Thread.Sleep(300);
+      if (!SetWindowPos(hWnd, IntPtr.Zero, monitor.Left + 40, monitor.Top + 40, monitor.Width - 80, monitor.Height - 80, SWP_NOZORDER | SWP_NOACTIVATE))
+        throw new InvalidOperationException($"SetWindowPos failed ({Marshal.GetLastWin32Error()})");
+      Thread.Sleep(300);
+      ShowWindow(hWnd, SW_MAXIMIZE);
+      SetForegroundWindow(hWnd);
+      Thread.Sleep(500);
+      var (x, y) = WindowCorner(hWnd);
+      // a maximized window's frame overhangs its monitor by a few px
+      bool onMonitor = x >= monitor.Left - 16 && x < monitor.Left + monitor.Width && y >= monitor.Top - 16 && y < monitor.Top + monitor.Height;
+      if (!IsIconic(hWnd) && onMonitor)
+        return;
+      state = $"attempt {attempt + 1}: iconic {IsIconic(hWnd)}, corner ({x}, {y})";
+      Thread.Sleep(1000);
+    }
+    throw new InvalidOperationException($"the window did not maximize on {monitor} ({state})");
+  }
+
+  /// <summary>Restores <paramref name="hWnd"/> (not maximized) and places it at the given desktop rectangle.</summary>
+  public static void PlaceAt(IntPtr hWnd, int x, int y, int width, int height)
+  {
+    const int SW_RESTORE = 9;
+    const uint SWP_NOZORDER = 0x0004;
     ShowWindow(hWnd, SW_RESTORE);
     Thread.Sleep(300);
-    if (!SetWindowPos(hWnd, IntPtr.Zero, monitor.Left + 40, monitor.Top + 40, monitor.Width - 80, monitor.Height - 80, SWP_NOZORDER | SWP_NOACTIVATE))
+    if (!SetWindowPos(hWnd, IntPtr.Zero, x, y, width, height, SWP_NOZORDER))
       throw new InvalidOperationException($"SetWindowPos failed ({Marshal.GetLastWin32Error()})");
-    Thread.Sleep(300);
-    ShowWindow(hWnd, SW_MAXIMIZE);
+    SetForegroundWindow(hWnd);
     Thread.Sleep(500);
   }
 
   public const byte VK_RETURN = 0x0D;
   public const byte VK_CONTROL = 0x11;
   public const byte VK_MENU = 0x12;
+
+  public const byte VK_SHIFT = 0x10;
+
+  /// <summary>Ctrl (+ Shift) + <paramref name="virtualKey"/> to the foreground window, e.g. Ctrl+Shift+S.</summary>
+  public static void CtrlChord(byte virtualKey, bool shift = false)
+  {
+    const uint KEYEVENTF_KEYUP = 0x0002;
+    keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
+    Thread.Sleep(50);
+    if (shift)
+      Chord(VK_SHIFT, virtualKey);
+    else
+      PressKey(virtualKey);
+    keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+    Thread.Sleep(150);
+  }
 
   /// <summary>A modifier held around a key press, e.g. (VK_MENU, 'D') for Alt+D.</summary>
   public static void Chord(byte modifier, byte virtualKey)

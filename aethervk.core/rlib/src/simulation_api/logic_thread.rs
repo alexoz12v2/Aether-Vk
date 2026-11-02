@@ -48,12 +48,18 @@ use thingbuf::mpsc;
 // don't insert imports from `dashmap` or `parking_lot` or `spin` cause their lock types have the
 // same names
 
+/// Commands scattered to the thread pool instead of run on the logic thread as they are drained.
+///
+/// `UnloadAlmanac` is not one of them: a recommit sends the old SPK's unload, then the new load,
+/// and the same file is often both. On the pool the two raced: the load could run first (the file
+/// still loaded, so deduplicated to a no-op) and the unload after it, leaving the comet without
+/// its SPK ("summary 1000012 not present", e2e `RunAtThisDate`). Run inline, the unload finishes
+/// before the next command (the load) is even received. It is a map removal and a coverage rescan.
 pub fn is_logic_command_async(cmd: &LogicCommand) -> bool {
   match cmd {
     LogicCommand::ImportModel { .. }
     | LogicCommand::ImportAsset { .. }
     | LogicCommand::LoadAlmanac { .. }
-    | LogicCommand::UnloadAlmanac { .. }
     | LogicCommand::UpdateTrajectoryForSpk { .. }
     | LogicCommand::BuildCometTrajectory { .. } => true,
     _ => false,
@@ -187,6 +193,9 @@ struct PlayControl {
   target_frame_time: timeus_t,
   last_frame_start: timeus_t,
   last_render_ticks: alloc::vec::Vec<core::num::NonZero<u64>>,
+  /// the `utils::dust_build_key` of the last paused dust history build that recorded nothing:
+  /// the paused loop tries again only once the key moves
+  paused_dust_build_stalled_at: Option<u64>,
 }
 
 impl PlayControl {
@@ -195,6 +204,7 @@ impl PlayControl {
       target_frame_time,
       last_frame_start: oshal::os::time::get_monotonic_time(),
       last_render_ticks: alloc::vec::Vec::new(),
+      paused_dust_build_stalled_at: None,
     }
   }
 }
@@ -400,11 +410,66 @@ pub fn start_logic_thread(
             // the trajectory lines: a toggle while paused (mail R8) showed nothing until Play or a
             // seek. Nothing is rebuilt at an unchanged sim time.
             if phase1_res.is_none() && !is_running {
-              let now_s = {
+              let (now_scaled_us, start_epoch) = {
                 let time_mgr = unsafe { scenes.time_managers.get(&scene_id).unwrap_unchecked() };
-                time_mgr.state.read().scaled_time as f64 * 1e-6
+                (time_mgr.state.read().scaled_time, time_mgr.start_epoch)
               };
+              let now_s = now_scaled_us as f64 * 1e-6;
               utils::update_dust_trajectories(&scene_arc.read(), now_s);
+
+              // a particle system added (or asked to re-emit) while paused has no dust history
+              // until the fixed update runs, that is Play, or a seek: build it here, as a seek
+              // does (`apply_seek` → `fill_dust_history`), at the paused time. Only once the
+              // previous compute submission completed (`physics_done`, the descriptor ring's
+              // contract), only while a system is building (nothing once it is complete), and
+              // not again after an attempt that moved nothing (`dust_build_key`).
+              let build_key = if physics_done {
+                utils::dust_build_key(&scene_arc.read().scene)
+                  .filter(|k| pc.paused_dust_build_stalled_at != Some(*k))
+              } else {
+                None
+              };
+              if let Some(key) = build_key {
+                let mut sync = None;
+                let _ = context.kernels.0.with_device(context.kernels.1, |dyn_device| {
+                  if let Some(device) =
+                    dyn_device.as_any().downcast_ref::<vulkan::device::Device>()
+                  {
+                    // the time manager's shard guard, as `self_sync_do_if_done` holds it: no
+                    // simulation step of this scene from someone else meanwhile
+                    let _time_mgr =
+                      unsafe { scenes.time_managers.get(&scene_id).unwrap_unchecked() };
+                    let g = scene_arc.read();
+                    sync = utils::fill_dust_history(
+                      device,
+                      &g.scene,
+                      *scene_id,
+                      &scenes.cartesian_state_cache,
+                      &context.logic_state.read().almanac_data,
+                      start_epoch,
+                      now_scaled_us,
+                      g.comet_reference_elements,
+                      false,
+                    )
+                    .unwrap_or_else(|e| {
+                      oshal::log!("[Dust] paused history build failed: {e}");
+                      None
+                    });
+                  }
+                  Ok(())
+                });
+                if let Some(sync) = sync {
+                  let mut scene_write = scene_arc.write();
+                  scene_write.latest_physics_sync = Some(sync);
+                  scene_write
+                    .active_physics_task
+                    .store(true, core::sync::atomic::Ordering::Release);
+                }
+                let after = utils::dust_build_key(&scene_arc.read().scene);
+                pc.paused_dust_build_stalled_at = (after == Some(key)).then_some(key);
+                // the trajectory lines of the history just built
+                utils::update_dust_trajectories(&scene_arc.read(), now_s);
+              }
             }
 
             // - Phase 2: Update
@@ -3427,6 +3492,56 @@ pub(crate) mod utils {
   const DUST_BATCHES_PER_TICK: usize =
     crate::gpu_backends::vulkan::device::dust::DUST_BATCH_SLOTS as usize - 256;
 
+  /// A particle system of `scene` is still building its dust history
+  /// (`DustSystemState::building`: due windows not emitted, batches awaiting re-emission).
+  pub fn any_dust_building(scene: &crate::scene::Scene) -> bool {
+    use crate::scene::particles::ParticleSystemComponent;
+    let mut any = false;
+    scene.query1(|_, ps: &ParticleSystemComponent| any |= ps.dust.lock().building());
+    any
+  }
+
+  /// What an emission pass over `scene` can move, folded into one number: the particle systems
+  /// (count and ids), their recorded batches (`upload_seq`, monotonic), their windows consumed
+  /// (`next_window`, also by unlit windows that record no batch, `unlit_windows`) and the
+  /// re-emits requested. `None` when no system is building.
+  ///
+  /// The paused logic tick builds the history of a system added while paused (which used to
+  /// wait for Play or a seek) with this as its progress check: an attempt that leaves the key
+  /// where it was recorded nothing (a system that cannot progress at this time, say no jet state),
+  /// and the loop does not try again until the key moves (a new system, a re-emit request, a seek
+  /// or Play that emitted). Without it such a system turned every paused tick into an empty
+  /// compute submission.
+  pub fn dust_build_key(scene: &crate::scene::Scene) -> Option<u64> {
+    use crate::scene::particles::ParticleSystemComponent;
+    // FNV-1a over the numbers, order-dependent (the query order is the component storage order,
+    // stable between two ticks without a structural change, which the count and ids catch)
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut fold = |v: u64| {
+      for b in v.to_le_bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+      }
+    };
+    let mut building = false;
+    let mut systems = 0u64;
+    scene.query1(|id, ps: &ParticleSystemComponent| {
+      let sys = ps.dust.lock();
+      building |= sys.building();
+      systems += 1;
+      fold(id.as_ffi());
+      fold(sys.upload_seq);
+      fold(sys.reemit as u64);
+      for t in &sys.tiers {
+        fold(t.next_window.unwrap_or(i64::MIN) as u64);
+        fold(t.unlit_windows as u64);
+        fold(t.jet_unavailable as u64);
+      }
+    });
+    fold(systems);
+    building.then_some(h)
+  }
+
   /// One emission pass submitted on its own: the single-pass case of [`fill_dust_history`].
   #[allow(clippy::too_many_arguments)]
   pub fn emit_and_submit_dust(
@@ -3522,11 +3637,7 @@ pub(crate) mod utils {
     use crate::{
       gpu_backends::vulkan::device::QueueRole, scene::particles::ParticleSystemComponent,
     };
-    let building = || {
-      let mut any = false;
-      scene.query1(|_, ps: &ParticleSystemComponent| any |= ps.dust.lock().building());
-      any
-    };
+    let building = || any_dust_building(scene);
     let mut systems = 0usize;
     scene.query1(|_, _: &ParticleSystemComponent| systems += 1);
     // what one pass can record at most: windows + re-emits + one provisional batch per tier

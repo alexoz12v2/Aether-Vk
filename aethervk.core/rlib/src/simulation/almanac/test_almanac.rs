@@ -30,3 +30,22 @@ fn test_fetch_earth_position_eclipj2000() {
 
   assert_ne!(state.radius_km[0], 0.0);
 }
+
+#[test]
+#[cfg(windows)]
+fn spk_unload_accepts_mixed_separators() {
+  let mut data = AlmanacPackedData::default();
+  let mixed = r"../../assets/planets\de442.bsp";
+  let other = r"../../assets\planets/de442.bsp";
+  assert_eq!(spk_alias(mixed), spk_alias(other));
+
+  data.load_almanac(mixed).unwrap();
+  assert_eq!(data.file_names.len(), 1);
+  assert_eq!(data.file_names[0], spk_alias(mixed));
+  let loaded = data.almanac.num_loaded_spk();
+  assert!(loaded >= 1);
+
+  data.unload_almanac_spk(mixed).unwrap();
+  assert!(data.file_names.is_empty());
+  assert_eq!(data.almanac.num_loaded_spk(), loaded - 1);
+}

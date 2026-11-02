@@ -2438,17 +2438,7 @@ fn test_device_loss_dumps_every_scene_without_the_gpu() {
 /// and one jet ignited at `start + ignite_days` (negative: before the start, the dust lead).
 /// `None` without the SPK (Horizons unreachable) or a GPU.
 fn ignition_scene(ignite_days: f64) -> Option<(Box<SimulationContext>, u64, Epoch)> {
-  use crate::scene::{
-    BodyRotationalModel, StaticMeshComponent, TransformComponent,
-    particles::{
-      ParticleSystemComponent, ParticleSystemDrawParams, ParticleSystemEmitParams,
-      emission_start_us_from_epoch,
-    },
-  };
-  use aethervk_oshal_rlib::math::{
-    quaternion::Quaternion,
-    vector::{Vector3, vec3::Vec3f32, vec4::Quat},
-  };
+  use crate::scene::{BodyRotationalModel, particles::emission_start_us_from_epoch};
   let Some(spk_path) = fetch_67p_spk("1000012_ignition.bsp") else {
     println!("Skipping: Horizons unreachable");
     return None;
@@ -2547,77 +2537,187 @@ fn ignition_scene(ignite_days: f64) -> Option<(Box<SimulationContext>, u64, Epoc
     let scenes = ctx.scenes.read();
     let scene_arc = scenes.get_scene(scene_id).unwrap();
     let g = scene_arc.read();
-    let parent_scale = g
-      .scene
-      .with_component(comet_body, |t: &TransformComponent| t.scale.x())
-      .unwrap_or(1.0);
-    let (lat, lon) = (20.0_f32.to_radians(), 0.0f32);
-    let local_r = 2.0 / parent_scale;
-    let pos = Vec3f32::from_components(
-      local_r * lat.cos() * lon.cos(),
-      local_r * lat.cos() * lon.sin(),
-      local_r * lat.sin(),
-    );
-    let jet = g.scene.spawn_entity("jet");
-    g.scene.set_parent(jet, Some(comet_body));
-    let _ = g.scene.add_component(
-      jet,
-      TransformComponent {
-        position: pos,
-        rotation: Quat::identity(),
-        scale: Vec3f32::from_components(0.04, 0.04, 0.04),
-      },
-    );
-    let sphere = alloc::sync::Arc::new(crate::simulation::comet::generate_uv_sphere(
-      1.0, 8, 8, 1.0, false,
-    ));
-    let _ = g.scene.add_component(
-      jet,
-      StaticMeshComponent {
-        asset_path: alloc::string::String::from("__internal_jet__"),
-        mesh: sphere,
-        emissive_color: [1.0, 0.6, 0.2, 1.0],
-        is_visible: true,
-      },
-    );
-    let ps = ParticleSystemComponent::new(
+    spawn_ignition_jet(
+      &g,
       render_frontend,
       ctx.render_device_handle(),
-      jet,
-      {
-        let mut p = ParticleSystemEmitParams {
-          latitude_rad: lat,
-          longitude_rad: lon,
-          aperture_rad: 0.5,
-          start_velocity_mean: 2.0,
-          start_velocity_std: 0.5,
-          seed: 7,
-          diametre_um: 100.0,
-          density_gcm3: 0.533,
-          scattering_efficiency: 1.0,
-          geometric_albedo: 0.04,
-          size_q: 3.5,
-          size_range: 10.0,
-          dust_rate_1au_kgs: 0.0,
-          dust_rate_power: 2.0,
-          dust_rate_cutoff_au: 15.0,
-          dust_rate_max_kgs: 0.0,
-        };
-        // the activity as a dust rate: the former Afρ 100.0 cm (max 100_000.0 cm) converted
-        p.dust_rate_1au_kgs = p.dust_rate_from_afrho_kgs(100.0);
-        p.dust_rate_max_kgs = p.dust_rate_from_afrho_kgs(100_000.0);
-        p
-      },
-      ParticleSystemDrawParams {
-        stream_color: [1.0, 0.6, 0.2, 1.0],
-      },
-      30 * 86_400 * 1_000_000i64,
+      comet_body,
       emission_start_us_from_epoch(t_on),
-    )
-    .expect("ParticleSystemComponent::new");
-    let _ = g.scene.add_component(jet, ps);
+    );
   }
   Some((ctx, scene_id, start))
+}
+
+/// The ignition tests' jet (the `avkSimulationContext_addParticleSystem` recipe): a child of
+/// `comet_body` at 20° N on its surface, 30 d TTL, ignited at `emission_start_us`
+/// (`emission_start_us_from_epoch`, or `EMISSION_START_PREEXISTING`). Added to the scene of `g`.
+fn spawn_ignition_jet(
+  g: &crate::simulation_api::structs::SceneContext,
+  render_frontend: crate::gpu::RenderFrontend,
+  device_handle: crate::gpu::RenderDeviceHandle,
+  comet_body: crate::scene::EntityId,
+  emission_start_us: i64,
+) -> crate::scene::EntityId {
+  use crate::scene::{
+    StaticMeshComponent, TransformComponent,
+    particles::{ParticleSystemComponent, ParticleSystemDrawParams, ParticleSystemEmitParams},
+  };
+  use aethervk_oshal_rlib::math::{
+    quaternion::Quaternion,
+    vector::{Vector3, vec3::Vec3f32, vec4::Quat},
+  };
+  let parent_scale = g
+    .scene
+    .with_component(comet_body, |t: &TransformComponent| t.scale.x())
+    .unwrap_or(1.0);
+  let (lat, lon) = (20.0_f32.to_radians(), 0.0f32);
+  let local_r = 2.0 / parent_scale;
+  let pos = Vec3f32::from_components(
+    local_r * lat.cos() * lon.cos(),
+    local_r * lat.cos() * lon.sin(),
+    local_r * lat.sin(),
+  );
+  let jet = g.scene.spawn_entity("jet");
+  g.scene.set_parent(jet, Some(comet_body));
+  let _ = g.scene.add_component(
+    jet,
+    TransformComponent {
+      position: pos,
+      rotation: Quat::identity(),
+      scale: Vec3f32::from_components(0.04, 0.04, 0.04),
+    },
+  );
+  let sphere = alloc::sync::Arc::new(crate::simulation::comet::generate_uv_sphere(
+    1.0, 8, 8, 1.0, false,
+  ));
+  let _ = g.scene.add_component(
+    jet,
+    StaticMeshComponent {
+      asset_path: alloc::string::String::from("__internal_jet__"),
+      mesh: sphere,
+      emissive_color: [1.0, 0.6, 0.2, 1.0],
+      is_visible: true,
+    },
+  );
+  let ps = ParticleSystemComponent::new(
+    render_frontend,
+    device_handle,
+    jet,
+    {
+      let mut p = ParticleSystemEmitParams {
+        latitude_rad: lat,
+        longitude_rad: lon,
+        aperture_rad: 0.5,
+        start_velocity_mean: 2.0,
+        start_velocity_std: 0.5,
+        seed: 7,
+        diametre_um: 100.0,
+        density_gcm3: 0.533,
+        scattering_efficiency: 1.0,
+        geometric_albedo: 0.04,
+        size_q: 3.5,
+        size_range: 10.0,
+        dust_rate_1au_kgs: 0.0,
+        dust_rate_power: 2.0,
+        dust_rate_cutoff_au: 15.0,
+        dust_rate_max_kgs: 0.0,
+      };
+      // the activity as a dust rate: the former Afρ 100.0 cm (max 100_000.0 cm) converted
+      p.dust_rate_1au_kgs = p.dust_rate_from_afrho_kgs(100.0);
+      p.dust_rate_max_kgs = p.dust_rate_from_afrho_kgs(100_000.0);
+      p
+    },
+    ParticleSystemDrawParams {
+      stream_color: [1.0, 0.6, 0.2, 1.0],
+    },
+    30 * 86_400 * 1_000_000i64,
+    emission_start_us,
+  )
+  .expect("ParticleSystemComponent::new");
+  let _ = g.scene.add_component(jet, ps);
+  jet
+}
+
+/// A jet added while paused gets its dust history from the paused logic loop, without Play or a
+/// seek after it: the scene seeked to start + 5 d (paused; the first jet's history built by the
+/// seek), a second jet ignited at start + 1 d is added, and the loop alone builds it (live
+/// clusters in its ring, nothing building, every tier caught up) with the clock still paused at
+/// the same time; built, the loop leaves it alone (no further compute submission, no batch
+/// recorded). Used to stay empty until Play or a seek: the fixed update, the only caller of
+/// `fill_dust_history` besides a seek, runs only while playing. Needs the 67P SPK and a GPU.
+#[test]
+fn test_jet_added_while_paused_builds_its_dust_history() {
+  use crate::scene::particles::{ParticleSystemComponent, emission_start_us_from_epoch};
+  use core::sync::atomic::Ordering;
+  let Some((ctx, scene_id, start)) = ignition_scene(2.0) else {
+    return;
+  };
+  let scene_arc = ctx.get_scene(scene_id).unwrap();
+  let busy = || scene_arc.read().active_physics_task.load(Ordering::Acquire);
+  let running = || scene_arc.read().simulation_running.load(Ordering::Acquire);
+  let sim_s = || scene_arc.read().scene.sim_time_s();
+  // `(building, live clusters, upload seq)` of one system
+  let system = |id: crate::scene::EntityId| {
+    scene_arc
+      .read()
+      .scene
+      .with_component(id, |ps: &ParticleSystemComponent| {
+        let sys = ps.dust.lock();
+        (sys.building(), sys.tiers.iter().map(|t| t.ring.live()).sum::<u32>(), sys.upload_seq)
+      })
+      .expect("the particle system")
+  };
+  let any_building = || {
+    let g = scene_arc.read();
+    utils::any_dust_building(&g.scene)
+  };
+  let wait_built = |what: &str| {
+    let t0 = std::time::Instant::now();
+    loop {
+      let tiers = ctx.dust_stats(scene_id);
+      if !busy() && !any_building() && !tiers.is_empty() && tiers.iter().all(|t| t.caught_up) {
+        return tiers;
+      }
+      assert!(t0.elapsed().as_secs_f64() < 120.0, "{what}: dust never built: {tiers:?}");
+      std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+  };
+
+  assert!(ctx.seek_epoch_sync(scene_id, start + Duration::from_days(5.0)), "seek +5 d");
+  let first = wait_built("after the seek");
+  assert!(first.iter().any(|t| t.live_clusters > 0), "the first jet's dust: {first:?}");
+  assert!(!running(), "a seek leaves the clock paused");
+  let at_seek_s = sim_s();
+
+  // the second jet, added paused; its history (4 d of dust due at once) comes from the loop
+  let comet_body = scene_arc.read().comet.unwrap().body;
+  let render_frontend = ctx.render_frontend().expect("the GPU of `ignition_scene`");
+  let jet2 = {
+    let g = scene_arc.read();
+    spawn_ignition_jet(
+      &g,
+      render_frontend,
+      ctx.render_device_handle(),
+      comet_body,
+      emission_start_us_from_epoch(start + Duration::from_days(1.0)),
+    )
+  };
+  let built = wait_built("the jet added while paused");
+  println!("the jet added while paused, built: {built:?}");
+  let (building, live, seq) = system(jet2);
+  assert!(!building, "the second jet is still building: {built:?}");
+  assert!(live > 0, "the second jet's ring is empty: {built:?}");
+  assert!(!running(), "the loop built it without Play");
+  assert_eq!(sim_s(), at_seek_s, "the paused clock did not move");
+
+  // built, the paused loop is idle again: no compute submission, no batch recorded
+  for _ in 0..25 {
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    assert!(!busy(), "a paused tick submitted compute work after the history was built");
+  }
+  assert_eq!(system(jet2).2, seq, "the paused loop kept recording batches once built");
+  assert!(!any_building());
+  ctx.threads.logic_thread.tx().try_send(LogicCommand::Shutdown).unwrap();
 }
 
 /// A jet ignited at `start + 2 d` through the real seek path (`seek_epoch_sync` →
@@ -3652,4 +3752,48 @@ fn nucleus_view_from_earth_follows_the_comet_until_cleared() {
   let p4 = ui_write(elsewhere);
   assert!(moved(p4, elsewhere) < 1e-9, "cleared: the UI's write must land ({:?} AU)", p4);
   ctx.threads.logic_thread.tx().try_send(LogicCommand::Shutdown).unwrap();
+}
+
+/// A recommit of the same SPK (unload the old commit's file, then load the new commit's, which is
+/// the same path) must leave the file loaded: the unload runs before the load, never after it
+/// (on the thread pool the load could win, be deduplicated, and the unload then drop the file).
+#[test]
+fn test_unload_then_load_of_the_same_spk_leaves_it_loaded() {
+  let spk = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+    .join("../../test_assets/saves/review_67p_2021-12/spk/spk_67P_90000703_2021-12-12_2021-12-28.bsp");
+  let spk = std::fs::canonicalize(&spk).expect("the test save's SPK");
+  // canonicalize gives a \?\ path on Windows; the app passes Path.GetFullPath's form
+  let path = spk.to_str().unwrap().trim_start_matches(r"\?\").to_string();
+  let ctx = SimulationContext::startup(None).expect("Failed to create SimulationContext");
+  // the planetary kernels first, as the app has them (a comet SPK alone breaks anise's path search)
+  {
+    let mut logic_state = ctx.logic_state.write();
+    for k in ["pck00011.pca", "gm_de431.pca", "de442.bsp"] {
+      logic_state.almanac_data.load_almanac(alloc::format!("../../assets/planets/{k}").as_str()).expect(k);
+    }
+  }
+  let alias = crate::simulation::almanac::spk_alias(&path);
+  let loaded = || ctx.logic_state.read().almanac_data.file_names.iter().any(|f| *f == alias);
+  let wait_for = |want: bool, what: &str| {
+    let t0 = std::time::Instant::now();
+    while loaded() != want {
+      assert!(t0.elapsed() < std::time::Duration::from_secs(10), "timed out waiting for {what}");
+      std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+  };
+
+  let tx = ctx.threads.logic_thread.tx();
+  tx.try_send(LogicCommand::LoadAlmanac { task_id: 1, path: path.clone() }).unwrap();
+  wait_for(true, "the first load");
+
+  for i in 0..20 {
+    tx.try_send(LogicCommand::UnloadAlmanac { task_id: 1, path: path.clone() }).unwrap();
+    tx.try_send(LogicCommand::LoadAlmanac { task_id: 1, path: path.clone() }).unwrap();
+    // both commands handled: the pool's load has had time to run (a lost race shows as unloaded)
+    std::thread::sleep(std::time::Duration::from_millis(250));
+    assert!(loaded(), "round {i}: the SPK was dropped by an unload that ran after the reload");
+    let n = ctx.logic_state.read().almanac_data.almanac.num_loaded_spk();
+    assert_eq!(n, 2, "round {i}: DE442 and the comet's SPK, the comet's once");
+  }
+  tx.try_send(LogicCommand::Shutdown).unwrap();
 }
