@@ -16,4 +16,5 @@ public partial interface ICameraMatrixDebugViewModel
     string StrElongation { get; set; }
     string StrSunPa { get; set; }
     string StrDebug { get; set; }
+    string StrViewportRect { get; set; }
 }

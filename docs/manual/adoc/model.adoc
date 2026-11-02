@@ -1,0 +1,257 @@
+== Model tab
+:imagesdir: ..
+
+[[model-dust]]
+=== Dust
+Location:: Model › Dust
+Shown:: no comet loaded
+
+.Model › Dust
+Before a comet is committed no jets can be added; the section shows its display options and a hint to commit a comet first.
+
+image::img/model-dust--empty--light--tagged.png[Model › Dust,width=561,pdfwidth=95mm]
+
+. *Dust* -- Section with the dust display options, the gizmo, the jet list and the defaults for new jets.
+. *show reference-position error* -- Draws two lines from the comet to its reference orbit when it is more than 10 nucleus radii away. Display only.
+. *Dust visibility* -- Display stretch of the dust, from 0.00001 to 1. Smaller values show the faint old tail; 1 is close to linear brightness. Display only.
+. *Coma 1/ρ normalisation* -- Divides the dust brightness by the distance from the nucleus so the inner coma and the outer jets share one exposure. On by default; display only.
+. *Trajectory lines* -- Draws as lines the paths of about 200 grains since they left the nucleus, one colour per jet.
+. *Dust exposure* -- Brightens or darkens the dust in stops (EV), from -6 to +6. One stop doubles or halves the brightness.
+. *Particle tracers* -- Draws one dust cluster in 256 as bright dots at the positions of its grains to follow them. Display only.
+. *Flow time-lapse* -- Speed factor of the flow marks, from 1 to 10000 on a log scale. 1 moves them with the dust; larger values move them faster. Display only.
+. *Show sphere gizmo* -- Shows the wireframe sphere and axes around the nucleus; the boxes below choose its parts.
+. *Grid* -- Shows the latitude and longitude wireframe of the gizmo.
+. *Body X/Y* -- Shows the body-fixed X (red) and Y (green) axes, which turn with the nucleus.
+. *Spin axis* -- Shows the rotation axis of the nucleus (body Z, blue).
+. *Sun* -- Shows the arrow pointing to the Sun.
+. *Velocity* -- Shows the direction of the comet's heliocentric velocity (magenta).
+. *+* -- Adds a new dust jet that starts from the defaults. It needs a committed comet and a known nucleus radius.
+
+==== Properties
+
+show reference-position error::
+  Draws two lines from the comet to its reference orbit (the red track):
+  • cross-track: to the closest point of the track;
+  • same-epoch: to where the reference says the comet should be now.
+
+  Each line is shown only while it is longer than 10 nucleus radii.
+
+Dust visibility::
+  Display stretch of the dust: the softening of an asinh curve over the accumulated optical depth, relative to the brightest dust in view (it adapts to the view like an eye). From 0.00001 to 1, on a logarithmic scale.
+
+  Smaller: the faint, old tail and trail (thousands of times fainter than the coma) become visible while the coma saturates.
+  1: close to linear, physically proportional brightness.
+
+  Visual only: the simulated dust is unchanged.
+
+Coma 1/ρ normalisation::
+  Divides the dust brightness by the distance from the nucleus (ρ), so the bright inner coma and the faint outer jets share one exposure.
+
+  Display only: the simulated dust is unchanged. On by default.
+
+Trajectory lines::
+  Draws as lines the paths of about 200 grains since they left the nucleus, one colour per jet.
+
+Dust exposure::
+  Brightens (+) or darkens (−) the dust over the automatic exposure, in photographic stops (EV), from −6 to +6 in steps of 0.25. One stop doubles or halves the brightness.
+
+Particle tracers::
+  Draws one dust cluster in 256 as bright dots at the exact positions of its grain sizes, from the slow large grains to the fast small ones: the dots span the tail.
+
+  The dust drifts at 2 to 150 m/s while a pixel of a wide view spans tens of km: at low simulation speed it moves far less than a pixel per second, and the dense dots blend into a still fog. Tracers are real particles to follow (raise the simulation speed to see them stream).
+
+  Visual only.
+
+Flow time-lapse::
+  Speed of the brightness marks (flow pulses) that ride the dust while the simulation runs; they freeze on pause. From 1 to 10000, on a logarithmic scale.
+
+  1: the marks move exactly with the dust (its real speed on screen, often far below a pixel per second in wide views).
+  K: every mark moves K times faster than its dust, in its direction, so the whole swarm keeps its true velocity field at a readable pace. Changing it never jumps the marks.
+
+  Visual only.
+
+Show sphere gizmo::
+  The wireframe sphere and axes around the nucleus. Saved with the file.
+
+  The boxes below choose its parts:
+  • Grid: the latitude / longitude wireframe;
+  • Body X/Y: the body-fixed X (red) and Y (green) axes, rotating with the nucleus;
+  • Spin axis: the rotation axis (body Z, blue);
+  • Sun: the arrow towards the Sun;
+  • Velocity: the comet's heliocentric velocity direction (magenta).
+
+[[model-dust-committed]]
+=== Dust
+Location:: Model › Dust
+Shown:: committed comet (67P, December 2021)
+
+.Model › Dust
+With a comet committed, the jet list is available. The + button adds a jet and selecting a jet opens its properties.
+
+image::img/model-dust--committed--light--tagged.png[Model › Dust,width=561,pdfwidth=95mm]
+
+. *Dust* -- Section with the dust display options, the gizmo, the jet list and the defaults for new jets.
+. *show reference-position error* -- Draws two lines from the comet to its reference orbit when it is more than 10 nucleus radii away. Display only.
+. *Dust visibility* -- Display stretch of the dust, from 0.00001 to 1. Smaller values show the faint old tail; 1 is close to linear brightness. Display only.
+. *Coma 1/ρ normalisation* -- Divides the dust brightness by the distance from the nucleus so the inner coma and the outer jets share one exposure. On by default; display only.
+. *Trajectory lines* -- Draws as lines the paths of about 200 grains since they left the nucleus, one colour per jet.
+. *Dust exposure* -- Brightens or darkens the dust in stops (EV), from -6 to +6. One stop doubles or halves the brightness.
+. *Particle tracers* -- Draws one dust cluster in 256 as bright dots at the positions of its grains to follow them. Display only.
+. *Flow time-lapse* -- Speed factor of the flow marks, from 1 to 10000 on a log scale. 1 moves them with the dust; larger values move them faster. Display only.
+. *Show sphere gizmo* -- Shows the wireframe sphere and axes around the nucleus; the boxes below choose its parts.
+. *Grid* -- Shows the latitude and longitude wireframe of the gizmo.
+. *Body X/Y* -- Shows the body-fixed X (red) and Y (green) axes, which turn with the nucleus.
+. *Spin axis* -- Shows the rotation axis of the nucleus (body Z, blue).
+. *Sun* -- Shows the arrow pointing to the Sun.
+. *Velocity* -- Shows the direction of the comet's heliocentric velocity (magenta).
+. *+* -- Adds a new dust jet that starts from the defaults. It needs a committed comet and a known nucleus radius.
+
+==== Properties
+
+show reference-position error::
+  Draws two lines from the comet to its reference orbit (the red track):
+  • cross-track: to the closest point of the track;
+  • same-epoch: to where the reference says the comet should be now.
+
+  Each line is shown only while it is longer than 10 nucleus radii.
+
+Dust visibility::
+  Display stretch of the dust: the softening of an asinh curve over the accumulated optical depth, relative to the brightest dust in view (it adapts to the view like an eye). From 0.00001 to 1, on a logarithmic scale.
+
+  Smaller: the faint, old tail and trail (thousands of times fainter than the coma) become visible while the coma saturates.
+  1: close to linear, physically proportional brightness.
+
+  Visual only: the simulated dust is unchanged.
+
+Coma 1/ρ normalisation::
+  Divides the dust brightness by the distance from the nucleus (ρ), so the bright inner coma and the faint outer jets share one exposure.
+
+  Display only: the simulated dust is unchanged. On by default.
+
+Trajectory lines::
+  Draws as lines the paths of about 200 grains since they left the nucleus, one colour per jet.
+
+Dust exposure::
+  Brightens (+) or darkens (−) the dust over the automatic exposure, in photographic stops (EV), from −6 to +6 in steps of 0.25. One stop doubles or halves the brightness.
+
+Particle tracers::
+  Draws one dust cluster in 256 as bright dots at the exact positions of its grain sizes, from the slow large grains to the fast small ones: the dots span the tail.
+
+  The dust drifts at 2 to 150 m/s while a pixel of a wide view spans tens of km: at low simulation speed it moves far less than a pixel per second, and the dense dots blend into a still fog. Tracers are real particles to follow (raise the simulation speed to see them stream).
+
+  Visual only.
+
+Flow time-lapse::
+  Speed of the brightness marks (flow pulses) that ride the dust while the simulation runs; they freeze on pause. From 1 to 10000, on a logarithmic scale.
+
+  1: the marks move exactly with the dust (its real speed on screen, often far below a pixel per second in wide views).
+  K: every mark moves K times faster than its dust, in its direction, so the whole swarm keeps its true velocity field at a readable pace. Changing it never jumps the marks.
+
+  Visual only.
+
+Show sphere gizmo::
+  The wireframe sphere and axes around the nucleus. Saved with the file.
+
+  The boxes below choose its parts:
+  • Grid: the latitude / longitude wireframe;
+  • Body X/Y: the body-fixed X (red) and Y (green) axes, rotating with the nucleus;
+  • Spin axis: the rotation axis (body Z, blue);
+  • Sun: the arrow towards the Sun;
+  • Velocity: the comet's heliocentric velocity direction (magenta).
+
+[[model-dust-jet]]
+=== Dust: jet
+Location:: Model › Dust
+Shown:: a jet selected, committed comet
+
+.Model › Dust
+The properties of the selected jet: where it sits on the nucleus, its cone and speed, its colour and the computed beta and dust rate, with its own Grain and Activity panels.
+
+image::img/model-dust-jet--selected--light--tagged.png[Model › Dust,width=509,pdfwidth=86mm]
+
+. *Dust* -- Section with the dust display options, the gizmo, the jet list and the defaults for new jets.
+. *Latitude* -- Latitude of the jet source on the nucleus in degrees: +90 is the north pole of the spin axis, 0 the equator.
+. *Longitude* -- Longitude of the jet source in degrees from the prime meridian, from -180 to 180. The spin carries it around.
+. *Aperture* -- Half-angle of the emission cone of the jet.
+. *Velocity* -- Mean ejection speed of the grains of the jet.
+. *Vel. σ* -- Standard deviation of the ejection speed.
+. *β (beta)* -- Read-only ratio of the solar radiation pressure to solar gravity on the reference grain; larger values curve the dust away from the Sun faster.
+. *Q_dust @ 1 AU* -- Read-only dust production rate of the jet at 1 AU in kg/s, as the engine applies it after the model-wide maximum.
+. *Grain* -- Opens the grain properties of the selected jet: diameters, density, Q_pr, albedo and size law.
+. *Smallest grain diameter* -- Diameter of the smallest simulated grain of this jet in µm, from 0.01 to 10000.
+. *Largest grain diameter* -- Diameter of the largest simulated grain of this jet in µm, from 0.01 to 10000. It must not be below the smallest.
+. *Density* -- Bulk density of this jet's grains in g/cm³, typically 0.5 to 1 for cometary dust.
+. *Q_pr* -- Radiation-pressure efficiency of this jet's grains, from 0.5 to 2; 1 is a grey body. It scales β only.
+. *Albedo* -- Geometric albedo of this jet's dust, from 0.01 to 0.5. It scales the brightness only.
+. *Size law q* -- Exponent q of the grain size law n(d) ∝ d^-q, from 2 to 5; 3.5 is the usual value. A larger q means more small grains.
+
+==== Properties
+
+Latitude::
+  Latitude of the jet source on the nucleus, in degrees in the body-fixed frame: +90 is the north spin pole, 0 the equator, −90 the south pole.
+
+Longitude::
+  Longitude of the jet source on the nucleus, in degrees from the prime meridian (−180 to 180). The nucleus spin carries the jet around as it rotates.
+
+Smallest grain diameter::
+  Diameter of the smallest simulated grain of this jet, in µm (0.01 to 10000). The simulated grains run from this to the largest diameter, with number density n(d) ∝ d^−q.
+
+  With density and Q_pr, the geometric mean of the two diameters sets β, the radiation-pressure push: smaller or lighter grains curve away from the Sun faster. Equal smallest and largest diameters simulate a single grain size.
+
+Largest grain diameter::
+  Diameter of the largest simulated grain of this jet, in µm (0.01 to 10000), at most 1,000,000 times the smallest. It must not be below the smallest diameter: an invalid pair is not applied (an error is shown) and the two diameters are never swapped.
+
+Density::
+  Bulk density of this jet's grains, in g/cm³ (cometary dust about 0.5 to 1). It enters β and the dust mass a given brightness needs.
+
+Q_pr::
+  Radiation-pressure efficiency Q_pr of this jet's grains (0.5 to 2; 1 is a grey body). It scales β only, not the brightness.
+
+Albedo::
+  Geometric albedo of this jet's dust (0.01 to 0.5; cometary dust 0.03 to 0.06). It scales the brightness only; the amount of dust is the jet's production rate Q_d.
+
+Size law q::
+  Exponent q of this jet's grain size law n(d) ∝ d^−q over the simulated diameters (2 to 5; 3.5 is the usual value). A larger q means more small grains.
+
+  Limitation: q only changes the individual bright specks; the continuous dust rendering assumes q = 3.5 over the same range.
+
+[[model-dust-defaults]]
+=== Dust: default grain and activity
+Location:: Model › Dust
+Shown:: committed comet (67P, December 2021)
+
+.Model › Dust
+The values that new jets start from, under Advanced: the dust production law (Q_d) and the grain size distribution, each with a plot. Existing jets keep their own values.
+
+image::img/model-dust-defaults--committed--light--tagged.png[Model › Dust,width=509,pdfwidth=86mm]
+
+. *Advanced: activity (Q_d)* -- Opens the dust production law shared by all jets and the default rate for new jets.
+. *Total activity* -- Shows the sum of the dust production rates of all jets at 1 AU and at the current distance from the Sun, in kg/s.
+. *Q_d at 1 AU (kg/s)* -- Default dust production rate at 1 AU for new jets, in kg/s. Each jet then has its own.
+. *Q_d law exponent* -- Exponent k of the law Q_d = Q_d0 times r to the power -k, from 1 to 4; 2 is the usual value. Shared by all jets.
+. *Cutoff (AU)* -- Distance from the Sun in AU, from 3 to 100, beyond which no dust is emitted. Shared by all jets.
+. *Q_d max (kg/s)* -- Upper limit of each jet's production rate in kg/s, so that it stays finite close to the Sun. Shared by all jets.
+. *Advanced: grain size distribution* -- Opens the plot of the grain size range that new jets start from.
+. *Grain size range* -- States the simulated grain diameters and that the continuous dust assumes q = 3.5 over that range.
+
+==== Properties
+
+Q_d at 1 AU (kg/s)::
+  Default dust mass production rate at 1 AU from the Sun for new jets, in kg/s. It scales as r_h^−k up to the max and stops beyond the cutoff.
+
+  Each jet then has its own (its Activity panel).
+
+Q_d law exponent::
+  Exponent k of the production law Q_d(r) = Q_d₀ · r^−k, with r the distance from the Sun in AU (1 to 4). 2 is the classic value; a larger k means the rate drops faster as the comet recedes.
+
+  Shared by every jet.
+
+Cutoff (AU)::
+  Distance from the Sun, in AU (3 to 100), beyond which the comet emits no dust.
+
+  Shared by every jet.
+
+Q_d max (kg/s)::
+  Upper limit on each jet's dust production rate, in kg/s, so that the emission does not grow without bound close to the Sun.
+
+  Shared by every jet.

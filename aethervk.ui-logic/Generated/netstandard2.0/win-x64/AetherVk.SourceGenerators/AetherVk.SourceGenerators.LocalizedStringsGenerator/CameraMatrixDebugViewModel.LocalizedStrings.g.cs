@@ -138,6 +138,18 @@ partial class CameraMatrixDebugViewModel
         }
     }
 
+    private string _strViewportRect = string.Empty;
+    public string StrViewportRect
+    {
+        get => _strViewportRect;
+        set
+        {
+            if (_strViewportRect == value) return;
+            _strViewportRect = value;
+            OnPropertyChanged(nameof(StrViewportRect));
+        }
+    }
+
     /// <summary>Called once on construction and on every culture change.</summary>
     private void RefreshStrings()
     {
@@ -152,5 +164,6 @@ partial class CameraMatrixDebugViewModel
         StrElongation = _translationService.GetString("Ephemeris_Elongation");
         StrSunPa = _translationService.GetString("Ephemeris_SunPa");
         StrDebug = _translationService.GetString("Ephemeris_Debug");
+        StrViewportRect = _translationService.GetString("Ephemeris_ViewportRect");
     }
 }
