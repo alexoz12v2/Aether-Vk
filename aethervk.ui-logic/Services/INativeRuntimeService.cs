@@ -1842,11 +1842,37 @@ public sealed class NativeRuntimeService : INativeRuntimeService
   private nint _ctx = 0;
   private ulong _sceneId = 0;
 
+  // Shutdown gate (the polled queries race a timer against the native teardown): set at the top of
+  // Dispose, so queries return their default; _inFlight counts the polled queries inside a P/Invoke
+  // and ShutdownSync waits for it to drain before the native context is destroyed.
+  private volatile bool _shutdown;
+  private int _inFlight;
+  private int _disposed;
+  private static readonly TimeSpan DrainTimeout = TimeSpan.FromSeconds(2);
+
+  /// <summary>Enters a polled query: false when shut down (or no context), else the caller must
+  /// <see cref="ExitQuery"/> in a finally.</summary>
+  private bool TryEnterQuery()
+  {
+    Interlocked.Increment(ref _inFlight);
+    if (_shutdown || _ctx == 0)
+    {
+      Interlocked.Decrement(ref _inFlight);
+      return false;
+    }
+    return true;
+  }
+
+  private void ExitQuery() => Interlocked.Decrement(ref _inFlight);
+
   // Cancelled in Dispose() so async operations (e.g. CommitCometAsync) can observe shutdown.
   private readonly CancellationTokenSource _shutdownCts = new();
 
   /// <inheritdoc/>
-  public CancellationToken ShutdownToken => _shutdownCts.Token;
+  public CancellationToken ShutdownToken => _shutdownToken;
+
+  // captured: reading Token from a disposed CancellationTokenSource throws
+  private readonly CancellationToken _shutdownToken;
 
   public NativeRuntimeService(
     IUiThreadDispatcher uiThreadDispatcher,
@@ -1855,6 +1881,7 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     Action<nint, nuint> panicCallback
   )
   {
+    _shutdownToken = _shutdownCts.Token;
     // panic registration
     _panicCallback = panicCallback;
     unsafe
@@ -2243,7 +2270,31 @@ public sealed class NativeRuntimeService : INativeRuntimeService
   public void ShutdownSync()
   {
     // assumes checks on ctx already done
-    PInvokeAetherVkCore.avkSimulationContext_shutdownSync(_ctx);
+    _shutdown = true;
+    var ctx = _ctx;
+    if (ctx == 0)
+      return;
+
+    // let the polled queries inside a P/Invoke finish (bounded: a query blocked natively must not
+    // hang the shutdown); new ones return their default from here on
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+    var spin = new SpinWait();
+    while (Volatile.Read(ref _inFlight) > 0)
+    {
+      if (sw.Elapsed > DrainTimeout)
+      {
+        System.Diagnostics.Trace.TraceWarning(
+          $"NativeRuntimeService: {Volatile.Read(ref _inFlight)} native query(ies) still in flight after {DrainTimeout.TotalSeconds:0}s, shutting down anyway");
+        break;
+      }
+      if (spin.NextSpinWillYield)
+        Thread.Sleep(1);
+      else
+        spin.SpinOnce();
+    }
+
+    PInvokeAetherVkCore.avkSimulationContext_shutdownSync(ctx);
+    _ctx = 0;
   }
 
   // ── INativeRuntimeService — Viewport & Rendering ──────────────────────────
@@ -2684,22 +2735,30 @@ public sealed class NativeRuntimeService : INativeRuntimeService
 
   public bool? DustInPreview()
   {
-    if (_ctx == 0)
+    if (!TryEnterQuery())
       return null;
-    return PInvokeAetherVkCore.avkSimulationContext_dustInPreview(_ctx, _sceneId) switch
+    try
     {
-      1 => true,
-      0 => false,
-      _ => null,
-    };
+      return PInvokeAetherVkCore.avkSimulationContext_dustInPreview(_ctx, _sceneId) switch
+      {
+        1 => true,
+        0 => false,
+        _ => null,
+      };
+    }
+    finally { ExitQuery(); }
   }
 
   public (DustRenderPhase Phase, float HoldProgress)? DustRenderState()
   {
-    if (_ctx == 0)
+    if (!TryEnterQuery())
       return null;
-    int code = PInvokeAetherVkCore.avkSimulationContext_dustRenderPhase(_ctx, _sceneId, out var progress);
-    return code is >= 0 and <= 3 ? ((DustRenderPhase)code, progress) : null;
+    try
+    {
+      int code = PInvokeAetherVkCore.avkSimulationContext_dustRenderPhase(_ctx, _sceneId, out var progress);
+      return code is >= 0 and <= 3 ? ((DustRenderPhase)code, progress) : null;
+    }
+    finally { ExitQuery(); }
   }
 
   public bool ResetDustViewFeedback() =>
@@ -2731,37 +2790,57 @@ public sealed class NativeRuntimeService : INativeRuntimeService
 
   public CometScreenPosition? GetCometScreenPosition(ulong cameraEntityId, uint widthPx, uint heightPx)
   {
-    if (_ctx == 0)
+    if (!TryEnterQuery())
       return null;
-    int r = PInvokeAetherVkCore.avkSimulationContext_cometScreenPosition(
-      _ctx, _sceneId, cameraEntityId, widthPx, heightPx, out double x, out double y);
-    return r < 0 ? null : new CometScreenPosition(x, y, r == 1);
+    try
+    {
+      int r = PInvokeAetherVkCore.avkSimulationContext_cometScreenPosition(
+        _ctx, _sceneId, cameraEntityId, widthPx, heightPx, out double x, out double y);
+      return r < 0 ? null : new CometScreenPosition(x, y, r == 1);
+    }
+    finally { ExitQuery(); }
   }
 
   public unsafe EarthObserverStatus? EarthObserverStatus()
   {
-    if (_ctx == 0)
+    if (!TryEnterQuery())
       return null;
-    CEarthObserverStatusDTO dto;
-    if (!PInvokeAetherVkCore.avkSimulationContext_earthObserverStatus(_ctx, _sceneId, &dto) || dto.Active == 0)
-      return null;
-    return new EarthObserverStatus((int)dto.Mode, dto.AimErrorRad, dto.TargetElevationRad);
+    try
+    {
+      CEarthObserverStatusDTO dto;
+      if (!PInvokeAetherVkCore.avkSimulationContext_earthObserverStatus(_ctx, _sceneId, &dto) || dto.Active == 0)
+        return null;
+      return new EarthObserverStatus((int)dto.Mode, dto.AimErrorRad, dto.TargetElevationRad);
+    }
+    finally { ExitQuery(); }
   }
 
   public unsafe CometEphemeris? CometEphemeris()
   {
-    if (_ctx == 0)
+    if (!TryEnterQuery())
       return null;
     CCometEphemerisDTO dto;
-    if (!PInvokeAetherVkCore.avkSimulationContext_cometEphemeris(_ctx, _sceneId, &dto) || dto.Active == 0)
-      return null;
+    try
+    {
+      if (!PInvokeAetherVkCore.avkSimulationContext_cometEphemeris(_ctx, _sceneId, &dto) || dto.Active == 0)
+        return null;
+    }
+    finally { ExitQuery(); }
     return new CometEphemeris(
       DateTimeOffset.FromUnixTimeMilliseconds((long)Math.Round(dto.EpochUnixS * 1000.0)),
       dto.RaRad, dto.DecRad, dto.RAu, dto.DeltaAu, dto.PhaseRad, dto.ElongationRad, dto.SunPaRad, dto.LightTimeS);
   }
 
   public double DustComaRadiusKm() =>
-    _ctx != 0 ? PInvokeAetherVkCore.avkSimulationContext_dustComaRadiusKm(_ctx, _sceneId) : 0.0;
+    DustComaRadiusKmGated();
+
+  private double DustComaRadiusKmGated()
+  {
+    if (!TryEnterQuery())
+      return 0.0;
+    try { return PInvokeAetherVkCore.avkSimulationContext_dustComaRadiusKm(_ctx, _sceneId); }
+    finally { ExitQuery(); }
+  }
 
   public bool SetEarthObserver(ulong cameraId, int mode, ulong earthId, ulong cometId, bool topocentric, double latDeg, double lonDeg, double elevM, Quaterniond look, ObserverUp up) =>
     _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_setEarthObserver(
@@ -2808,23 +2887,27 @@ public sealed class NativeRuntimeService : INativeRuntimeService
 
   public bool GetSimulationClock(out short centuries, out ulong nanoseconds)
   {
-    if (_ctx == 0 || _sceneId == 0)
+    if (_sceneId == 0 || !TryEnterQuery())
     {
       centuries = 0;
       nanoseconds = 0;
       return false;
     }
 
-    unsafe
+    try
     {
-      CTime time;
-      if (PInvokeAetherVkCore.avkSimulationContext_getSimulationClock(_ctx, _sceneId, &time))
+      unsafe
       {
-        centuries = time.Centuries;
-        nanoseconds = time.Nanoseconds;
-        return true;
+        CTime time;
+        if (PInvokeAetherVkCore.avkSimulationContext_getSimulationClock(_ctx, _sceneId, &time))
+        {
+          centuries = time.Centuries;
+          nanoseconds = time.Nanoseconds;
+          return true;
+        }
       }
     }
+    finally { ExitQuery(); }
 
     centuries = 0;
     nanoseconds = 0;
@@ -3257,31 +3340,43 @@ public sealed class NativeRuntimeService : INativeRuntimeService
 
   public unsafe DustExposure? DustExposure(ulong presentationEngineId)
   {
-    if (_ctx == 0)
+    if (!TryEnterQuery())
       return null;
     CDustExposureDTO e;
-    if (!PInvokeAetherVkCore.avkSimulationContext_dustExposure(_ctx, presentationEngineId, &e))
-      return null;
+    try
+    {
+      if (!PInvokeAetherVkCore.avkSimulationContext_dustExposure(_ctx, presentationEngineId, &e))
+        return null;
+    }
+    finally { ExitQuery(); }
     return new DustExposure(e.WhiteRf, e.P50Rf, e.Softening, e.MagArcsec2, e.Ev, e.Fixed != 0);
   }
 
   public unsafe DustGpuTimings? DustGpuTimings(ulong presentationEngineId)
   {
-    if (_ctx == 0)
+    if (!TryEnterQuery())
       return null;
     CDustGpuTimingsDTO t;
-    if (!PInvokeAetherVkCore.avkSimulationContext_dustGpuTimings(_ctx, presentationEngineId, &t))
-      return null;
+    try
+    {
+      if (!PInvokeAetherVkCore.avkSimulationContext_dustGpuTimings(_ctx, presentationEngineId, &t))
+        return null;
+    }
+    finally { ExitQuery(); }
     return ToTimings(t);
   }
 
   public unsafe DustGpuTimings? DustGpuTimingsDrawn(ulong presentationEngineId)
   {
-    if (_ctx == 0)
+    if (!TryEnterQuery())
       return null;
     CDustGpuTimingsDTO t;
-    if (!PInvokeAetherVkCore.avkSimulationContext_dustGpuTimingsDrawn(_ctx, presentationEngineId, &t))
-      return null;
+    try
+    {
+      if (!PInvokeAetherVkCore.avkSimulationContext_dustGpuTimingsDrawn(_ctx, presentationEngineId, &t))
+        return null;
+    }
+    finally { ExitQuery(); }
     return ToTimings(t);
   }
 
@@ -3291,11 +3386,13 @@ public sealed class NativeRuntimeService : INativeRuntimeService
 
   public unsafe System.Collections.Generic.IReadOnlyList<DustTierStats> DustStats()
   {
-    if (_ctx == 0)
+    if (!TryEnterQuery())
       return Array.Empty<DustTierStats>();
     const int Max = 8;
     var buf = stackalloc CDustTierStatsDTO[Max];
-    uint n = PInvokeAetherVkCore.avkSimulationContext_dustStats(_ctx, _sceneId, buf, Max);
+    uint n;
+    try { n = PInvokeAetherVkCore.avkSimulationContext_dustStats(_ctx, _sceneId, buf, Max); }
+    finally { ExitQuery(); }
     var list = new DustTierStats[Math.Min((int)n, Max)];
     for (int i = 0; i < list.Length; i++)
     {
@@ -3320,7 +3417,7 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     posX = posY = posZ = 0.0;
     rotX = rotY = rotZ = rotW = 0.0;
 
-    if (_ctx == 0)
+    if (!TryEnterQuery())
       return false;
 
     double[] pos = new double[3];
@@ -3329,13 +3426,18 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     fixed (double* pPos = pos)
     fixed (double* pRot = rot)
     {
-      bool res = PInvokeAetherVkCore.avkSimulationContext_debugCameraState(
-        _ctx,
-        _sceneId,
-        cameraEntityId,
-        pPos,
-        pRot
-      );
+      bool res;
+      try
+      {
+        res = PInvokeAetherVkCore.avkSimulationContext_debugCameraState(
+          _ctx,
+          _sceneId,
+          cameraEntityId,
+          pPos,
+          pRot
+        );
+      }
+      finally { ExitQuery(); }
 
       if (res)
       {
@@ -3397,10 +3499,14 @@ public sealed class NativeRuntimeService : INativeRuntimeService
 
   public bool GetDebugTelemetryStats(out DebugTelemetryStats stats)
   {
-    if (
-      _ctx != 0
-      && PInvokeAetherVkCore.avkSimulationContext_getDebugTelemetryStats(_ctx, out var cStats)
-    )
+    CDebugTelemetryStatsDTO cStats = default;
+    bool got = false;
+    if (TryEnterQuery())
+    {
+      try { got = PInvokeAetherVkCore.avkSimulationContext_getDebugTelemetryStats(_ctx, out cStats); }
+      finally { ExitQuery(); }
+    }
+    if (got)
     {
       stats = new DebugTelemetryStats(
         cStats.OsPhysicalRamBytes,
@@ -3425,6 +3531,9 @@ public sealed class NativeRuntimeService : INativeRuntimeService
   {
     // Signal shutdown to any in-flight async operations (CommitCometAsync, LoadAlmanacFileAsync)
     // before tearing down the native context, so they can abort rather than hanging.
+    if (Interlocked.Exchange(ref _disposed, 1) != 0)
+      return; // idempotent: App.Exit shuts down explicitly, then the host disposes again
+    _shutdown = true;
     _shutdownCts.Cancel();
     _instance = null;
     if (_ctx == 0)

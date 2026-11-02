@@ -1,0 +1,482 @@
+% sample-settings-viewport.tex -- one panel written to the standard in STYLE.md.
+%
+% Requires aethervk-manual.sty. Images live in img/ (written by the ManualCapture fixture, see
+% PLAN.md). Until they exist, \uiscreenshot draws a placeholder of the given size, and the
+% \uidefinecallout lines below place the markers at approximate positions. When the fixture
+% has run, img/<figure>.callouts.tex replaces them with measured positions.
+%
+% Sources of every fact on this page (read 2026-11-01):
+%   labels, layout, visibility  aethervk.ui-app/Views/SettingsTabView.axaml, lines 790-1210
+%   help texts                  aethervk.ui-logic/Resources/AppStrings.resx (Tabs_Settings_*)
+%   ranges and defaults         ViewportSettingsViewModel.cs, CameraService.cs
+%                               (ViewportDisplayState.Default, Min/MaxNucleusExposureEv)
+%   what is stored where        SaveFile/SaveIndexV1.cs (ViewportDto), PreferencesService.cs
+%
+% Items marked  % VERIFY  should be checked against the first capture.
+
+% ---------------------------------------------------------------- callout positions
+% One block per figure. The fixture writes exactly these commands, in the same order.
+\InputIfFileExists{img/settings-viewport--orbit--light.callouts.tex}{}{%
+  \uidefinecallout{settings-viewport}{CameraModeText}{1}{0.04}{0.07}%
+  \uidefinecallout{settings-viewport}{DiagnosticPanelsCheckBox}{2}{0.04}{0.15}%
+  \uidefinecallout{settings-viewport}{ComparisonLockCheckBox}{3}{0.04}{0.23}%
+  \uidefinecallout{settings-viewport}{ProjectionPerspective}{4}{0.04}{0.31}%
+  \uidefinecallout{settings-viewport}{ProjectionAdvancedExpander}{5}{0.04}{0.39}%
+  \uidefinecallout{settings-viewport}{StarBackgroundBox}{6}{0.04}{0.48}%
+  \uidefinecallout{settings-viewport}{OrbitLinesCheckBox}{7}{0.04}{0.56}%
+  \uidefinecallout{settings-viewport}{ViewNucleusFromEarthButton}{8}{0.04}{0.65}%
+  \uidefinecallout{settings-viewport}{SnapAbove}{9}{0.04}{0.82}}
+\InputIfFileExists{img/settings-viewport-persp--orbit--light.callouts.tex}{}{%
+  \uidefinecallout{settings-viewport-persp}{FovSlider}{1}{0.04}{0.12}%
+  \uidefinecallout{settings-viewport-persp}{FovUnitPicker}{2}{0.04}{0.30}%
+  \uidefinecallout{settings-viewport-persp}{PerspNearHelp}{3}{0.04}{0.48}%
+  \uidefinecallout{settings-viewport-persp}{PerspFarHelp}{4}{0.04}{0.66}%
+  \uidefinecallout{settings-viewport-persp}{DistanceUnitsHelp}{5}{0.04}{0.84}}
+\InputIfFileExists{img/settings-viewport-ortho--orbit--light.callouts.tex}{}{%
+  \uidefinecallout{settings-viewport-ortho}{OrthoHalfWidthSlider}{1}{0.04}{0.08}%
+  \uidefinecallout{settings-viewport-ortho}{OrthoHalfHeightSlider}{2}{0.04}{0.19}%
+  \uidefinecallout{settings-viewport-ortho}{OrthoUnitPicker}{3}{0.04}{0.30}%
+  \uidefinecallout{settings-viewport-ortho}{OrthoNearHelp}{4}{0.04}{0.41}%
+  \uidefinecallout{settings-viewport-ortho}{OrthoFarHelp}{5}{0.04}{0.52}%
+  \uidefinecallout{settings-viewport-ortho}{OrthoProportionsLock}{6}{0.04}{0.66}%
+  \uidefinecallout{settings-viewport-ortho}{ShowBehindCameraCheckBox}{7}{0.04}{0.77}%
+  \uidefinecallout{settings-viewport-ortho}{RestoreOrthoProportionsButton}{8}{0.04}{0.90}}
+\InputIfFileExists{img/settings-viewport-nucleus--nucleus--light.callouts.tex}{}{%
+  \uidefinecallout{settings-viewport-nucleus}{PhysicalLightingToggle}{1}{0.04}{0.30}%
+  \uidefinecallout{settings-viewport-nucleus}{NucleusExposureSlider}{2}{0.04}{0.80}}
+\InputIfFileExists{img/settings-viewport-observer--model--light.callouts.tex}{}{%
+  \uidefinecallout{settings-viewport-observer}{ObserverTopocentricCheckBox}{1}{0.04}{0.10}%
+  \uidefinecallout{settings-viewport-observer}{ObserverNorthUpCheckBox}{2}{0.04}{0.19}%
+  \uidefinecallout{settings-viewport-observer}{ObserverLatSlider}{3}{0.04}{0.29}%
+  \uidefinecallout{settings-viewport-observer}{ObserverLonSlider}{4}{0.04}{0.38}%
+  \uidefinecallout{settings-viewport-observer}{OrientFree}{5}{0.04}{0.50}%
+  \uidefinecallout{settings-viewport-observer}{RestorePresetButton}{6}{0.04}{0.72}%
+  \uidefinecallout{settings-viewport-observer}{EarthObserverScaleText}{7}{0.04}{0.86}}
+
+% ================================================================= the panel
+\begin{uipanel}[key=settings-viewport,
+    open={\menu{Settings > Viewport 1} (one section per 3D viewport; the default layout has one)},
+    modes={all three views; parts of the panel change with the view (Table~\ref{tab:viewport-modes})}]
+  {Viewport}
+
+The \uilabel{Viewport} section holds the settings of one 3D viewport's camera: how the scene is
+projected onto the screen, what is drawn behind the comet, and, in the \uilabel{Model} view, where
+on the Earth the observer stands and what the view tracks. None of these settings changes the
+simulation. They change what the camera shows and how, and the dust already computed is
+reused.
+
+The section is named after its viewport (\uilabel{Viewport 1}, \uilabel{Viewport 2}, \dots).
+Each 3D viewport added to the layout gets its own section with independent values. The
+\uilabel{Show diagnostic panels} switch is the only exception: it applies to all viewports.
+
+\paragraph{Opening the panel.} Select the \uilabel{Settings} tab and expand
+\menu{Viewport 1}. It is the last section of the tab. The view-mode strip under the menu bar
+(\uilabel{Orbit}, \uilabel{Nucleus}, \uilabel{Model}, \panelref{main}) and the view buttons on
+the viewport overlay change the camera mode. The first line of this panel shows the current
+mode.
+
+\begin{table}[htbp]
+  \centering\small
+  \caption{Which parts of \menu{Settings > Viewport} appear in each view.
+    \emph{Mode} is the text the panel prints in its first line.}
+  \label{tab:viewport-modes}
+  \begin{tabular}{@{}llccc@{}}
+    \toprule
+    Part of the panel & & \uilabel{Orbit} & \uilabel{Nucleus} & \uilabel{Model} \\
+    \midrule
+    \emph{Mode} line                           & & \uival{UpZenith} & \uival{CometOrbiting} & \uival{EarthPosition} \\
+    Locks, \uilabel{Type}, \uilabel{Advanced: projection} & & \checkmark & \checkmark & \checkmark \\
+    \uilabel{Background stars}, \uilabel{Orbit lines}, \uilabel{Nucleus from Earth} & & \checkmark & \checkmark & \checkmark \\
+    \uilabel{Physical lighting}                & &            & \checkmark &            \\
+    \uilabel{Nucleus exposure}                 & &            & \checkmark & \checkmark \\
+    \uilabel{Snap above}                       & & \checkmark &            &            \\
+    \uilabel{Earth Observer Settings}          & &            &            & \checkmark \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+% (\toprule etc. need booktabs; the thesis preamble loads it -- VERIFY on the other computer)
+
+\begin{figure}[htbp]
+  \centering
+  \uiscreenshot[placeholder={0.45,0.62}]{settings-viewport}{img/settings-viewport--orbit--light.png}
+  \caption{\menu{Settings > Viewport 1} in the \uilabel{Orbit} view, with
+    \uilabel{Advanced: projection} collapsed. Save \texttt{review\_67p\_2021-12}, light theme.}
+  \label{fig:settings-viewport}
+\end{figure}
+
+% ----------------------------------------------------------------
+\uisection[locks]{Mode and locks}{ViewportSettingsSection}
+
+\begin{uiproperty}[key=mode, id=CameraModeText, type={read-only text},
+    visible={always}]{Mode}
+The camera mode of this viewport, printed as \uival{Mode: UpZenith},
+\uival{Mode: CometOrbiting} or \uival{Mode: EarthPosition}. These are the internal names of
+the \uilabel{Orbit}, \uilabel{Nucleus} and \uilabel{Model} views
+(Table~\ref{tab:viewport-modes}). The rest of the panel adapts to this mode.
+\end{uiproperty}
+
+\begin{uiproperty}[key=diagnostics, id=DiagnosticPanelsCheckBox, type={check box},
+    default={off}, effect=display, saved=prefs, help=Tabs_Settings_HelpViewDiagnostics]
+  {Show diagnostic panels (all viewports)}
+Shows the camera coordinates, the dust history, the observer line and the orbit debug panels
+over every viewport at once. These panels are for checking the engine. A normal session
+leaves them hidden.
+\begin{uihelptext}
+Shows the camera coordinates, dust history, observer line and orbit debug panels over the
+viewport, in all viewports at once. For checking the engine; hidden by default.
+\end{uihelptext}
+\end{uiproperty}
+
+\begin{uiproperty}[key=comparison-lock, id=ComparisonLockCheckBox, type={check box},
+    default={off}, effect=camera, saved=none, help=Tabs_Settings_HelpViewComparisonLock]
+  {Lock viewport for comparison}
+Ignores mouse orbit, pan and zoom, and greys out \uilabel{Type} and
+\uilabel{Advanced: projection}. The view then stays matched to a telescope image. The
+billboard's \uilabel{Set up comparison} button (\menu{Settings > Billboards > FITS image})
+turns the lock on as its last step. Clear the check box to move the camera again. The lock is
+not saved: a reopened save starts unlocked.
+\begin{uiexample}
+After \uilabel{Set up comparison} the status line reads \uival{Comparison set up; the viewport
+is locked.} and this box is checked. Clear it, orbit the camera to look at the tail from
+the side, then use the billboard's \uilabel{Match camera to image} to return to the matched
+view.
+\end{uiexample}
+\end{uiproperty}
+
+% ----------------------------------------------------------------
+\uisection[projection]{Projection}{}
+
+\begin{uiproperty}[key=type, id=ProjectionPerspective, type={radio buttons},
+    range={\uilabel{Perspective}, \uilabel{Orthographic}}, default={\uilabel{Perspective}},
+    effect=camera, saved=file, visible={always; disabled while the viewport is locked},
+    help=Tabs_Settings_HelpViewProjectionType]{Type}
+\begin{description}
+  \item[\uilabel{Perspective}] Distant objects look smaller, as through a camera lens. The
+    field of view sets the zoom.
+  \item[\uilabel{Orthographic}] No perspective: an object's size does not depend on its
+    distance, as on a map or a flat telescope image. The half-width and half-height set what
+    is visible.
+\end{description}
+The parameters of both are in \uilabel{Advanced: projection}. The second radio button has
+the AutomationId \uiid{ProjectionOrthographic}.
+\end{uiproperty}
+
+\begin{uiproperty}[key=advanced, id=ProjectionAdvancedExpander, type={expander},
+    default={collapsed}, help=Tabs_Settings_HelpViewProjectionAdvanced]{Advanced: projection}
+Holds the field of view (perspective) or the half-width and half-height (orthographic), the
+near and far clip planes and their display units. You rarely set these by hand. A billboard's
+\uilabel{Match camera to image} sets the field from the image instead.
+Figure~\ref{fig:settings-viewport-projection} shows both variants.
+\end{uiproperty}
+
+\begin{figure}[htbp]
+  \centering
+  \begin{minipage}[b]{0.48\linewidth}\centering
+    \uiscreenshot[placeholder={0.95,0.62}]{settings-viewport-persp}{img/settings-viewport-persp--orbit--light.png}\\
+    \small (a) \uilabel{Perspective}
+  \end{minipage}\hfill
+  \begin{minipage}[b]{0.48\linewidth}\centering
+    \uiscreenshot[placeholder={0.95,1.05}]{settings-viewport-ortho}{img/settings-viewport-ortho--orbit--light.png}\\
+    \small (b) \uilabel{Orthographic}
+  \end{minipage}
+  \caption{\menu{Settings > Viewport 1 > Advanced: projection} for each projection type.}
+  \label{fig:settings-viewport-projection}
+\end{figure}
+
+\paragraph{Perspective parameters} (shown when \uilabel{Type} is \uilabel{Perspective}).
+\uiusefigure{settings-viewport-persp}
+
+\begin{uiproperty}[key=fov, id=FovSlider, type={slider (drag, or click and type)},
+    unit={the one chosen in \uilabel{Units}: \unit{\degree}, \unit{\arcminute} or
+      \unit{\arcsecond}},
+    range={\qty{0.02}{\arcsecond} to \qty{179}{\degree}; step \qty{1}{\degree},
+      \qty{1}{\arcminute} or \qty{10}{\arcsecond}},
+    default={\qty{30}{\degree}}, % VERIFY: the engine's first projection may replace it
+    effect=camera, saved=file, visible={Perspective; disabled while locked},
+    help=Tabs_Settings_HelpViewFov]{FOV}
+The \emph{vertical} field of view of the perspective camera. Smaller values zoom in.
+Telescope fields are usually given in arcminutes, so switch \uilabel{Units} to
+\uilabel{arcmin} before typing one.
+\begin{uiexample}
+A \qty{2048}{\pixel}-tall CCD frame at a plate scale of \qty{1.0}{\arcsecond} per pixel
+spans \qty{2048}{\arcsecond}, about \qty{34.1}{\arcminute}. Set \uilabel{Units} to
+\uilabel{arcmin}, click the slider and type \uival{34,1}, then press
+\uikey{Enter}. The box uses the system's decimal separator, a comma on an Italian system.
+\end{uiexample}
+\end{uiproperty}
+
+\begin{uiproperty}[key=fov-units, id=FovUnitPicker, type={drop-down list},
+    range={\uilabel{deg}, \uilabel{arcmin}, \uilabel{arcsec}}, default={\uilabel{deg}},
+    effect=display, saved=file, visible={Perspective},
+    help=Tabs_Settings_HelpViewFovUnits]{Units}
+The unit in which \uilabel{FOV} is shown and typed. It changes only the display: the field
+itself stays the same. One arcminute is $1/60$ of a degree and one arcsecond is
+$1/3600$ of a degree.
+\end{uiproperty}
+
+\begin{uiproperty}[key=persp-near, id=PerspNearHelp, type={slider, logarithmic},
+    unit={the one chosen in \uilabel{Distance units}},
+    range={\qty{1e-12}{\AU} to \qty{1000}{\AU}}, default={\qty{0.0001}{\AU}}, % VERIFY
+    effect=camera, saved=file, visible={Perspective},
+    help=Tabs_Settings_HelpViewPerspNear]{Near}
+Objects closer to the camera than this distance are not drawn. The slider itself has no
+AutomationId. The callout points at its \texttt{?} button (\uiid{PerspNearHelp}).
+\end{uiproperty}
+
+\begin{uiproperty}[key=persp-far, id=PerspFarHelp, type={slider, logarithmic},
+    unit={the one chosen in \uilabel{Distance units}},
+    range={\qty{1e-12}{\AU} to \qty{1000}{\AU}}, default={\qty{200}{\AU}}, % VERIFY
+    effect=camera, saved=file, visible={Perspective},
+    help=Tabs_Settings_HelpViewPerspFar]{Far}
+Objects farther from the camera than this distance are not drawn.
+\end{uiproperty}
+
+\begin{uiproperty}[key=distance-units, id=DistanceUnitsHelp, type={drop-down list},
+    range={\uilabel{Astronomical Units (AU)}, \uilabel{Kilometers (km)}, \uilabel{Meters (m)}},
+    default={\uilabel{Astronomical Units (AU)}}, effect=display, saved=file,
+    visible={Perspective}, help=Tabs_Settings_HelpViewDistanceUnits]{Distance units}
+The unit used to show \uilabel{Near} and \uilabel{Far}. The values are stored in AU. This is
+the same setting as \uilabel{Units} of the orthographic parameters: changing one changes the
+other.
+\end{uiproperty}
+
+\paragraph{Orthographic parameters} (shown when \uilabel{Type} is \uilabel{Orthographic}).
+\uiusefigure{settings-viewport-ortho}
+
+\begin{uiproperty}[key=half-width, id=OrthoHalfWidthSlider, type={slider, logarithmic},
+    unit={the one chosen in \uilabel{Units}},
+    range={\qty{1e-12}{\AU} to \qty{1000}{\AU}}, default={\qty{0.0155}{\AU}}, % VERIFY
+    effect=camera, saved=file, visible={Orthographic; disabled while locked},
+    help=Tabs_Settings_HelpViewHalfWidth]{Half-Width}
+Half the visible width of the view: it spans $\pm$ this value around its centre. With
+\uilabel{Keep Proportions Locked} on, \uilabel{Half-Height} follows it.
+\end{uiproperty}
+
+\begin{uiproperty}[key=half-height, id=OrthoHalfHeightSlider, type={slider, logarithmic},
+    unit={the one chosen in \uilabel{Units}},
+    range={\qty{1e-12}{\AU} to \qty{1000}{\AU}}, default={\qty{0.0155}{\AU}}, % VERIFY
+    effect=camera, saved=file, visible={Orthographic; disabled while locked},
+    help=Tabs_Settings_HelpViewHalfHeight]{Half-Height}
+Half the visible height of the view: it spans $\pm$ this value around its centre.
+\begin{uiexample}
+To frame a coma \qty{100000}{\kilo\metre} across, set \uilabel{Units} to
+\uilabel{Kilometers (km)} and type \uival{50000} into \uilabel{Half-Height}. With the
+proportions locked, \uilabel{Half-Width} follows from the viewport's shape.
+\end{uiexample}
+\end{uiproperty}
+
+\begin{uiproperty}[key=ortho-units, id=OrthoUnitPicker, type={drop-down list},
+    range={\uilabel{Astronomical Units (AU)}, \uilabel{Kilometers (km)}, \uilabel{Meters (m)}},
+    default={\uilabel{Astronomical Units (AU)}}, effect=display, saved=file,
+    visible={Orthographic}, help=Tabs_Settings_HelpViewOrthoUnits]{Units}
+The unit for \uilabel{Half-Width}, \uilabel{Half-Height}, \uilabel{Near} and \uilabel{Far}.
+It changes only the display. The perspective \uilabel{Distance units} list shows the same
+setting.
+\end{uiproperty}
+
+\begin{uiproperty}[key=ortho-near, id=OrthoNearHelp, type={slider, logarithmic},
+    range={\qty{1e-12}{\AU} to \qty{1000}{\AU}}, effect=camera, saved=file,
+    visible={Orthographic}, help=Tabs_Settings_HelpViewOrthoNear]{Near}
+The nearest distance along the view direction that is drawn. Anything closer is not drawn.
+\end{uiproperty}
+
+\begin{uiproperty}[key=ortho-far, id=OrthoFarHelp, type={slider, logarithmic},
+    range={\qty{1e-12}{\AU} to \qty{1000}{\AU}}, effect=camera, saved=file,
+    visible={Orthographic}, help=Tabs_Settings_HelpViewOrthoFar]{Far}
+The farthest distance along the view direction that is drawn. Anything farther is not drawn.
+\end{uiproperty}
+
+\begin{uiproperty}[key=proportions-lock, id=OrthoProportionsLock, type={check box},
+    default={on}, effect=camera, saved=file, visible={Orthographic},
+    help=Tabs_Settings_HelpViewProportionsLock]{Keep Proportions Locked}
+Keeps the ratio of half-width to half-height equal to the viewport's shape, also when the
+window is resized, so the image is never stretched.
+\end{uiproperty}
+
+\begin{uiproperty}[key=behind-camera, id=ShowBehindCameraCheckBox, type={check box},
+    default={on}, effect=display, saved=file, visible={Orthographic},
+    help=Tabs_Settings_HelpViewShowBehindCamera]{Show objects behind camera}
+Also draws the geometry behind the camera plane, within the \uilabel{Far} distance, as a
+telescope image does. Dust behind the camera is never drawn, and a perspective view cannot
+show it.
+\end{uiproperty}
+
+\begin{uiproperty}[key=restore-proportions, id=RestoreOrthoProportionsButton, type={button},
+    effect=action, visible={Orthographic}]{Restore Proportions}
+Recomputes \uilabel{Half-Width} from \uilabel{Half-Height} once, so the proportions match
+the viewport again. Use it after a manual edit with the lock off. The text comes from the
+button's tooltip. It has no \texttt{?} help.
+\end{uiproperty}
+
+% ----------------------------------------------------------------
+\uiusefigure{settings-viewport}
+\uisection[display]{Display}{}
+
+\begin{figure}[htbp]
+  \centering
+  \uiscreenshot[placeholder={0.45,0.22}]{settings-viewport-nucleus}{img/settings-viewport-nucleus--nucleus--light.png}
+  \caption{The parts of \menu{Settings > Viewport 1} that appear only in the
+    \uilabel{Nucleus} view.}
+  \label{fig:settings-viewport-nucleus}
+\end{figure}
+
+\uiusefigure{settings-viewport-nucleus}
+
+\begin{uiproperty}[key=physical-lighting, id=PhysicalLightingToggle, type={check box},
+    default={off}, effect=display, saved=prefs, visible={\uilabel{Nucleus} view},
+    help=Tabs_Settings_HelpViewPhysicalLighting]{Physical lighting}
+Lights the nucleus with direct sunlight only, scaled with the comet's heliocentric distance
+$r$ as $(\qty{1}{\AU}/r)^2$, with no ambient fill. The exposure is set so that a white
+surface facing the Sun at \qty{1}{\AU} is drawn white. The surface the Sun does not reach is
+drawn in dark indigo. The choice is remembered across sessions
+(Figure~\ref{fig:settings-viewport-nucleus}).
+\end{uiproperty}
+
+\begin{uiproperty}[key=nucleus-exposure, id=NucleusExposureSlider, type={slider},
+    unit={\unit{\EV} (stops)}, range={\qty{-4}{\EV} to \qty{+6}{\EV}, step \qty{0.5}{\EV}},
+    default={\qty{0}{\EV}}, effect=display, saved=none, % VERIFY: not in ViewportDto
+    visible={\uilabel{Nucleus} and \uilabel{Model} views},
+    help=Tabs_Settings_HelpViewNucleusExposure]{Nucleus exposure}
+The brightness of the sunlit nucleus in photographic stops. Each whole step doubles or halves
+it. The label above the slider shows the value, e.g.\ \uival{Nucleus exposure: +1.5 EV}. At
+\qty{0}{\EV} a white surface facing the Sun is drawn white.
+\begin{uiexample}
+A nucleus at \qty{3}{\AU} receives $1/9$ of the sunlight it gets at \qty{1}{\AU}, about
+\qty{3.2}{\EV} less. With \uilabel{Physical lighting} on, set the exposure to
+\qty{+3}{\EV} to see its surface at about the brightness it would have at \qty{1}{\AU}.
+\end{uiexample}
+\end{uiproperty}
+
+\uiusefigure{settings-viewport}% back to Figure~\ref{fig:settings-viewport}
+\begin{uiproperty}[key=stars, id=StarBackgroundBox, type={drop-down list},
+    range={\uilabel{Auto (off in Model view)}, \uilabel{On}, \uilabel{Off}},
+    default={\uilabel{Auto (off in Model view)}}, effect=display, saved=prefs,
+    help=Tabs_Settings_HelpViewStarBackground]{Background stars}
+A decorative procedural star field. It does not match the real sky, and its field of view
+is fixed. \uilabel{Auto} draws it in every view except \uilabel{Model}, which then has a
+black backdrop. \uilabel{On} and \uilabel{Off} apply to
+every view.
+\end{uiproperty}
+
+\begin{uiproperty}[key=orbit-lines, id=OrbitLinesCheckBox, type={check box}, default={on},
+    effect=display, saved=prefs, help=Tabs_Settings_HelpViewOrbitLines]{Orbit lines}
+Draws the comet's reference orbit (red), the Earth's orbit (light blue) and the path
+travelled in this run (yellow). In the \uilabel{Orbit} and \uilabel{Model} views the overlay
+legend lists them (\panelref{overlay}).
+\end{uiproperty}
+
+\begin{uiproperty}[key=nucleus-from-earth, id=ViewNucleusFromEarthButton, type={button},
+    effect=action, visible={always; enabled once a comet is committed}, % VERIFY enable rule
+    help=Tabs_Settings_HelpViewNucleusFromEarth]{Nucleus from Earth}
+Switches to the Earth observer tracking the comet, with celestial north up and a field a few
+nucleus diameters tall. The result is the sunlit nucleus as seen from the Earth. It is a
+shortcut for: \uilabel{Model} view, \uilabel{Comet tracking}, \uilabel{North up} on, then a
+small \uilabel{FOV}.
+\end{uiproperty}
+
+\begin{uiproperty}[key=snap-above, id=SnapAbove, type={three buttons},
+    range={\uilabel{Sun}, \uilabel{Comet}, \uilabel{Earth}}, effect=action,
+    visible={\uilabel{Orbit} view}]{Snap above}
+Flies the camera above the chosen body and fits the projection to it. \uilabel{Sun} restores
+the startup view. \uilabel{Comet} frames the committed comet's nucleus. \uilabel{Earth} fits
+the Earth's radius. This is an animation only: the camera does not track the body
+afterwards. The buttons have no AutomationId. The fixture finds them by name inside
+\uiid{ViewportSettingsSection} (synthetic id \uiid{SnapAbove}).
+\end{uiproperty}
+
+% ----------------------------------------------------------------
+\uiusefigure{settings-viewport-observer}
+\uisection[observer]{Earth Observer Settings}{}
+
+Shown only in the \uilabel{Model} view, where the camera stands at the Earth. The settings
+below are saved with the file, because a comparison with a telescope image depends on them.
+
+\begin{figure}[htbp]
+  \centering
+  \uiscreenshot[placeholder={0.45,0.70}]{settings-viewport-observer}{img/settings-viewport-observer--model--light.png}
+  \caption{\uilabel{Earth Observer Settings} in the \uilabel{Model} view, observer on the
+    surface, \uilabel{Comet tracking}. The save's site is used.}
+  \label{fig:settings-viewport-observer}
+\end{figure}
+
+\begin{uiproperty}[key=topocentric, id=ObserverTopocentricCheckBox, type={check box},
+    default={off (geocentric)}, effect=camera, saved=file,
+    help=Tabs_Settings_HelpObserverTopocentric]{Observer on the Earth's surface (topocentric)}
+\begin{description}
+  \item[On (topocentric)] The observer stands at the telescope site given by
+    \uilabel{Latitude (°N)} and \uilabel{Longitude (°E)} and turns with the Earth. Nearby
+    objects shift by diurnal parallax, and a horizon appears.
+  \item[Off (geocentric)] The camera is at the Earth's centre and follows only its motion
+    around the Sun.
+\end{description}
+The view never rotates with the Earth.
+\end{uiproperty}
+
+\begin{uiproperty}[key=north-up, id=ObserverNorthUpCheckBox, type={check box}, default={on},
+    effect=camera, saved=file, help=Tabs_Settings_HelpObserverNorthUp]{North up}
+On: the view is levelled to celestial north (J2000), with north up and east left, like a
+telescope image. Off: the view is levelled to the ecliptic pole on the site's side of the
+equator.
+\end{uiproperty}
+
+\begin{uiproperty}[key=latitude, id=ObserverLatSlider, type={slider}, unit={\unit{\degree}, positive north},
+    range={\qty{-90}{\degree} to \qty{90}{\degree}, step \qty{0.1}{\degree}},
+    default={\qty{0}{\degree}}, effect=camera, saved=file, visible={topocentric on},
+    help=Tabs_Settings_HelpObserverLatitude]{Latitude (°N)}
+The latitude of the observing site.
+\end{uiproperty}
+
+\begin{uiproperty}[key=longitude, id=ObserverLonSlider, type={slider}, unit={\unit{\degree}, positive east of Greenwich},
+    range={\qty{-180}{\degree} to \qty{180}{\degree}, step \qty{0.1}{\degree}},
+    default={\qty{0}{\degree}}, effect=camera, saved=file, visible={topocentric on},
+    help=Tabs_Settings_HelpObserverLongitude]{Longitude (°E)}
+The longitude of the observing site.
+\begin{uiexample}
+For an observatory at \ang{45;3;}\,N, \ang{7;40;}\,E, type \uival{45,05} into
+\uilabel{Latitude (°N)} and \uival{7,67} into \uilabel{Longitude (°E)}. Sites west of
+Greenwich take negative longitudes.
+\end{uiexample}
+\end{uiproperty}
+
+\begin{uiproperty}[key=look-direction, id=OrientFree, type={radio buttons},
+    range={\uilabel{Free look}, \uilabel{Comet tracking}, \uilabel{Sun tracking}},
+    default={\uilabel{Free look}}, effect=camera, saved=file,
+    help=Tabs_Settings_HelpObserverLookDirection]{Look Direction}
+\begin{description}
+  \item[\uilabel{Free look}] Drag to look around. The direction stays fixed among the stars.
+  \item[\uilabel{Comet tracking}] Keeps the comet exactly at the centre of the view
+    (\uiid{OrientCometTracking}).
+  \item[\uilabel{Sun tracking}] Keeps the Sun at the centre of the view
+    (\uiid{OrientSunTracking}).
+\end{description}
+On the surface, while the tracked target is below the horizon, the view faces the point on
+the horizon where it will rise. A box then explains the hold and offers
+\uilabel{Move observer there}. That button moves the site to the latitude and longitude
+where the target is overhead now.
+\end{uiproperty}
+
+\begin{uiproperty}[key=restore-preset, id=RestorePresetButton, type={button}, effect=action,
+    visible={enabled after the projection was changed away from the tracking preset}]
+  {Restore preset projection}
+Re-applies the tracking projection, in which the target spans \qty{10}{\percent} of the
+view.
+\end{uiproperty}
+
+\begin{uiproperty}[key=scale, id=EarthObserverScaleText, type={read-only text},
+    visible={Model view, once a scale is known}, help=Tabs_Settings_HelpObserverScale]
+  {Telescope scale}
+The angle one screen pixel covers and the field of view. At the comet's distance it also
+gives the kilometres per pixel and the half-width and half-height of the view, for example:
+\begin{center}\small
+\uival{Scale 1.2″/px · field 21.26′ × 12′ (1063 × 600 px)}\\
+\uival{At the comet (0.4664 AU): 406 km/px, half-width 2.1579E+05 km, half-height 1.218E+05 km}
+\end{center}
+The figures above are illustrative. The text always uses a decimal point, whatever the
+system's language.
+\end{uiproperty}
+
+\paragraph{See also.} \menu{Settings > Billboards > FITS image} for
+\uilabel{Match camera to image} and \uilabel{Set up comparison}, which set many of the values
+above in one step. The \uilabel{Model} button of the view-mode strip (\panelref{main}).
+
+\end{uipanel}

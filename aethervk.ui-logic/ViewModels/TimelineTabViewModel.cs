@@ -302,6 +302,7 @@ public partial class TimelineTabViewModel : StatefulTabViewModelBase<TimelineSes
       .AddDisposableTo(_disposables);
 
     Observable.Interval(TimeSpan.FromMilliseconds(33), schedulerProvider.MainThread)
+      .TakeUntil(_runtimeService.ShutdownToken.WhenCancelled())
       .Where(_ => IsPlaying)
       .Subscribe(_ => PollSimulationClock())
       .AddDisposableTo(_disposables);

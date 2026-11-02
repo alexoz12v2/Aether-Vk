@@ -37,6 +37,10 @@ class Program
       catch (DllNotFoundException) { }
     }
 
+    // AETHERVK_UI_CULTURE (e.g. "en-US"): the interface language and locale regardless of the OS
+    // one, for documentation screenshots in another language; unset or unknown keeps the OS one.
+    Logic.Utils.NumberCulture.ApplyOverride(Environment.GetEnvironmentVariable("AETHERVK_UI_CULTURE"));
+
     // Numbers read and print with a dot on every OS locale (an Italian Windows otherwise shows and
     // parses "0,5"); dates and the rest of the locale are kept.
     Logic.Utils.NumberCulture.Apply();

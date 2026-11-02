@@ -1919,11 +1919,13 @@ public class CameraServiceTests
   }
 
   /// A camera with a committed comet at (1.3, −0.4, 0.05) AU (the Earth at its default (1, 0, 0)),
-  /// in the Earth observer on a 1600 × 1000 px viewport, recording the projection requests.
-  private static (CameraService Service, Mock<INativeRuntimeService> Runtime, System.Collections.Generic.List<CameraProjectionState> Requests)
+  /// in the Earth observer on a 1600 × 1000 px viewport, recording the projection requests. The
+  /// scheduler is the main thread: a deferred projection (after a mode snap) lands on AdvanceBy.
+  private static (CameraService Service, Mock<INativeRuntimeService> Runtime,
+      System.Collections.Generic.List<CameraProjectionState> Requests, TestScheduler Scheduler)
     BuildObserverWithComet(bool perspective)
   {
-    var (service, runtime, _) = BuildService();
+    var (service, runtime, scheduler) = BuildService();
     var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
     runtime.Setup(r => r.CometEntityId).Returns(77UL);
     var cometConfig = (CometConfigService)typeof(CameraService).GetField("_cometConfigService", flags)!.GetValue(service)!;
@@ -1949,8 +1951,14 @@ public class CameraServiceTests
       .Callback<ulong, float, float, float, float, float, float>((_, l, r, b, t, n, f) =>
         requests.Add(new CameraProjectionState(false, 0, 0, n, f, l, r, b, t, 1f)))
       .Returns(true);
-    return (service, runtime, requests);
+    return (service, runtime, requests, scheduler);
   }
+
+  /// <summary>The runtime confirmed <paramref name="p"/> (the projection callback's subject).</summary>
+  private static void ConfirmProjection(CameraService service, CameraProjectionState p) =>
+    ((System.Reactive.Subjects.BehaviorSubject<CameraProjectionState?>)typeof(CameraService)
+      .GetField("_projectionSubject", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+      .GetValue(service)!).OnNext(p);
 
   /// "Match camera to image", orthographic: the half-height is exactly half the image's height at
   /// the comet (120 000 km → 60 000 km, no distance in it), the half-width × the viewport's px
@@ -1959,7 +1967,7 @@ public class CameraServiceTests
   public void SetEarthObserverField_Orthographic_HalfHeightIsHalfTheImageHeight()
   {
     const double AuToKm = 149_597_870.7;
-    var (service, _, requests) = BuildObserverWithComet(perspective: false);
+    var (service, _, requests, _) = BuildObserverWithComet(perspective: false);
     Assert.True(service.SetEarthObserverField(120_000, 1e-3));
     Assert.Equal(EarthObserverOrientationMode.CometTracking, service.GetPersistedState().ObserverOrientation);
     var p = requests[^1];
@@ -1972,6 +1980,51 @@ public class CameraServiceTests
     Assert.False(service.SetEarthObserverField(0, 1e-3));
   }
 
+  /// A save made after "Match camera to image" (the FITS comparison: half-height = the image's
+  /// field / 2, half-width = that × the viewport's aspect) reopens on the same frustum: the
+  /// restore's deferred snapshot lands after the tracking submode re-applied its preset, and the
+  /// proportions lock re-derives the width from the height only for a new viewport aspect (the
+  /// e2e "67p-2021-12-27-south" save: Right 103 304 km = Top 61 633 km × 1.676, as saved).
+  [Fact]
+  public async Task RestorePersistedState_Orthographic_KeepsTheSavedFrustumAfterTheTrackingPreset()
+  {
+    const double AuToKm = 149_597_870.7;
+    var (built, _, builtRequests, _) = BuildObserverWithComet(perspective: false);
+    Assert.True(built.SetEarthObserverField(123_265, 1e-3));
+    var field = builtRequests[^1];
+    Assert.Equal((float)(61_632.5 / AuToKm), field.Top);
+    Assert.Equal((float)(61_632.5 / AuToKm * 1.6), field.Right);
+    ConfirmProjection(built, field);
+    var saved = built.GetPersistedState();
+    Assert.Equal((CameraMode.EarthPosition, EarthObserverOrientationMode.CometTracking), (saved.Mode, saved.ObserverOrientation));
+    Assert.Equal(field, saved.Projection);
+    Assert.True(saved.Display!.OrthoProportionsLocked);
+
+    var (reopened, _, requests, scheduler) = BuildObserverWithComet(perspective: false);
+    reopened.RestorePersistedState(saved);
+    // the tracking submode's preset (the comet at 10 % of the view) went out at once ...
+    Assert.NotEmpty(requests);
+    Assert.False(requests[^1].IsPerspective);
+    // ... and the saved frustum after the snap (0.05 s), exactly as saved: last word
+    await Task.Delay(TimeSpan.FromMilliseconds(400));
+    scheduler.AdvanceBy(1);
+    var landed = requests[^1];
+    Assert.False(landed.IsPerspective);
+    Assert.Equal((field.Left, field.Right, field.Bottom, field.Top), (landed.Left, landed.Right, landed.Bottom, landed.Top));
+    ConfirmProjection(reopened, landed);
+
+    // a resize at the same aspect keeps the frustum (to a float rounding)
+    int before = requests.Count;
+    reopened.OnViewportResized(1600, 1000);
+    Assert.Equal(before + 1, requests.Count);
+    Assert.Equal(field.Top, requests[^1].Top);
+    Assert.InRange(requests[^1].Right, field.Right * (1 - 1e-6), field.Right * (1 + 1e-6));
+    // the lock follows a new aspect from the height
+    reopened.OnViewportResized(1000, 1000);
+    Assert.Equal(field.Top, requests[^1].Top);
+    Assert.InRange(requests[^1].Right, field.Top * (1 - 1e-6), field.Top * (1 + 1e-6));
+  }
+
   /// Perspective: the vertical fov is the image's angle, 2·atan(60 000 km / D) for a 120 000 km
   /// image at the comet's distance D (|comet − observer|); refused from 0.9 π and outside the
   /// Earth observer.
@@ -1979,7 +2032,7 @@ public class CameraServiceTests
   public void SetEarthObserverField_Perspective_FovIsTheImageAngle()
   {
     const double AuToKm = 149_597_870.7;
-    var (service, _, requests) = BuildObserverWithComet(perspective: true);
+    var (service, _, requests, _) = BuildObserverWithComet(perspective: true);
     double d = service.GetEarthObserverCometDistanceKm()!.Value;
     Assert.Equal(new Vector3d(0.3, -0.4, 0.05).Length() * AuToKm, d, 3);
     double angle = 2.0 * Math.Atan(60_000 / d);

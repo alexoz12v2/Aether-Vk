@@ -49,6 +49,27 @@ namespace AetherVk.Logic.ViewModels
             }
         }
 
+        /// <inheritdoc cref="_viewportDesktopRect"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public string ViewportDesktopRect
+        {
+            get => _viewportDesktopRect;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<string>.Default.Equals(_viewportDesktopRect, value))
+                {
+                    OnViewportDesktopRectChanging(value);
+                    OnViewportDesktopRectChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.ViewportDesktopRect);
+                    _viewportDesktopRect = value;
+                    OnViewportDesktopRectChanged(value);
+                    OnViewportDesktopRectChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.ViewportDesktopRect);
+                }
+            }
+        }
+
         /// <summary>Executes the logic for when <see cref="SelectedTexture"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="SelectedTexture"/> is changed.</remarks>
@@ -93,5 +114,27 @@ namespace AetherVk.Logic.ViewModels
         /// <remarks>This method is invoked right after the value of <see cref="HasTextures"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnHasTexturesChanged(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="ViewportDesktopRect"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="ViewportDesktopRect"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnViewportDesktopRectChanging(string value);
+        /// <summary>Executes the logic for when <see cref="ViewportDesktopRect"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="ViewportDesktopRect"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnViewportDesktopRectChanging(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="ViewportDesktopRect"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="ViewportDesktopRect"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnViewportDesktopRectChanged(string value);
+        /// <summary>Executes the logic for when <see cref="ViewportDesktopRect"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="ViewportDesktopRect"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnViewportDesktopRectChanged(string? oldValue, string newValue);
     }
 }
