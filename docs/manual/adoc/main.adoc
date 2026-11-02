@@ -1,0 +1,208 @@
+== Main window
+:imagesdir: ..
+
+[[main]]
+=== Main window
+Location:: Main window
+Shown:: no comet loaded
+
+.Main window
+The main window of a new session: no comet is committed, so the viewport is empty and the Timeline only shows the range typed in the Comet tab.
+
+image::img/main--empty--light--tagged.png[Main window,width=900,pdfwidth=170mm]
+
+. *Orbit* -- Shows the comet's orbit in the Solar System, animated over the chosen range.
+. *Nucleus* -- Shows the nucleus with its orientation, the Sun direction, illumination and jets.
+. *Model* -- Sets the view up to compare the model with a telescope image; the end date is the image date.
+. *Settings* -- Tab with time scale, comet appearance, billboards, particle rendering, input bindings and viewport settings.
+. *Comet* -- Tab to search and commit a comet, set the simulated range and nucleus radius, and edit the rotational model.
+. *Model* -- Tab with the dust display options, the gizmo, the jets and the dust grain and activity defaults.
+. *Viewport 3D* -- // TODO: describe
+. *Imports* -- // TODO: describe
+. *Legend* -- // TODO: describe
+. *Dust* -- Section with the dust display options, the gizmo, the jet list and the defaults for new jets.
+. *Import…* -- Opens a file dialog to import meshes (OBJ, PLY, glTF, GLB) or textures (PNG, JPEG, KTX2).
+. *Scale ruler* -- Shows the length in km that the bar beside it covers at the comet in the current view.
+. *Timeline* -- // TODO: describe
+. *Start Epoch* -- Shows the start of the simulated range in the chosen time scale. It is read-only here; change it in the Comet tab.
+. *End Epoch* -- Shows the end of the simulated range in the chosen time scale. It is read-only here; change it in the Comet tab.
+
+// TODO: some controls have no help text and no description
+
+[[main-committed]]
+=== Main window
+Location:: Main window
+Shown:: committed comet (67P, December 2021)
+
+.Main window
+The main window with a comet committed and the Model view active: the dust, the legend, the ephemeris table and the timeline controls are filled in.
+
+image::img/main--committed--light--tagged.png[Main window,width=900,pdfwidth=170mm]
+
+. *Orbit* -- Shows the comet's orbit in the Solar System, animated over the chosen range.
+. *Nucleus* -- Shows the nucleus with its orientation, the Sun direction, illumination and jets.
+. *Model* -- Sets the view up to compare the model with a telescope image; the end date is the image date.
+. *Time scale for dates* -- Section that chooses the time scale used for the dates you type and read.
+. *Import…* -- Opens a file dialog to import meshes (OBJ, PLY, glTF, GLB) or textures (PNG, JPEG, KTX2).
+. *Time scale* -- Chooses UTC or TDB for the Start and End boxes, the Timeline epoch box and the viewport epoch label. UTC is the default.
+. *Comet Appearance* -- Section that sets how the nucleus is drawn. It changes the look only, not the simulation.
+. *Billboards* -- Section to create billboard windows that show imported images over the desktop.
+. *Texture* -- Chooses the imported texture to show in a new billboard window.
+. *Centre (desktop px), X* -- Horizontal position of the billboard centre, in desktop pixels.
+. *Centre (desktop px), Y* -- Vertical position of the billboard centre, in desktop pixels.
+. *Size (px), width* -- Width of the billboard in pixels, at least 16.
+. *Size (px), height* -- Height of the billboard in pixels, at least 16.
+. *Keep aspect* -- When on, changing the width or the height also changes the other so the image keeps its proportions.
+. *Opacity* -- Opacity of the billboard, from 0 (transparent) to 1 (opaque).
+
+==== Properties
+
+Texture::
+  Imported texture to show in a new billboard window over the desktop; the button next to it opens the window. Import images in the Imports tab.
+
+Keep aspect::
+  When on, changing the width or height also changes the other, keeping the image proportions.
+
+Opacity::
+  Opacity of the billboard, from 0 (fully transparent) to 1 (fully opaque).
+
+[[main-modebar]]
+=== Mode bar
+Location:: Mode bar
+Shown:: Orbit mode, committed comet
+
+.Mode bar
+Orbit mode: the viewport shows the comet's orbit in the Solar System, animated over the chosen range.
+
+image::img/main-modebar--orbit--light--tagged.png[Mode bar,width=266,pdfwidth=45mm]
+
+. *Orbit* -- Shows the comet's orbit in the Solar System, animated over the chosen range.
+. *Nucleus* -- Shows the nucleus with its orientation, the Sun direction, illumination and jets.
+. *Model* -- Sets the view up to compare the model with a telescope image; the end date is the image date.
+
+[[main-modebar-nucleus]]
+=== Mode bar
+Location:: Mode bar
+Shown:: Nucleus mode, committed comet
+
+.Mode bar
+Nucleus mode: the viewport shows the nucleus with its orientation, the Sun direction, illumination and the jets.
+
+image::img/main-modebar--nucleus--light--tagged.png[Mode bar,width=266,pdfwidth=45mm]
+
+. *Orbit* -- Shows the comet's orbit in the Solar System, animated over the chosen range.
+. *Nucleus* -- Shows the nucleus with its orientation, the Sun direction, illumination and jets.
+. *Model* -- Sets the view up to compare the model with a telescope image; the end date is the image date.
+
+[[main-modebar-model]]
+=== Mode bar
+Location:: Mode bar
+Shown:: Model mode, committed comet
+
+.Mode bar
+Model mode: the viewport is set up to compare with a telescope image, ending at the image date. Without a FITS image, a hint tells you to import one.
+
+image::img/main-modebar--model--light--tagged.png[Mode bar,width=613,pdfwidth=104mm]
+
+. *Mode hint* -- Shows a message after you choose Model mode: a hint to import a FITS image, or the result of the comparison set-up.
+. *Orbit* -- Shows the comet's orbit in the Solar System, animated over the chosen range.
+. *Nucleus* -- Shows the nucleus with its orientation, the Sun direction, illumination and jets.
+. *Model* -- Sets the view up to compare the model with a telescope image; the end date is the image date.
+
+[[menu-file]]
+=== File menu
+Location:: Menu bar › File menu
+Shown:: committed comet (67P, December 2021)
+
+.Menu bar › File menu
+The File menu creates, opens and saves sessions. The screenshot lists its entries.
+
+image::img/menu-file--committed--light--tagged.png[Menu bar › File menu,width=280,pdfwidth=47mm]
+
+. *New* -- // TODO: describe
+. *Open...* -- // TODO: describe
+. *Open Recent* -- // TODO: describe
+. *Save* -- // TODO: describe
+. *Save As...* -- // TODO: describe
+. *Save As Folder...* -- // TODO: describe
+
+// TODO: some controls have no help text and no description
+
+[[menu-edit]]
+=== Edit menu
+Location:: Menu bar › Edit menu
+Shown:: committed comet (67P, December 2021)
+
+.Menu bar › Edit menu
+The Edit menu opens the Settings window and switches between the light and dark theme.
+
+image::img/menu-edit--committed--light--tagged.png[Menu bar › Edit menu,width=246,pdfwidth=42mm]
+
+. *Settings...* -- // TODO: describe
+. *Toggle Theme* -- // TODO: describe
+
+// TODO: some controls have no help text and no description
+
+[[docking]]
+=== Docking and tabs
+Location:: Docking and tabs
+Shown:: committed comet (67P, December 2021)
+
+.Docking and tabs
+Each pane of the window is a group of tabs. The tab strip has a button to add a tab, a button to swap the pane and a button to close it.
+
+image::img/docking--committed--light--tagged.png[Docking and tabs,width=900,pdfwidth=170mm]
+
+. *Settings* -- Tab with time scale, comet appearance, billboards, particle rendering, input bindings and viewport settings.
+. *Time scale for dates* -- Section that chooses the time scale used for the dates you type and read.
+. *Comet Appearance* -- Section that sets how the nucleus is drawn. It changes the look only, not the simulation.
+. *Time scale* -- Chooses UTC or TDB for the Start and End boxes, the Timeline epoch box and the viewport epoch label. UTC is the default.
+. *Import…* -- Opens a file dialog to import meshes (OBJ, PLY, glTF, GLB) or textures (PNG, JPEG, KTX2).
+. *Texture* -- Chooses the imported texture to show in a new billboard window.
+. *Visible* -- Shows or hides the billboard window without deleting it.
+. *Centre (desktop px), X* -- Horizontal position of the billboard centre, in desktop pixels.
+. *Size (px), width* -- Width of the billboard in pixels, at least 16.
+. *Keep aspect* -- When on, changing the width or the height also changes the other so the image keeps its proportions.
+. *Opacity* -- Opacity of the billboard, from 0 (transparent) to 1 (opaque).
+. *Rotation (°)* -- Rotation of the billboard about its centre, in degrees from -180 to 180.
+. *Image height at the comet (km)* -- Physical height of the image at the comet's distance, in km. When set, it takes precedence over the plate scale.
+. *Centre (desktop px), Y* -- Vertical position of the billboard centre, in desktop pixels.
+. *Size (px), height* -- Height of the billboard in pixels, at least 16.
+
+==== Properties
+
+Texture::
+  Imported texture to show in a new billboard window over the desktop; the button next to it opens the window. Import images in the Imports tab.
+
+Keep aspect::
+  When on, changing the width or height also changes the other, keeping the image proportions.
+
+Opacity::
+  Opacity of the billboard, from 0 (fully transparent) to 1 (fully opaque).
+
+Rotation (°)::
+  Rotation of the billboard about its centre, in degrees (−180 to 180). The rotation handle on the billboard does the same.
+
+Image height at the comet (km)::
+  The image's vertical extent at the comet, in kilometres (dot decimals), for an image without a WCS (a JPEG, for example). When set, it wins over the plate scale.
+
+  Empty: not set.
+
+[[main-modebar-locked]]
+=== Mode bar
+Location:: Mode bar
+Shown:: pending range edit, the range is locked, committed comet
+
+.Mode bar
+The mode bar after the range was edited while a comet is committed: a lock message and a Recommit button appear beside the mode buttons.
+
+image::img/main-modebar--locked--light--tagged.png[Mode bar,width=900,pdfwidth=170mm]
+
+. *Mode hint* -- Shows a message after you choose Model mode: a hint to import a FITS image, or the result of the comparison set-up.
+. *Range locked while the comet is committed: the simulation keeps the...* -- // TODO: describe
+. *Recommit with this range* -- // TODO: describe
+. *Orbit* -- Shows the comet's orbit in the Solar System, animated over the chosen range.
+. *Nucleus* -- Shows the nucleus with its orientation, the Sun direction, illumination and jets.
+. *Model* -- Sets the view up to compare the model with a telescope image; the end date is the image date.
+
+// TODO: some controls have no help text and no description

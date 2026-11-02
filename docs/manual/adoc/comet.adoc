@@ -1,0 +1,250 @@
+== Comet tab
+:imagesdir: ..
+
+[[comet-guided]]
+=== Guided steps
+Location:: Comet › Guided steps
+Shown:: no comet loaded
+
+.Comet › Guided steps
+Before any comet is committed, the first step is highlighted and the help text tells you what to do next.
+
+image::img/comet-guided--empty--light--tagged.png[Comet › Guided steps,width=515,pdfwidth=87mm]
+
+. *Current step* -- Explains what to do in the current step of the guided flow.
+
+[[comet-selection]]
+=== Comet selection
+Location:: Comet › Comet selection
+Shown:: no comet loaded
+
+.Comet › Comet selection
+The search for "67P" has returned a list of comets; the SPK records appear once you select one.
+
+image::img/comet-selection--empty--light--tagged.png[Comet › Comet selection,width=581,pdfwidth=98mm]
+
+. *Search* -- Searches for comets that match the text in the box.
+. *Search comets* -- Type a comet name or designation, for example 67P, and press Enter or Search.
+. *Search results* -- Lists the comets that match the search. Select one to list its ephemeris (SPK) records.
+
+[[comet-commit]]
+=== Reference orbit and commit
+Location:: Comet › Reference orbit and commit
+Shown:: no comet loaded
+
+.Comet › Reference orbit and commit
+Before the first commit the reference orbit is chosen here and the button is ready.
+
+image::img/comet-commit--empty--light--tagged.png[Comet › Reference orbit and commit,width=507,pdfwidth=86mm]
+
+. *Reference orbit* -- Chooses the two-body orbit drawn next to the true SPK path: the SBDB solution at its own epoch, or osculating at the start epoch. Required before the first commit.
+. *Download & Commit* -- Downloads the selected SPK record and attaches it to the simulation with the proposed range.
+
+==== Properties
+
+Reference orbit::
+  The red track is a two-body (Keplerian) reference orbit drawn next to the true SPK path.
+
+  SBDB solution: the elements JPL publishes, osculating at the solution epoch, which can be years away from your window (67P: 2015-10-10, about 0.12 AU off its 2025 path because of Jupiter).
+
+  Osculating at start epoch: elements recomputed from the SPK position and velocity at your start epoch. Exact there, and within about 10³ km over a month (planetary perturbations and outgassing forces).
+
+  Required before the first commit; it cannot be changed while a comet is committed.
+
+[[comet-guided-committed]]
+=== Guided steps
+Location:: Comet › Guided steps
+Shown:: committed comet (67P, December 2021)
+
+.Comet › Guided steps
+After the commit all four steps are ticked and the text tells you to press Play in the Timeline tab.
+
+image::img/comet-guided--committed--light--tagged.png[Comet › Guided steps,width=499,pdfwidth=84mm]
+
+. *Current step* -- Explains what to do in the current step of the guided flow.
+
+[[comet-selection-committed]]
+=== Comet selection
+Location:: Comet › Comet selection
+Shown:: committed comet (67P, December 2021)
+
+.Comet › Comet selection
+After the commit a banner shows the committed comet and an Undo button, above the search box and the record list.
+
+image::img/comet-selection--committed--light--tagged.png[Comet › Comet selection,width=565,pdfwidth=96mm]
+
+. *Committed comet* -- Shows the name of the comet attached to the simulation.
+. *Search* -- Searches for comets that match the text in the box.
+. *Search comets* -- Type a comet name or designation, for example 67P, and press Enter or Search.
+. *Search results* -- Lists the comets that match the search. Select one to list its ephemeris (SPK) records.
+. *Available SPK Records* -- Lists the ephemeris records of the selected comet, each a separate fit of its orbit. Select one before you commit.
+
+==== Properties
+
+Available SPK records::
+  Ephemeris (SPK) records of the selected comet: each is a separate fit of its orbit.
+
+  Select one, then press Download & Commit to attach it to the simulation.
+
+[[comet-commit-committed]]
+=== Reference orbit and commit
+Location:: Comet › Reference orbit and commit
+Shown:: committed comet (67P, December 2021)
+
+.Comet › Reference orbit and commit
+After the commit the status line shows the committed comet, and the reference orbit is locked.
+
+image::img/comet-commit--committed--light--tagged.png[Comet › Reference orbit and commit,width=491,pdfwidth=83mm]
+
+. *Reference orbit* -- Chooses the two-body orbit drawn next to the true SPK path: the SBDB solution at its own epoch, or osculating at the start epoch. Required before the first commit.
+. *Download & Commit* -- Downloads the selected SPK record and attaches it to the simulation with the proposed range.
+. *Status* -- Shows the result of the download and commit, for example the name of the committed comet.
+
+==== Properties
+
+Reference orbit::
+  The red track is a two-body (Keplerian) reference orbit drawn next to the true SPK path.
+
+  SBDB solution: the elements JPL publishes, osculating at the solution epoch, which can be years away from your window (67P: 2015-10-10, about 0.12 AU off its 2025 path because of Jupiter).
+
+  Osculating at start epoch: elements recomputed from the SPK position and velocity at your start epoch. Exact there, and within about 10³ km over a month (planetary perturbations and outgassing forces).
+
+  Required before the first commit; it cannot be changed while a comet is committed.
+
+[[comet-simulated-range]]
+=== Simulated range
+Location:: Comet › Simulated range
+Shown:: committed comet (67P, December 2021)
+
+.Comet › Simulated range
+The range as committed: the date, the number of rotations and the resulting span in days.
+
+image::img/comet-simulated-range--committed--light--tagged.png[Comet › Simulated range,width=571,pdfwidth=97mm]
+
+. *Simulated range* -- Section for the observation date, the number of rotations before it, the dust lead time and Run at this date.
+. *From image* -- Takes the observation date from the loaded FITS image.
+. *Observation date (UTC)* -- Type the date of your telescope image in UTC. The simulated range ends at this date.
+. *Rotations before it* -- Number of full nucleus rotations before the observation date at which the simulation starts, from 1 to 1000.
+. *Span* -- Shows the length of the simulated range in days, from the number of rotations and the rotation period.
+. *Dust lead time* -- Days before the start epoch at which the jets begin to emit, from 0 to 30. The default is 30, so the tail already exists at the start.
+. *Run at this date* -- Sets the range from the observation date, commits the comet again and seeks to the date; with a FITS image it also sets up the comparison.
+. *Run status* -- Shows what Run at this date is doing or what it did.
+. *Advanced: Start / End, Restore, Recommit* -- Opens the hand-typed Start and End epochs, the Restore button and the range lock controls.
+
+==== Properties
+
+Dust lead time::
+  Days the jets start emitting before the start epoch, from 0 to 30 (30 = one dust lifetime, the default).
+
+  With 30 the tail is already fully formed when the timeline starts; with 0 the jets switch on at the start and the tail grows from nothing.
+
+  Used the next time the comet is committed.
+
+[[comet-range-advanced]]
+=== Simulated range: Advanced
+Location:: Comet › Simulated range
+Shown:: committed comet (67P, December 2021)
+
+.Comet › Simulated range
+The advanced part of the range lets you type the Start and End epochs by hand, restore the committed range, or set a range without running.
+
+image::img/comet-range-advanced--committed--light--tagged.png[Comet › Simulated range,width=561,pdfwidth=95mm]
+
+. *Advanced: Start / End, Restore, Recommit* -- Opens the hand-typed Start and End epochs, the Restore button and the range lock controls.
+. *Start* -- Type the start epoch of the simulated range in ISO 8601 form, in the chosen time scale. It only proposes a range until you commit.
+. *End* -- Type the end epoch of the simulated range in ISO 8601 form, in the chosen time scale. It must be at least 1 day after the start.
+. *Restore* -- Puts the committed range back in the Start and End boxes and drops your edit.
+. *Proposed* -- Shows the range in the Start and End boxes, which the next commit or recommit will use.
+. *Set range* -- Applies the range from the observation date and rotation count without running the simulation.
+
+==== Properties
+
+Proposed range::
+  The range in the Start/End boxes: what the next Download & Commit or Recommit will use.
+
+  It does not change the running simulation. Restore puts the committed range back in the boxes.
+
+[[comet-nucleus]]
+=== Nucleus
+Location:: Comet › Nucleus
+Shown:: committed comet (67P, December 2021)
+
+.Comet › Nucleus
+The Nucleus section holds the nucleus radius. The jets start on a sphere of this radius, so it must be known before you add jets.
+
+image::img/comet-nucleus--committed--light--tagged.png[Comet › Nucleus,width=511,pdfwidth=87mm]
+
+. *Nucleus* -- Section with the physical parameters of the nucleus, here its radius.
+. *Nucleus Radius* -- Sets the radius of the nucleus in km, from 0.1 to 100; it is filled from Horizons when a comet is committed. The jets start on this sphere.
+
+==== Properties
+
+Nucleus Radius::
+  Bounding-sphere radius of the comet nucleus, in km (0.1 to 100); the jets start on this sphere.
+
+  Auto-filled from Horizons when a comet is committed. Override it here if needed.
+
+  An edit after Play returns the simulation to the snapshot taken at Play.
+
+[[comet-rotation]]
+=== Rotational model
+Location:: Comet › Rotational model
+Shown:: committed comet (67P, December 2021)
+
+.Comet › Rotational model
+Rotational Model sets the spin axis, the rotation phase and the spin rate of the nucleus. It is available after a comet is committed, and changes are applied live.
+
+image::img/comet-rotation--committed--light--tagged.png[Comet › Rotational model,width=571,pdfwidth=97mm]
+
+. *Rotational Model* -- Section with the spin axis, rotation phase and spin rate of the nucleus. It is available once a comet is committed.
+. *Pole RA* -- Right ascension of the spin axis (J2000), in degrees. Together with Pole Dec it sets where the axis points.
+. *Pole Dec* -- Declination of the spin axis (J2000), in degrees. Together with Pole RA it sets where the axis points.
+. *Prime Meridian* -- Rotation angle of the nucleus at J2000, in degrees; it sets which side faces where at a given time.
+. *Rotation Period (h)* -- Sidereal rotation period of the nucleus in hours. It changes the rotation rate below and the length of one rotation in the range.
+. *Advanced: rates (precession, °/day)* -- Opens the precession rates of the spin axis and the rotation rate in degrees per day.
+. *Rotation Rate (°/day)* -- Spin rate of the nucleus in degrees per day; the sign gives prograde or retrograde. It is the same spin as the period.
+
+[[comet-simulated-range-locked]]
+=== Simulated range
+Location:: Comet › Simulated range
+Shown:: pending range edit, the range is locked, committed comet
+
+.Comet › Simulated range
+After the number of rotations was changed while a comet is committed, the range is locked: the simulation keeps the committed range until you recommit or run at the new date.
+
+image::img/comet-simulated-range--locked--light--tagged.png[Comet › Simulated range,width=571,pdfwidth=97mm]
+
+. *Simulated range* -- Section for the observation date, the number of rotations before it, the dust lead time and Run at this date.
+. *From image* -- Takes the observation date from the loaded FITS image.
+. *Observation date (UTC)* -- Type the date of your telescope image in UTC. The simulated range ends at this date.
+. *Rotations before it* -- Number of full nucleus rotations before the observation date at which the simulation starts, from 1 to 1000.
+. *Span* -- Shows the length of the simulated range in days, from the number of rotations and the rotation period.
+. *Dust lead time* -- Days before the start epoch at which the jets begin to emit, from 0 to 30. The default is 30, so the tail already exists at the start.
+. *Run at this date* -- Sets the range from the observation date, commits the comet again and seeks to the date; with a FITS image it also sets up the comparison.
+. *Run status* -- Shows what Run at this date is doing or what it did.
+. *Advanced: Start / End, Restore, Recommit* -- Opens the hand-typed Start and End epochs, the Restore button and the range lock controls.
+. *Start* -- Type the start epoch of the simulated range in ISO 8601 form, in the chosen time scale. It only proposes a range until you commit.
+. *End* -- Type the end epoch of the simulated range in ISO 8601 form, in the chosen time scale. It must be at least 1 day after the start.
+. *Restore* -- Puts the committed range back in the Start and End boxes and drops your edit.
+. *Proposed* -- Shows the range in the Start and End boxes, which the next commit or recommit will use.
+. *Recommit with this range* -- Commits the comet again (as Download & Commit) with the range in the boxes.
+. *Set range* -- Applies the range from the observation date and rotation count without running the simulation.
+
+==== Properties
+
+Dust lead time::
+  Days the jets start emitting before the start epoch, from 0 to 30 (30 = one dust lifetime, the default).
+
+  With 30 the tail is already fully formed when the timeline starts; with 0 the jets switch on at the start and the tail grows from nothing.
+
+  Used the next time the comet is committed.
+
+Proposed range::
+  The range in the Start/End boxes: what the next Download & Commit or Recommit will use.
+
+  It does not change the running simulation. Restore puts the committed range back in the boxes.
+
+Recommit with this range::
+  Commits the comet again (as Download & Commit) with the range in the boxes. The dust restarts from the new start.
+
+  Until then the simulation keeps the committed range.

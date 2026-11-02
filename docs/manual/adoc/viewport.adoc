@@ -1,0 +1,70 @@
+== Viewport
+:imagesdir: ..
+
+[[billboard-window]]
+=== Billboard window
+Location:: Billboard window
+Shown:: committed comet (67P, December 2021)
+
+.Billboard window
+A billboard window shows the imported image over the desktop. Drag it with the left mouse button; the right button cycles the move, rotate and scale handles.
+
+image::img/billboard-window--committed--light--tagged.png[Billboard window,width=868,pdfwidth=147mm]
+
+[[viewport]]
+=== Viewport
+Location:: Viewport
+Shown:: Orbit mode, committed comet
+
+.Viewport
+Orbit mode: the comet and its dust seen along its orbit, with the Earth orbit and the path travelled in the run.
+
+image::img/viewport--orbit--light--tagged.png[Viewport,width=900,pdfwidth=170mm]
+
+[[viewport-nucleus]]
+=== Viewport
+Location:: Viewport
+Shown:: Nucleus mode, committed comet
+
+.Viewport
+Nucleus mode: a close view of the nucleus with its jets and the dust leaving it.
+
+image::img/viewport--nucleus--light--tagged.png[Viewport,width=900,pdfwidth=170mm]
+
+[[viewport-model]]
+=== Viewport
+Location:: Viewport
+Shown:: Model mode, committed comet
+
+.Viewport
+Model mode: the dust as the Earth observer sees it, to compare with a telescope image.
+
+image::img/viewport--model--light--tagged.png[Viewport,width=900,pdfwidth=170mm]
+
+[[overlay]]
+=== Viewport overlay
+Location:: Viewport overlay
+Shown:: Orbit mode, committed comet
+
+.Viewport overlay
+The overlay in Orbit mode: the orbit legend, the ephemeris table, the scale ruler and the epoch label.
+
+image::img/overlay--orbit--light--tagged.png[Viewport overlay,width=900,pdfwidth=170mm]
+
+. *Scale ruler* -- Shows the length in km that the bar beside it covers at the comet in the current view.
+. *Epoch* -- Shows the current simulation epoch in the chosen time scale.
+. *Reference frame* -- Describes the view, for example from Earth with celestial north up, and repeats the epoch.
+
+[[overlay-model]]
+=== Viewport overlay
+Location:: Viewport overlay
+Shown:: Model mode, committed comet
+
+.Viewport overlay
+The overlay in Model mode: the legend, the ephemeris table, the scale ruler, the epoch and the reference frame of the Earth view.
+
+image::img/overlay--model--light--tagged.png[Viewport overlay,width=900,pdfwidth=170mm]
+
+. *Scale ruler* -- Shows the length in km that the bar beside it covers at the comet in the current view.
+. *Epoch* -- Shows the current simulation epoch in the chosen time scale.
+. *Reference frame* -- Describes the view, for example from Earth with celestial north up, and repeats the epoch.

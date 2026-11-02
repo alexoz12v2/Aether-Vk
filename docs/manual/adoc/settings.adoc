@@ -1,0 +1,525 @@
+== Settings tab
+:imagesdir: ..
+
+[[settings-time-scale]]
+=== Time scale
+Location:: Settings › Time scale
+Shown:: committed comet (67P, December 2021)
+
+.Settings › Time scale
+Time scale for dates chooses whether dates you type and read are in UTC or in TDB.
+
+image::img/settings-time-scale--committed--light--tagged.png[Settings › Time scale,width=501,pdfwidth=85mm]
+
+. *Time scale for dates* -- Section that chooses the time scale used for the dates you type and read.
+. *Time scale* -- Chooses UTC or TDB for the Start and End boxes, the Timeline epoch box and the viewport epoch label. UTC is the default.
+
+[[settings-particle-rendering]]
+=== Particle rendering
+Location:: Settings › Particle rendering
+Shown:: committed comet (67P, December 2021)
+
+.Settings › Particle rendering
+Particle rendering sets how finely the dust is drawn. A quality slider presets the detail values; the playback preview quality sets how the dust looks while playing.
+
+image::img/settings-particle-rendering--committed--light--tagged.png[Settings › Particle rendering,width=562,pdfwidth=95mm]
+
+. *Particle rendering* -- Section that sets how finely the dust is drawn, live and saved for the next start.
+. *Quality* -- Dust drawing quality from 1 (lowest, fastest) to 5 (ultra). It presets the four detail values below it.
+. *Playback preview quality* -- Chooses how the dust is drawn while playing and for 2 s after a pause or seek: Off (full render), Smooth, Balanced or Quality.
+
+==== Properties
+
+Quality::
+  Dust drawing quality, from 1 (lowest, fastest) to 5 (ultra). Each step draws the dust finer and costs more GPU time.
+
+  Moving the slider presets the four detail settings below (volume, trajectory, haze and temporal reuse). Editing one of them by hand turns the quality to Custom.
+
+  Saved for the next start.
+
+Playback preview quality::
+  While the simulation plays, and for 2 s after a pause or a seek, the dust is drawn as a preview: coarser, redrawn every frame (no temporal reuse), with the flow marks moving out of the nucleus. The flow marks are a visual aid: they travel along the real velocity field, faster than the dust at slow speeds; the particles stay where the physics puts them.
+
+  Smooth is the fastest, Quality the finest; Off draws the full render while playing too.
+
+  When the preview ends the full render starts and refines. "Render full" on the viewport starts it at once. Saved for the next start.
+
+[[settings-input-bindings]]
+=== Input bindings
+Location:: Settings › Input bindings
+Shown:: committed comet (67P, December 2021)
+
+.Settings › Input bindings
+Input bindings lists the keys and mouse buttons of each action. You can rebind them, add more than one for an action, and reset a group to its defaults.
+
+image::img/settings-input-bindings--committed--light--tagged.png[Settings › Input bindings,width=577,pdfwidth=98mm]
+
+. *Input bindings* -- Section that lists the key and mouse bindings of each action and lets you change them.
+
+[[settings-comet-appearance]]
+=== Comet appearance
+Location:: Settings › Comet appearance
+Shown:: committed comet (67P, December 2021)
+
+.Settings › Comet appearance
+The default display mode: the nucleus is drawn as a procedural sphere.
+
+image::img/settings-comet-appearance--committed--light--tagged.png[Settings › Comet appearance,width=501,pdfwidth=85mm]
+
+. *Comet Appearance* -- Section that sets how the nucleus is drawn. It changes the look only, not the simulation.
+. *Procedural sphere* -- Draws the nucleus as a plain sphere of the nucleus radius.
+. *Custom mesh* -- Draws an imported 3D mesh with its textures instead of the sphere.
+
+[[settings-comet-appearance-custom]]
+=== Comet appearance
+Location:: Settings › Comet appearance
+Shown:: custom mesh selected, committed comet
+
+.Settings › Comet appearance
+Custom mesh mode: you pick an imported mesh and its texture channels, and set its rotation and offset.
+
+image::img/settings-comet-appearance--custom--light--tagged.png[Settings › Comet appearance,width=501,pdfwidth=85mm]
+
+. *Comet Appearance* -- Section that sets how the nucleus is drawn. It changes the look only, not the simulation.
+. *Procedural sphere* -- Draws the nucleus as a plain sphere of the nucleus radius.
+. *Custom mesh* -- Draws an imported 3D mesh with its textures instead of the sphere.
+
+[[settings-billboards]]
+=== Billboards
+Location:: Settings › Billboards
+Shown:: committed comet (67P, December 2021)
+
+.Settings › Billboards
+Billboards show an imported image in its own window over the desktop, so you can place a telescope image next to the model. This is where you create one and set its position, size, opacity and rotation.
+
+image::img/settings-billboards--committed--light--tagged.png[Settings › Billboards,width=562,pdfwidth=95mm]
+
+. *Billboards* -- Section to create billboard windows that show imported images over the desktop.
+. *Texture* -- Chooses the imported texture to show in a new billboard window.
+. *Centre (desktop px), X* -- Horizontal position of the billboard centre, in desktop pixels.
+. *Centre (desktop px), Y* -- Vertical position of the billboard centre, in desktop pixels.
+. *Size (px), width* -- Width of the billboard in pixels, at least 16.
+. *Size (px), height* -- Height of the billboard in pixels, at least 16.
+. *Keep aspect* -- When on, changing the width or the height also changes the other so the image keeps its proportions.
+. *Opacity* -- Opacity of the billboard, from 0 (transparent) to 1 (opaque).
+. *Rotation (°)* -- Rotation of the billboard about its centre, in degrees from -180 to 180.
+. *Visible* -- Shows or hides the billboard window without deleting it.
+. *Image height at the comet (km)* -- Physical height of the image at the comet's distance, in km. When set, it takes precedence over the plate scale.
+. *Plate scale (″/px)* -- Angular size of one image pixel in arcseconds. A FITS image fills it from its header.
+. *Detect* -- Finds the nucleus in the image as the brightest spot in its central third and fills the nucleus pixel.
+. *Nucleus pixel, X* -- Column of the nucleus in the image in pixels, counted from the left. Empty means the image centre.
+. *Nucleus pixel, Y* -- Row of the nucleus in the image in pixels, counted from the top. Empty means the image centre.
+
+==== Properties
+
+Texture::
+  Imported texture to show in a new billboard window over the desktop; the button next to it opens the window. Import images in the Imports tab.
+
+Keep aspect::
+  When on, changing the width or height also changes the other, keeping the image proportions.
+
+Opacity::
+  Opacity of the billboard, from 0 (fully transparent) to 1 (fully opaque).
+
+Rotation (°)::
+  Rotation of the billboard about its centre, in degrees (−180 to 180). The rotation handle on the billboard does the same.
+
+Image height at the comet (km)::
+  The image's vertical extent at the comet, in kilometres (dot decimals), for an image without a WCS (a JPEG, for example). When set, it wins over the plate scale.
+
+  Empty: not set.
+
+Plate scale (″/px)::
+  The image's plate scale, in arcseconds per image pixel (dot decimals). A FITS image fills it from its WCS. The image height at the comet, when set, wins over it.
+
+  Empty: not set.
+
+[[settings-billboards-fits]]
+=== Billboards: FITS image
+Location:: Settings › Billboards
+Shown:: committed comet (67P, December 2021)
+
+.Settings › Billboards
+For a FITS image the billboard has a FITS section with the key header facts, the full header, the stretch settings, and buttons that set up the comparison with the model.
+
+image::img/settings-billboards-fits--committed--light--tagged.png[Settings › Billboards,width=466,pdfwidth=79mm]
+
+. *Billboards* -- Section to create billboard windows that show imported images over the desktop.
+. *FITS image* -- Section for a FITS billboard: key header facts, the header, the stretch and the comparison buttons.
+. *Flip longitude sign* -- Uses the opposite sign for the longitude of the observing site, for headers that give west as a positive value.
+
+==== Properties
+
+Flip longitude sign::
+  Uses the opposite sign of the site longitude: some headers say 'west' for an east-positive value (the Liverpool Telescope's LONGITUD). The header's LST settles it when present.
+
+[[settings-viewport]]
+=== Viewport
+Location:: Settings › Viewport
+Shown:: Orbit mode, committed comet
+
+.Settings › Viewport
+In Orbit mode the section shows the projection type and its advanced values, the background and orbit-line options, and buttons to fly above the Sun, the comet or the Earth.
+
+image::img/settings-viewport--orbit--light--tagged.png[Settings › Viewport,width=577,pdfwidth=98mm]
+
+. *Viewport 1* -- Section with the camera and display settings of the viewport; the options shown depend on the mode.
+. *Mode: UpZenith* -- // TODO: describe
+. *Show diagnostic panels (all viewports)* -- Shows the camera coordinates, dust history, observer line and orbit debug panels over the viewport, in all viewports at once.
+. *Lock viewport for comparison* -- Refuses mouse orbit, pan and zoom and greys out the projection settings, so the view stays matched to a telescope image.
+. *Perspective* -- // TODO: describe
+. *Orthographic* -- // TODO: describe
+. *Advanced: projection* -- The field of view (perspective) or the half-width and half-height (orthographic), the near and far clip planes and the units they are shown in.
+. *Background stars* -- The stars are a decorative procedural field; they do not match the real sky, and their field of view is fixed.
+. *Orbit lines* -- Draws the comet's reference orbit (red), the Earth's orbit (light blue) and the path travelled in this run (yellow).
+. *Nucleus from Earth* -- Switches to the Earth observer tracking the comet, with north up and a field a few nucleus diameters tall.
+
+==== Properties
+
+Diagnostic panels::
+  Shows the camera coordinates, dust history, observer line and orbit debug panels over the viewport, in all viewports at once.
+
+  For checking the engine; hidden by default.
+
+Lock viewport for comparison::
+  Refuses mouse orbit, pan and zoom and greys out the projection settings, so the view stays matched to a telescope image.
+
+  Turn it off to move the camera again.
+
+Advanced: projection::
+  The field of view (perspective) or the half-width and half-height (orthographic), the near and far clip planes and the units they are shown in.
+
+  A billboard's Match camera to image sets the field from the image instead.
+
+Background stars::
+  The stars are a decorative procedural field; they do not match the real sky, and their field of view is fixed.
+
+  Auto draws them in every view except the Model (Earth observer) view, which then has a black backdrop. On or Off applies to every view.
+
+Orbit lines::
+  Draws the comet's reference orbit (red), the Earth's orbit (light blue) and the path travelled in this run (yellow). The legend lists them in the Model and Orbit views.
+
+Nucleus from Earth::
+  Switches to the Earth observer tracking the comet, celestial north up, with a field a few nucleus diameters tall: the nucleus lit by the Sun as seen from Earth.
+
+[[settings-viewport-nucleus]]
+=== Viewport
+Location:: Settings › Viewport
+Shown:: Nucleus mode, committed comet
+
+.Settings › Viewport
+In Nucleus mode the section also shows the nucleus lighting and exposure controls.
+
+image::img/settings-viewport--nucleus--light--tagged.png[Settings › Viewport,width=577,pdfwidth=98mm]
+
+. *Viewport 1* -- Section with the camera and display settings of the viewport; the options shown depend on the mode.
+. *Mode: CometOrbiting* -- // TODO: describe
+. *Show diagnostic panels (all viewports)* -- Shows the camera coordinates, dust history, observer line and orbit debug panels over the viewport, in all viewports at once.
+. *Lock viewport for comparison* -- Refuses mouse orbit, pan and zoom and greys out the projection settings, so the view stays matched to a telescope image.
+. *Perspective* -- // TODO: describe
+. *Orthographic* -- // TODO: describe
+. *Advanced: projection* -- The field of view (perspective) or the half-width and half-height (orthographic), the near and far clip planes and the units they are shown in.
+. *Physical lighting* -- Direct sunlight only, scaled with the comet's heliocentric distance r as (1 AU / r)², and exposed so that a white surface facing the Sun at 1 AU is drawn white.
+. *Background stars* -- The stars are a decorative procedural field; they do not match the real sky, and their field of view is fixed.
+. *Orbit lines* -- Draws the comet's reference orbit (red), the Earth's orbit (light blue) and the path travelled in this run (yellow).
+. *Nucleus from Earth* -- Switches to the Earth observer tracking the comet, with north up and a field a few nucleus diameters tall.
+. *Nucleus exposure* -- Brightness of the sunlit nucleus in stops (EV); each whole step doubles or halves it.
+
+==== Properties
+
+Diagnostic panels::
+  Shows the camera coordinates, dust history, observer line and orbit debug panels over the viewport, in all viewports at once.
+
+  For checking the engine; hidden by default.
+
+Lock viewport for comparison::
+  Refuses mouse orbit, pan and zoom and greys out the projection settings, so the view stays matched to a telescope image.
+
+  Turn it off to move the camera again.
+
+Advanced: projection::
+  The field of view (perspective) or the half-width and half-height (orthographic), the near and far clip planes and the units they are shown in.
+
+  A billboard's Match camera to image sets the field from the image instead.
+
+Physical lighting::
+  Direct sunlight only, scaled with the comet's heliocentric distance r as (1 AU / r)², and exposed so that a white surface facing the Sun at 1 AU is drawn white. No ambient fill.
+
+  The surface the Sun does not reach is drawn in dark indigo.
+
+  Off by default; your choice is remembered.
+
+Background stars::
+  The stars are a decorative procedural field; they do not match the real sky, and their field of view is fixed.
+
+  Auto draws them in every view except the Model (Earth observer) view, which then has a black backdrop. On or Off applies to every view.
+
+Orbit lines::
+  Draws the comet's reference orbit (red), the Earth's orbit (light blue) and the path travelled in this run (yellow). The legend lists them in the Model and Orbit views.
+
+Nucleus from Earth::
+  Switches to the Earth observer tracking the comet, celestial north up, with a field a few nucleus diameters tall: the nucleus lit by the Sun as seen from Earth.
+
+Nucleus exposure::
+  Brightness of the sunlit nucleus, in stops (EV): each whole step doubles or halves it; the slider moves in half stops.
+
+  At 0 a white surface facing the Sun is drawn white.
+
+[[settings-viewport-model]]
+=== Viewport
+Location:: Settings › Viewport
+Shown:: Model mode, committed comet
+
+.Settings › Viewport
+In Model mode the camera is the Earth observer, so the section shows the observer settings.
+
+image::img/settings-viewport--model--light--tagged.png[Settings › Viewport,width=562,pdfwidth=95mm]
+
+. *Viewport 1* -- Section with the camera and display settings of the viewport; the options shown depend on the mode.
+. *Show diagnostic panels (all viewports)* -- Shows the camera coordinates, dust history, observer line and orbit debug panels over the viewport, in all viewports at once.
+. *Lock viewport for comparison* -- Refuses mouse orbit, pan and zoom and greys out the projection settings, so the view stays matched to a telescope image.
+. *Perspective* -- // TODO: describe
+. *Orthographic* -- // TODO: describe
+. *Advanced: projection* -- The field of view (perspective) or the half-width and half-height (orthographic), the near and far clip planes and the units they are shown in.
+. *Background stars* -- The stars are a decorative procedural field; they do not match the real sky, and their field of view is fixed.
+. *Orbit lines* -- Draws the comet's reference orbit (red), the Earth's orbit (light blue) and the path travelled in this run (yellow).
+. *Nucleus from Earth* -- Switches to the Earth observer tracking the comet, with north up and a field a few nucleus diameters tall.
+. *Nucleus exposure* -- Brightness of the sunlit nucleus in stops (EV); each whole step doubles or halves it.
+. *Observer on the Earth's surface (topocentric)* -- On (topocentric): the observer stands at the telescope site on the Earth's surface (latitude and longitude below) and turns with the Earth.
+. *North up* -- On: the view is levelled to celestial north (J2000), north up and east left, like a telescope image.
+. *Latitude (°N)* -- Latitude of the observing site in degrees, positive north of the equator (−90 to 90).
+. *Longitude (°E)* -- Longitude of the observing site in degrees, positive east of Greenwich (−180 to 180).
+. *Free look* -- // TODO: describe
+
+==== Properties
+
+Diagnostic panels::
+  Shows the camera coordinates, dust history, observer line and orbit debug panels over the viewport, in all viewports at once.
+
+  For checking the engine; hidden by default.
+
+Lock viewport for comparison::
+  Refuses mouse orbit, pan and zoom and greys out the projection settings, so the view stays matched to a telescope image.
+
+  Turn it off to move the camera again.
+
+Advanced: projection::
+  The field of view (perspective) or the half-width and half-height (orthographic), the near and far clip planes and the units they are shown in.
+
+  A billboard's Match camera to image sets the field from the image instead.
+
+Background stars::
+  The stars are a decorative procedural field; they do not match the real sky, and their field of view is fixed.
+
+  Auto draws them in every view except the Model (Earth observer) view, which then has a black backdrop. On or Off applies to every view.
+
+Orbit lines::
+  Draws the comet's reference orbit (red), the Earth's orbit (light blue) and the path travelled in this run (yellow). The legend lists them in the Model and Orbit views.
+
+Nucleus from Earth::
+  Switches to the Earth observer tracking the comet, celestial north up, with a field a few nucleus diameters tall: the nucleus lit by the Sun as seen from Earth.
+
+Nucleus exposure::
+  Brightness of the sunlit nucleus, in stops (EV): each whole step doubles or halves it; the slider moves in half stops.
+
+  At 0 a white surface facing the Sun is drawn white.
+
+Observer on the Earth's surface::
+  On (topocentric): the observer stands at the telescope site on the Earth's surface (latitude and longitude below) and turns with the Earth. This shifts the apparent position of nearby objects by diurnal parallax and adds a horizon.
+
+  Off (geocentric): the camera is at the Earth's centre and only follows its motion around the Sun.
+
+  The view never rotates with the Earth. Saved with the file.
+
+North up::
+  On: the view is levelled to celestial north (J2000), north up and east left, like a telescope image.
+
+  Off: levelled to the ecliptic pole (on the site's side of the equator).
+
+  Saved with the file.
+
+Latitude::
+  Latitude of the observing site in degrees, positive north of the equator (−90 to 90). Used by the topocentric observer.
+
+Longitude::
+  Longitude of the observing site in degrees, positive east of Greenwich (−180 to 180). Used by the topocentric observer.
+
+[[settings-viewport-persp]]
+=== Viewport: perspective projection
+Location:: Settings › Viewport
+Shown:: Orbit mode, committed comet
+
+.Settings › Viewport
+Advanced projection for a perspective camera: the field of view with its units, and the near and far clip planes.
+
+image::img/settings-viewport-persp--orbit--light--tagged.png[Settings › Viewport,width=505,pdfwidth=86mm]
+
+. *Viewport 1* -- Section with the camera and display settings of the viewport; the options shown depend on the mode.
+. *Advanced: projection* -- The field of view (perspective) or the half-width and half-height (orthographic), the near and far clip planes and the units they are shown in.
+. *Half-Width* -- Half of the visible width of the orthographic view, in the chosen units: the view spans plus or minus this value around its centre.
+. *Half-Height* -- Half of the visible height of the orthographic view, in the chosen units: the view spans plus or minus this value around its centre.
+. *Units* -- Unit used to show the half-width, the half-height and the clip planes: AU, km or m.
+. *Keep Proportions Locked* -- Keeps the half-width to half-height ratio equal to the viewport's shape, also when the window is resized, so the image is never stretched.
+. *Show objects behind camera* -- Orthographic only: also draws the geometry behind the camera plane (within the far distance), as a telescope image does.
+. *Restore Proportions* -- // TODO: describe
+
+==== Properties
+
+Advanced: projection::
+  The field of view (perspective) or the half-width and half-height (orthographic), the near and far clip planes and the units they are shown in.
+
+  A billboard's Match camera to image sets the field from the image instead.
+
+Half-width::
+  Half of the visible width of the orthographic view, in the chosen units: the view spans plus or minus this value around its centre.
+
+Half-height::
+  Half of the visible height of the orthographic view, in the chosen units: the view spans plus or minus this value around its centre.
+
+Units::
+  Unit used to show the half-width, the half-height and the clip planes: AU, km or m.
+
+  Only changes the display; the values are stored in AU.
+
+Keep proportions locked::
+  Keeps the half-width to half-height ratio equal to the viewport's shape, also when the window is resized, so the image is never stretched.
+
+  Restore Proportions recomputes the half-width from the half-height once.
+
+Show objects behind camera::
+  Orthographic only: also draws the geometry behind the camera plane (within the far distance), as a telescope image does.
+
+  Dust behind the camera is not drawn. A perspective view cannot show it.
+
+[[settings-viewport-ortho]]
+=== Viewport: orthographic projection
+Location:: Settings › Viewport
+Shown:: Orbit mode, committed comet
+
+.Settings › Viewport
+Advanced projection for an orthographic camera: the half-width and half-height of the view, the near and far planes, and a lock for the proportions.
+
+image::img/settings-viewport-ortho--orbit--light--tagged.png[Settings › Viewport,width=505,pdfwidth=86mm]
+
+. *Viewport 1* -- Section with the camera and display settings of the viewport; the options shown depend on the mode.
+. *Advanced: projection* -- The field of view (perspective) or the half-width and half-height (orthographic), the near and far clip planes and the units they are shown in.
+. *Half-Width* -- Half of the visible width of the orthographic view, in the chosen units: the view spans plus or minus this value around its centre.
+. *Half-Height* -- Half of the visible height of the orthographic view, in the chosen units: the view spans plus or minus this value around its centre.
+. *Units* -- Unit used to show the half-width, the half-height and the clip planes: AU, km or m.
+. *Keep Proportions Locked* -- Keeps the half-width to half-height ratio equal to the viewport's shape, also when the window is resized, so the image is never stretched.
+. *Show objects behind camera* -- Orthographic only: also draws the geometry behind the camera plane (within the far distance), as a telescope image does.
+. *Restore Proportions* -- // TODO: describe
+
+==== Properties
+
+Advanced: projection::
+  The field of view (perspective) or the half-width and half-height (orthographic), the near and far clip planes and the units they are shown in.
+
+  A billboard's Match camera to image sets the field from the image instead.
+
+Half-width::
+  Half of the visible width of the orthographic view, in the chosen units: the view spans plus or minus this value around its centre.
+
+Half-height::
+  Half of the visible height of the orthographic view, in the chosen units: the view spans plus or minus this value around its centre.
+
+Units::
+  Unit used to show the half-width, the half-height and the clip planes: AU, km or m.
+
+  Only changes the display; the values are stored in AU.
+
+Keep proportions locked::
+  Keeps the half-width to half-height ratio equal to the viewport's shape, also when the window is resized, so the image is never stretched.
+
+  Restore Proportions recomputes the half-width from the half-height once.
+
+Show objects behind camera::
+  Orthographic only: also draws the geometry behind the camera plane (within the far distance), as a telescope image does.
+
+  Dust behind the camera is not drawn. A perspective view cannot show it.
+
+[[settings-viewport-nucleus]]
+=== Viewport: nucleus mode
+Location:: Settings › Viewport
+Shown:: Nucleus mode, committed comet
+
+.Settings › Viewport
+The viewport settings in Nucleus mode: projection, lighting and exposure of the nucleus.
+
+image::img/settings-viewport-nucleus--nucleus--light--tagged.png[Settings › Viewport,width=577,pdfwidth=98mm]
+
+. *Viewport 1* -- Section with the camera and display settings of the viewport; the options shown depend on the mode.
+. *Mode: CometOrbiting* -- // TODO: describe
+. *Show diagnostic panels (all viewports)* -- Shows the camera coordinates, dust history, observer line and orbit debug panels over the viewport, in all viewports at once.
+. *Lock viewport for comparison* -- Refuses mouse orbit, pan and zoom and greys out the projection settings, so the view stays matched to a telescope image.
+. *Perspective* -- // TODO: describe
+. *Orthographic* -- // TODO: describe
+. *Advanced: projection* -- The field of view (perspective) or the half-width and half-height (orthographic), the near and far clip planes and the units they are shown in.
+. *Physical lighting* -- Direct sunlight only, scaled with the comet's heliocentric distance r as (1 AU / r)², and exposed so that a white surface facing the Sun at 1 AU is drawn white.
+. *Background stars* -- The stars are a decorative procedural field; they do not match the real sky, and their field of view is fixed.
+. *Orbit lines* -- Draws the comet's reference orbit (red), the Earth's orbit (light blue) and the path travelled in this run (yellow).
+. *Nucleus from Earth* -- Switches to the Earth observer tracking the comet, with north up and a field a few nucleus diameters tall.
+. *Nucleus exposure* -- Brightness of the sunlit nucleus in stops (EV); each whole step doubles or halves it.
+
+==== Properties
+
+Diagnostic panels::
+  Shows the camera coordinates, dust history, observer line and orbit debug panels over the viewport, in all viewports at once.
+
+  For checking the engine; hidden by default.
+
+Lock viewport for comparison::
+  Refuses mouse orbit, pan and zoom and greys out the projection settings, so the view stays matched to a telescope image.
+
+  Turn it off to move the camera again.
+
+Advanced: projection::
+  The field of view (perspective) or the half-width and half-height (orthographic), the near and far clip planes and the units they are shown in.
+
+  A billboard's Match camera to image sets the field from the image instead.
+
+Physical lighting::
+  Direct sunlight only, scaled with the comet's heliocentric distance r as (1 AU / r)², and exposed so that a white surface facing the Sun at 1 AU is drawn white. No ambient fill.
+
+  The surface the Sun does not reach is drawn in dark indigo.
+
+  Off by default; your choice is remembered.
+
+Background stars::
+  The stars are a decorative procedural field; they do not match the real sky, and their field of view is fixed.
+
+  Auto draws them in every view except the Model (Earth observer) view, which then has a black backdrop. On or Off applies to every view.
+
+Orbit lines::
+  Draws the comet's reference orbit (red), the Earth's orbit (light blue) and the path travelled in this run (yellow). The legend lists them in the Model and Orbit views.
+
+Nucleus from Earth::
+  Switches to the Earth observer tracking the comet, celestial north up, with a field a few nucleus diameters tall: the nucleus lit by the Sun as seen from Earth.
+
+Nucleus exposure::
+  Brightness of the sunlit nucleus, in stops (EV): each whole step doubles or halves it; the slider moves in half stops.
+
+  At 0 a white surface facing the Sun is drawn white.
+
+[[settings-viewport-observer]]
+=== Viewport: observer
+Location:: Settings › Viewport
+Shown:: Nucleus mode, committed comet
+
+.Settings › Viewport
+The Earth observer settings: switch to the view of the nucleus from Earth, set the exposure, choose a site on the Earth's surface and the look direction, and read the telescope scale.
+
+image::img/settings-viewport-observer--nucleus--light--tagged.png[Settings › Viewport,width=433,pdfwidth=73mm]
+
+. *Nucleus from Earth* -- Switches to the Earth observer tracking the comet, with north up and a field a few nucleus diameters tall.
+. *Nucleus exposure* -- Brightness of the sunlit nucleus in stops (EV); each whole step doubles or halves it.
+
+==== Properties
+
+Nucleus from Earth::
+  Switches to the Earth observer tracking the comet, celestial north up, with a field a few nucleus diameters tall: the nucleus lit by the Sun as seen from Earth.
+
+Nucleus exposure::
+  Brightness of the sunlit nucleus, in stops (EV): each whole step doubles or halves it; the slider moves in half stops.
+
+  At 0 a white surface facing the Sun is drawn white.
