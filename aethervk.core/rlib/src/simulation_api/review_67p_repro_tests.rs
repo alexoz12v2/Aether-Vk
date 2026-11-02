@@ -170,6 +170,12 @@ fn fmt_epoch(e: Epoch) -> String {
 /// 30 d before the committed start (2021-11-12)?
 #[test]
 fn review_67p_spk_segment_bounds() {
+  // the −30 d SPK came with the reviewer's archive and is not a tracked fixture: without it the
+  // question cannot be asked, so the test skips (the committed SPK is tracked and required)
+  if !std::path::Path::new(SPK_M30).exists() {
+    println!("skipped: {SPK_M30} is not in test_assets (it is not a tracked fixture)");
+    return;
+  }
   let (start, end) = (committed_start(), committed_end());
   let before = start - Duration::from_days(30.0);
   println!("committed start {}", fmt_epoch(start));

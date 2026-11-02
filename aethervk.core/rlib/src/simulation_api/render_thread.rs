@@ -45,6 +45,9 @@ pub fn start_render_thread(
     #[cfg(debug_assertions)]
     let mut pending_rdoc_captures: hashbrown::HashSet<PresentationEngineHandle> =
       hashbrown::HashSet::new();
+    // PEs retired on this thread: a frame batch the logic thread built before the retirement
+    // skips them at once instead of waiting out the live-map lookup's retries.
+    let mut retired_pes: hashbrown::HashSet<PresentationEngineHandle> = hashbrown::HashSet::new();
     let render_device_handle = render_params.render_device_handle;
     let render_frontend = {
       let r = render_params
@@ -124,6 +127,28 @@ pub fn start_render_thread(
           });
         }
 
+        // Between two batches no image of an engine is acquired, being recorded or presented:
+        // the only point where a windowed swapchain can go while the render loop runs. Polled
+        // before the next command, so a request does not queue behind the frame batches.
+        let retire_requests: alloc::vec::Vec<_> =
+          core::mem::take(&mut *render_params.retire_requests.lock());
+        if !retire_requests.is_empty() {
+          let _ = render_frontend.with_device(render_device_handle, |render_device| {
+            for (handle, done) in retire_requests {
+              if let Err(e) = render_device.retire_presentation_engine(handle) {
+                oshal::log!("[Render Thread] retire of PE {:?} failed: {:?}", handle, e);
+              }
+              // the batches already queued for it are skipped, not recorded without its camera
+              retired_pes.insert(handle);
+              first_render_map.remove(&handle);
+              sky_parallax_map.remove(&handle);
+              // raised on failure too: the requester is parked on it
+              done.store(true, core::sync::atomic::Ordering::Release);
+            }
+            Ok(())
+          });
+        }
+
         match render_rx.try_recv() {
           Ok(cmd) => {
             if let RenderCommand::Shutdown = cmd {
@@ -160,6 +185,7 @@ pub fn start_render_thread(
                 &render_params,
                 &mut first_render_map,
                 &mut sky_parallax_map,
+                &mut retired_pes,
                 render_frontend.clone(),
                 render_device_handle,
                 #[cfg(debug_assertions)]
@@ -214,6 +240,7 @@ fn process_command(
     PresentationEngineHandle,
     crate::gpu::frame::SkyParallaxState,
   >,
+  retired_pes: &mut hashbrown::HashSet<PresentationEngineHandle>,
   render_frontend: gpu::RenderFrontend,
   render_device_handle: gpu::RenderDeviceHandle,
   #[cfg(debug_assertions)] pending_rdoc_captures: &mut hashbrown::HashSet<PresentationEngineHandle>,
@@ -261,6 +288,10 @@ fn process_command(
 
       for render_frame in render_frames {
         let task_id_feedback = alloc::sync::Arc::clone(&render_frame.task_id);
+        if retired_pes.contains(&render_frame.presentation_engine_handle) {
+          task_id_feedback.store(u64::MAX, core::sync::atomic::Ordering::Release);
+          continue;
+        }
         let extent_res =
           render_device.get_presentation_engine_extent(render_frame.presentation_engine_handle);
         let extent = match extent_res {

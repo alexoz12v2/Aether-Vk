@@ -351,6 +351,9 @@ pub struct SimulationThreads {
   /// The Arc is cloned into [`RenderThreadContext`] so the render thread can observe it
   /// without any lifetime coupling to `SimulationThreads`.
   pub skip_present: Arc<core::sync::atomic::AtomicBool>,
+  /// Presentation engines the render thread is asked to destroy between two frame batches; the
+  /// render thread polls its clone (see [`RetireRequests`]).
+  pub retire_requests: RetireRequests,
 }
 
 impl Drop for SimulationThreads {
@@ -675,6 +678,7 @@ impl SimulationThreads {
       logic_feedback_rx: None,
       audio_device: None,
       skip_present,
+      retire_requests: Arc::new(parking_lot::Mutex::new(alloc::vec::Vec::new())),
     })
   }
 
@@ -690,7 +694,11 @@ impl SimulationThreads {
     let closing = Arc::new(core::sync::atomic::AtomicBool::new(false));
     let render_thread_handle = start_render_thread(
       render_rx,
-      params.to_context(render_feedback_tx, Arc::clone(&closing)),
+      params.to_context(
+        render_feedback_tx,
+        Arc::clone(&closing),
+        Arc::clone(&self.retire_requests),
+      ),
     )?;
     self.render_thread.closing = closing;
     self.render_thread.tx = Some(render_tx);
@@ -1117,6 +1125,19 @@ pub enum RenderCommand {
 }
 
 unsafe impl Send for RenderCommand {}
+
+/// Presentation engines to destroy on the render thread between two frame batches
+/// (`RenderDevice::retire_presentation_engine`), each with the flag the render thread raises once
+/// done; the requester waits on it and then drains the main-thread cleanup queue, so a windowed
+/// engine's swapchain and surface are gone before its window. A side queue, polled before every
+/// command, not a `RenderCommand`: the frame channel stays full while the logic thread outpaces
+/// the render thread, and a request competing with it for a slot starved (the UI thread sat in
+/// the send for the rig's whole 30 s teardown budget).
+pub type RetireRequests = Arc<
+  parking_lot::Mutex<
+    alloc::vec::Vec<(crate::gpu::PresentationEngineHandle, Arc<core::sync::atomic::AtomicBool>)>,
+  >,
+>;
 
 // --------------------- Internal Types ---------------------------
 
@@ -1692,6 +1713,7 @@ impl RenderThreadParams {
     self,
     render_feedback_tx: mpsc::Sender<RenderFeedback>,
     closing: Arc<core::sync::atomic::AtomicBool>,
+    retire_requests: RetireRequests,
   ) -> RenderThreadContext {
     RenderThreadContext {
       closing,
@@ -1700,6 +1722,7 @@ impl RenderThreadParams {
       render_device_handle: self.render_device_handle,
       thread_pool: self.thread_pool,
       skip_present: self.skip_present,
+      retire_requests,
     }
   }
 }
@@ -1717,6 +1740,8 @@ pub struct RenderThreadContext {
   pub skip_present: Arc<core::sync::atomic::AtomicBool>,
   /// See `ThreadTxContainer::closing`: an empty channel with this set counts as closed.
   pub closing: Arc<core::sync::atomic::AtomicBool>,
+  /// Presentation engines to destroy before the next command, see [`RetireRequests`].
+  pub retire_requests: RetireRequests,
 }
 
 impl RenderThreadContext {

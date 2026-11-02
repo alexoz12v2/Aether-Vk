@@ -890,6 +890,10 @@ earth_trajectory_log.csv
 # test generated images
 test_*.png
 
+# the last validation-layer error a Rust test saw (gpu_backends/vulkan/utils.rs debug callback),
+# written in the test's working directory
+VULKAN_ERROR_DUMP.txt
+
 # working assets
 *.blend
 figma/

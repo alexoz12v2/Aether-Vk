@@ -3775,9 +3775,11 @@ impl Device {
     Ok(Some((l.buf.address + word as u64 * 4, n, stride)))
   }
 
-  /// The preview's cluster stride of `pe` for the frame about to be recorded: fed with the last
-  /// GPU timing readback ([`dust::play_quality::PlayStride::absorb`]) while `budget` is some (the
-  /// preview), back to 1 otherwise. Logs each change.
+  /// The preview's cluster stride of `pe` for the frame about to be recorded: while `budget` is
+  /// some (the preview), a session's first frame starts at the last session's stride
+  /// ([`dust::play_quality::PlayStride::play`]), then fed with the last GPU timing readback
+  /// ([`dust::play_quality::PlayStride::absorb`]); back to 1 otherwise (the session ends,
+  /// remembering its stride). Logs each change.
   pub fn dust_update_play_stride(
     &self,
     pe: gpu::PresentationEngineHandle,
@@ -3792,10 +3794,16 @@ impl Device {
       if host.play_stride.stride() > 1 {
         aethervk_oshal_rlib::log!("[Dust] view {}: preview stride off (every cluster drawn)", pe.0);
       }
-      host.play_stride.reset();
+      host.play_stride.end_session();
       return 1;
     };
     let now = host.frame;
+    if let Some(s) = host.play_stride.play(now, b) {
+      aethervk_oshal_rlib::log!(
+        "[Dust] view {}: preview stride {} (session start or preset cap {}, budget {} ms)",
+        pe.0, s, b.max_stride, b.budget_ms
+      );
+    }
     if let Some(t) = host.timings.filter(|t| !t.reused)
       && let Some(s) = host.play_stride.absorb(t.frame, t.total_ms, now, b)
     {
