@@ -568,7 +568,8 @@ impl LogicThreadContext {
   /// Emitting the `ExternalState::AlmanacImported` callback is the caller's responsibility.
   pub fn load_almanac_file_internal(&self, path: &str) -> EngineResult<i32> {
     let mut logic = self.logic_state.write();
-    if logic.almanac_data.file_names.iter().any(|f| f == path) {
+    let alias = crate::simulation::almanac::spk_alias(path);
+    if logic.almanac_data.file_names.iter().any(|f| *f == alias) {
       return Ok(0); // already loaded; NAIF ID not re-discovered
     }
 

@@ -121,6 +121,8 @@ public sealed partial class CameraMatrixDebugViewModel : ObservableObject, IDisp
         }
         _disposables.Add(
             Observable.Timer(TimeSpan.Zero, TimeSpan.FromMilliseconds(500), schedulerProvider.Background)
+                // stop polling the native runtime before it shuts down (a tick into a destroyed context crashes)
+                .TakeUntil(runtimeService.ShutdownToken.WhenCancelled())
                 .Select(_ =>
                 {
                     string dust = FormatDustHistory(runtimeService.DustStats());

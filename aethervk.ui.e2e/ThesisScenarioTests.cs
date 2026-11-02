@@ -34,6 +34,8 @@ public sealed class ThesisScenarioTests(ITestOutputHelper output)
       Directory.Delete(saveDir, recursive: true);
     Directory.CreateDirectory(saveDir);
     var image = ObservationImage(sc, artifacts);
+    // the orthographic half-width (km) the save was made with: what the reopen must show
+    double savedHalfWidthKm = double.NaN, savedAlpha = double.NaN;
 
     InSession(artifacts, "build", s =>
     {
@@ -72,6 +74,10 @@ public sealed class ThesisScenarioTests(ITestOutputHelper output)
       s.App.SaveScreenshot(Path.Combine(artifacts, "observer.png"));
       AssertNotWashedOut(s.Find("ViewportHost"), "the settled observer view (observer.png)");
       AssertNotFlat(s.Find("ViewportHost"), "the settled observer view (observer.png)");
+      // tracking and the run must not have replaced the projection the user set (the fan ridges
+      // are measured at this half-width; a Fan scenario's comparison reframes the view below)
+      Step("projection");
+      AssertOrthographic(s, sc.OrthoHalfWidthKm);
       if (sc.Fan is { } fan)
       {
         Step("fan ridges");
@@ -86,6 +92,7 @@ public sealed class ThesisScenarioTests(ITestOutputHelper output)
         FitsComparisonSteps.Run(s);
         s.Desktop.SaveScreenshot(Path.Combine(artifacts, "comparison.png"));
         AssertCometCentred(s, 3.0);
+        AssertComparisonFraming(s);
       }
       else
       {
@@ -97,6 +104,10 @@ public sealed class ThesisScenarioTests(ITestOutputHelper output)
       s.App.SaveScreenshot(Path.Combine(artifacts, "main-window.png"));
 
       Step("save as");
+      savedHalfWidthKm = ReadOrthoHalfWidth(s);
+      // the billboard's opacity as saved: 0.5 set by the import step, the default 0.6 after the FITS comparison
+      s.Expand("BillboardsSection", "CreateBillboardButton");
+      savedAlpha = Ui.ReadRange(s.Find("BillboardAlpha"));
       // the folder layout, so the checks below can read the index (Save As… writes an .avk)
       s.Menu("File", "Save As Folder...");
       s.AnswerFileDialog(saveDir);
@@ -118,7 +129,7 @@ public sealed class ThesisScenarioTests(ITestOutputHelper output)
       s.AnswerFileDialog(Path.Combine(saveDir, "aethervk_index.json"));
       Ui.WaitUntil(() => s.WindowTitle.Contains(sc.Id), TimeSpan.FromSeconds(60), "the save to open");
       Thread.Sleep(3000);
-      AssertRestored(s, sc);
+      AssertRestored(s, sc, savedHalfWidthKm, savedAlpha);
       // the dust feedback restarts 3 s after Open and re-climbs against the final view
       Thread.Sleep(5000);
       // the reopened, paused tracking view drew the nucleus 50 px off centre (UI pose after the
@@ -487,14 +498,44 @@ public sealed class ThesisScenarioTests(ITestOutputHelper output)
     Assert.True(failures.Count == 0, string.Join("; ", failures) + Environment.NewLine + report);
   }
 
-  /// <summary>Tracking and the run must not have replaced the projection the user set.</summary>
-  private static void AssertOrthographic(AppSession s, Scenario sc)
+  /// <summary>
+  /// Still orthographic, at <paramref name="halfWidthKm"/>: the scenario's framing before the
+  /// comparison, or, after the save and reopen, the half-width read just before the save.
+  /// </summary>
+  private static void AssertOrthographic(AppSession s, double halfWidthKm)
+  {
+    Assert.False(double.IsNaN(halfWidthKm), "no half-width to compare with");
+    Assert.Equal(halfWidthKm, ReadOrthoHalfWidth(s), 0);
+  }
+
+  /// <summary>The orthographic half-width (km) of the Settings tab's projection sliders.</summary>
+  private static double ReadOrthoHalfWidth(AppSession s)
   {
     s.SelectTab("SettingsTab");
     s.Expand("ViewportSettingsSection", "CameraModeText");
     Assert.True(s.Find("ProjectionOrthographic").Selected, "projection is no longer orthographic");
     s.Expand("ProjectionAdvancedExpander", "OrthoHalfWidthSlider.Input");
-    Assert.Equal(sc.OrthoHalfWidthKm, s.ReadSlider("OrthoHalfWidthSlider"), 0);
+    return s.ReadSlider("OrthoHalfWidthSlider");
+  }
+
+  /// <summary>
+  /// "Set up comparison" reframed the view to the image ("match the field": the viewport's height
+  /// is the FITS field at the comet, the km of the row's conversion) and, proportions locked, the
+  /// half-width is that half-height × the viewport's aspect: the half-width the scenario set is
+  /// gone (the 1200 px Liverpool stack's 123 265 km on a 1120 × 668 viewport: half-height 61 633 km,
+  /// half-width 103 304 km). Within 0.5 % (whole-pixel viewport sizes, rounded km).
+  /// </summary>
+  private static void AssertComparisonFraming(AppSession s, int fitsRow = 0)
+  {
+    double fieldKm = FitsComparisonSteps.FieldKmAtComet(s, fitsRow);
+    var vp = s.Find("ViewportHost");
+    double aspect = (double)vp.Size.Width / vp.Size.Height;
+    double halfW = ReadOrthoHalfWidth(s);
+    double halfH = s.ReadSlider("OrthoHalfHeightSlider");
+    Assert.True(Math.Abs(halfH - fieldKm / 2) <= 0.005 * fieldKm / 2,
+      $"half-height {halfH} km; the image's field at the comet is {fieldKm} km");
+    Assert.True(Math.Abs(halfW - halfH * aspect) <= 0.005 * halfW,
+      $"half-width {halfW} km is not the half-height {halfH} km × the viewport's aspect {aspect:F4}");
   }
 
   /// <summary>
@@ -670,7 +711,11 @@ public sealed class ThesisScenarioTests(ITestOutputHelper output)
     s.SetRange("BillboardAlpha", 0.5, step: 0.1, tolerance: 0.05);
   }
 
-  private static void AssertRestored(AppSession s, Scenario sc)
+  /// <param name="savedHalfWidthKm">The orthographic half-width read just before the save: a Fan
+  /// scenario's comparison reframed the view, so the round trip is checked, not the scenario's
+  /// constant.</param>
+  /// <param name="savedAlpha">The billboard opacity read just before the save (the round trip).</param>
+  private static void AssertRestored(AppSession s, Scenario sc, double savedHalfWidthKm, double savedAlpha)
   {
     s.SelectTab("TimelineTab");
     // the Timeline tab's read-only copy of the committed range
@@ -707,10 +752,10 @@ public sealed class ThesisScenarioTests(ITestOutputHelper output)
     Assert.Equal(sc.Site.LongitudeDeg, s.ReadSlider("ObserverLonSlider"), 2);
     Assert.True(s.Find("ObserverTopocentricCheckBox").Selected, "topocentric observer not restored");
     Assert.True(s.Find("OrientCometTracking").Selected, "comet tracking not restored");
-    AssertOrthographic(s, sc);
+    AssertOrthographic(s, savedHalfWidthKm);
 
     s.Expand("BillboardsSection", "CreateBillboardButton");
-    Assert.InRange(Ui.ReadRange(s.Find("BillboardAlpha")), 0.45, 0.55); // as set: 0.5 ± the SetRange tolerance
+    Assert.Equal(savedAlpha, Ui.ReadRange(s.Find("BillboardAlpha")), 3); // as saved
   }
 
   /// <summary>

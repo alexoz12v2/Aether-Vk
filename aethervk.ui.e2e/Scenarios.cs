@@ -42,7 +42,11 @@ public sealed record Scenario(
   Site Site,
   IReadOnlyList<Jet> Jets,
   // Orthographic half-width of the viewport (km): the framing of the thesis chapter 5 overlay
-  // figures, read off their scale bars (bar 148 px of a 898 px frame: half-width = bar * 449/148)
+  // figures, read off their scale bars (bar 148 px of a 898 px frame: half-width = bar * 449/148).
+  // It holds through the run and the fan check; a scenario with a Fan then runs the FITS
+  // comparison, whose "match the field" reframes the view to the image's height (half-height =
+  // the field / 2, half-width = that × the viewport's aspect), so the save and reopen are checked
+  // against the half-width read before the save, not against this value
   double OrthoHalfWidthKm,
   // The nucleus spin: with the Comet tab's default rate 0 the jet sites never turn
   Rotation Spin,

@@ -199,7 +199,7 @@ impl AlmanacPackedData {
 
   fn load_single_spk(&mut self, path: &os::fs::Path) -> EngineResult<()> {
     if let Some(path_cow) = path.to_str_unified() {
-      let path_str = path_cow.to_str().unwrap();
+      let path_str: &str = path_cow.as_ref();
 
       let mmap = Mmap::open(path).map_err(|e| EngineError::from(e))?;
       let bytes = bytes::Bytes::from_owner(mmap);
@@ -220,6 +220,8 @@ impl AlmanacPackedData {
 
   /// Unloads a previously loaded SPK file by its alias (which is the file path).
   pub fn unload_almanac_spk(&mut self, path: &str) -> EngineResult<()> {
+    let alias = spk_alias(path);
+    let path = alias.as_str();
     if let Err(e) = self.almanac.spk_unload(path) {
       aethervk_oshal_rlib::log!("Failed to unload SPK {}: {}", path, e);
       return Err(EngineError::InvalidOperation(
@@ -393,6 +395,17 @@ impl VecTypeConversionScaled<anise::math::Vector3> for Vec3f32 {
       (value[1] / DISTANCE_SCALE_FACTOR) as f32,
       (value[2] / DISTANCE_SCALE_FACTOR) as f32,
     )
+  }
+}
+
+/// Normalises a kernel path into the unified string the almanac registers it under.
+/// Load, dedupe and unload must all go through this so mixed `\` and `/` separators
+/// resolve to the same alias. Falls back to the raw string for non-UTF-8 paths.
+pub fn spk_alias(path: &str) -> alloc::string::String {
+  let buf = os::fs::PathBuf::from(path);
+  match buf.to_str_unified() {
+    Some(c) => alloc::string::String::from(c.as_ref()),
+    None => alloc::string::String::from(path),
   }
 }
 
