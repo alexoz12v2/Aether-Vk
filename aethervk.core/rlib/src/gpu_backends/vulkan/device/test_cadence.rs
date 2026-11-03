@@ -2955,3 +2955,83 @@ fn the_gate_counters_route_through_the_frame() {
     assert!(!routed(w), "geometry word {w} is routed");
   }
 }
+
+/// The view keeps its exposure when the cadence toggles: Play turns the temporal reuse off and
+/// Pause back on, which changes the class-image span and recreates the view over new buffers
+/// (`DustViewHost::carried_over`). Paused frames with the cadence on until the white point and the
+/// median adapted away from the seed; then the cadence off (Play) and one frame: the view was
+/// recreated (its class-image span changed), the white point and median are the recorded ones
+/// exactly (no readback of the old buffers is absorbed), the frame counter kept counting and the
+/// preview stride of the running play session is kept; then the cadence on again (Pause) and one
+/// frame: the same. Validation errors panic (the test device's callback).
+#[test]
+fn gpu_dust_view_keeps_its_exposure_when_the_cadence_toggles() {
+  let id = 9046u64;
+  with_device(id, |device, capacity, _render_buf, moments_buf| {
+    let batch = test_batch(1024, 3600.0, 3, capacity, 0xC0FFEE);
+    emit(device, id, &batch, 0);
+    let first = batch.first_index & batch.ring_mask;
+    let live = batch.count;
+    let frame = frame_at(5.0);
+    let mut cmds = device
+      .run_transient_commands(|cmd| {
+        device.cmd_dust_pre_propagate_barrier(cmd);
+        device.cmd_dust_propagate(cmd, id, 0, capacity, first, live, &frame)?;
+        Ok(())
+      })
+      .unwrap();
+    cmds.cleanup(&device.device);
+    let m0: alloc::vec::Vec<dust::DustMoments> = records(device, moments_buf, first, live, capacity);
+    let (eye, _) = eye_above(&m0, 3.0);
+    let mvp = camera(eye, 320, 200).0;
+    let pe = crate::gpu::PresentationEngineHandle(u64::MAX - 46);
+    let seed = dust::mag_arcsec2_to_white(dust::DUST_WHITE_SEED_MAG);
+    let image_words = |device: &Device| {
+      let res = device.res.read();
+      res.dust_manager.as_ref().and_then(|m| m.views.get(&pe).map(|v| v.image_words))
+    };
+    let exposure = |device: &Device| with_view_host(device, pe, |h| (h.white, h.p50, h.frame)).unwrap();
+    // paused, the cadence on: frames until the white point and the median adapted (bounded)
+    device.dust_cadence_enable(pe, Some(cad::CadenceConfig::full())).unwrap();
+    let mut adapted = false;
+    for f in 0..48u32 {
+      cad_frame(device, pe, id, capacity, first, live, &frame, mvp, eye, None);
+      let (white, p50, _) = exposure(device);
+      if f as usize > 2 * DUST_READBACK_SLOTS && white != seed && p50 > 0.0 {
+        adapted = true;
+        break;
+      }
+    }
+    let (white, p50, frame_no) = exposure(device);
+    let words_on = image_words(device).unwrap();
+    std::println!("[cadence gpu] toggle: paused white {white:e} (seed {seed:e}), p50 {p50:e}, frame {frame_no}, image words {words_on}");
+    assert!(adapted, "the white point never adapted: white {white:e}, seed {seed:e}, p50 {p50:e}");
+    assert!(words_on > 0, "the cadence's class images are in the view");
+    // a play session running (its first frame's stride: the preset's cap)
+    let budget = dust::play_quality::StrideBudget { budget_ms: 33.0, max_stride: 32 };
+    assert_eq!(device.dust_update_play_stride(pe, Some(budget)), 32);
+    // Play: the temporal reuse off, one frame
+    device.dust_cadence_enable(pe, None).unwrap();
+    cad_frame(device, pe, id, capacity, first, live, &frame, mvp, eye, None);
+    let words_off = image_words(device).unwrap();
+    let (w1, p1, f1) = exposure(device);
+    let stride = with_view_host(device, pe, |h| h.play_stride.stride()).unwrap();
+    std::println!("[cadence gpu] toggle: play white {w1:e}, p50 {p1:e}, frame {f1}, image words {words_off}, stride {stride}");
+    assert_ne!(words_off, words_on, "the view was recreated for the new class-image span");
+    assert_eq!((w1, p1), (white, p50), "Play keeps the view's white point and median");
+    assert!(f1 > frame_no, "the frame counter kept counting ({frame_no} → {f1})");
+    assert_eq!(stride, 32, "the play session's stride is kept");
+    assert_eq!(device.dust_update_play_stride(pe, Some(budget)), 32);
+    device.dust_update_play_stride(pe, None);
+    // Pause: the temporal reuse on again, one frame
+    device.dust_cadence_enable(pe, Some(cad::CadenceConfig::full())).unwrap();
+    cad_frame(device, pe, id, capacity, first, live, &frame, mvp, eye, None);
+    let words_again = image_words(device).unwrap();
+    let (w2, p2, f2) = exposure(device);
+    std::println!("[cadence gpu] toggle: pause white {w2:e}, p50 {p2:e}, frame {f2}, image words {words_again}");
+    assert_eq!(words_again, words_on, "the view was recreated with the class images again");
+    assert_eq!((w2, p2), (white, p50), "Pause keeps the view's white point and median");
+    assert!(f2 > f1, "the frame counter kept counting ({f1} → {f2})");
+    device.dust_cadence_enable(pe, None).unwrap();
+  });
+}

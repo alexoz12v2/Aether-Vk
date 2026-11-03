@@ -17,17 +17,15 @@ image::img/main--empty--light--tagged.png[Main window,width=900,pdfwidth=170mm]
 . *Settings* -- Tab with time scale, comet appearance, billboards, particle rendering, input bindings and viewport settings.
 . *Comet* -- Tab to search and commit a comet, set the simulated range and nucleus radius, and edit the rotational model.
 . *Model* -- Tab with the dust display options, the gizmo, the jets and the dust grain and activity defaults.
-. *Viewport 3D* -- // TODO: describe
-. *Imports* -- // TODO: describe
-. *Legend* -- // TODO: describe
+. *Viewport 3D* -- Tab with the 3D view of the simulation. There is only one, and it is pinned: it cannot be closed, replaced or dragged to another pane.
+. *Imports* -- Tab that imports meshes (OBJ, PLY, glTF, GLB) and textures (PNG, JPEG, KTX2, FITS) and lists them. Textures embedded in a mesh are listed separately.
+. *Legend* -- Explains the coloured lines in the viewport: in the Nucleus view the gizmo's grid, body axes, spin axis, Sun and velocity directions and one line per jet; in the Orbit and Model views the orbit lines. Its toggle collapses it.
 . *Dust* -- Section with the dust display options, the gizmo, the jet list and the defaults for new jets.
 . *Import…* -- Opens a file dialog to import meshes (OBJ, PLY, glTF, GLB) or textures (PNG, JPEG, KTX2).
 . *Scale ruler* -- Shows the length in km that the bar beside it covers at the comet in the current view.
-. *Timeline* -- // TODO: describe
+. *Timeline* -- Tab that shows the simulated range and, once a comet is committed, plays it: speed, reset, play or pause, run to end, and a box to jump to an epoch.
 . *Start Epoch* -- Shows the start of the simulated range in the chosen time scale. It is read-only here; change it in the Comet tab.
 . *End Epoch* -- Shows the end of the simulated range in the chosen time scale. It is read-only here; change it in the Comet tab.
-
-// TODO: some controls have no help text and no description
 
 [[main-committed]]
 === Main window
@@ -119,14 +117,12 @@ The File menu creates, opens and saves sessions. The screenshot lists its entrie
 
 image::img/menu-file--committed--light--tagged.png[Menu bar › File menu,width=280,pdfwidth=47mm]
 
-. *New* -- // TODO: describe
-. *Open...* -- // TODO: describe
-. *Open Recent* -- // TODO: describe
-. *Save* -- // TODO: describe
-. *Save As...* -- // TODO: describe
-. *Save As Folder...* -- // TODO: describe
-
-// TODO: some controls have no help text and no description
+. *New* -- Starts a new, empty session. If the current one has unsaved changes, you are asked whether to save them first.
+. *Open...* -- Opens a saved session (Ctrl+O): an .avk file, or the aethervk_index.json of a save folder. Asks about unsaved changes first.
+. *Open Recent* -- Lists the last saves opened or written, up to 10; pick one to open it. Shows (none) when the list is empty.
+. *Save* -- Saves the session to its current file (Ctrl+S). A session that was never saved asks for a file name, as Save As does.
+. *Save As...* -- Saves the session to a new .avk file (Ctrl+Shift+S); the extension is added when missing.
+. *Save As Folder...* -- Saves the session as a folder of separate files instead of one .avk file, for inspecting a save. Open reads it back through its aethervk_index.json.
 
 [[menu-edit]]
 === Edit menu
@@ -138,10 +134,8 @@ The Edit menu opens the Settings window and switches between the light and dark 
 
 image::img/menu-edit--committed--light--tagged.png[Menu bar › Edit menu,width=246,pdfwidth=42mm]
 
-. *Settings...* -- // TODO: describe
-. *Toggle Theme* -- // TODO: describe
-
-// TODO: some controls have no help text and no description
+. *Settings...* -- Opens the Settings window, which holds the same settings sections as the Settings tab.
+. *Toggle Theme* -- Switches between the light and the dark theme. The app starts with the system theme.
 
 [[docking]]
 === Docking and tabs
@@ -199,10 +193,8 @@ The mode bar after the range was edited while a comet is committed: a lock messa
 image::img/main-modebar--locked--light--tagged.png[Mode bar,width=900,pdfwidth=170mm]
 
 . *Mode hint* -- Shows a message after you choose Model mode: a hint to import a FITS image, or the result of the comparison set-up.
-. *Range locked while the comet is committed: the simulation keeps the...* -- // TODO: describe
-. *Recommit with this range* -- // TODO: describe
+. *Range lock message* -- Appears when the range in the Comet tab differs from the committed one: the simulation keeps the committed range until you decommit, or recommit with the new range.
+. *Recommit with this range* -- Commits the comet again, as Download & Commit does, with the range typed in the Comet tab; the dust restarts from the new start. Shown only while the range is locked.
 . *Orbit* -- Shows the comet's orbit in the Solar System, animated over the chosen range.
 . *Nucleus* -- Shows the nucleus with its orientation, the Sun direction, illumination and jets.
 . *Model* -- Sets the view up to compare the model with a telescope image; the end date is the image date.
-
-// TODO: some controls have no help text and no description

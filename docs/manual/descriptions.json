@@ -572,6 +572,86 @@
   "CurrentEpochBox": {
    "label": "Epoch",
    "text": "Shows the current epoch; type an epoch inside the committed range and press Enter or Go to jump there."
+  },
+  "Tab.Viewport3D": {
+   "label": "Viewport 3D",
+   "text": "Tab with the 3D view of the simulation. There is only one, and it is pinned: it cannot be closed, replaced or dragged to another pane."
+  },
+  "Tab.ImportsTab": {
+   "label": "Imports",
+   "text": "Tab that imports meshes (OBJ, PLY, glTF, GLB) and textures (PNG, JPEG, KTX2, FITS) and lists them. Textures embedded in a mesh are listed separately."
+  },
+  "GizmoLegendTitle": {
+   "label": "Legend",
+   "text": "Explains the coloured lines in the viewport: in the Nucleus view the gizmo's grid, body axes, spin axis, Sun and velocity directions and one line per jet; in the Orbit and Model views the orbit lines. Its toggle collapses it."
+  },
+  "Tab.TimelineTab": {
+   "label": "Timeline",
+   "text": "Tab that shows the simulated range and, once a comet is committed, plays it: speed, reset, play or pause, run to end, and a box to jump to an epoch."
+  },
+  "menu:File/New": {
+   "label": "New",
+   "text": "Starts a new, empty session. If the current one has unsaved changes, you are asked whether to save them first."
+  },
+  "menu:File/Open...": {
+   "label": "Open...",
+   "text": "Opens a saved session (Ctrl+O): an .avk file, or the aethervk_index.json of a save folder. Asks about unsaved changes first."
+  },
+  "menu:File/Open Recent": {
+   "label": "Open Recent",
+   "text": "Lists the last saves opened or written, up to 10; pick one to open it. Shows (none) when the list is empty."
+  },
+  "menu:File/Save": {
+   "label": "Save",
+   "text": "Saves the session to its current file (Ctrl+S). A session that was never saved asks for a file name, as Save As does."
+  },
+  "menu:File/Save As...": {
+   "label": "Save As...",
+   "text": "Saves the session to a new .avk file (Ctrl+Shift+S); the extension is added when missing."
+  },
+  "menu:File/Save As Folder...": {
+   "label": "Save As Folder...",
+   "text": "Saves the session as a folder of separate files instead of one .avk file, for inspecting a save. Open reads it back through its aethervk_index.json."
+  },
+  "menu:Edit/Settings...": {
+   "label": "Settings...",
+   "text": "Opens the Settings window, which holds the same settings sections as the Settings tab."
+  },
+  "menu:Edit/Toggle Theme": {
+   "label": "Toggle Theme",
+   "text": "Switches between the light and the dark theme. The app starts with the system theme."
+  },
+  "ModeBarRangeLockText": {
+   "label": "Range lock message",
+   "text": "Appears when the range in the Comet tab differs from the committed one: the simulation keeps the committed range until you decommit, or recommit with the new range."
+  },
+  "ModeBarRecommitButton": {
+   "label": "Recommit with this range",
+   "text": "Commits the comet again, as Download & Commit does, with the range typed in the Comet tab; the dust restarts from the new start. Shown only while the range is locked."
+  },
+  "CameraModeText": {
+   "text": "Shows the camera mode of the viewport. UpZenith (Orbit view): the camera only pans; rotation and zoom are locked. CometOrbiting (Nucleus view): the camera orbits the comet, and zoom is allowed."
+  },
+  "ProjectionPerspective": {
+   "label": "Perspective",
+   "text": "Perspective projection: distant objects look smaller, like a camera; the field of view sets the zoom. Greyed out while the viewport is locked for comparison."
+  },
+  "ProjectionOrthographic": {
+   "label": "Orthographic",
+   "text": "Orthographic projection: an object's size does not depend on its distance, like a map or a flat telescope image; the half-width and half-height set what is visible. Greyed out while the viewport is locked for comparison."
+  },
+  "OrientFree": {
+   "label": "Free look",
+   "text": "Drag in the viewport to look around; the look direction stays fixed among the stars."
+  },
+  "RestoreOrthoProportionsButton": {
+   "label": "Restore Proportions",
+   "text": "Recomputes the half-width from the half-height once, so the orthographic view matches the viewport's proportions again. Available in the orthographic projection when the proportions differ."
   }
+ },
+ "help_ids": {
+  "ProjectionPerspective": "ProjectionTypeHelp",
+  "ProjectionOrthographic": "ProjectionTypeHelp",
+  "OrientFree": "LookDirectionHelp"
  }
 }

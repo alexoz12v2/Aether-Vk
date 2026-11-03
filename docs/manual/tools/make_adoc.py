@@ -9,8 +9,9 @@ AutomationId (run tools/axaml_inventory.py --json first); from
 aethervk.ui-logic/Resources/AppStrings.resx the help texts; from docs/manual/descriptions.json
 the hand-written English: an intro per shot ("shots": {"<key>" or "<key>--<state>": text}) and a
 label and explanation per control ("controls": {"<AutomationId>": {"label", "text"}}), used where the
-app has no help text (and as the short line when it has one). Writes docs/manual/adoc/*.adoc
-(one file per tab plus index.adoc). With --sync it copies the PNGs and manifest.json into
+app has no help text (and as the short line when it has one), and the help button of a control whose
+button is not named "<AutomationId>Help" ("help_ids": {"<AutomationId>": "<help button AutomationId>"}).
+Writes docs/manual/adoc/*.adoc (one file per tab plus index.adoc). With --sync it copies the PNGs and manifest.json into
 docs/manual/img/ (only files whose bytes changed). Standard library only.
 """
 import argparse
@@ -175,10 +176,10 @@ def label_of(callout, inv):
     return label if label and label != "?" else cid
 
 
-def help_of(callout, inv, resx):
+def help_of(callout, inv, resx, help_ids=None):
     """(header, text) of the property's help button, or (None, None)."""
     cid = callout["id"]
-    candidates = [callout.get("help_id"), cid + "Help", cid]
+    candidates = [callout.get("help_id"), (help_ids or {}).get(cid), cid + "Help", cid]
     for hid in candidates:
         row = inv.get(hid) if hid else None
         if row and row.get("helpKey") and resx.get(row["helpKey"]):
@@ -202,9 +203,9 @@ def png_size(path):
 
 def load_descriptions(path):
     if not path.exists():
-        return {"shots": {}, "controls": {}}
+        return {"shots": {}, "controls": {}, "help_ids": {}}
     d = json.loads(path.read_text(encoding="utf-8"))
-    return {"shots": d.get("shots", {}), "controls": d.get("controls", {})}
+    return {"shots": d.get("shots", {}), "controls": d.get("controls", {}), "help_ids": d.get("help_ids", {})}
 
 
 def build(capture, resx, inv, out_dir, desc=None):
@@ -257,11 +258,12 @@ def build(capture, resx, inv, out_dir, desc=None):
             for c in callouts:
                 own = desc["controls"].get(c["id"], {})
                 label = own.get("label") or label_of(c, inv)
-                header, text = help_of(c, inv, resx)
+                header, text = help_of(c, inv, resx, desc.get("help_ids"))
                 short = own.get("text")
                 if text:
                     lines.append(f". *{label}* -- {short or one_line(text)}")
-                    props.append((header or label, text))
+                    if (header or label, text) not in props:  # two controls sharing one help button
+                        props.append((header or label, text))
                 elif short:
                     lines.append(f". *{label}* -- {short}")
                 else:
