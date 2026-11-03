@@ -54,7 +54,9 @@ void main() {
     // lit time only: dark phases of the jet site get no clusters (full df64 when always lit)
     vec2 dt_in = B.lit.w == DUST_LIT_MODE_PERIODIC
         ? vec2(dust_lit_time_map(u_t, B.lit, B.spin.w, dur.x + dur.y), 0.0)
-        : df_mul_f(dur, u_t);
+        : (B.lit.w == DUST_LIT_MODE_INSOLATION
+            ? vec2(dust_insol_time_map(u_t, B.lit, B.site_offset.w, B.spin.w, dur.x + dur.y), 0.0)
+            : df_mul_f(dur, u_t));
     vec2 t0 = df_add(t_start, dt_in);
 
     // the window-start site position in free fall over the sub-interval (the site's turn is added
@@ -123,6 +125,6 @@ void main() {
     C.v0_hi_beta = vec4(v0.hi, beta);
     C.v0_lo_mass = vec4(v0.lo, mass_g);
     C.misc       = vec4(sigma_lat, sigma_rad, xsec_per_g, dbeta);
-    C.eject      = vec4(eject, s_ref);
+    C.eject      = vec4(eject, dust_size_law_word(s_ref, B.size_params));
     pc.clusters.c[global & B.ring_mask] = C;
 }

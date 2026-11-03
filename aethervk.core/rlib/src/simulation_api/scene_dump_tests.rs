@@ -611,6 +611,98 @@ mod scene_dump_tests {
       assert_eq!(format!("{:?}", restored.projection), format!("{:?}", original.projection));
       assert_eq!(restored.focus_distance, original.focus_distance);
     }
-    assert_eq!(SceneDump::CURRENT_VERSION, 9);
+    assert_eq!(SceneDump::CURRENT_VERSION, 10);
+  }
+
+  /// The `states/<hash>/scene.bin` member of a committed `.avk` save (a zip): located through the
+  /// central directory (sizes are always there), stored or deflated.
+  fn avk_scene_bin(avk: &str) -> std::vec::Vec<u8> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(avk);
+    let zip = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let u16_at = |i: usize| u16::from_le_bytes([zip[i], zip[i + 1]]) as usize;
+    let u32_at = |i: usize| u32::from_le_bytes([zip[i], zip[i + 1], zip[i + 2], zip[i + 3]]) as usize;
+    let eocd = (0..=zip.len() - 22).rev().find(|&i| u32_at(i) == 0x0605_4b50).expect("end of central directory");
+    let (entries, mut at) = (u16_at(eocd + 10), u32_at(eocd + 16));
+    for _ in 0..entries {
+      assert_eq!(u32_at(at), 0x0201_4b50, "central directory entry");
+      let (method, csize) = (u16_at(at + 10), u32_at(at + 20));
+      let (nlen, elen, clen, local) = (u16_at(at + 28), u16_at(at + 30), u16_at(at + 32), u32_at(at + 42));
+      let name = std::str::from_utf8(&zip[at + 46..at + 46 + nlen]).unwrap();
+      if name.starts_with("states/") && name.ends_with("/scene.bin") {
+        let data = local + 30 + u16_at(local + 26) + u16_at(local + 28);
+        let raw = &zip[data..data + csize];
+        return match method {
+          0 => raw.to_vec(),
+          8 => miniz_oxide::inflate::decompress_to_vec(raw).expect("inflate"),
+          m => panic!("zip method {m}"),
+        };
+      }
+      at += 46 + nlen + elen + clen;
+    }
+    panic!("{avk}: no states/*/scene.bin");
+  }
+
+  /// Saves of v1.0.1-15 (dump v9) restore in full: [`SceneDump::decode`] reads the committed v9
+  /// fixtures to the last byte, their jets come back with every dynamic-model option off and the
+  /// 30 d lifetime, and the jets' v9 compatibility JSON rebuilt from the decoded parameters is the
+  /// one the old engine stored, which the live scene's v9 JSON must equal for the restore
+  /// (`compatibility_json_for_version`). The current-version JSON of the same jets differs, so
+  /// the restore depends on the v9 comparison. A jet with a new option on has no v9 description.
+  #[test]
+  fn test_v9_save_fixtures_decode_and_match_their_v9_compatibility() {
+    use crate::scene::particles::v2::DEFAULT_TTL_DAYS;
+    use crate::simulation_api::{
+      scene_dump::jets_compatibility_json_for_version,
+      structs::{SerializedComponent, legacy_v9},
+    };
+    for avk in ["test_assets/saves/review_slow_rotator_2026-11.avk", "test_assets/saves/review_67p_2021-12.avk"] {
+      let bytes = avk_scene_bin(avk);
+      let (raw, read): (legacy_v9::SceneDump, usize) =
+        bincode::serde::decode_from_slice(&bytes, bincode::config::standard()).expect(avk);
+      assert_eq!(raw.version, 9, "{avk}");
+      assert_eq!(read, bytes.len(), "{avk}: the v9 layout reads the dump to its last byte");
+
+      let dump = SceneDump::decode(&bytes).expect(avk);
+      assert_eq!(dump.version, 9, "{avk}: the decoded dump keeps its version");
+      assert_eq!(dump.compatibility, raw.compatibility);
+      assert_eq!(dump.entities.len(), raw.entities.len());
+      let jets: std::vec::Vec<_> = dump
+        .entities
+        .iter()
+        .flat_map(|e| e.components.iter())
+        .filter_map(|c| match c {
+          SerializedComponent::ParticleSystemConfig(p) => Some((p.emission_params, p.ttl_us, p.emission_start_us)),
+          _ => None,
+        })
+        .collect();
+      assert!(!jets.is_empty(), "{avk}: jets");
+      for (p, _, _) in &jets {
+        assert_eq!((p.insolation_weighted, p.orbit_size_law, p.spk_before_start, p.size_q_table_len), (0, 0, 0, 0));
+        assert_eq!(p.ttl_days, DEFAULT_TTL_DAYS);
+        let back = legacy_v9::ParticleSystemEmitParams::from_current(p).expect("a v9 jet has a v9 description");
+        assert_eq!(back.to_current(), *p, "{avk}: v9 ↔ current round trip");
+      }
+      let v9 = jets_compatibility_json_for_version(jets.iter().copied(), 9).unwrap();
+      assert!(
+        dump.compatibility.ends_with(&std::format!("\"jets\":[{v9}]}}")),
+        "{avk}: the stored v9 JSON lists the decoded jets\nstored: {}\nrebuilt jets: {v9}",
+        dump.compatibility
+      );
+      assert!(dump.compatibility.starts_with("{\"version\":9,"));
+      let current = jets_compatibility_json_for_version(jets.iter().copied(), SceneDump::CURRENT_VERSION).unwrap();
+      assert_ne!(current, v9, "{avk}: the current JSON describes the jets differently");
+
+      let mut on = jets[0];
+      on.0.insolation_weighted = 1;
+      assert_eq!(jets_compatibility_json_for_version([on], 9), None);
+      let mut ttl = jets[0];
+      ttl.0.ttl_days = 45.0;
+      assert_eq!(jets_compatibility_json_for_version([ttl], 9), None);
+      assert_eq!(jets_compatibility_json_for_version([jets[0]], 8), None);
+    }
+    // a version older than the oldest restorable one is refused with a message
+    let mut old = avk_scene_bin("test_assets/saves/review_slow_rotator_2026-11.avk");
+    old[0] = 8;
+    assert!(SceneDump::decode(&old).unwrap_err().contains("not readable"));
   }
 }

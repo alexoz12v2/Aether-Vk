@@ -34,7 +34,7 @@
   "model-dust--empty": "Before a comet is committed no jets can be added; the section shows its display options and a hint to commit a comet first.",
   "model-dust--committed": "With a comet committed, the jet list is available. The + button adds a jet and selecting a jet opens its properties.",
   "model-dust-jet": "The properties of the selected jet: where it sits on the nucleus, its cone and speed, its colour and the computed beta and dust rate, with its own Grain and Activity panels.",
-  "model-dust-defaults": "The values that new jets start from, under Advanced: the dust production law (Q_d) and the grain size distribution, each with a plot. Existing jets keep their own values.",
+  "model-dust-defaults": "The values that new jets start from, including the size law q, and under Advanced the dust production law (Q_d) with its plot. Existing jets keep their own values.",
   "imports": "The Imports pane loads meshes (OBJ, PLY, glTF, GLB) and textures (PNG, JPEG, KTX2) from disk and lists what was imported.",
   "imports--empty": "Before anything is imported both lists are empty.",
   "imports--committed": "The pane with imported items: the loaded textures are listed with their size and can be used in the Settings tab.",
@@ -453,13 +453,13 @@
    "label": "Q_d max (kg/s)",
    "text": "Upper limit of each jet's production rate in kg/s, so that it stays finite close to the Sun. Shared by all jets."
   },
-  "SizeDistributionAdvancedExpander": {
-   "label": "Advanced: grain size distribution",
-   "text": "Opens the plot of the grain size range that new jets start from."
+  "DustSizeQBox": {
+   "label": "Size law q",
+   "text": "Size law exponent q that new jets start from, from 2 to 5; 3.5 is the usual value. Each jet then has its own."
   },
   "SizeRangeNote": {
    "label": "Grain size range",
-   "text": "States the simulated grain diameters and that the continuous dust assumes q = 3.5 over that range."
+   "text": "States the simulated grain diameters and which q the continuous dust uses: 3.5, or the jet's q or q(t) table with its orbit-dependent size distribution on."
   },
   "JetLatitudeSlider": {
    "label": "Latitude",
@@ -484,6 +484,10 @@
   "JetBetaBox": {
    "label": "β (beta)",
    "text": "Read-only ratio of the solar radiation pressure to solar gravity on the reference grain; larger values curve the dust away from the Sun faster."
+  },
+  "JetBetaRangeText": {
+   "label": "β range",
+   "text": "Read-only β of the largest to β of the smallest simulated grain of the jet (β ∝ 1/grain size)."
   },
   "JetQDustBox": {
    "label": "Q_dust @ 1 AU",
@@ -515,7 +519,7 @@
   },
   "JetSizeQ": {
    "label": "Size law q",
-   "text": "Exponent q of the grain size law n(d) ∝ d^-q, from 2 to 5; 3.5 is the usual value. A larger q means more small grains."
+   "text": "Exponent q of the grain size law n(d) ∝ d^-q, from 2 to 5; 3.5 is the usual value. The continuous dust uses it only with the jet's orbit-dependent size distribution on; off, it uses q = 3.5."
   },
   "ViewportRulerText": {
    "label": "Scale ruler",
@@ -557,9 +561,13 @@
    "label": "Elongation (Sun–Earth–comet)",
    "text": "Angle at the Earth between the Sun and the comet, in degrees."
   },
-  "EphemerisSunPa": {
-   "label": "Sun PA (N→E)",
-   "text": "Position angle on the sky of the direction from the Sun to the comet, from north through east, in degrees; the tail points near it."
+  "EphemerisPaOfSun": {
+   "label": "PA of Sun (N→E)",
+   "text": "Position angle on the sky of the direction from the comet towards the Sun, from north through east, in degrees. It is PsAng + 180°."
+  },
+  "EphemerisPsAng": {
+   "label": "PsAng, anti-Sun (N→E)",
+   "text": "JPL Horizons' PsAng: position angle on the sky of the extended Sun→comet vector (the anti-solar direction), from north through east, in degrees; the tail points near it. It is the PA of the Sun minus 180°."
   },
   "SpeedPicker": {
    "label": "Speed",

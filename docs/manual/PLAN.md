@@ -342,7 +342,7 @@ opened at the end epoch, paused). Ordered as the chapter is.
 | 12 | `model-sun`, `model-nucleus-spin` | committed | `ModelSunSection`, `NucleusSpinSection` | element |
 | 13 | `model-dust` | empty (no-radius warning), committed | `DustSection` collapsed sub-expanders | element, stitched |
 | 14 | `model-dust-jet` | selected | click the first jet row. `JetGrainExpander`, `JetActivityExpander` open | jet detail panel |
-| 15 | `model-dust-defaults` | committed | `ActivityAdvancedExpander`, `SizeDistributionAdvancedExpander` | element |
+| 15 | `model-dust-defaults` | committed | `JetDefaultsHelp` … `DustSizeQBox`, `SizeRangeNote`, `ActivityAdvancedExpander` | element |
 | 16 | `settings-time-scale`, `settings-general`, `settings-orbital-elements` | committed | expanders | element |
 | 17 | `settings-comet-appearance` | committed, custom | `CometDisplayModeCustom` to show *Custom mesh* | element |
 | 18 | `settings-billboards`, `settings-billboards-fits` | committed | `BillboardsSection`, the row expander, `BillboardFitsSection` | element, stitched |

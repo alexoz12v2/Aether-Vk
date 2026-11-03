@@ -627,11 +627,9 @@ public sealed class SaveFileService
 
   private async Task<bool> TryRestoreAsync(string dir, StateDto state, DateTimeOffset now)
   {
-    if (state.DumpVersion != _host.SceneDumpVersion) return false;
     var file = Path.Combine(dir, state.File);
     if (!File.Exists(file)) return false;
-    var json = _host.GetCompatibilityJson();
-    if (json is null || SaveIndexIo.CompatHash(json) != state.CompatHash) return false;
+    if (!Matches(state)) return false;
     if (!await _host.RestoreSceneAsync(file)) return false;
     state.LastUsedAt = now;
     _lastReusedHash = state.CompatHash;
@@ -652,12 +650,8 @@ public sealed class SaveFileService
     try
     {
       await _host.SettleAsync();
-      var json = _host.GetCompatibilityJson();
-      if (json is null) return false;
-      var hash = SaveIndexIo.CompatHash(json);
-      if (hash == _lastReusedHash) return false;
-      var state = _index.States.FirstOrDefault(s => s.CompatHash == hash);
-      if (state is null) return false;
+      var state = _index.States.FirstOrDefault(Matches);
+      if (state is null || state.CompatHash == _lastReusedHash) return false;
       if (!await TryRestoreAsync(CurrentSaveDir, state, _clock.UtcNow)) return false;
       _host.SyncClock();
       _host.RestartDustFeedbackWhenSettled();
@@ -670,6 +664,17 @@ public sealed class SaveFileService
   }
 
   // ── helpers ────────────────────────────────────────────────────────────────
+
+  /// <summary>Whether <paramref name="state"/> can be restored into the live scene: its hash matches
+  /// the engine's compatibility JSON in the terms of the state's dump version (the current JSON for a
+  /// current state; an older state, written by an earlier engine, against that engine's JSON, which
+  /// the engine gives only while it still reads that version).</summary>
+  private bool Matches(StateDto state)
+  {
+    var json = state.DumpVersion == _host.SceneDumpVersion ? _host.GetCompatibilityJson()
+      : _host.GetCompatibilityJson(state.DumpVersion);
+    return json is not null && SaveIndexIo.CompatHash(json) == state.CompatHash;
+  }
 
   private static bool SamePath(string a, string b) =>
     string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.Ordinal);

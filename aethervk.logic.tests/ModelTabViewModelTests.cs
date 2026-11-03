@@ -859,14 +859,17 @@ public class ModelTabViewModelTests
     s.Vm.AddJetCommand.Execute(null);
 
     var jet = s.Vm.Jets!.Single();
-    // q is per jet only: a new jet starts at 3.5 whatever the session holds (an older save's value)
-    var expected = new AetherVk.Logic.Models.JetGrain(42f, 1.3f, 1.4f, 0.06f, 3.5f, 30f, 7f);
+    // q included: a new jet takes the session's q ("Defaults for new jets")
+    var expected = new AetherVk.Logic.Models.JetGrain(42f, 1.3f, 1.4f, 0.06f, 3.0f, 30f, 7f);
     Assert.Equal(expected, jet.Grain);
-    Assert.Equal(expected with { SizeQ = 3.0f }, s.Session.DefaultGrain);
-    Assert.Equal(new ParticleSystemModel(42f, 1.3f, 1.4f, 0.06f, 3.5f, 30f, 7f, 2.5f, 15f, 2000f), captured);
+    Assert.Equal(expected, s.Session.DefaultGrain);
+    // a new jet: the dynamic-model defaults (toggles off, 30 d, no table) and the pre-start dust
+    // from the ephemeris on (an older save's jet has it off)
+    Assert.Equal(new ParticleSystemModel(42f, 1.3f, 1.4f, 0.06f, 3.0f, 30f, 7f, 2.5f, 15f, 2000f, SpkBeforeStart: true), captured);
 
     s.Session.DiametreUm = 7f;
     s.Session.DustRate1AuKgs = 9f;
+    s.Session.SizeQ = 4.5f;
     Assert.Equal(expected, jet.Grain);
   }
 

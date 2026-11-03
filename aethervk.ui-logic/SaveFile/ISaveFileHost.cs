@@ -58,6 +58,10 @@ public interface ISaveFileHost
   /// <summary>The engine's compatibility JSON of the scene; null without a scene.</summary>
   string? GetCompatibilityJson();
 
+  /// <summary>The compatibility JSON for a saved state of dump <paramref name="dumpVersion"/>
+  /// (an older save); null when no state of that version can be restored into this scene.</summary>
+  string? GetCompatibilityJson(uint dumpVersion);
+
   /// <summary>The scene dump format the engine writes and restores.</summary>
   uint SceneDumpVersion { get; }
 

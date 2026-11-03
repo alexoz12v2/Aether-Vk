@@ -146,6 +146,7 @@ fn save_dto(jet: &SaveJet, emission_start_us: i64) -> ParticleSystemDTO {
     seed: jet.seed,
     _pad: 0,
     emission_start_us,
+    ..bytemuck::Zeroable::zeroed()
   };
   // the activity the save held as an Afρ of 100.0 cm (max 100_000.0 cm), as a dust rate (v9)
   let p = crate::scene::particles::ParticleSystemEmitParams::from_dto(&dto);
@@ -526,6 +527,7 @@ fn jet_state(
     site_normal,
     spin: Some(spin),
     site_offset_m,
+    conditions: None,
   })
 }
 

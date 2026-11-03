@@ -1903,7 +1903,224 @@ impl SceneDump {
   /// 9: the jets' activity fields are a dust production rate `Q_d` in kg/s
   ///    (`dust_rate_1au_kgs`, `dust_rate_max_kgs`), not an Afρ in cm: a v8 dump would read its
   ///    Afρ as kg/s, so v8 dumps are refused.
-  pub const CURRENT_VERSION: u32 = 9;
+  /// 10: the jets' dynamic-model fields (`insolation_weighted`, `orbit_size_law`,
+  ///    `spk_before_start`, `ttl_days`, the `q` orbit table): positional again, and the
+  ///    compatibility JSON (the parameters' `Debug`) changed with them. v9 dumps are still read
+  ///    ([`Self::decode`], [`legacy_v9`]) and restored into a scene whose jets have every new option
+  ///    off, compared against the v9 JSON (`scene_dump::compatibility_json_for_version`).
+  pub const CURRENT_VERSION: u32 = 10;
+
+  /// The oldest version [`Self::decode`] reads: a v9 dump differs from v10 only by the jets'
+  /// parameters, which lack the dynamic-model fields ([`legacy_v9`]); it is read with those fields
+  /// off (30 d lifetime), the configuration every v9 save had, and restored when the live scene
+  /// matches its v9 compatibility JSON (`scene_dump::compatibility_json_for_version`).
+  pub const OLDEST_RESTORABLE_VERSION: u32 = 9;
+
+  /// Decodes a dump of any restorable version. The result keeps the file's `version` (the restore
+  /// compares the live scene against the compatibility JSON of that version); a v9 dump comes back
+  /// in the current types.
+  pub fn decode(bytes: &[u8]) -> Result<Self, alloc::string::String> {
+    use alloc::format;
+    let cfg = bincode::config::standard();
+    // `version` is the first field: bincode is positional, so it decodes on its own
+    let (version, _): (u32, usize) =
+      bincode::serde::decode_from_slice(bytes, cfg).map_err(|e| format!("version: {e}"))?;
+    match version {
+      Self::CURRENT_VERSION => bincode::serde::decode_from_slice::<Self, _>(bytes, cfg)
+        .map(|(d, _)| d)
+        .map_err(|e| format!("v{version}: {e}")),
+      9 => bincode::serde::decode_from_slice::<legacy_v9::SceneDump, _>(bytes, cfg)
+        .map(|(d, _)| d.into())
+        .map_err(|e| format!("v9: {e}")),
+      v => Err(format!("version {v} is not readable (oldest {}, current {})", Self::OLDEST_RESTORABLE_VERSION, Self::CURRENT_VERSION)),
+    }
+  }
+}
+
+/// The v9 layout of the types v10 changed (bincode is positional): the jets' parameters without
+/// the dynamic-model fields, and the containers that hold them. Every other component is the same
+/// type in both versions.
+pub mod legacy_v9 {
+  use super::*;
+
+  /// `ParticleSystemEmitParams` of v9. Same name, field order and types as the current struct's
+  /// first 16 fields, so its `Debug` is the v9 compatibility JSON's `params` text.
+  #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+  pub struct ParticleSystemEmitParams {
+    pub latitude_rad: f32,
+    pub longitude_rad: f32,
+    pub aperture_rad: f32,
+    pub start_velocity_mean: f32,
+    pub start_velocity_std: f32,
+    pub seed: u32,
+    pub diametre_um: f32,
+    pub density_gcm3: f32,
+    pub scattering_efficiency: f32,
+    pub geometric_albedo: f32,
+    pub size_q: f32,
+    pub size_range: f32,
+    pub dust_rate_1au_kgs: f32,
+    pub dust_rate_power: f32,
+    pub dust_rate_cutoff_au: f32,
+    pub dust_rate_max_kgs: f32,
+  }
+
+  type Current = crate::scene::particles::v2::ParticleSystemEmitParams;
+
+  impl ParticleSystemEmitParams {
+    /// The v9 view of current parameters, `None` when they use anything v9 could not express (a
+    /// dynamic-model option on, a lifetime other than 30 d, a `q` table)
+    pub fn from_current(p: &Current) -> Option<Self> {
+      let default_ttl = p.ttl_days == 0.0 || p.ttl_days == crate::scene::particles::v2::DEFAULT_TTL_DAYS;
+      if p.insolation_weighted != 0 || p.orbit_size_law != 0 || p.spk_before_start != 0 || p.size_q_table_len != 0 || !default_ttl {
+        return None;
+      }
+      Some(Self {
+        latitude_rad: p.latitude_rad,
+        longitude_rad: p.longitude_rad,
+        aperture_rad: p.aperture_rad,
+        start_velocity_mean: p.start_velocity_mean,
+        start_velocity_std: p.start_velocity_std,
+        seed: p.seed,
+        diametre_um: p.diametre_um,
+        density_gcm3: p.density_gcm3,
+        scattering_efficiency: p.scattering_efficiency,
+        geometric_albedo: p.geometric_albedo,
+        size_q: p.size_q,
+        size_range: p.size_range,
+        dust_rate_1au_kgs: p.dust_rate_1au_kgs,
+        dust_rate_power: p.dust_rate_power,
+        dust_rate_cutoff_au: p.dust_rate_cutoff_au,
+        dust_rate_max_kgs: p.dust_rate_max_kgs,
+      })
+    }
+
+    /// The current parameters of a v9 record: the dynamic-model options off, the 30 d lifetime
+    /// set explicitly (as the application sets it for a v9 save's jets), no `q` table
+    pub fn to_current(&self) -> Current {
+      Current {
+        latitude_rad: self.latitude_rad,
+        longitude_rad: self.longitude_rad,
+        aperture_rad: self.aperture_rad,
+        start_velocity_mean: self.start_velocity_mean,
+        start_velocity_std: self.start_velocity_std,
+        seed: self.seed,
+        diametre_um: self.diametre_um,
+        density_gcm3: self.density_gcm3,
+        scattering_efficiency: self.scattering_efficiency,
+        geometric_albedo: self.geometric_albedo,
+        size_q: self.size_q,
+        size_range: self.size_range,
+        dust_rate_1au_kgs: self.dust_rate_1au_kgs,
+        dust_rate_power: self.dust_rate_power,
+        dust_rate_cutoff_au: self.dust_rate_cutoff_au,
+        dust_rate_max_kgs: self.dust_rate_max_kgs,
+        ttl_days: crate::scene::particles::v2::DEFAULT_TTL_DAYS,
+        ..bytemuck::Zeroable::zeroed()
+      }
+    }
+  }
+
+  #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+  pub struct SerializedParticleSystemConfig {
+    pub entity_ffi_id: u64,
+    pub emission_params: ParticleSystemEmitParams,
+    pub stream_color: [f32; 4],
+    pub ttl_us: i64,
+    pub emission_start_us: i64,
+  }
+
+  /// Same variants, same order as [`super::SerializedComponent`]
+  #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+  pub enum SerializedComponent {
+    HighResTransform(SerializedHighResTransform),
+    Transform(SerializedTransform),
+    Camera(SerializedCamera),
+    StaticMesh(SerializedStaticMesh),
+    ParticleSystemConfig(SerializedParticleSystemConfig),
+    SunMarker,
+    SkyMarker,
+    GridMarker,
+    CometMarker,
+    AlmanacPlanet(SerializedAlmanacPlanet),
+    BodyRotationalModel(SerializedRotationalModel),
+    Trajectory(SerializedTrajectory),
+    ReferenceFrame(SerializedReferenceFrame),
+    Sun(SerializedSun),
+  }
+
+  #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+  pub struct SerializedEntity {
+    pub ffi_id: u64,
+    pub name: alloc::string::String,
+    pub parent_ffi_id: Option<u64>,
+    pub components: alloc::vec::Vec<SerializedComponent>,
+  }
+
+  #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+  pub struct SceneDump {
+    pub version: u32,
+    pub scene_id: u64,
+    pub start_epoch_parts: (i16, u64),
+    pub end_epoch_parts: (i16, u64),
+    pub current_epoch_parts: (i16, u64),
+    pub compatibility: alloc::string::String,
+    pub entities: alloc::vec::Vec<SerializedEntity>,
+    pub particle_snapshot: Option<ParticleSystemSnapshot>,
+  }
+
+  impl From<SerializedComponent> for super::SerializedComponent {
+    fn from(c: SerializedComponent) -> Self {
+      use super::SerializedComponent as C;
+      match c {
+        SerializedComponent::HighResTransform(x) => C::HighResTransform(x),
+        SerializedComponent::Transform(x) => C::Transform(x),
+        SerializedComponent::Camera(x) => C::Camera(x),
+        SerializedComponent::StaticMesh(x) => C::StaticMesh(x),
+        SerializedComponent::ParticleSystemConfig(x) => C::ParticleSystemConfig(super::SerializedParticleSystemConfig {
+          entity_ffi_id: x.entity_ffi_id,
+          emission_params: x.emission_params.to_current(),
+          stream_color: x.stream_color,
+          ttl_us: x.ttl_us,
+          emission_start_us: x.emission_start_us,
+        }),
+        SerializedComponent::SunMarker => C::SunMarker,
+        SerializedComponent::SkyMarker => C::SkyMarker,
+        SerializedComponent::GridMarker => C::GridMarker,
+        SerializedComponent::CometMarker => C::CometMarker,
+        SerializedComponent::AlmanacPlanet(x) => C::AlmanacPlanet(x),
+        SerializedComponent::BodyRotationalModel(x) => C::BodyRotationalModel(x),
+        SerializedComponent::Trajectory(x) => C::Trajectory(x),
+        SerializedComponent::ReferenceFrame(x) => C::ReferenceFrame(x),
+        SerializedComponent::Sun(x) => C::Sun(x),
+      }
+    }
+  }
+
+  /// Keeps `version` (9): the restore checks the live scene against the v9 compatibility JSON
+  impl From<SceneDump> for super::SceneDump {
+    fn from(d: SceneDump) -> Self {
+      Self {
+        version: d.version,
+        scene_id: d.scene_id,
+        start_epoch_parts: d.start_epoch_parts,
+        end_epoch_parts: d.end_epoch_parts,
+        current_epoch_parts: d.current_epoch_parts,
+        compatibility: d.compatibility,
+        entities: d
+          .entities
+          .into_iter()
+          .map(|e| super::SerializedEntity {
+            ffi_id: e.ffi_id,
+            name: e.name,
+            parent_ffi_id: e.parent_ffi_id,
+            components: e.components.into_iter().map(Into::into).collect(),
+          })
+          .collect(),
+        particle_snapshot: d.particle_snapshot,
+      }
+    }
+  }
 }
 
 /// Serialized representation of a single scene entity.

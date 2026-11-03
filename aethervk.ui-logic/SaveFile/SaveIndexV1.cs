@@ -213,6 +213,20 @@ public sealed class JetDto
   [JsonPropertyName("dust_rate_1au_kgs")]
   public float? DustRate1AuKgs { get; set; }
 
+  // the dynamic model (per jet); null in saves written before: off, 30 days, no table, which is
+  // exactly what the engine did then (the dust of such a save is unchanged)
+  /// <summary>"Insolation-weighted emission"; null = off.</summary>
+  public bool? InsolationWeighted { get; set; }
+  /// <summary>"Orbit-dependent size distribution"; null = off.</summary>
+  public bool? OrbitSizeLaw { get; set; }
+  /// <summary>Pre-start dust from the ephemeris when the SPK covers the time; null = off.</summary>
+  public bool? SpkBeforeStart { get; set; }
+  /// <summary>Dust lifetime in days; null = 30.</summary>
+  public float? LifetimeDays { get; set; }
+  /// <summary>q along the orbit: the rows' days from perihelion and q, parallel arrays; null = no table.</summary>
+  public float[]? SizeQTableDays { get; set; }
+  public float[]? SizeQTableQ { get; set; }
+
   // Obsolete: read only to convert pre-Q_d saves (this jet's Afρ at 1 AU in cm); never written
   [JsonPropertyName("afrho0_cm"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
   public float? Afrho0Cm { get; set; }

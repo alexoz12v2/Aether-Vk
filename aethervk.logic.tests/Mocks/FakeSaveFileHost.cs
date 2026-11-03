@@ -76,6 +76,14 @@ internal sealed class FakeSaveFileHost(string root) : ISaveFileHost
 
   public uint SceneDumpVersion => DumpVersion;
 
+  /// <summary>Older dump versions this fake engine still restores, with the JSON it describes the
+  /// scene by in that version's terms (a legacy reader; empty by default: other versions refused).</summary>
+  public Dictionary<uint, Func<string?>> LegacyCompatibility { get; } = [];
+
+  public string? GetCompatibilityJson(uint dumpVersion) =>
+    dumpVersion == DumpVersion ? GetCompatibilityJson()
+    : LegacyCompatibility.TryGetValue(dumpVersion, out var json) ? json() : null;
+
   public Task<bool> DumpSceneAsync(string file)
   {
     Calls.Add("dump");
@@ -160,7 +168,8 @@ internal sealed class FakeSaveFileHost(string root) : ISaveFileHost
   {
     Calls.Add("restore " + Path.GetRelativePath(root, file));
     var parts = File.ReadAllText(file).Split('|');
-    if (parts[0] != GetCompatibilityJson()) return Task.FromResult(false);
+    if (parts[0] != GetCompatibilityJson() && !LegacyCompatibility.Values.Any(json => json() == parts[0]))
+      return Task.FromResult(false);
     Timeline.CurrentEpoch = new EpochParts(0, ulong.Parse(parts[1]));
     return Task.FromResult(true);
   }

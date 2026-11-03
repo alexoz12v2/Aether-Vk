@@ -76,16 +76,16 @@ public partial interface IModelTabViewModel : ICursorWarpingViewModel
   /// <summary>Q_d(r_h) of the defaults for new jets (engine law), marker at the comet's r_h.</summary>
   AetherVk.Logic.Utils.CurvePlotModel? DustRatePlot { get; }
 
-  /// <summary>Grain size PDFs by number and by cross-section, of the defaults for new jets.</summary>
-  AetherVk.Logic.Utils.CurvePlotModel? SizeDistributionPlot { get; }
-
   /// <summary>Q_d(r_h) of the selected jet; null without a selection.</summary>
   AetherVk.Logic.Utils.CurvePlotModel? JetDustRatePlot { get; }
 
   /// <summary>Grain size PDFs of the selected jet; null without a selection.</summary>
   AetherVk.Logic.Utils.CurvePlotModel? JetSizeDistributionPlot { get; }
 
-  /// <summary>"Simulated grains: diameters a-b. ..." under the defaults' size plot.</summary>
+  /// <summary>q along the orbit of the selected jet (its table, else its q as a flat line); null without a selection.</summary>
+  AetherVk.Logic.Utils.CurvePlotModel? JetSizeQPlot { get; }
+
+  /// <summary>"Simulated grains: diameters a-b. ..." under the defaults for new jets.</summary>
   string SizeRangeNote { get; }
 
   /// <summary>The same note under the selected jet's size plot.</summary>

@@ -18,15 +18,19 @@ public class SphereGizmoLegendTests
   {
     var vm = new SphereGizmoLegendViewModel();
     vm.Refresh(new LegendContext(EarthObserverState.CometOrbiting, true, SphereGizmoPart.Default, NoJets));
-    Assert.Equal(new[] { "grid", "body_x", "body_y", "spin", "sun" }, Keys(vm));
+    Assert.Equal(new[] { "grid", "body_x", "body_y", "spin", "sun", "axes_away" }, Keys(vm));
     Assert.True(vm.IsShown);
 
     vm.Refresh(new LegendContext(EarthObserverState.CometOrbiting, true, SphereGizmoPart.All, NoJets));
-    Assert.Equal("velocity", Keys(vm)[^1]);
-    Assert.Equal(6, vm.Rows.Count);
+    Assert.Equal(new[] { "velocity", "axes_away" }, Keys(vm)[^2..]);
+    Assert.Equal(7, vm.Rows.Count);
 
     vm.Refresh(new LegendContext(EarthObserverState.CometOrbiting, true, SphereGizmoPart.SpinAxis | SphereGizmoPart.Sun, NoJets));
-    Assert.Equal(new[] { "spin", "sun" }, Keys(vm));
+    Assert.Equal(new[] { "spin", "sun", "axes_away" }, Keys(vm));
+
+    // the grid alone draws no axis: no dashed-axis note
+    vm.Refresh(new LegendContext(EarthObserverState.CometOrbiting, true, SphereGizmoPart.Grid, NoJets));
+    Assert.Equal(new[] { "grid" }, Keys(vm));
 
     vm.Refresh(new LegendContext(EarthObserverState.CometOrbiting, true, 0, NoJets));
     Assert.Empty(vm.Rows);
@@ -41,7 +45,9 @@ public class SphereGizmoLegendTests
     string C(string key) => vm.Rows.Single(r => r.Key == key).ColorHex;
     Assert.Equal("#FF0000", C("body_x"));
     Assert.Equal("#00FF00", C("body_y"));
-    Assert.Equal("#0000FF", C("spin"));
+    Assert.Equal("#73ADFF", C("spin")); // SPIN_COLOR (0.45, 0.68, 1)
+    Assert.Equal("#737373", C("axes_away"));
+    Assert.Contains("Dashed", vm.Rows.Single(r => r.Key == "axes_away").Label);
     Assert.Equal("#FFFF00", C("sun"));
     Assert.Equal("#FF59FF", C("velocity")); // (1, 0.35, 1)
   }
@@ -63,9 +69,9 @@ public class SphereGizmoLegendTests
   {
     var vm = new SphereGizmoLegendViewModel();
     vm.Refresh(new LegendContext(EarthObserverState.CometOrbiting, true, SphereGizmoPart.Sun, [(1, new Vector4(0.4f, 0.8f, 1f, 1f)), (2, new Vector4(1f, 0f, 0f, 1f))]));
-    Assert.Equal(new[] { "sun", "jet_1", "jet_2" }, Keys(vm));
-    Assert.Equal("#66CCFF", vm.Rows[1].ColorHex);
-    Assert.Equal("Jet 2 direction", vm.Rows[2].Label);
+    Assert.Equal(new[] { "sun", "axes_away", "jet_1", "jet_2" }, Keys(vm));
+    Assert.Equal("#66CCFF", vm.Rows[2].ColorHex);
+    Assert.Equal("Jet 2 direction", vm.Rows[3].Label);
   }
 
   [Fact]

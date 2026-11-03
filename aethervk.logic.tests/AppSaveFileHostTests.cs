@@ -145,8 +145,11 @@ public sealed class AppSaveFileHostTests
     rig.Host.ApplyModel(model, [new JetDto { Seed = 1 }, new JetDto { Seed = 2, DiametreUm = 20, DustRate1AuKgs = 0.6f }]);
 
     var inherited = new AetherVk.Logic.Models.JetGrain(150f, 0.9f, 1.3f, 0.05f, 3.1f, 25f, 4.2f);
-    Assert.Equal(inherited, rig.Model.Jets[0].Grain);
-    Assert.Equal(inherited with { DiametreUm = 20f, DustRate1AuKgs = 0.6f }, rig.Model.Jets[1].Grain);
+    // a jet of an older save keeps the old dynamic model: the pre-start dust from the reference
+    // orbit (absent → off), unlike a new jet seeded from the defaults
+    var old = inherited with { SpkBeforeStart = false };
+    Assert.Equal(old, rig.Model.Jets[0].Grain);
+    Assert.Equal(old with { DiametreUm = 20f, DustRate1AuKgs = 0.6f }, rig.Model.Jets[1].Grain);
     Assert.Equal(inherited, rig.Model.DefaultGrain);
 
     var snap = rig.Host.Capture();

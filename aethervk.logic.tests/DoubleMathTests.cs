@@ -42,10 +42,19 @@ public class DoubleMathTests
     Assert.Equal(80, Marshal.SizeOf<AnimationTargetDTO>());
     Assert.Equal(64, Marshal.SizeOf<CRotoTranslateDTO>());
     Assert.Equal(56, Marshal.SizeOf<CDustTierStatsDTO>());
-    Assert.Equal(96, Marshal.SizeOf<ParticleSystemDTO>());
-    // the common block grew by SizeQ / SizeRange: the Rust offsets (scene.rs asserts 24 and 88)
+    // the dynamic-model tail (lifetime, toggles, q table) after EmissionStartUs: the Rust offsets
+    // (scene.rs asserts 24, 88, 96..120 and the size 184)
+    Assert.Equal(184, Marshal.SizeOf<ParticleSystemDTO>());
+    Assert.Equal(ParticleSystemDTO.NativeSize, Marshal.SizeOf<ParticleSystemDTO>());
     Assert.Equal(24, (int)Marshal.OffsetOf<ParticleSystemDTO>(nameof(ParticleSystemDTO.DustRate1AuKgs)));
     Assert.Equal(88, (int)Marshal.OffsetOf<ParticleSystemDTO>(nameof(ParticleSystemDTO.EmissionStartUs)));
+    Assert.Equal(96, (int)Marshal.OffsetOf<ParticleSystemDTO>(nameof(ParticleSystemDTO.LifetimeDays)));
+    Assert.Equal(100, (int)Marshal.OffsetOf<ParticleSystemDTO>(nameof(ParticleSystemDTO.InsolationWeighted)));
+    Assert.Equal(104, (int)Marshal.OffsetOf<ParticleSystemDTO>(nameof(ParticleSystemDTO.OrbitSizeLaw)));
+    Assert.Equal(108, (int)Marshal.OffsetOf<ParticleSystemDTO>(nameof(ParticleSystemDTO.SpkBeforeStart)));
+    Assert.Equal(112, (int)Marshal.OffsetOf<ParticleSystemDTO>(nameof(ParticleSystemDTO.SizeQTableLen)));
+    Assert.Equal(120, (int)Marshal.OffsetOf<ParticleSystemDTO>(nameof(ParticleSystemDTO.SizeQTable0Days)));
+    Assert.Equal(180, (int)Marshal.OffsetOf<ParticleSystemDTO>(nameof(ParticleSystemDTO.SizeQTable7Q)));
     Assert.Equal(32, Marshal.SizeOf<CDustExposureDTO>());
   }
 }

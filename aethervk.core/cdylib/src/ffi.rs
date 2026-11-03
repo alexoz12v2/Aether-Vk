@@ -2120,11 +2120,11 @@ pub unsafe extern "C" fn avkSimulationContext_addParticleSystem(
     stream_color: ps_dto.stream_color,
   };
 
-  // TODO Add this as a per-jet parameter (or a model-wide one in the Model tab)
-  // Dust v3: lifetime of a cluster (scaled). A tail needs weeks: at 5 AU radiation pressure moves
-  // a β = 0.2 grain ~90 km in 17 h but ~10⁶ km in 30 days. Cost is independent of it (the ring
-  // budget spreads over the TTL).
-  const JET_TTL_US: aethervk_oshal_rlib::os::time::timeus_t = 30 * 86_400 * 1_000_000i64;
+  // Dust v3: lifetime of a cluster (scaled), the jet's own parameter (`ttl_days`, default 30 d:
+  // a record without it reads as the 30 d the engine used to hard-code). A tail needs weeks: at
+  // 5 AU radiation pressure moves a β = 0.2 grain ~90 km in 17 h but ~10⁶ km in 30 days. Cost is
+  // independent of it (the ring budget spreads over the TTL).
+  let jet_ttl_us: aethervk_oshal_rlib::os::time::timeus_t = emit_params.ttl_us();
 
   let render_frontend = match ctx_ref.render_frontend() {
     Some(rf) => rf,
@@ -2166,7 +2166,7 @@ pub unsafe extern "C" fn avkSimulationContext_addParticleSystem(
     jet_entity,
     emit_params,
     draw_params,
-    JET_TTL_US,
+    jet_ttl_us,
     emission_start_us,
   ) {
     Ok(c) => c,
@@ -2236,7 +2236,7 @@ pub unsafe extern "C" fn avkSimulationContext_modifyParticleSystem(
         let pos = scene.with_component(id, |t: &aethervk_core_rlib::scene::TransformComponent| {
           t.position
         });
-        v.push((id, ps.emission_params, pos));
+        v.push((id, ps.emission_params, ps.ttl_us, pos));
       },
     );
     v
@@ -2284,6 +2284,8 @@ pub unsafe extern "C" fn avkSimulationContext_modifyParticleSystem(
     jet_eid,
     |p: &mut aethervk_core_rlib::scene::ParticleSystemComponent| {
       p.emission_params = emit_params;
+      // the dust lifetime is a parameter of the record (a change re-emits, below)
+      p.ttl_us = emit_params.ttl_us();
       p.draw_params.stream_color = ps_dto.stream_color;
     },
   );
@@ -3888,7 +3890,59 @@ pub unsafe extern "C" fn avkSimulationContext_getCompatibilityJson(
     return false;
   };
   let json = aethervk_core_rlib::simulation_api::scene_dump::compatibility_json(&scene_arc.read(), start, end);
-  let bytes = json.as_bytes();
+  unsafe { write_ffi_string(&json, out, out_len, out_needed) };
+  true
+}
+
+/// The scene's compatibility JSON as the engine of dump `version` wrote it
+/// (`scene_dump::compatibility_json_for_version`): what a saved state of that version must match
+/// to be restored. Same output contract as [`avkSimulationContext_getCompatibilityJson`]. `false`
+/// when the scene does not exist, the version is not restorable, or the scene uses something that
+/// version could not express (no state of that version can match).
+///
+/// # Safety
+/// As [`avkSimulationContext_getCompatibilityJson`].
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_getCompatibilityJsonForVersion(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  version: u32,
+  out: *mut core::ffi::c_char,
+  out_len: u32,
+  out_needed: *mut u32,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { ctx.as_ref().unwrap_unchecked() };
+  let scenes = ctx_ref.scenes.read();
+  let Some(scene_arc) = scenes.get_scene(scene_id) else {
+    return false;
+  };
+  let Some((start, end)) = scenes.time_managers.get(&scene_id).map(|tm| (tm.start_epoch, tm.end_epoch))
+  else {
+    return false;
+  };
+  let Some(json) = aethervk_core_rlib::simulation_api::scene_dump::compatibility_json_for_version(
+    &scene_arc.read(),
+    start,
+    end,
+    version,
+  ) else {
+    return false;
+  };
+  unsafe { write_ffi_string(&json, out, out_len, out_needed) };
+  true
+}
+
+/// Writes `s` NUL-terminated into `out` (truncated to `out_len`) and its full byte length into
+/// `out_needed`; either may be null.
+///
+/// # Safety
+/// `out` valid for `out_len` bytes when non-null; `out_needed` null or writable.
+unsafe fn write_ffi_string(s: &str, out: *mut core::ffi::c_char, out_len: u32, out_needed: *mut u32) {
+  let bytes = s.as_bytes();
   if !out.is_null() && out_len > 0 {
     let n = bytes.len().min(out_len as usize - 1);
     unsafe {
@@ -3899,7 +3953,6 @@ pub unsafe extern "C" fn avkSimulationContext_getCompatibilityJson(
   if !out_needed.is_null() {
     unsafe { *out_needed = bytes.len() as u32 };
   }
-  true
 }
 
 /// Restore a scene from a previously dumped save file.
@@ -3929,7 +3982,8 @@ pub unsafe extern "C" fn avkSimulationContext_restoreScene(
 }
 
 /// Reads and decodes the scene dump at `path` and queues its restore (shared by the restore
-/// entry points). `false` when unreadable, undecodable or of another version.
+/// entry points). `false` when unreadable, undecodable or of a version older than
+/// `SceneDump::OLDEST_RESTORABLE_VERSION`.
 fn restore_scene_from_path(ctx_ref: &SimulationContext, scene_id: u64, path: &str) -> bool {
 
   let bytes = match fs::read(&path) {
@@ -3947,33 +4001,14 @@ fn restore_scene_from_path(ctx_ref: &SimulationContext, scene_id: u64, path: &st
     }
   };
 
-  use aethervk_core_rlib::simulation_api::structs::SceneDump;
-  let (dump, _): (SceneDump, _) =
-    match bincode::serde::decode_from_slice(&bytes, bincode::config::standard()) {
-      Ok(d) => d,
-      Err(e) => {
-        emit_breadcrumb(
-          0,
-          &alloc::format!(
-            "avkSimulationContext_restoreScene: bincode decode failed: {}",
-            e
-          ),
-        );
-        return false;
-      }
-    };
-
-  if dump.version != SceneDump::CURRENT_VERSION {
-    emit_breadcrumb(
-      0,
-      &alloc::format!(
-        "avkSimulationContext_restoreScene: version mismatch (file={}, expected={})",
-        dump.version,
-        SceneDump::CURRENT_VERSION
-      ),
-    );
-    return false;
-  }
+  // any restorable version (an older dump comes back in the current types, keeping its version)
+  let dump = match aethervk_core_rlib::simulation_api::structs::SceneDump::decode(&bytes) {
+    Ok(d) => d,
+    Err(e) => {
+      emit_breadcrumb(0, &alloc::format!("avkSimulationContext_restoreScene: cannot decode {:?}: {}", path, e));
+      return false;
+    }
+  };
 
   ctx_ref
     .threads

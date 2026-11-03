@@ -25,14 +25,16 @@ layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Sp
 
 layout(push_constant, std430) uniform PushConstants {
     mat4 viewProj;             // 64 bytes @ offset  0
-    vec3 sunPos;               // 12 bytes @ offset 64
-    float _pad;                //  4 bytes @ offset 76
+    vec3 sunDir;               // 12 bytes @ offset 64: gizmo centre → Sun, unit, layer axes, the
+                               //   mesh light's f64 direction (frame::sphere_gizmo_sun_dir)
+    float sunDirValid;         //  4 bytes @ offset 76: 1 = sunDir set, 0 = no Sun arrow
     SphereGizmoArray gizmoPtr; //  8 bytes @ offset 80  (total: 88)
 } push;
 
 layout(location = 0) out vec3 fragColor;
 layout(location = 1) out float outAlpha;
-// x: position along the dash pattern (style 1: 0 at the south end, dashCount + ½ at the north end),
+// x: position along the dash pattern (style 1: 0 at the south end, dashCount + ½ at the north end;
+// style 0 axis shafts: AXIS_DASHES_PER_RADIUS periods per gizmo radius from the centre),
 // y: 1 = dashed line (the fragment shader cuts the gaps), 0 = solid
 layout(location = 2) out vec2 outDash;
 
@@ -45,13 +47,43 @@ const uint PART_SPIN_AXIS = 4u;
 const uint PART_SUN       = 8u;
 const uint PART_VELOCITY  = 16u;
 const vec3 VELOCITY_COLOR = vec3(1.0, 0.35, 1.0);
+const vec3 SPIN_COLOR     = vec3(0.45, 0.68, 1.0); // lighter than pure blue: readable on black
+
+// Style 0 axes (frame::SPHERE_GIZMO_AXIS_VERTICES = 5 × AXIS_VERTS): each axis starts at the limb
+// (1 radius) and is a 3-strand shaft (6 vertices), an 8-spoke arrowhead (16) and the 8-segment
+// ring of the arrowhead's base (16), which stays a readable circle when the axis points at the
+// viewer. An axis pointing away from the viewer (its far part is behind the nucleus) is dimmed
+// and its shaft dashed.
+const int   AXIS_VERTS             = 38;
+const int   AXIS_SHAFT_VERTS       = 6;
+const int   AXIS_SPOKE_VERTS       = 16;
+const int   AXIS_HEAD_SEGMENTS     = 8;
+const float AXIS_BODY_LENGTH       = 1.5;   // radii, X / Y / spin
+const float AXIS_FAR_LENGTH        = 2.1;   // radii, Sun / velocity
+const float AXIS_HEAD_LENGTH       = 0.22;  // radii
+const float AXIS_HEAD_WIDTH        = 0.10;  // radii
+const float AXIS_STRAND_OFFSET     = 0.008; // radii between the shaft's strands
+const float AXIS_DASHES_PER_RADIUS = 6.0;
+const float AXIS_AWAY_DIM          = 0.45;
 
 // Whether axis `axisIdx` (0 X, 1 Y, 2 Z = spin, 3 Sun, 4 velocity) is drawn.
 bool axisShown(int axisIdx, uint parts, vec3 velocity) {
     if (axisIdx <= 1) return (parts & PART_BODY_AXES) != 0u;
     if (axisIdx == 2) return (parts & PART_SPIN_AXIS) != 0u;
-    if (axisIdx == 3) return (parts & PART_SUN) != 0u;
+    if (axisIdx == 3) return (parts & PART_SUN) != 0u && push.sunDirValid > 0.5;
     return (parts & PART_VELOCITY) != 0u && dot(velocity, velocity) > 0.25;
+}
+
+// Unit direction from the gizmo centre towards the viewer, layer axes. Perspective (the clip w row
+// of viewProj is non-zero): towards the eye at the RTE origin. Orthographic (w row zero): the
+// reverse-Z depth row, which grows towards the viewer (orthographic_vk_reverse_z).
+vec3 towardsViewer(vec3 center) {
+    vec3 wRow = vec3(push.viewProj[0][3], push.viewProj[1][3], push.viewProj[2][3]);
+    vec3 zRow = vec3(push.viewProj[0][2], push.viewProj[1][2], push.viewProj[2][2]);
+    bool perspective = dot(wRow, wRow) > 0.0;
+    vec3 v = perspective ? -center : zRow;
+    if (dot(v, v) <= 0.0) v = perspective ? -wRow : zRow;
+    return normalize(v);
 }
 
 void main() {
@@ -141,16 +173,9 @@ void main() {
     uint parts = uint(partsSlot.w + 0.5);
     vec3 velocityDir = partsSlot.xyz;
 
-    // 5 axes: X(red), Y(green), Z(blue), Sun(yellow), velocity(magenta). 2 vertices each.
+    // 5 axes: X(red), Y(green), spin(light blue), Sun(yellow), velocity(magenta)
     int axesOffset = totalSphereVertices;
-    int totalAxesVertices = 10; // 5 axes * 2 vertices
-
-    // Arrowheads: 4 lines = 8 vertices per arrowhead. 5 arrowheads = 40 vertices.
-    int arrowheadLines = 4;
-    int arrowheadVerticesPerAxis = arrowheadLines * 2;
-    int totalArrowheadVertices = arrowheadVerticesPerAxis * 5; // 5 axes
-
-    int totalExpectedVertices = axesOffset + totalAxesVertices + totalArrowheadVertices;
+    int totalExpectedVertices = axesOffset + 5 * AXIS_VERTS;
 
     vec3 localPos = vec3(0.0);
     vec3 color = vec3(1.0); // Default white for the sphere
@@ -193,84 +218,71 @@ void main() {
 
             localPos = vec3(cos(phi) * sin(theta) * r, sin(phi) * sin(theta) * r, cos(theta) * r);
         }
-    } else if (gl_VertexIndex < axesOffset + totalAxesVertices) {
-        // ── 5 axes (X=red, Y=green, Z=blue, Sun=yellow, velocity=magenta) ───
-        isAxis = true;
-        int axisIdx = (gl_VertexIndex - axesOffset) / 2;
-        int pt = (gl_VertexIndex - axesOffset) % 2;
-        float r = push.gizmoPtr.gizmos[gl_InstanceIndex].radius * 1.5; // Axes extend beyond the sphere
-        valid = axisShown(axisIdx, parts, velocityDir);
-
-        if (axisIdx == 0) { // X Axis (Right) -> Red
-            localPos = vec3(pt == 0 ? 0.0 : r, 0.0, 0.0);
-            color = vec3(1.0, 0.0, 0.0);
-        } else if (axisIdx == 1) { // Y Axis (Backward) -> Green
-            localPos = vec3(0.0, pt == 0 ? 0.0 : r, 0.0);
-            color = vec3(0.0, 1.0, 0.0);
-        } else if (axisIdx == 2) { // Z Axis (Up) -> Blue
-            localPos = vec3(0.0, 0.0, pt == 0 ? 0.0 : r);
-            color = vec3(0.0, 0.0, 1.0);
-        } else if (axisIdx == 3) { // Axis 3: Sun direction -> Yellow (1.4x length)
-            float sunR = r * 1.4;
-            // Transform global sun direction into the model's local space.
-            // scene_conversion.rs enforces scale=1 for sphere gizmos, so mat3(model)
-            // is orthonormal -> inverse == transpose (cheaper, no singularity risk).
-            vec3 worldSunDir = normalize(push.sunPos - model[3].xyz);
-            vec3 localSunDir = normalize(transpose(mat3(model)) * worldSunDir);
-            localPos = pt == 0 ? vec3(0.0) : localSunDir * sunR;
-            color = vec3(1.0, 1.0, 0.0);
-        } else { // Axis 4: heliocentric velocity -> Magenta (1.4x length, like the Sun)
-            vec3 localVelDir = normalize(transpose(mat3(model)) * velocityDir);
-            localPos = pt == 0 ? vec3(0.0) : localVelDir * (r * 1.4);
-            color = VELOCITY_COLOR;
-        }
     } else if (gl_VertexIndex < totalExpectedVertices) {
-        // ── Arrowheads (4 axes) ──────────────────────────────────────────────
+        // ── Axes: shaft from the limb, arrowhead spokes, arrowhead base ring ───────────────
         isAxis = true;
-        int vIdx = gl_VertexIndex - axesOffset - totalAxesVertices;
-        int axisIdx = vIdx / arrowheadVerticesPerAxis;
-        int lineIdx = (vIdx % arrowheadVerticesPerAxis) / 2;
-        int pt = vIdx % 2;
+        int v = gl_VertexIndex - axesOffset;
+        int axisIdx = v / AXIS_VERTS;
+        int k = v % AXIS_VERTS;
+        int pt = k % 2;
         valid = axisShown(axisIdx, parts, velocityDir);
+        float r = push.gizmoPtr.gizmos[gl_InstanceIndex].radius;
+        mat3 toLocal = transpose(mat3(model)); // scale 1 (scene_conversion): inverse = transpose
 
-        float r = push.gizmoPtr.gizmos[gl_InstanceIndex].radius * 1.5;
-        float headLength = push.gizmoPtr.gizmos[gl_InstanceIndex].radius * 0.2;
-        float headWidth = push.gizmoPtr.gizmos[gl_InstanceIndex].radius * 0.1;
-
-        float angle = float(lineIdx) * (2.0 * PI / float(arrowheadLines));
-
-        vec3 tip = vec3(0.0);
-        vec3 baseOffset = vec3(0.0);
-
+        vec3 dir;
+        float len = AXIS_BODY_LENGTH;
         if (axisIdx == 0) {
-            tip = vec3(r, 0.0, 0.0);
-            baseOffset = vec3(-headLength, cos(angle)*headWidth, sin(angle)*headWidth);
+            dir = vec3(1.0, 0.0, 0.0);
             color = vec3(1.0, 0.0, 0.0);
         } else if (axisIdx == 1) {
-            tip = vec3(0.0, r, 0.0);
-            baseOffset = vec3(cos(angle)*headWidth, -headLength, sin(angle)*headWidth);
+            dir = vec3(0.0, 1.0, 0.0);
             color = vec3(0.0, 1.0, 0.0);
         } else if (axisIdx == 2) {
-            tip = vec3(0.0, 0.0, r);
-            baseOffset = vec3(cos(angle)*headWidth, sin(angle)*headWidth, -headLength);
-            color = vec3(0.0, 0.0, 1.0);
-        } else { // Axis 3: Sun arrowhead -> Yellow; axis 4: velocity arrowhead -> Magenta
-            float sunR = r * 1.4;
-            vec3 worldDir = axisIdx == 3 ? normalize(push.sunPos - model[3].xyz) : velocityDir;
-            vec3 localSunDir = normalize(transpose(mat3(model)) * worldDir);
-            tip = localSunDir * sunR;
-
-            // Gram-Schmidt: build orthonormal basis perpendicular to localSunDir
-            vec3 up     = abs(localSunDir.z) < 0.99 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
-            vec3 right  = normalize(cross(up, localSunDir));
-            vec3 trueUp = cross(localSunDir, right);
-
-            vec3 radial = right * cos(angle) * headWidth + trueUp * sin(angle) * headWidth;
-            baseOffset  = -localSunDir * headLength + radial;
-            color = axisIdx == 3 ? vec3(1.0, 1.0, 0.0) : VELOCITY_COLOR;
+            dir = vec3(0.0, 0.0, 1.0);
+            color = SPIN_COLOR;
+        } else if (axisIdx == 3) {
+            // the mesh light's f64 direction (no sunPos − centre in f32 here)
+            dir = normalize(toLocal * push.sunDir);
+            len = AXIS_FAR_LENGTH;
+            color = vec3(1.0, 1.0, 0.0);
+        } else {
+            dir = normalize(toLocal * velocityDir);
+            len = AXIS_FAR_LENGTH;
+            color = VELOCITY_COLOR;
         }
 
-        localPos = (pt == 0) ? tip : tip + baseOffset;
+        // pointing away from the viewer: behind the limb, dimmed, the shaft dashed
+        vec3 viewer = toLocal * towardsViewer(model[3].xyz);
+        bool away = dot(dir, viewer) < 0.0;
+
+        // basis across the axis; `side` faces the screen (perpendicular to the view) when it can
+        vec3 side = cross(dir, viewer);
+        if (dot(side, side) < 1e-8) side = cross(dir, abs(dir.z) < 0.99 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0));
+        side = normalize(side);
+        vec3 side2 = cross(dir, side);
+
+        float tipS = len * r;
+        float baseS = (len - AXIS_HEAD_LENGTH) * r;
+        float headW = AXIS_HEAD_WIDTH * r;
+        float s = 0.0; // distance from the centre along the axis
+        if (k < AXIS_SHAFT_VERTS) {
+            // three parallel strands from the limb to the arrowhead's base: a thicker shaft
+            float strand = float(k / 2) - 1.0;
+            s = pt == 0 ? r : baseS;
+            localPos = dir * s + side * (strand * AXIS_STRAND_OFFSET * r);
+            outDash = away ? vec2(s / r * AXIS_DASHES_PER_RADIUS, 1.0) : vec2(0.0);
+        } else if (k < AXIS_SHAFT_VERTS + AXIS_SPOKE_VERTS) {
+            // spokes from the tip to the base ring: a dense (near-filled) cone
+            int j = (k - AXIS_SHAFT_VERTS) / 2;
+            float a = float(j) * (2.0 * PI / float(AXIS_HEAD_SEGMENTS));
+            localPos = pt == 0 ? dir * tipS : dir * baseS + (side * cos(a) + side2 * sin(a)) * headW;
+        } else {
+            // the base ring: a circle around the axis, readable when it points at the viewer
+            int j = (k - AXIS_SHAFT_VERTS - AXIS_SPOKE_VERTS) / 2 + pt;
+            float a = float(j) * (2.0 * PI / float(AXIS_HEAD_SEGMENTS));
+            localPos = dir * baseS + (side * cos(a) + side2 * sin(a)) * headW;
+        }
+        if (away) color *= AXIS_AWAY_DIM;
     } else {
         valid = false;
     }

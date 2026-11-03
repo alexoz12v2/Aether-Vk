@@ -1541,7 +1541,7 @@ fn test_jet_state_site_turns_with_the_rotational_model() {
     body_fixed_orientation: true,
   };
   let state = |m: &crate::scene::BodyRotationalModel, t: f64| {
-    utils::jet_state_at(&planet, Some(m), &jet_local, Some(&reference), &almanac, start, t)
+    utils::jet_state_at(&planet, Some(m), &jet_local, Some(&reference), &almanac, start, t, false)
       .expect("reference-orbit jet state")
   };
   let angle = |a: [f64; 3], b: [f64; 3]| {
@@ -1590,6 +1590,111 @@ fn test_jet_state_site_turns_with_the_rotational_model() {
     angle(a.site_normal, b.site_normal) < 1e-6,
     "a still nucleus keeps its site direction"
   );
+}
+
+/// The frozen-comet diagnostic (`utils::jet_state_conditioned_at` with an epoch): two emission
+/// windows 30 days apart take the emission conditions of the frozen epoch, the Sun direction
+/// (lit gating, insolation weighting) and the heliocentric distance and perihelion time of the
+/// emission config, equal to each other and to the comet's own at that epoch, while their origins
+/// and velocities stay their own. Without an epoch the state is `jet_state_at`'s, untouched. The
+/// epoch is a parameter here, not the process-wide setting (tests run in parallel).
+/// Reference-orbit path (t < 0), no SPK needed.
+#[test]
+fn test_frozen_comet_conditions_are_the_frozen_epoch() {
+  use crate::scene::TransformComponent;
+  use aethervk_oshal_rlib::math::vector::{Vector3, vec3::Vec3f32, vec4::Quat};
+  let almanac = load_planet_almanac();
+  let planet = AlmanacPlanet { naif_id: 1000012 };
+  // 67P, perihelion 2021-11-02 (JD TDB 2459520.5)
+  let reference = KeplerianElements {
+    eccentricity: 0.6402,
+    perihelion_distance_au: 1.2432,
+    inclination_deg: 3.871,
+    longitude_of_ascending_node_deg: 36.33,
+    argument_of_perihelion_deg: 22.15,
+    time_of_perihelion_jd_tdb: 2_459_520.5,
+  };
+  let (lat, lon) = (30.0_f32.to_radians(), 0.0_f32);
+  let jet_local = TransformComponent {
+    position: Vec3f32::from_components(lat.cos() * lon.cos(), lat.cos() * lon.sin(), lat.sin()),
+    rotation: Quat::identity(),
+    scale: Vec3f32::from_components(0.02, 0.02, 0.02),
+  };
+  let model = crate::scene::BodyRotationalModel {
+    pole_ra: 69.54,
+    pole_dec: 64.11,
+    prime_meridian: 114.69,
+    pole_ra_rate: 0.0,
+    pole_dec_rate: 0.0,
+    rotation_rate: 696.543_884,
+    body_fixed_orientation: true,
+  };
+  let start = Epoch::from_gregorian_utc(2022, 1, 11, 20, 0, 0, 0);
+  let frozen = Epoch::from_gregorian_utc(2021, 11, 2, 0, 0, 0, 0);
+  let state = |t: f64, frozen: Option<Epoch>| {
+    utils::jet_state_conditioned_at(
+      &planet,
+      Some(&model),
+      &jet_local,
+      Some(&reference),
+      &almanac,
+      start,
+      t,
+      false,
+      frozen,
+    )
+    .expect("reference-orbit jet state")
+  };
+  let plain = |t: f64| {
+    utils::jet_state_at(&planet, Some(&model), &jet_local, Some(&reference), &almanac, start, t, false)
+      .expect("reference-orbit jet state")
+  };
+  let cond = |j: &crate::scene::dust::JetState| {
+    utils::emission_r_au_and_days(j, Some(&reference), start)
+  };
+  // two windows 30 days apart, both before the start (reference orbit), neither at the frozen epoch
+  let (t1, t2) = (-60.0 * 86_400.0, -30.0 * 86_400.0);
+  let t_frozen = (frozen - start).to_seconds();
+  let at_frozen = plain(t_frozen);
+
+  // unset: exactly the plain state, conditions included (None)
+  for t in [t1, t2, t_frozen] {
+    let (a, b) = (state(t, None), plain(t));
+    assert_eq!(a, b, "no frozen epoch must leave the jet state untouched at t {t}");
+    assert!(a.conditions.is_none());
+    assert_eq!(a.sun_dir(), b.sun_dir());
+    assert_eq!(cond(&a), cond(&b));
+  }
+  // the real model's conditions do change over 30 days near perihelion
+  let (r1, _) = cond(&plain(t1));
+  let (r2, _) = cond(&plain(t2));
+  assert!((r1 - r2).abs() > 1e-3, "the real r_h must move over 30 days: {r1} vs {r2}");
+  assert_ne!(plain(t1).sun_dir(), plain(t2).sun_dir());
+
+  // frozen: equal conditions, equal to the frozen epoch's own; origin, velocity, attitude real
+  let (a, b) = (state(t1, Some(frozen)), state(t2, Some(frozen)));
+  assert_eq!(a.sun_dir(), b.sun_dir(), "the windows' Sun directions must be the frozen one");
+  assert_eq!(a.sun_dir(), at_frozen.sun_dir());
+  assert_eq!(cond(&a), cond(&b), "the windows' emission r_h / days must be the frozen ones");
+  assert_eq!(cond(&a), cond(&at_frozen));
+  let (r_frozen, days_frozen) = cond(&at_frozen);
+  assert!(days_frozen.expect("reference elements").abs() < 1.0, "frozen at perihelion");
+  assert!((r_frozen - 1.2432).abs() < 0.01, "r_h at perihelion {r_frozen}");
+  for (j, t) in [(a, t1), (b, t2)] {
+    let p = plain(t);
+    assert_eq!(j.r_m, p.r_m, "the origin stays the window's own");
+    assert_eq!(j.v_ms, p.v_ms, "the comet velocity stays the window's own");
+    assert_eq!(j.rot, p.rot, "the spin phase stays the window's own");
+    assert_eq!(j.site_normal, p.site_normal);
+    assert_eq!(j.t_s, t);
+  }
+  assert_ne!(a.r_m, b.r_m, "the two windows leave from different places");
+  let d = [0, 1, 2].map(|i| a.r_m[i] - b.r_m[i]);
+  assert!((d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() > 1e9, "30 days of orbit apart");
+  // the lit window sees the frozen Sun with the window's own site
+  let lit_a = a.lit_window(3_600.0);
+  let manual = crate::scene::dust::JetState { conditions: None, r_m: at_frozen.r_m, ..a };
+  assert_eq!(lit_a.lit_time_s, manual.lit_window(3_600.0).lit_time_s);
 }
 
 static ASSET_SENDER: parking_lot::Mutex<
@@ -2621,6 +2726,7 @@ fn spawn_ignition_jet(
         dust_rate_power: 2.0,
         dust_rate_cutoff_au: 15.0,
         dust_rate_max_kgs: 0.0,
+        ..bytemuck::Zeroable::zeroed()
       };
       // the activity as a dust rate: the former Afρ 100.0 cm (max 100_000.0 cm) converted
       p.dust_rate_1au_kgs = p.dust_rate_from_afrho_kgs(100.0);
@@ -3061,6 +3167,7 @@ fn test_jet_without_rotation_model_emits_and_settles() {
           dust_rate_power: 2.0,
           dust_rate_cutoff_au: 15.0,
           dust_rate_max_kgs: 0.0,
+          ..bytemuck::Zeroable::zeroed()
         };
         // the activity as a dust rate: the former Afρ 100.0 cm (max 100_000.0 cm) converted
         p.dust_rate_1au_kgs = p.dust_rate_from_afrho_kgs(100.0);

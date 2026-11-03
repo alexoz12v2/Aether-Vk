@@ -320,11 +320,24 @@ for file in assets/*.comp assets/sim/*.comp; do
                         compile_one "$file" comp "-DDUST_SPLAT_STAGE=${st}u -DDUST_PROFILE=1 $(opt_flags "$base") $vmm_flag" "${file%.comp}.comp.prof.st${st}${vmm_infix}.spv"
                         compile_one "$file" comp "-DDUST_SPLAT_STAGE=${st}u -DDUST_PROFILE=1 -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.prof.st${st}${vmm_infix}.d.spv"
                     done
+                    # The dust size-law blobs (`-DDUST_SIZE_LAW_ON=true`, dust_common.glsl): the
+                    # orbit-dependent size distribution compiled in; `.law` right after `.comp`,
+                    # before the stage / pass suffix and the vmm infix (`dust_splat.comp.law.st3.vmm.spv`).
+                    # Only the pipelines the host switches (physics::DustLawPipelines): this chain,
+                    # dust_splat_mono.comp and every dust_specks.comp pass; vmm and non-vmm only,
+                    # no `.d` debug twins and no `.prof` (the law pipelines load these plain blobs
+                    # under AETHERVK_SHADER_DEBUG_INFO and profiling). The default blobs keep the
+                    # law out: they are the byte gate of the q = 3.5 path.
+                    for st in 0 1 2 3 4 5 6 7 8 9 10 11; do
+                        compile_one "$file" comp "-DDUST_SIZE_LAW_ON=true -DDUST_SPLAT_STAGE=${st}u $(opt_flags "$base") $vmm_flag" "${file%.comp}.comp.law.st${st}${vmm_infix}.spv"
+                    done
                     ;;
                 # the monolithic enumerator (the splat path knob): its `.prof` blobs
                 dust_splat_mono.comp)
                     compile_one "$file" comp "-DDUST_PROFILE=1 $(opt_flags "$base") $vmm_flag" "${file%.comp}.comp.prof${vmm_infix}.spv"
                     compile_one "$file" comp "-DDUST_PROFILE=1 -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.prof${vmm_infix}.d.spv"
+                    # its size-law blob (see dust_splat.comp above)
+                    compile_one "$file" comp "-DDUST_SIZE_LAW_ON=true $(opt_flags "$base") $vmm_flag" "${file%.comp}.comp.law${vmm_infix}.spv"
                     ;;
                 # the pre-split splitter (AETHERVK_DUST_SPLIT_STAGED=0, the GTX 1070
                 # default): its `.prof` blobs
@@ -396,6 +409,20 @@ for file in assets/*.comp assets/sim/*.comp; do
                     compile_one "$file" comp "-DDUST_SPECKS_WALK=1 -DDUST_SPECKS_LEAVES=3 -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.leaves1${vmm_infix}.d.spv"
                     compile_one "$file" comp "-DDUST_SPECKS_WALK=1 -DDUST_SPECKS_LEAVES=2 $vmm_flag" "${file%.comp}.comp.trace${vmm_infix}.spv"
                     compile_one "$file" comp "-DDUST_SPECKS_WALK=1 -DDUST_SPECKS_LEAVES=2 -DDEBUG_SHADERS $vmm_flag" "${file%.comp}.comp.trace${vmm_infix}.d.spv"
+                    # the size-law blobs of every speck pass (see dust_splat.comp above): the gate
+                    # (`.law`), `.law.walk`, `.law.setup1/2a/2b/3/4/5`, `.law.leaves`, `.law.leaves1`, `.law.trace`
+                    law="-DDUST_SIZE_LAW_ON=true"
+                    compile_one "$file" comp "$law $(opt_flags "$base") $vmm_flag" "${file%.comp}.comp.law${vmm_infix}.spv"
+                    compile_one "$file" comp "$law -DDUST_SPECKS_WALK=1 $vmm_flag" "${file%.comp}.comp.law.walk${vmm_infix}.spv"
+                    for p in 1 3 4 5; do
+                        compile_one "$file" comp "$law -DDUST_SPECKS_WALK=1 -DDUST_SPECKS_SETUP=$p $vmm_flag" "${file%.comp}.comp.law.setup$p${vmm_infix}.spv"
+                    done
+                    for m in a:0x1 b:0x1E; do
+                        compile_one "$file" comp "$law -DDUST_SPECKS_WALK=1 -DDUST_SPECKS_SETUP=2 -DDUST_SPECKS_SETUP_MASK=${m#*:} $vmm_flag" "${file%.comp}.comp.law.setup2${m%%:*}${vmm_infix}.spv"
+                    done
+                    compile_one "$file" comp "$law -DDUST_SPECKS_WALK=1 -DDUST_SPECKS_LEAVES=1 $vmm_flag" "${file%.comp}.comp.law.leaves${vmm_infix}.spv"
+                    compile_one "$file" comp "$law -DDUST_SPECKS_WALK=1 -DDUST_SPECKS_LEAVES=3 $vmm_flag" "${file%.comp}.comp.law.leaves1${vmm_infix}.spv"
+                    compile_one "$file" comp "$law -DDUST_SPECKS_WALK=1 -DDUST_SPECKS_LEAVES=2 $vmm_flag" "${file%.comp}.comp.law.trace${vmm_infix}.spv"
                     ;;
                 # dust_propagate_mono.comp / dust_emit_mono.comp (AETHERVK_DUST_PROP_STAGED=0,
                 # the GTX 1070 default): the pre-package monoliths, plain / `.d` / `.vmm` from the

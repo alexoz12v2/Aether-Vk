@@ -107,9 +107,9 @@ public sealed partial class ModelSession : ObservableObject, ITabSession
   private float _geometricAlbedo = JetGrain.Default.GeometricAlbedo;
 
   /// <summary>
-  /// Exponent q of the differential grain size law n(s) ∝ s^-q. Valid range 2–5; default 3.5.
-  /// Enters the physical speck counts (grains per size bin and their sizes) only: the continuum's
-  /// size layout stays the q = 3.5 one.
+  /// Exponent q of the differential grain size law n(s) ∝ s^-q for new jets. Valid range 2–5;
+  /// default 3.5 (also what an older save without it loads). A jet's q drives its continuous dust
+  /// only with the jet's orbit-dependent size law on; off, only the near specks follow it.
   /// Corresponds to <c>ParticleSystemEmitParams.size_q</c>.
   /// </summary>
   [ObservableProperty]

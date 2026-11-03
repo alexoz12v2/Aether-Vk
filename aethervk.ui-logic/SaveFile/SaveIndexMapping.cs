@@ -262,6 +262,12 @@ public static class SaveIndexMapping
     MinDiameterUm = GrainDiameterRange.MinOf(j.DiametreUm, j.SizeRange),
     MaxDiameterUm = GrainDiameterRange.MaxOf(j.DiametreUm, j.SizeRange),
     DustRate1AuKgs = j.DustRate1AuKgs,
+    InsolationWeighted = j.InsolationWeighted,
+    OrbitSizeLaw = j.OrbitSizeLaw,
+    SpkBeforeStart = j.SpkBeforeStart,
+    LifetimeDays = j.LifetimeDays,
+    SizeQTableDays = j.SizeQTable.IsEmpty ? null : j.SizeQTable.DaysArray(),
+    SizeQTableQ = j.SizeQTable.IsEmpty ? null : j.SizeQTable.QArray(),
   };
 
   /// <summary>
@@ -283,6 +289,8 @@ public static class SaveIndexMapping
     float rate = d.DustRate1AuKgs ?? (d.Afrho0Cm is { } afrho
       ? (float)LegacyAfrho.DustRateKgs(afrho, diametreUm, densityGCm3, d.VelocityMeanMs, d.VelocityStdMs, albedo, sizeRange)
       : m.DustRate1AuKgs);
+    // the dynamic model: absent fields are off / 30 d / no table, never the model's defaults
+    // (an older save's dust must not change)
     var grain = new JetGrain(
       diametreUm,
       densityGCm3,
@@ -290,7 +298,12 @@ public static class SaveIndexMapping
       albedo,
       d.SizeQ ?? m.SizeQ,
       sizeRange,
-      rate);
+      rate,
+      InsolationWeighted: d.InsolationWeighted ?? false,
+      OrbitSizeLaw: d.OrbitSizeLaw ?? false,
+      SpkBeforeStart: d.SpkBeforeStart ?? false,
+      LifetimeDays: DustLifetime.Effective(d.LifetimeDays ?? DustLifetime.DefaultDays),
+      SizeQTable: SizeQTable.From(d.SizeQTableDays, d.SizeQTableQ));
     return new JetViewModel(d.LatitudeDeg, d.LongitudeDeg, d.ApertureDeg, d.VelocityMeanMs, d.VelocityStdMs,
       new Vector4(c[0], c[1], c[2], c[3]), d.PreviewVisible, d.Seed, grain);
   }

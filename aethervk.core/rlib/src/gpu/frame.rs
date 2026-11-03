@@ -334,15 +334,47 @@ impl SunDrawCall {
     Vec3f32(model_matrix.w)
   }
 
-  /// Sun RTE position in f64, in the macro layer's unit (AU).
-  /// For micro layers, caller must divide by `frame_scale as f64` to convert to km.
+  /// Sun RTE position in f64, in the unit of the depth layer holding the `SunDrawCall`
+  /// (AU on the macro layer, km on the Sun's own micro layer). [`sun_rte_au`] converts it to AU.
   /// Keeps the full f64 precision of `model_matrix_f64` — use this instead of
   /// `sun_pos()` when computing body-fixed sun direction for PBR lighting.
-  pub fn sun_pos_au_f64(&self) -> [f64; 3] {
+  pub fn sun_pos_layer_f64(&self) -> [f64; 3] {
     use aethervk_oshal_rlib::math::vector::Vector3;
     let col = &self.model_matrix_f64.cols[3];
     [col.x(), col.y(), col.z()]
   }
+}
+
+/// `true` when `frame_scale` converts a micro layer's unit (km) to AU.
+fn layer_is_scaled(layer_index: u32, frame_scale: f32) -> bool {
+  layer_index > 0 && frame_scale > 0.0 && frame_scale < 1.0
+}
+
+/// The Sun's camera-relative position in AU, from the first layer holding a `SunDrawCall`.
+/// The Sun usually sits on its own micro layer (km), so its position is scaled by THAT layer's
+/// `frame_scale`; dividing by another layer's `frame_scale` then gives that layer's unit.
+pub fn sun_rte_au(layers: &[RenderLayer]) -> Option<[f64; 3]> {
+  layers.iter().find_map(|l| {
+    let p = l.sun_call.as_ref()?.sun_pos_layer_f64();
+    Some(layer_unit_to_au(p, l.layer_index, l.frame_scale))
+  })
+}
+
+/// A camera-relative position in a layer's unit to AU (micro layers scale by `frame_scale`).
+pub fn layer_unit_to_au(p: [f64; 3], layer_index: u32, frame_scale: f32) -> [f64; 3] {
+  let s = if layer_is_scaled(layer_index, frame_scale) { frame_scale as f64 } else { 1.0 };
+  [p[0] * s, p[1] * s, p[2] * s]
+}
+
+/// A camera-relative position in AU to a layer's unit (km on scaled micro layers).
+pub fn au_to_layer_unit(au: [f64; 3], layer_index: u32, frame_scale: f32) -> [f64; 3] {
+  let s = if layer_is_scaled(layer_index, frame_scale) { frame_scale as f64 } else { 1.0 };
+  [au[0] / s, au[1] / s, au[2] / s]
+}
+
+/// The Sun position in `layer`'s unit (km on scaled micro layers, AU otherwise).
+fn sun_in_layer_unit(sun_au: [f64; 3], layer: &RenderLayer) -> [f64; 3] {
+  au_to_layer_unit(sun_au, layer.layer_index, layer.frame_scale)
 }
 
 pub struct SkyDrawCall {
@@ -863,7 +895,16 @@ pub struct SphereGizmoBatchCall {
   /// discards excess sphere-grid vertices via valid=false at lower LOD.
   pub axis_vertex_start: u32,
   pub data_ptr: u64,
+  /// RTE centre (layer units, f64) of the batch's first sphere-style gizmo: the point the Sun
+  /// arrow's direction is computed from, exactly as the mesh light of a mesh centred there
+  /// (`sphere_gizmo_sun_dir`). `None`: no sphere-style gizmo in the batch.
+  pub sun_ref_center: Option<[f64; 3]>,
 }
+
+/// Vertices of the axes section of a sphere-style gizmo (`sphere_gizmo.vert`): 5 axes (X, Y,
+/// spin, Sun, velocity), each a 3-strand shaft from the limb (6 vertices), an 8-spoke arrowhead
+/// (16) and the 8-segment ring of its base (16).
+pub const SPHERE_GIZMO_AXIS_VERTICES: u32 = 5 * (6 + 16 + 16);
 
 /// Dust draw of one particle system (one age tier). Cluster positions are metres relative to the
 /// jet, in root (= reference frame) axes, so the model matrix is translation × uniform scale only.
@@ -1243,6 +1284,10 @@ pub fn prepare_dust(
   device.cmd_checkpoint(cmd, c"dust: propagate");
   let mut buffers: Vec<Option<(u64, u64)>> = Vec::new();
   for layer in render_scene.depth_layers.iter() {
+    // the size-law pipelines (`physics::DustLawPipelines`, the `.law` blobs) for the whole frame when
+    // any drawn system has the orbit law on; the frame without one binds the pipelines whose code is
+    // the one before the law (`Device::dust_set_size_law`)
+    device.dust_set_size_law(layer.dust_calls.iter().any(|c| c.state.size_law));
     for call in layer.dust_calls.iter() {
       let s = &call.state;
       if reuse {
@@ -2389,10 +2434,27 @@ pub fn do_draw_grid(
   device.draw(cmd_buffer, draw_call.vertex_count)
 }
 
+/// The Sun arrow's direction for a sphere-gizmo batch: gizmo centre → Sun, unit, in the layer's
+/// axes, from the same f64 Sun position and the same [`mesh_sun_light`] the nucleus mesh is lit
+/// with (`draw_layer_content`), so the arrow and the terminator agree. `sun_f64` is the f64 Sun in
+/// the layer's units when known, else the f32 `sun_pos` is widened. `None`: no reference centre
+/// or the Sun at the centre.
+pub fn sphere_gizmo_sun_dir(
+  sun_f64: Option<[f64; 3]>,
+  sun_pos: Vec3f32,
+  center: Option<[f64; 3]>,
+  frame_scale: f32,
+  layer_index: u32,
+) -> Option<[f32; 3]> {
+  let center = center?;
+  let sun = sun_f64.unwrap_or([sun_pos.x() as f64, sun_pos.y() as f64, sun_pos.z() as f64]);
+  mesh_sun_light(sun, center, frame_scale, layer_index, false, 1.0, [1.0; 4]).direction
+}
+
 pub fn do_draw_sphere_gizmo_batch(
   device: &dyn RenderDevice,
   camera: &CameraRenderData,
-  sun_pos: Vec3f32,
+  sun_dir: Option<[f32; 3]>,
   cmd_buffer: super::CommandBufferHandle,
   _handle: PresentationEngineHandle,
   draw_call: &SphereGizmoBatchCall,
@@ -2400,8 +2462,8 @@ pub fn do_draw_sphere_gizmo_batch(
   let push_constants = crate::gpu::SphereGizmoPushConstants {
     view_proj: camera.view_proj.into(),
     gizmo_ptr: draw_call.data_ptr,
-    sun_pos: [sun_pos.x(), sun_pos.y(), sun_pos.z()],
-    _pad: 0,
+    sun_dir: sun_dir.unwrap_or([0.0; 3]),
+    sun_dir_valid: if sun_dir.is_some() { 1.0 } else { 0.0 },
   };
 
   let sphere_count = draw_call.axis_vertex_start;
@@ -2518,11 +2580,8 @@ pub fn render_frame(
   handle: PresentationEngineHandle,
   render_scene: &gpu::RenderScene,
 ) -> GpuResult<()> {
-  // ── Extract global sun position (RTE) from whichever layer has a SunDrawCall ──
-  let global_sun_pos = render_scene
-    .depth_layers
-    .iter()
-    .find_map(|l| l.sun_call.as_ref().map(|s| s.sun_pos()));
+  // ── Global sun position (RTE, AU) from whichever layer has a SunDrawCall ──
+  let global_sun_pos = sun_rte_au(&render_scene.depth_layers);
 
   // ── Multi-layer compositing mode (always 3 subpasses) ──────────────────
   // ── Subpass 0: macro layer (AU-scale) ──────────────────────────────────
@@ -2753,8 +2812,31 @@ pub struct MeshSunLight {
   /// mesh → Sun, unit, in the layer's RTE axes (body-fixed for the shader: both ends are RTE)
   pub direction: Option<[f32; 3]>,
   /// `sunColor`: rgb the light factor (display: the exposure; physical: the irradiance (1 AU / r)²
-  /// times the exposure), w the shading kind (1 display, 2 physical)
+  /// times the exposure), w the shading kind (1 display, 2 physical, 3 physical dark Lambert)
   pub color: [f32; 4],
+}
+
+/// `sunColor.w` of the physical dark-Lambert shading (`CAMERA_SHADING_LAMBERT_DARK`).
+pub const MESH_SHADING_W_LAMBERT_DARK: f32 = 3.0;
+
+/// [`mesh_sun_light`] for a camera's `CAMERA_SHADING_*` flags: physical with
+/// `CAMERA_SHADING_PHYSICAL`, and `sunColor.w` = [`MESH_SHADING_W_LAMBERT_DARK`] when
+/// `CAMERA_SHADING_LAMBERT_DARK` is set too (no ambient, black night side, dark albedo).
+pub fn mesh_sun_light_for_shading(
+  sun: [f64; 3],
+  center: [f64; 3],
+  frame_scale: f32,
+  layer_index: u32,
+  shading: u32,
+  exposure: f32,
+  base_color: [f32; 4],
+) -> MeshSunLight {
+  let physical = shading & crate::scene::CAMERA_SHADING_PHYSICAL != 0;
+  let mut light = mesh_sun_light(sun, center, frame_scale, layer_index, physical, exposure, base_color);
+  if physical && shading & crate::scene::CAMERA_SHADING_LAMBERT_DARK != 0 {
+    light.color[3] = MESH_SHADING_W_LAMBERT_DARK;
+  }
+  light
 }
 
 impl MeshSunLight {
@@ -2806,67 +2888,27 @@ fn draw_layer_content(
   handle: PresentationEngineHandle,
   render_scene: &gpu::RenderScene,
   layer: &RenderLayer,
-  global_sun_pos: Option<Vec3f32>,
+  global_sun_pos: Option<[f64; 3]>,
 ) -> GpuResult<()> {
-  // Use the global sun position (shared across all layers) if available,
-  // otherwise fall back to this layer's own sun or a sensible default.
-  let sun_pos = layer
-    .sun_call
-    .as_ref()
-    .map(|s| s.sun_pos())
-    .or(global_sun_pos)
-    .unwrap_or_else(|| Vec3f32::from_components(100.0, 100.0, 100.0));
-
-  // For micro layers, transform sun position from AU to frame-local units.
-  // sun_pos is in RTE AU coordinates; micro layer meshes are in km.
-  // Dividing by frame_scale (AU/km) converts AU → km.
-  let sun_pos = if layer.layer_index > 0 && layer.frame_scale > 0.0 && layer.frame_scale < 1.0 {
-    use aethervk_oshal_rlib::math::vector::Vector3;
-    Vec3f32::from_components(
-      sun_pos.x() / layer.frame_scale,
-      sun_pos.y() / layer.frame_scale,
-      sun_pos.z() / layer.frame_scale,
-    )
-  } else {
-    sun_pos
-  };
-
-  // For directional lights (sunColor.w = 1.0), compute the sun's RTE position in f64
-  // so the per-mesh body-fixed direction subtraction and normalization always happen,
-  // producing a unit-length lightDir in the shader.
+  // The Sun's camera-relative position in this layer's unit. `global_sun_pos` is in AU (it is
+  // scaled by the Sun layer's own frame_scale), so dividing by this layer's frame_scale gives km
+  // on micro layers. The f64 value feeds the per-mesh body-fixed direction and the physical
+  // irradiance (1 AU / r)², whose r must be the true heliocentric distance.
   //
-  // The sun's SunDrawCall is in its own micro layer (layer_index=2), separate from the
-  // comet/planet layer (1) so the Sun's AU-scale depth range doesn't collapse km-scale depth.
-  // Other micro layers that contain no SunDrawCall fall back to the already-frame-scaled
-  // f32 sun_pos (cast to f64). This guarantees sun_pos_f64_km is Some(_) for every
-  // directional draw and the normalize below runs.
+  // For directional lights (sunColor.w ≥ 1) the per-mesh subtraction and normalization run in
+  // f64; without any Sun a fixed fallback position keeps the meshes lit.
+  let sun_pos_layer: [f64; 3] = match global_sun_pos {
+    Some(au) => sun_in_layer_unit(au, layer),
+    None => sun_in_layer_unit([100.0, 100.0, 100.0], layer),
+  };
+  let sun_pos = Vec3f32::from_components(
+    sun_pos_layer[0] as f32,
+    sun_pos_layer[1] as f32,
+    sun_pos_layer[2] as f32,
+  );
   let sun_color: [f32; 4] = [1.0, 1.0, 1.0, 1.0]; // TODO: per-light color
   let is_directional = sun_color[3] > 0.5;
-  let sun_pos_f64_km: Option<[f64; 3]> = if is_directional {
-    use aethervk_oshal_rlib::math::vector::Vector3;
-    let km = layer
-      .sun_call
-      .as_ref()
-      .map(|sc| {
-        // Own SunDrawCall in this layer: use full f64 model matrix.
-        let au = sc.sun_pos_au_f64();
-        let fs = layer.frame_scale as f64;
-        if layer.layer_index > 0 && fs > 0.0 && fs < 1.0 {
-          [au[0] / fs, au[1] / fs, au[2] / fs]
-        } else {
-          au
-        }
-      })
-      .unwrap_or_else(|| {
-        // Sun is in another layer (e.g. macro).  sun_pos is already converted to this
-        // layer's units (km for micro) by the frame_scale division above, so we just
-        // widen to f64.  Body-fixed subtraction and normalization still happen in f64.
-        [sun_pos.x() as f64, sun_pos.y() as f64, sun_pos.z() as f64]
-      });
-    Some(km)
-  } else {
-    None
-  };
+  let sun_pos_f64_km: Option<[f64; 3]> = is_directional.then_some(sun_pos_layer);
 
   // Rebuild projection matrix for this layer's near/far planes.
   // The view matrix (rotation-only in RTE) is shared across all layers.
@@ -2903,12 +2945,12 @@ fn draw_layer_content(
     // mesh's heliocentric distance relative to 1 AU, (1 AU / r)², in sunColor.rgb.
     let (effective_sun_pos, draw_sun_color) = match &sun_pos_f64_km {
       Some(sun_km) => {
-        let light = mesh_sun_light(
+        let light = mesh_sun_light_for_shading(
           *sun_km,
           draw_call.center_rte_f64,
           layer.frame_scale,
           layer.layer_index,
-          render_scene.mesh_shading & crate::scene::CAMERA_SHADING_PHYSICAL != 0,
+          render_scene.mesh_shading,
           render_scene.mesh_exposure,
           sun_color,
         );
@@ -2966,10 +3008,18 @@ fn draw_layer_content(
 
   if let Some(batch_call) = &layer.sphere_gizmo_batch_call {
     device.debug_label_insert(cmd_buffer, c"Sphere Gizmos", [1.0, 0.8, 0.0, 1.0]);
+    // the Sun arrow: the mesh light's f64 direction, not sunPos − centre in f32 on the GPU
+    let sun_dir = sphere_gizmo_sun_dir(
+      sun_pos_f64_km,
+      sun_pos,
+      batch_call.sun_ref_center,
+      layer.frame_scale,
+      layer.layer_index,
+    );
     do_draw_sphere_gizmo_batch(
       device,
       &layer_camera,
-      sun_pos,
+      sun_dir,
       cmd_buffer,
       handle,
       batch_call,
@@ -3057,6 +3107,78 @@ mod mesh_sun_light_tests {
     assert!((l.color[0] - 0.25).abs() < 1e-6);
     // degenerate: Sun at the centre
     assert_eq!(mesh_sun_light([1.0; 3], [1.0; 3], 1.0, 0, false, 1.0, [1.0; 4]).direction, None);
+  }
+
+  /// The Sun sits on its own micro layer in km, the nucleus on another micro layer in km. Its
+  /// position goes to AU with the Sun layer's `frame_scale` and back to km with the nucleus layer's,
+  /// so the physical irradiance at 1.2 AU is 1/1.44. Treating the Sun's km as AU (dividing them by
+  /// the nucleus layer's `frame_scale` alone) put it ~1.5e8× too far and the irradiance near 0.
+  #[test]
+  fn sun_on_its_own_layer_keeps_the_heliocentric_distance() {
+    let fs = (1.0 / KM_PER_AU) as f32;
+    let center = [-350.0, 120.0, 40.0]; // nucleus, km from the camera on layer 1
+    let sun_km = [center[0], center[1] - 1.2 * KM_PER_AU, center[2]]; // Sun layer 2, km
+    let au = layer_unit_to_au(sun_km, 2, fs);
+    assert!((au[1] + 1.2).abs() < 1e-6, "{au:?}");
+    let back = au_to_layer_unit(au, 1, fs);
+    for i in 0..3 {
+      assert!((back[i] - sun_km[i]).abs() < 1e-6 * KM_PER_AU, "{back:?} vs {sun_km:?}");
+    }
+    let l = mesh_sun_light(back, center, fs, 1, true, 1.0, [1.0; 4]);
+    assert!((l.color[0] - 1.0 / 1.44).abs() < 1e-4, "irradiance {}", l.color[0]);
+    let d = l.direction.unwrap();
+    assert!((d[1] + 1.0).abs() < 1e-6, "{d:?}");
+    // the macro layer keeps AU both ways
+    assert_eq!(layer_unit_to_au([1.0, 2.0, 3.0], 0, 1.0), [1.0, 2.0, 3.0]);
+    assert_eq!(au_to_layer_unit([1.0, 2.0, 3.0], 0, 1.0), [1.0, 2.0, 3.0]);
+  }
+
+  /// The gizmo's Sun arrow and the nucleus mesh light point the same way: for the same layer, f64
+  /// Sun and centre, `sphere_gizmo_sun_dir` is the mesh light's direction bit for bit, in every
+  /// shading; and it keeps f64 precision where `sunPos − centre` in f32 (the old shader path)
+  /// does not.
+  #[test]
+  fn gizmo_and_mesh_sun_directions_agree() {
+    let fs = (1.0 / KM_PER_AU) as f32;
+    let center = [-3.5, 1.25, 0.4]; // km from the camera: a nucleus filling the view
+    // the Sun 1.39 AU away, off every axis
+    let dir = [0.62, -0.55, 0.559_464_029_5];
+    let r = 1.39 * KM_PER_AU;
+    let sun = [center[0] + dir[0] * r, center[1] + dir[1] * r, center[2] + dir[2] * r];
+    let sun_f32 = Vec3f32::from_components(sun[0] as f32, sun[1] as f32, sun[2] as f32);
+    let gizmo = sphere_gizmo_sun_dir(Some(sun), sun_f32, Some(center), fs, 1).expect("a direction");
+    for shading in [
+      0,
+      crate::scene::CAMERA_SHADING_PHYSICAL,
+      crate::scene::CAMERA_SHADING_PHYSICAL | crate::scene::CAMERA_SHADING_LAMBERT_DARK,
+    ] {
+      let mesh = mesh_sun_light_for_shading(sun, center, fs, 1, shading, 2.0, [1.0; 4]);
+      assert_eq!(mesh.direction, Some(gizmo), "shading {shading}");
+    }
+    let n = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+    for i in 0..3 {
+      assert!((gizmo[i] as f64 - dir[i] / n).abs() < 1e-6, "{gizmo:?}");
+    }
+    // without the f64 Sun the widened f32 one still gives a unit direction close to it
+    let widened = sphere_gizmo_sun_dir(None, sun_f32, Some(center), fs, 1).unwrap();
+    for i in 0..3 {
+      assert!((widened[i] - gizmo[i]).abs() < 1e-5, "{widened:?} vs {gizmo:?}");
+    }
+    // no sphere-style gizmo, or the Sun at the centre: no arrow
+    assert_eq!(sphere_gizmo_sun_dir(Some(sun), sun_f32, None, fs, 1), None);
+    assert_eq!(sphere_gizmo_sun_dir(Some(center), sun_f32, Some(center), fs, 1), None);
+  }
+
+  /// The shading flags reach `sunColor.w`: 1 display, 2 physical, 3 physical dark Lambert; the
+  /// dark-Lambert bit alone (without physical) changes nothing.
+  #[test]
+  fn shading_flags_pick_the_sun_color_kind() {
+    use crate::scene::{CAMERA_SHADING_LAMBERT_DARK as D, CAMERA_SHADING_PHYSICAL as P};
+    let w = |flags| mesh_sun_light_for_shading([1.0, 0.0, 0.0], [0.0; 3], 1.0, 0, flags, 1.0, [1.0; 4]).color[3];
+    assert_eq!(w(0), 1.0);
+    assert_eq!(w(D), 1.0);
+    assert_eq!(w(P), 2.0);
+    assert_eq!(w(P | D), MESH_SHADING_W_LAMBERT_DARK);
   }
 }
 
@@ -3153,6 +3275,7 @@ mod dust_volume_detail_tests {
         ttl_s: 1.0,
         s_ref_um: 0.0,
         size_q: 0.0,
+        size_law: false,
         ready_tail: [(0, 0); dust::DUST_READY_TAIL],
         ready_tail_len: 0,
       },

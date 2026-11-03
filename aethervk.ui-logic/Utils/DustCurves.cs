@@ -167,6 +167,68 @@ public static class DustCurves
   }
 
   /// <summary>
+  /// The size law exponent q along the orbit of a jet (<see cref="Models.SizeQTable"/>): the table
+  /// interpolated linearly in time and held constant outside it, drawn over the rows' time span
+  /// widened by a quarter on each side (±30 days around a single row), with a dot per row;
+  /// <paramref name="fallbackQ"/> (the jet's q) as a flat line without rows. Marker at
+  /// <paramref name="nowDaysFromPerihelion"/> when finite.
+  /// </summary>
+  public static CurvePlotModel SizeQOrbitPlot(Models.SizeQTable table, double fallbackQ, double nowDaysFromPerihelion = double.NaN)
+  {
+    double xMin, xMax;
+    if (table.IsEmpty)
+    {
+      xMin = -180; xMax = 180;
+    }
+    else
+    {
+      xMin = table.Rows[0].DaysFromPerihelion;
+      xMax = table.Rows[table.Count - 1].DaysFromPerihelion;
+      double span = xMax - xMin;
+      double pad = span > 0 ? span * 0.25 : 30;
+      xMin -= pad; xMax += pad;
+    }
+    if (IsFinite(nowDaysFromPerihelion))
+    {
+      xMin = Math.Min(xMin, nowDaysFromPerihelion - 5);
+      xMax = Math.Max(xMax, nowDaysFromPerihelion + 5);
+    }
+    const int N = 121;
+    var pts = new List<PlotPoint>(N);
+    for (int i = 0; i < N; i++)
+    {
+      double t = xMin + (xMax - xMin) * i / (N - 1);
+      pts.Add(new PlotPoint(t, table.Evaluate(t, (float)fallbackQ)));
+    }
+    var rows = new List<PlotPoint>(table.Count);
+    foreach (var r in table.Rows)
+      rows.Add(new PlotPoint(r.DaysFromPerihelion, r.Q));
+    var series = new List<PlotSeries> { new PlotSeries("q(t)", pts, 0) };
+    if (rows.Count > 0)
+      series.Add(new PlotSeries("rows", rows, 1));
+    var model = new CurvePlotModel
+    {
+      Series = series,
+      XMin = xMin,
+      XMax = xMax,
+      YMin = Models.SizeQTable.MinQ,
+      YMax = Models.SizeQTable.MaxQ,
+      XLog = false,
+      YLog = false,
+      XLabel = "days from perihelion",
+      YLabel = "q",
+      XTicks = LinearTicks(xMin, xMax, 5),
+      YTicks = LinearTicks(Models.SizeQTable.MinQ, Models.SizeQTable.MaxQ, 6),
+    };
+    if (IsFinite(nowDaysFromPerihelion))
+    {
+      model.MarkerX = nowDaysFromPerihelion;
+      model.MarkerLabel = "now " + nowDaysFromPerihelion.ToString("0", CultureInfo.InvariantCulture) + " d";
+    }
+    return model;
+  }
+
+  /// <summary>
   /// The one-line read-out under the Q_d plot: "Q_d now (r_h X AU): Y kg/s", of jet
   /// <paramref name="jetIndex"/> (0 = the defaults for new jets); <paramref name="rhNowAu"/> NaN =
   /// no committed comet.

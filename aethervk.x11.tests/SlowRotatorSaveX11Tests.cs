@@ -399,6 +399,7 @@ public sealed class SlowRotatorSaveX11Tests : IDisposable
     var opened = openTask.Result;
     _output.WriteLine($"open: success {opened.Success}, restored {opened.StateRestored}, sought {opened.Sought}, missing {opened.MissingFiles?.Count ?? 0}");
     Assert.True(opened.Success, $"open failed: {opened.Error}");
+    // the fixture's state was dumped by an older engine (v9): the engine still reads it and restores it
     Assert.True(opened.StateRestored, $"the saved scene state was not restored: {runtime.GetCompatibilityJson()}");
     Assert.True(WaitFor(() => Ui(() => comet.IsAlmanacCommitted && comet.Range.HasCommittedState), 30_000), "committed after open");
     Assert.Equal(avk, rig.Saves.CurrentArchivePath);

@@ -82,9 +82,12 @@ public sealed partial class CameraMatrixDebugViewModel : ObservableObject, IDisp
     [ObservableProperty] private string _ephemerisPhase = NoValue;
     /// <summary>Solar elongation Sun–Earth–comet, "112.3°".</summary>
     [ObservableProperty] private string _ephemerisElongation = NoValue;
-    /// <summary>Position angle of the extended Sun→comet vector, north through east (Horizons'
-    /// PsAng), "287.6°".</summary>
-    [ObservableProperty] private string _ephemerisSunPa = NoValue;
+    /// <summary>Position angle of the direction from the comet towards the Sun, north through
+    /// east: PsAng + 180° wrapped to [0, 360), "107.6°".</summary>
+    [ObservableProperty] private string _ephemerisPaOfSun = NoValue;
+    /// <summary>Position angle of the extended Sun→comet vector (the anti-solar direction), north
+    /// through east: Horizons' PsAng, "287.6°".</summary>
+    [ObservableProperty] private string _ephemerisPsAng = NoValue;
 
     [ObservableProperty] private double _posX;
     [ObservableProperty] private double _posY;
@@ -177,7 +180,8 @@ public sealed partial class CameraMatrixDebugViewModel : ObservableObject, IDisp
                     EphemerisDelta = s.ephemeris.Delta;
                     EphemerisPhase = s.ephemeris.Phase;
                     EphemerisElongation = s.ephemeris.Elongation;
-                    EphemerisSunPa = s.ephemeris.SunPa;
+                    EphemerisPaOfSun = s.ephemeris.PaOfSun;
+                    EphemerisPsAng = s.ephemeris.PsAng;
                     if (s.hasCam)
                     {
                         PosX = s.px;
@@ -225,16 +229,17 @@ public sealed partial class CameraMatrixDebugViewModel : ObservableObject, IDisp
     /// <summary>The ephemeris rows as shown: every value <see cref="NoValue"/> for null (no
     /// committed comet).</summary>
     public sealed record CometEphemerisText(string Epoch, string Ra, string Dec, string R, string Delta,
-        string Phase, string Elongation, string SunPa)
+        string Phase, string Elongation, string PaOfSun, string PsAng)
     {
         public static readonly CometEphemerisText Empty =
-            new(NoValue, NoValue, NoValue, NoValue, NoValue, NoValue, NoValue, NoValue);
+            new(NoValue, NoValue, NoValue, NoValue, NoValue, NoValue, NoValue, NoValue, NoValue);
     }
 
     /// <summary>
     /// Formats an ephemeris as Horizons prints one: the epoch as "yyyy-MM-dd HH:mm UTC", RA in
     /// hours/minutes/seconds to 0.1 s, Dec in signed degrees/arcminutes/arcseconds, r and Δ in AU
-    /// to 1e-4, the angles in degrees to 0.1°. Invariant culture.
+    /// to 1e-4, the angles in degrees to 0.1°; the PA of the Sun is PsAng + 180°, both position
+    /// angles wrapped to [0, 360) after rounding. Invariant culture.
     /// </summary>
     public static CometEphemerisText FormatEphemeris(CometEphemeris? e)
     {
@@ -249,7 +254,19 @@ public sealed partial class CameraMatrixDebugViewModel : ObservableObject, IDisp
             string.Format(inv, "{0:0.0000} AU", e.DeltaAu),
             string.Format(inv, "{0:0.0}°", e.PhaseRad * 180.0 / Math.PI),
             string.Format(inv, "{0:0.0}°", e.ElongationRad * 180.0 / Math.PI),
-            string.Format(inv, "{0:0.0}°", e.SunPaRad * 180.0 / Math.PI));
+            FormatPositionAngle(e.SunPaRad * 180.0 / Math.PI + 180.0),
+            FormatPositionAngle(e.SunPaRad * 180.0 / Math.PI));
+    }
+
+    /// <summary>"107.6°": a position angle in degrees (any value) wrapped to [0, 360) to 0.1°, a
+    /// rounding carry to 360.0 printed as 0.0.</summary>
+    public static string FormatPositionAngle(double deg)
+    {
+        double tenths = Math.Round(deg * 10.0, MidpointRounding.AwayFromZero);
+        tenths -= Math.Floor(tenths / 3600.0) * 3600.0;
+        if (tenths >= 3600.0)
+            tenths = 0.0;
+        return (tenths / 10.0).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + "°";
     }
 
     /// <summary>"07h 51m 23.4s": sexagesimal hours of a right ascension (rad, any value: wrapped

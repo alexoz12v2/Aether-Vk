@@ -259,20 +259,37 @@ public sealed class TimelineService : IDisposable
     catch { return null; }
   }
 
-  /// <summary>The longest dust lead time: the jet TTL (JET_TTL_US, 30 d) and the SPK margin before the start.</summary>
+  /// <summary>The default longest dust lead time: the default dust lifetime (30 d), what every jet had before the lifetime was a parameter.</summary>
   public const double MaxDustLeadDays = 30;
 
+  private double _maxDustLeadDaysNow = MaxDustLeadDays;
   private double _dustLeadDays = MaxDustLeadDays;
+
+  /// <summary>
+  /// The longest dust lead time now: the longest dust lifetime among the jets (the Model tab keeps
+  /// it up to date; <see cref="MaxDustLeadDays"/> without jets). Lowering it clamps
+  /// <see cref="DustLeadDays"/>.
+  /// </summary>
+  public double MaxDustLeadDaysNow
+  {
+    get => _maxDustLeadDaysNow;
+    set
+    {
+      _maxDustLeadDaysNow = double.IsNaN(value) || value <= 0 ? MaxDustLeadDays : value;
+      _dustLeadDays = Math.Min(_maxDustLeadDaysNow, _dustLeadDays);
+    }
+  }
 
   /// <summary>
   /// How long before the committed start the jets ignite (reviewer report 2026-10-29: igniting at the
   /// start left no tail until Run to End rebuilt the last TTL). The default, one TTL, gives a tail
-  /// already formed at the start. Applies to jets created from now on (the next commit).
+  /// already formed at the start. Applies to jets created from now on (the next commit); the commit
+  /// also downloads the SPK from this long before the start (pre-start dust from the ephemeris).
   /// </summary>
   public double DustLeadDays
   {
     get => _dustLeadDays;
-    set => _dustLeadDays = double.IsNaN(value) ? MaxDustLeadDays : Math.Min(MaxDustLeadDays, Math.Max(0, value));
+    set => _dustLeadDays = double.IsNaN(value) ? Math.Min(MaxDustLeadDays, _maxDustLeadDaysNow) : Math.Min(_maxDustLeadDaysNow, Math.Max(0, value));
   }
 
   /// <summary>

@@ -1589,6 +1589,53 @@ public class CameraServiceTests
     Assert.Equal(new List<(ulong, uint)> { (100UL, 0u), (100UL, p), (100UL, 0u), (100UL, p), (100UL, 0u) }, sent);
   }
 
+  /// The nucleus-from-Earth view is lit physically by default (dark Lambert, no ambient, black night
+  /// side) even with the physical-lighting toggle off; an orbit drag takes the orbit's display
+  /// shading back. Its exposure is normalised to the dark albedo.
+  [Fact]
+  public void Shading_NucleusFromEarthIsPhysicalLambert()
+  {
+    var dark = CameraService.ShadingPhysical | CameraService.ShadingLambertDark;
+    Assert.Equal(dark, CameraService.ShadingFor(CameraMode.CometOrbiting, false, nucleusFromEarth: true));
+    Assert.Equal(dark, CameraService.ShadingFor(CameraMode.CometOrbiting, true, nucleusFromEarth: true));
+    Assert.Equal(dark | CameraService.HideBehindCamera,
+      CameraService.ShadingFor(CameraMode.CometOrbiting, false, showBehindCamera: false, nucleusFromEarth: true));
+    // other views unchanged
+    Assert.Equal(0u, CameraService.ShadingFor(CameraMode.UpZenith, false, nucleusFromEarth: true));
+    Assert.Equal(0u, CameraService.ShadingFor(CameraMode.EarthPosition, true, nucleusFromEarth: true));
+    Assert.Equal(1f / (float)CameraService.NucleusDarkAlbedo,
+      CameraService.ExposureFor(CameraMode.CometOrbiting, false, 0f, nucleusFromEarth: true), 4);
+    Assert.Equal((float)Math.PI, CameraService.ExposureFor(CameraMode.CometOrbiting, false, 0f), 5);
+
+    var (service, runtime, _) = BuildService();
+    runtime.Setup(r => r.CometEntityId).Returns(7UL);
+    runtime
+      .Setup(r => r.SetNucleusViewFromEarth(It.IsAny<ulong>(), It.IsAny<ulong>(), It.IsAny<ulong>(), It.IsAny<double>()))
+      .Returns(true);
+    runtime
+      .Setup(r => r.SetEarthObserver(It.IsAny<ulong>(), It.IsAny<int>(), It.IsAny<ulong>(), It.IsAny<ulong>(), It.IsAny<bool>(),
+        It.IsAny<double>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<Quaterniond>(), It.IsAny<ObserverUp>()))
+      .Returns(true);
+    var sent = new List<uint>();
+    runtime
+      .Setup(r => r.SetCameraShading(It.IsAny<ulong>(), It.IsAny<uint>()))
+      .Callback<ulong, uint>((_, f) => sent.Add(f))
+      .Returns(true);
+    var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+    var cometConfig = (CometConfigService)typeof(CameraService).GetField("_cometConfigService", flags)!.GetValue(service)!;
+    ((System.Reactive.Subjects.BehaviorSubject<bool>)typeof(CometConfigService)
+      .GetField("_isCommittedSubject", flags)!.GetValue(cometConfig)!).OnNext(true);
+
+    Assert.False(service.PhysicalLighting);
+    service.SetCameraMode(CameraMode.CometOrbiting);
+    Assert.True(service.ViewNucleusFromEarth());
+    Assert.True(service.IsNucleusFromEarth);
+    Assert.Equal(dark, sent[^1] & dark);
+    Assert.True(service.RequestOrbit(new Vector2(10f, 0f), InputModifiers.None));
+    Assert.False(service.IsNucleusFromEarth);
+    Assert.Equal(0u, sent[^1] & dark);
+  }
+
   /// The "Model" mode button (feedback #20): the Earth observer with celestial north up; without
   /// a comet the tracking is refused (back to free look) and so is the nucleus-from-Earth field.
   [Fact]

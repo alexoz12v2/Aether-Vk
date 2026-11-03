@@ -2181,6 +2181,7 @@ public sealed class CameraService : IDisposable
       : heightAu * 2.0;
     bool ok = _runtimeService.SetNucleusViewFromEarth(cam, earth, comet, distanceAu);
     _nucleusFromEarthSubject.OnNext(ok);
+    RefreshShading(); // the view's dark Lambert shading (or back to the orbit's)
     if (!ok)
     {
       Console.WriteLine($"[CameraService] nucleus from Earth refused (earth {earth}, comet {comet}, {distanceAu:E3} AU)");
@@ -2204,6 +2205,7 @@ public sealed class CameraService : IDisposable
       return;
     _runtimeService.SetEarthObserver(CameraEntityId ?? 0, -1, 0, 0, false, 0, 0, 0, Quaterniond.Identity, ObserverUp.Ecliptic);
     _nucleusFromEarthSubject.OnNext(false);
+    RefreshShading(); // back to the comet orbit's shading
   }
 
   /// <summary>See <see cref="GetEarthObserverScale"/>: the scale of a projection on a
@@ -2496,6 +2498,15 @@ public sealed class CameraService : IDisposable
   /// (<c>scene::CAMERA_HIDE_BEHIND</c>).</summary>
   public const uint HideBehindCamera = 1u << 1;
 
+  /// <summary>Shading bit, with <see cref="ShadingPhysical"/>: pure Lambert on a dark nucleus
+  /// albedo (<see cref="NucleusDarkAlbedo"/>), no ambient, a black night side
+  /// (<c>scene::CAMERA_SHADING_LAMBERT_DARK</c>). The nucleus-from-Earth view's shading.</summary>
+  public const uint ShadingLambertDark = 1u << 2;
+
+  /// <summary>The nucleus albedo of <see cref="ShadingLambertDark"/> (67P's geometric albedo is
+  /// ~0.065); mirrors <c>NUCLEUS_DARK_ALBEDO</c> in <c>physical_mesh2.frag</c>.</summary>
+  public const double NucleusDarkAlbedo = 0.06;
+
   private bool _physicalLighting = false;
 
   /// <summary>
@@ -2516,10 +2527,19 @@ public sealed class CameraService : IDisposable
     }
   }
 
-  /// <summary>The camera flags (shading, behind-camera) a camera in <paramref name="mode"/> uses.</summary>
-  internal static uint ShadingFor(CameraMode mode, bool physicalLighting, bool showBehindCamera = true) =>
-    (physicalLighting && mode == CameraMode.CometOrbiting ? ShadingPhysical : 0u)
-    | (showBehindCamera ? 0u : HideBehindCamera);
+  /// <summary>The camera flags (shading, behind-camera) a camera in <paramref name="mode"/> uses.
+  /// The nucleus-from-Earth view (<paramref name="nucleusFromEarth"/>, a
+  /// <see cref="CameraMode.CometOrbiting"/> pose) is always lit physically, as a dark Lambert
+  /// surface with a black night side, whatever <paramref name="physicalLighting"/> says.</summary>
+  internal static uint ShadingFor(CameraMode mode, bool physicalLighting, bool showBehindCamera = true,
+    bool nucleusFromEarth = false)
+  {
+    bool fromEarth = nucleusFromEarth && mode == CameraMode.CometOrbiting;
+    uint shading = fromEarth
+      ? ShadingPhysical | ShadingLambertDark
+      : (physicalLighting && mode == CameraMode.CometOrbiting ? ShadingPhysical : 0u);
+    return shading | (showBehindCamera ? 0u : HideBehindCamera);
+  }
 
   // last (camera, flags) the runtime accepted (null: unknown, resend)
   private (ulong Camera, uint Flags)? _shadingSent;
@@ -2531,10 +2551,11 @@ public sealed class CameraService : IDisposable
     ulong cam = CameraEntityId ?? 0;
     if (cam == 0)
       return;
-    uint flags = ShadingFor(_modeSubject.Value, _physicalLighting, DisplayState.ShowBehindCamera);
+    bool fromEarth = _nucleusFromEarthSubject.Value;
+    uint flags = ShadingFor(_modeSubject.Value, _physicalLighting, DisplayState.ShowBehindCamera, fromEarth);
     if (_shadingSent != (cam, flags) && _runtimeService.SetCameraShading(cam, flags))
       _shadingSent = (cam, flags);
-    float exposure = ExposureFor(_modeSubject.Value, _physicalLighting, _nucleusExposureEv);
+    float exposure = ExposureFor(_modeSubject.Value, _physicalLighting, _nucleusExposureEv, fromEarth);
     if (_exposureSent != (cam, exposure) && _runtimeService.SetCameraExposure(cam, exposure))
       _exposureSent = (cam, exposure);
   }
@@ -2570,12 +2591,18 @@ public sealed class CameraService : IDisposable
   /// The sunlight factor a camera in <paramref name="mode"/> uses: 1 (unchanged) in UpZenith; else
   /// 2^<paramref name="ev"/>, times π for the display shading, whose Oren–Nayar term keeps the BRDF's
   /// 1/π under a unit sun and so drew a sunlit white surface at 1/π grey (the "black" nucleus,
-  /// feedback #17). The physical shading already cancels it.
+  /// feedback #17). The physical shading already cancels it. The nucleus-from-Earth view's dark
+  /// Lambert shading divides by <see cref="NucleusDarkAlbedo"/>: at EV 0 a Sun-facing patch of the
+  /// dark nucleus at 1 AU is white (without ambient light the albedo is only a brightness scale).
   /// </summary>
-  internal static float ExposureFor(CameraMode mode, bool physicalLighting, float ev) =>
-    mode == CameraMode.UpZenith
-      ? 1f
-      : (float)(Math.Pow(2.0, ev) * (physicalLighting && mode == CameraMode.CometOrbiting ? 1.0 : Math.PI));
+  internal static float ExposureFor(CameraMode mode, bool physicalLighting, float ev, bool nucleusFromEarth = false)
+  {
+    if (mode == CameraMode.UpZenith)
+      return 1f;
+    if (nucleusFromEarth && mode == CameraMode.CometOrbiting)
+      return (float)(Math.Pow(2.0, ev) / NucleusDarkAlbedo);
+    return (float)(Math.Pow(2.0, ev) * (physicalLighting && mode == CameraMode.CometOrbiting ? 1.0 : Math.PI));
+  }
 
   /// <summary>The comet label and its indicator line are drawn in the Orbit view only (the comet is
   /// a speck there); the Model and Nucleus views show the body itself (reviewer feedback).</summary>

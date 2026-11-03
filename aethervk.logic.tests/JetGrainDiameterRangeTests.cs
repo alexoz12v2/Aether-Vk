@@ -158,4 +158,38 @@ public class JetGrainDiameterRangeTests
     Assert.Equal(plot.XMin, plot.Series[0].Points.First().X, 6);
     Assert.Equal(plot.XMax, plot.Series[0].Points.Last().X, 6);
   }
+
+  /// <summary>
+  /// β ∝ Q_pr/(ρ·s): the engine's β is the reference grain's (diameter D = √(D_min·D_max)), so the
+  /// range shown next to it, β/F .. β·F, is β of the largest and of the smallest simulated grain.
+  /// One grain: 10-1000 µm (D 100, F 10), 0.8 g/cm³, Q_pr 1.
+  /// </summary>
+  [Fact]
+  public void BetaRange_SpansTheLargestToTheSmallestGrain()
+  {
+    // β = 3L/(16π c GM) · Q_pr / (ρ s), the engine's constant, ρ in kg/m³ and s in m
+    const double k = 3 * 3.828e26 / (16 * System.Math.PI * 299_792_458.0 * 1.3271244e20);
+    static double BetaOf(double diameterUm) => k * 1.0 / (800.0 * diameterUm * 0.5e-6);
+
+    var (d, f) = GrainDiameterRange.ToEngine(10, 1000);
+    double beta = BetaOf(d);
+    Assert.InRange(beta, 0.01435, 0.01436);
+    var (lo, hi) = GrainDiameterRange.BetaRange(beta, f);
+    Assert.Equal(BetaOf(1000), lo, 9);
+    Assert.Equal(BetaOf(10), hi, 9);
+    Assert.Equal("0.00144 – 0.144", GrainDiameterRange.BetaRangeText(beta, f));
+
+    // the jet's text follows its β (from the engine) and its range factor
+    var jet = new JetViewModel(new JetGrain(100f, 0.8f, 1f, 0.04f, 3.5f, 10f, 2f));
+    Assert.Equal("", jet.BetaRangeText); // β not computed yet
+    var raised = new System.Collections.Generic.List<string?>();
+    jet.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+    jet.Beta = 0.0143f;
+    Assert.Equal("0.00143 – 0.143", jet.BetaRangeText);
+    jet.MaxDiameterUm = 100f; // 10-100 µm: F = √10
+    Assert.Equal("0.00452 – 0.0452", jet.BetaRangeText);
+    Assert.Contains(nameof(JetViewModel.BetaRangeText), raised);
+    // one size (F = 1): a single β
+    Assert.Equal("0.02 – 0.02", GrainDiameterRange.BetaRangeText(0.02, 1));
+  }
 }

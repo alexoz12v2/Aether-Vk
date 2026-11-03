@@ -1272,9 +1272,13 @@ impl SpeckCluster {
     fade_ratio: f32,
   ) -> Self {
     let range = moments_size_range(m);
+    // the count takes the cluster law when the moments carry one (`DustMoments::size_law`,
+    // `dust_specks_q_of`), else the system q; the sizes drawn within the bin keep the system q on
+    // both mirrors (the walk record has no lane for the law)
+    let q_count = m.size_law().unwrap_or(q);
     let p = speck_leaf(m, b, seg_t);
     let fade = age_fade(m.age(), ttl_s, fade_ratio).max(1e-6);
-    let xsec = bin_mean_cross_section_f32(s_ref_um, q, range, b as u32).max(1e-30);
+    let xsec = bin_mean_cross_section_f32(s_ref_um, q_count, range, b as u32).max(1e-30);
     let count = p.flux / fade / xsec;
     let root_hash = dust_hash32(
       dust_hash32(slot.wrapping_mul(0x9E37_79B9) ^ m.id())

@@ -1,7 +1,11 @@
 using System;
+using System.Collections.ObjectModel;
+using System.Collections.Specialized;
+using System.ComponentModel;
 using System.Numerics;
 using AetherVk.Logic.Models;
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 
 namespace AetherVk.Logic.ViewModels;
 
@@ -138,7 +142,8 @@ public sealed partial class JetViewModel : ObservableObject
   private float _geometricAlbedo = JetGrain.Default.GeometricAlbedo;
 
   /// <summary>
-  /// Size law exponent q (2–5). Only the specks follow it: the continuum keeps q = 3.5.
+  /// Size law exponent q (2–5). With <see cref="OrbitSizeLaw"/> on the continuous dust follows it
+  /// (or <see cref="SizeQTable"/>); off, the continuum keeps q = 3.5 and only the near specks follow it.
   /// Corresponds to <c>ParticleSystemEmitParams.size_q</c>.
   /// </summary>
   [ObservableProperty]
@@ -146,6 +151,7 @@ public sealed partial class JetViewModel : ObservableObject
 
   /// <summary>Size range factor F = √(D_max/D_min) (1–1000). Corresponds to <c>ParticleSystemEmitParams.size_range</c>.</summary>
   [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(BetaRangeText))]
   private float _sizeRange = JetGrain.Default.SizeRange;
 
   // ── Grain size law stated as the smallest / largest diameter (the UI), stored as (D, F) ───────
@@ -217,13 +223,140 @@ public sealed partial class JetViewModel : ObservableObject
   [ObservableProperty]
   private float _dustRate1AuKgs = JetGrain.Default.DustRate1AuKgs;
 
+  // ── Dynamic model (per jet) ──────────────────────────────────────────────────
+
   /// <summary>
-  /// The grain and activity parameters as one value; setting it assigns each property (each one
-  /// raises its own change notification).
+  /// "Insolation-weighted emission": the emitted mass is Q_d · ∫max(0, cos i) dt over the day and
+  /// the emission instants follow cos i, instead of lit / dark gating. Off = the engine's
+  /// behaviour before the option (older saves). Corresponds to
+  /// <c>ParticleSystemEmitParams.insolation_weighted</c>.
+  /// </summary>
+  [ObservableProperty]
+  private bool _insolationWeighted = JetGrain.Default.InsolationWeighted;
+
+  /// <summary>
+  /// "Orbit-dependent size distribution": the continuous dust follows this jet's q, from
+  /// <see cref="SizeQTable"/> along the orbit when it has rows. Off = q 3.5 for the continuum as
+  /// before (older saves). Corresponds to <c>ParticleSystemEmitParams.orbit_size_law</c>.
+  /// </summary>
+  [ObservableProperty]
+  private bool _orbitSizeLaw = JetGrain.Default.OrbitSizeLaw;
+
+  /// <summary>
+  /// Pre-start dust from the ephemeris: before the start epoch the jet state comes from the SPK
+  /// whenever it covers that time (the commit downloads it from start − lead), else from the
+  /// reference orbit. Off in older saves. Corresponds to <c>ParticleSystemEmitParams.spk_before_start</c>.
+  /// </summary>
+  [ObservableProperty]
+  private bool _spkBeforeStart = JetGrain.Default.SpkBeforeStart;
+
+  /// <summary>
+  /// Dust lifetime in days (1 to 365, default 30): the age at which the dust leaves the
+  /// simulation; the emission steps follow it (<see cref="EmissionStepsText"/>). Corresponds to
+  /// <c>ParticleSystemEmitParams.ttl_days</c>.
+  /// </summary>
+  [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(EmissionStepsText))]
+  private float _lifetimeDays = JetGrain.Default.LifetimeDays;
+
+  /// <summary>
+  /// The emission steps of the three age tiers for <see cref="LifetimeDays"/>: "2.8 h / 19.7 h /
+  /// 6.6 d" at 30 days (each tier's age band / 256 windows). Read-only.
+  /// </summary>
+  public string EmissionStepsText => DustLifetime.EmissionStepsText(LifetimeDays);
+
+  /// <summary>
+  /// The rows of the q table (days from perihelion, q), edited in place by the Model tab; up to
+  /// <see cref="Models.SizeQTable.MaxRows"/>. Any edit raises <see cref="SizeQTable"/>.
+  /// </summary>
+  public ObservableCollection<SizeQRowViewModel> SizeQRows { get; } = new();
+
+  private bool _settingSizeQRows;
+
+  /// <summary>
+  /// q along the orbit as an immutable value (sorted, clamped): what the native record and the
+  /// save carry. Raised on every row edit, add or removal. Empty = the jet's <see cref="SizeQ"/>.
+  /// </summary>
+  public SizeQTable SizeQTable
+  {
+    get
+    {
+      var rows = new SizeQPoint[SizeQRows.Count];
+      for (int i = 0; i < rows.Length; i++)
+        rows[i] = new SizeQPoint(SizeQRows[i].DaysFromPerihelion, SizeQRows[i].Q);
+      return SizeQTable.From(rows);
+    }
+    set
+    {
+      _settingSizeQRows = true;
+      try
+      {
+        foreach (var r in SizeQRows)
+          r.PropertyChanged -= OnSizeQRowChanged;
+        SizeQRows.Clear();
+        foreach (var p in value.Rows)
+          SizeQRows.Add(NewRow(p.DaysFromPerihelion, p.Q));
+      }
+      finally { _settingSizeQRows = false; }
+      OnPropertyChanged(nameof(SizeQTable));
+      OnPropertyChanged(nameof(CanAddSizeQRow));
+    }
+  }
+
+  /// <summary>Another row can be added (fewer than <see cref="Models.SizeQTable.MaxRows"/>).</summary>
+  public bool CanAddSizeQRow => SizeQRows.Count < SizeQTable.MaxRows;
+
+  private SizeQRowViewModel NewRow(float days, float q)
+  {
+    var row = new SizeQRowViewModel(days, q);
+    row.PropertyChanged += OnSizeQRowChanged;
+    return row;
+  }
+
+  private void OnSizeQRowChanged(object? sender, PropertyChangedEventArgs e)
+  {
+    if (!_settingSizeQRows)
+      OnPropertyChanged(nameof(SizeQTable));
+  }
+
+  /// <summary>
+  /// Adds a row after the last one (its time + 30 days, the last q; (0 d, the jet's q) for the
+  /// first); nothing at the capacity.
+  /// </summary>
+  [RelayCommand]
+  private void AddSizeQRow()
+  {
+    if (!CanAddSizeQRow) return;
+    float days = 0f, q = SizeQ;
+    if (SizeQRows.Count > 0)
+    {
+      var last = SizeQRows[SizeQRows.Count - 1];
+      days = last.DaysFromPerihelion + 30f;
+      q = last.Q;
+    }
+    SizeQRows.Add(NewRow(days, q));
+    OnPropertyChanged(nameof(SizeQTable));
+    OnPropertyChanged(nameof(CanAddSizeQRow));
+  }
+
+  /// <summary>Removes <paramref name="row"/>.</summary>
+  [RelayCommand]
+  private void RemoveSizeQRow(SizeQRowViewModel? row)
+  {
+    if (row is null || !SizeQRows.Remove(row)) return;
+    row.PropertyChanged -= OnSizeQRowChanged;
+    OnPropertyChanged(nameof(SizeQTable));
+    OnPropertyChanged(nameof(CanAddSizeQRow));
+  }
+
+  /// <summary>
+  /// The grain and activity parameters as one value (the dynamic model included); setting it
+  /// assigns each property (each one raises its own change notification).
   /// </summary>
   public JetGrain Grain
   {
-    get => new(DiametreUm, DensityGCm3, ScatteringEfficiency, GeometricAlbedo, SizeQ, SizeRange, DustRate1AuKgs);
+    get => new(DiametreUm, DensityGCm3, ScatteringEfficiency, GeometricAlbedo, SizeQ, SizeRange, DustRate1AuKgs,
+      InsolationWeighted, OrbitSizeLaw, SpkBeforeStart, LifetimeDays, SizeQTable);
     set
     {
       DiametreUm = value.DiametreUm;
@@ -233,6 +366,11 @@ public sealed partial class JetViewModel : ObservableObject
       SizeQ = value.SizeQ;
       SizeRange = value.SizeRange;
       DustRate1AuKgs = value.DustRate1AuKgs;
+      InsolationWeighted = value.InsolationWeighted;
+      OrbitSizeLaw = value.OrbitSizeLaw;
+      SpkBeforeStart = value.SpkBeforeStart;
+      LifetimeDays = value.LifetimeDays;
+      SizeQTable = value.SizeQTable;
     }
   }
 
@@ -243,7 +381,14 @@ public sealed partial class JetViewModel : ObservableObject
   /// Populated from <c>ParticleSystemComputedDTO.Beta</c> after each Add/Modify call.
   /// </summary>
   [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(BetaRangeText))]
   private float _beta;
+
+  /// <summary>
+  /// "β_min – β_max" of the simulated grains (β/F for the largest, β·F for the smallest), 3
+  /// significant digits; empty until the engine computed β.
+  /// </summary>
+  public string BetaRangeText => GrainDiameterRange.BetaRangeText(Beta, SizeRange);
 
   /// <summary>
   /// Dust production rate in kg/s at 1 AU as the engine applies it (min(Q_d₀, max)).
@@ -345,5 +490,23 @@ public sealed partial class JetViewModel : ObservableObject
     else                  { r = c; g = 0; b = x; }
 
     return new Vector4(r + m, g + m, b + m, 1f);
+  }
+}
+
+/// <summary>One editable row of <see cref="JetViewModel.SizeQRows"/>: q at a time from perihelion.</summary>
+public sealed partial class SizeQRowViewModel : ObservableObject
+{
+  /// <summary>Days from perihelion (negative before it).</summary>
+  [ObservableProperty]
+  private float _daysFromPerihelion;
+
+  /// <summary>Exponent q (0 to 6).</summary>
+  [ObservableProperty]
+  private float _q;
+
+  public SizeQRowViewModel(float daysFromPerihelion, float q)
+  {
+    _daysFromPerihelion = daysFromPerihelion;
+    _q = q;
   }
 }

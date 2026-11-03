@@ -822,6 +822,10 @@ pub const CAMERA_SHADING_PHYSICAL: u32 = 1 << 0;
 /// the camera within the far distance, which a telescope-like view needs; perspective views can
 /// never show it.
 pub const CAMERA_HIDE_BEHIND: u32 = 1 << 1;
+/// [`CameraShadingComponent`] bit, with [`CAMERA_SHADING_PHYSICAL`]: the physical sunlight on a
+/// pure Lambert surface of a dark nucleus albedo (`NUCLEUS_DARK_ALBEDO` in `physical_mesh2.frag`),
+/// no ambient, a black night side (no debug tint). The nucleus-from-Earth view's shading.
+pub const CAMERA_SHADING_LAMBERT_DARK: u32 = 1 << 2;
 
 /// How a camera shades meshes (`CAMERA_SHADING_*` bits, plus [`CAMERA_HIDE_BEHIND`]). A camera
 /// without it uses the display shading and shows what lies behind an orthographic eye.
@@ -5120,11 +5124,37 @@ pub mod particles_dto {
     /// `particles::EMISSION_START_NOW` = the scene's current epoch when the jet is added,
     /// `particles::EMISSION_START_PREEXISTING` = a pre-existing tail
     pub emission_start_us: i64,
+
+    // -- dynamic model (per jet; a zeroed tail = the behaviour before these fields existed) --
+    /// dust lifetime in days (1 to 365; 0 = the default 30 d,
+    /// `ParticleSystemEmitParams::ttl_days`)
+    pub ttl_days: f32,
+    /// "Insolation-weighted emission" (0 off, 1 on; `ParticleSystemEmitParams::insolation_weighted`)
+    pub insolation_weighted: u32,
+    /// "Orbit-dependent size distribution" (0 off, 1 on; `ParticleSystemEmitParams::orbit_size_law`)
+    pub orbit_size_law: u32,
+    /// pre-start dust from the SPK when it covers the time (0 off, 1 on;
+    /// `ParticleSystemEmitParams::spk_before_start`)
+    pub spk_before_start: u32,
+    /// valid rows of `size_q_table` (0 to 8)
+    pub size_q_table_len: u32,
+    /// explicit padding (keeps the table 8-byte aligned and the size a multiple of 8)
+    pub _pad2: u32,
+    /// `q` along the orbit, 8 rows of (days from perihelion, q) flattened: row `i` is
+    /// `[2i]`, `[2i + 1]` (`ParticleSystemEmitParams::size_q_table`)
+    pub size_q_table: [f32; 16],
   }
   // 10 grain/activity f32 (40 B) + jet 5 f32 + colour 4 f32 + radius + seed (44 B) + `_pad` + i64
-  const _: () = assert!(core::mem::size_of::<ParticleSystemDTO>() == 96);
+  // (96 B) + lifetime, three flags, table length, `_pad2` (24 B) + 16 f32 table (64 B)
+  const _: () = assert!(core::mem::size_of::<ParticleSystemDTO>() == 184);
   const _: () = assert!(core::mem::offset_of!(ParticleSystemDTO, emission_start_us) == 88);
   const _: () = assert!(core::mem::offset_of!(ParticleSystemDTO, dust_rate_1au_kgs) == 24);
+  const _: () = assert!(core::mem::offset_of!(ParticleSystemDTO, ttl_days) == 96);
+  const _: () = assert!(core::mem::offset_of!(ParticleSystemDTO, insolation_weighted) == 100);
+  const _: () = assert!(core::mem::offset_of!(ParticleSystemDTO, orbit_size_law) == 104);
+  const _: () = assert!(core::mem::offset_of!(ParticleSystemDTO, spk_before_start) == 108);
+  const _: () = assert!(core::mem::offset_of!(ParticleSystemDTO, size_q_table_len) == 112);
+  const _: () = assert!(core::mem::offset_of!(ParticleSystemDTO, size_q_table) == 120);
 }
 
 pub use particles_dto::*;

@@ -7,7 +7,7 @@
 
   <!-- Ephemeris at the shown epoch (reviewer docx item 15): a Horizons-style observer table,
        "—" in every row without a committed comet -->
-  <Grid ColumnDefinitions="Auto,12,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto"
+  <Grid ColumnDefinitions="Auto,12,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto"
         Margin="0,4,0,0"
         AutomationProperties.AutomationId="EphemerisTable">
     <StackPanel Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="3" Orientation="Horizontal" Spacing="4" Margin="0,0,0,3">
@@ -67,11 +67,23 @@
                AutomationProperties.AutomationId="EphemerisElongation"
                FontFamily="Consolas,Monospace" FontSize="9"
                Foreground="{DynamicResource Text.Primary}"/>
-    <TextBlock Grid.Row="8" Grid.Column="0" Text="{ReflectionBinding StrSunPa}"
+    <!-- two position angles 180° apart: towards the Sun, and Horizons' PsAng (anti-solar) -->
+    <TextBlock Grid.Row="8" Grid.Column="0" Text="{ReflectionBinding StrPaOfSun}"
+               ToolTip.Tip="{ReflectionBinding StrPaOfSunTip}"
                FontFamily="Consolas,Monospace" FontSize="9"
                Foreground="{DynamicResource Text.Secondary}"/>
-    <TextBlock Grid.Row="8" Grid.Column="2" Text="{ReflectionBinding EphemerisSunPa}"
-               AutomationProperties.AutomationId="EphemerisSunPa"
+    <TextBlock Grid.Row="8" Grid.Column="2" Text="{ReflectionBinding EphemerisPaOfSun}"
+               ToolTip.Tip="{ReflectionBinding StrPaOfSunTip}"
+               AutomationProperties.AutomationId="EphemerisPaOfSun"
+               FontFamily="Consolas,Monospace" FontSize="9"
+               Foreground="{DynamicResource Text.Primary}"/>
+    <TextBlock Grid.Row="9" Grid.Column="0" Text="{ReflectionBinding StrPsAng}"
+               ToolTip.Tip="{ReflectionBinding StrPsAngTip}"
+               FontFamily="Consolas,Monospace" FontSize="9"
+               Foreground="{DynamicResource Text.Secondary}"/>
+    <TextBlock Grid.Row="9" Grid.Column="2" Text="{ReflectionBinding EphemerisPsAng}"
+               ToolTip.Tip="{ReflectionBinding StrPsAngTip}"
+               AutomationProperties.AutomationId="EphemerisPsAng"
                FontFamily="Consolas,Monospace" FontSize="9"
                Foreground="{DynamicResource Text.Primary}"/>
   </Grid>

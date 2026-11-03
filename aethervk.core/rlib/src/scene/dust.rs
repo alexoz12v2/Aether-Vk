@@ -714,6 +714,33 @@ pub const AU_M: f64 = 149_597_870_700.0;
 pub const SIZE_RANGE_FACTOR: f64 = 10.0;
 /// differential size distribution exponent `n(s) ∝ s^-q`
 pub const SIZE_POWER_Q: f64 = 3.5;
+/// the range of the orbit-dependent size law's exponent ([`SizeDistribution::from_diameter_um_range_q`])
+pub const SIZE_Q_MIN: f64 = 0.0;
+pub const SIZE_Q_MAX: f64 = 6.0;
+
+/// The cluster record's size-law word (`DustCluster::eject.w`, never read as `s_ref`): the
+/// reference radius `s_ref` (µm, > 0) when the batch's law is the q = 3.5 one (`size_params.z =
+/// 4 − q == 0.5` bit for bit), else `q` with its sign bit set (`q = 0` is `−0.0`: the bit, not the
+/// value, is the flag, so `q` is read back by the bits). The propagate copies the word into the
+/// moments (`DustMoments::edges[13].w`, [`splat::DustMoments::size_law`]) and the splat / specks
+/// take the law from there; a positive word leaves every record and every expression of the
+/// q = 3.5 path untouched. Mirror of `dust_size_law_word`.
+pub fn size_law_word(s_ref_um: f32, size_params: [f32; 4]) -> f32 {
+  if size_params[2] == 0.5 {
+    s_ref_um
+  } else {
+    f32::from_bits((4.0 - size_params[2]).to_bits() | 0x8000_0000)
+  }
+}
+
+/// The size law `q` a size-law word carries ([`size_law_word`]), `None` for the q = 3.5 path.
+pub fn size_law_q_of(word: f32) -> Option<f32> {
+  if word.to_bits() >> 31 != 0 {
+    Some(f32::from_bits(word.to_bits() & 0x7FFF_FFFF))
+  } else {
+    None
+  }
+}
 /// relative child velocity dispersion (fraction of the ejection speed), lower bound
 pub const CHILD_SIGMA_V_REL: f32 = 0.05;
 
@@ -1081,6 +1108,11 @@ impl DustCluster {
   /// ejection velocity of the reference grain (m/s, root frame)
   pub fn eject(&self) -> [f32; 3] {
     [self.eject[0], self.eject[1], self.eject[2]]
+  }
+  /// the size law `q` of the record's word ([`size_law_word`], `eject.w`), `None` on the q = 3.5
+  /// path
+  pub fn size_law_q(&self) -> Option<f32> {
+    size_law_q_of(self.eject[3])
   }
   /// lateral velocity dispersion σ_lat (m/s)
   pub fn sigma_lat(&self) -> f32 {
@@ -1451,6 +1483,131 @@ pub fn lit_time_map(u: f32, lit: [f32; 4], omega: f32, dur: f32) -> f32 {
   ((psi - ps) / omega).clamp(0.0, dur)
 }
 
+/// Bisection steps of [`insol_time_map`]'s arc inversion (mirror of `DUST_INSOL_BISECT_STEPS`):
+/// 2ψ0 / 2²⁴ rad, far below the f32 resolution of the phase of a long window.
+pub const INSOL_BISECT_STEPS: u32 = 24;
+
+/// Insolation measure within a lit arc, in units of `R`: `∫_{−ψ0}^{ψl} (cos ψ − c) dψ` of the local
+/// phase `ψl ∈ [−ψ0, ψ0]` about the arc centre (0 at the arc start, [`insol_arc_measure`] at its
+/// end; non-decreasing: the integrand is ≥ 0 on the arc). f32, mirror of `dust_insol_arc_cum`.
+#[inline]
+pub fn insol_arc_cum(psi_local: f32, psi0: f32, c: f32) -> f32 {
+  (<f32 as FloatLike>::sin(psi_local) + <f32 as FloatLike>::sin(psi0)) - c * (psi_local + psi0)
+}
+
+/// Insolation measure of a whole lit arc (`R` units): `2 sin ψ0 − 2 c ψ0` (mirror of
+/// `dust_insol_arc_measure`)
+#[inline]
+pub fn insol_arc_measure(psi0: f32, c: f32) -> f32 {
+  2.0 * <f32 as FloatLike>::sin(psi0) - 2.0 * c * psi0
+}
+
+/// The local phase `ψl ∈ [lo, ψ0]` at which [`insol_arc_cum`] reaches `target` (bisection,
+/// [`INSOL_BISECT_STEPS`] halvings; mirror of `dust_insol_arc_invert`)
+#[inline]
+fn insol_arc_invert(target: f32, lo: f32, psi0: f32, c: f32) -> f32 {
+  let (mut lo, mut hi) = (lo, psi0);
+  for _ in 0..INSOL_BISECT_STEPS {
+    let mid = 0.5 * (lo + hi);
+    if insol_arc_cum(mid, psi0, c) < target {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+  0.5 * (lo + hi)
+}
+
+/// f32 lit phase measure of `[−π, x]` (mirror of `dust_lit_measure`; the f64 one is
+/// `lit_measure`): the lit phase between two instants of an insolation-weighted window
+#[inline]
+pub fn lit_measure_f32(x: f32, psi0: f32) -> f32 {
+  const TWO_PI: f32 = 2.0 * core::f32::consts::PI;
+  let turns = <f32 as FloatLike>::floor((x + core::f32::consts::PI) / TWO_PI);
+  let wrapped = x - TWO_PI * turns;
+  turns * 2.0 * psi0 + (wrapped + psi0).clamp(0.0, 2.0 * psi0)
+}
+
+/// Emission offset `dt ∈ [0, dur]` (s) of the stratified sample `u ∈ [0, 1]` of an
+/// **insolation-weighted** window ([`LIT_MODE_INSOLATION`]): the emission density is
+/// `max(0, cos i) = R · max(0, cos ψ − c)` over the spin phase `ψ`, so `u` is the quantile of the
+/// cumulative insolation. `lit` = `[ψ_start, ψ0, W, mode]` with `W` the window's total measure
+/// (`R` units, [`LitWindow::insol_measure`]), `c` = `−A/R` ([`LitWindow::c`]; `< −1` when the
+/// site never sets, ψ0 = π then), `omega` = `spin.w`. The arc walk is that of [`lit_time_map`]
+/// (inclusive arc ends: `u = 1` is the end of the last lit arc); within an arc the cumulative
+/// `insol_arc_cum` is inverted by bisection. Mirror of `dust_insol_time_map`.
+#[inline]
+pub fn insol_time_map(u: f32, lit: [f32; 4], c: f32, omega: f32, dur: f32) -> f32 {
+  const TWO_PI: f32 = 2.0 * core::f32::consts::PI;
+  if !(lit[3] == LIT_MODE_INSOLATION) || !(omega > 0.0) || !(lit[1] > 0.0) || !(lit[2] > 0.0) {
+    return u * dur;
+  }
+  let (ps, p0) = (lit[0], lit[1]);
+  let arc = 2.0 * p0;
+  let w_arc = insol_arc_measure(p0, c);
+  if !(w_arc > 0.0) {
+    return u * dur;
+  }
+  // lit arcs are `(−ψ0, ψ0) + 2πk`; the first lit segment at or after `ψ_start`
+  let (seg_start, arc_start) = if ps < -p0 {
+    (-p0, -p0)
+  } else if ps < p0 {
+    (ps, -p0)
+  } else {
+    (TWO_PI - p0, TWO_PI - p0)
+  };
+  // local phase of the segment start about its arc centre, and the measure already consumed
+  let seg_lo = seg_start - arc_start - p0;
+  let seg_cum0 = insol_arc_cum(seg_lo, p0, c);
+  let seg_w = (w_arc - seg_cum0).max(0.0);
+  let m = u * lit[2];
+  let eps = LIT_ARC_END_EPS * w_arc;
+  let psi = if m <= seg_w + eps {
+    let target = seg_cum0 + m.min(seg_w);
+    arc_start + p0 + insol_arc_invert(target, seg_lo, p0, c)
+  } else {
+    let m = m - seg_w;
+    let k = <f32 as FloatLike>::floor(m / w_arc);
+    let r = m - k * w_arc;
+    // an arc starting past the window's end holds no measure: r is the rounding of the f32 arc
+    // measure (2 sin ψ0 − 2cψ0 cancels at high c) against the host's total, and the sample is
+    // the end of the arc before it
+    let next_arc = arc_start + TWO_PI + k * TWO_PI;
+    if r <= eps || next_arc > ps + omega * dur {
+      arc_start + k * TWO_PI + arc
+    } else {
+      next_arc + p0 + insol_arc_invert(r, -p0, p0, c)
+    }
+  };
+  ((psi - ps) / omega).clamp(0.0, dur)
+}
+
+/// [`stream_dark_before`] of an insolation-weighted window: the dark phase between the previous
+/// sample of the stream and cluster `j` is the elapsed phase less the lit phase between the two
+/// instants ([`lit_measure_f32`]; the samples are no longer uniform in lit phase, so the share
+/// `(u − u_prev)` of the window's measure does not give it). Mirror of
+/// `dust_insol_stream_dark_before`.
+pub fn insol_stream_dark_before(batch: &DustBatch, j: u32) -> bool {
+  let shift = batch_streams(batch).0;
+  let i = j >> shift;
+  let omega = batch.spin[3];
+  let dur = batch.comet_v_dur_hi[3] + batch.comet_v_dur_lo[3];
+  let c = batch.site_offset[3];
+  let u = stream_time_u01(batch, j);
+  let dt_prev = if i == 0 {
+    0.0
+  } else {
+    let up = stream_time_u01(batch, j - (1 << shift));
+    insol_time_map(up, batch.lit, c, omega, dur)
+  };
+  let dt = insol_time_map(u, batch.lit, c, omega, dur);
+  let (ps, p0) = (batch.lit[0], batch.lit[1]);
+  let elapsed = omega * (dt - dt_prev);
+  let lit_between = lit_measure_f32(ps + omega * dt, p0) - lit_measure_f32(ps + omega * dt_prev, p0);
+  let dark = elapsed - lit_between;
+  dark > 2.0 * core::f32::consts::PI * STREAM_BREAK_TURNS && dark > STREAM_BREAK_FRACTION * elapsed
+}
+
 /// uniform direction inside a cone around unit `dir` with half aperture `aperture`
 fn sample_cone(u1: f32, u2: f32, dir: [f32; 3], aperture: f32) -> [f32; 3] {
   let cos_a = <f32 as FloatLike>::cos(aperture);
@@ -1610,6 +1767,14 @@ fn emission_offset(batch: &DustBatch, u: f32) -> Df {
   let dur = Df::new(batch.comet_v_dur_hi[3], batch.comet_v_dur_lo[3]);
   if batch.lit[3] == LIT_MODE_PERIODIC {
     Df::from_f32(lit_time_map(u, batch.lit, batch.spin[3], dur.hi + dur.lo))
+  } else if batch.lit[3] == LIT_MODE_INSOLATION {
+    Df::from_f32(insol_time_map(
+      u,
+      batch.lit,
+      batch.site_offset[3],
+      batch.spin[3],
+      dur.hi + dur.lo,
+    ))
   } else {
     dur.mul_f(u)
   }
@@ -1630,6 +1795,9 @@ pub fn stream_dark_before(batch: &DustBatch, j: u32) -> bool {
   let shift = batch_streams(batch).0;
   let i = j >> shift;
   let omega = batch.spin[3];
+  if batch.lit[3] == LIT_MODE_INSOLATION && omega > 0.0 {
+    return insol_stream_dark_before(batch, j);
+  }
   if !(batch.lit[3] == LIT_MODE_PERIODIC) || !(omega > 0.0) {
     return false;
   }
@@ -1813,7 +1981,7 @@ pub fn emit_cluster(batch: &DustBatch, j: u32) -> DustCluster {
     v0_hi_beta: [v0.hi[0], v0.hi[1], v0.hi[2], beta],
     v0_lo_mass: [v0.lo[0], v0.lo[1], v0.lo[2], mass_g],
     misc: [sigma_lat, sigma_rad, xsec_per_g, dbeta],
-    eject: [eject[0], eject[1], eject[2], s_ref],
+    eject: [eject[0], eject[1], eject[2], size_law_word(s_ref, batch.size_params)],
   }
 }
 
@@ -1928,20 +2096,34 @@ impl SizeDistribution {
     Self::from_diameter_um_range(diameter_um, SIZE_RANGE_FACTOR)
   }
   /// The distribution of radii `r/F .. r·F` about the configured radius `r`
-  /// (`ParticleSystemEmitParams::size_range`, ≥ 1). The exponent stays [`SIZE_POWER_Q`]: the
-  /// continuum's size polyline is laid out for it (`size_edge_sqrt_beta`); the Model's `size_q`
-  /// enters the speck counts only (`ParticleSystemEmitParams::size_q`).
+  /// (`ParticleSystemEmitParams::size_range`, ≥ 1) with the exponent [`SIZE_POWER_Q`]: the law
+  /// of every jet whose orbit-dependent size distribution is off.
   pub fn from_diameter_um_range(diameter_um: f32, range: f64) -> Self {
+    Self::from_diameter_um_range_q(diameter_um, range, SIZE_POWER_Q)
+  }
+  /// [`Self::from_diameter_um_range`] with the exponent `q` of `n(s) ∝ s^-q` ([`SIZE_Q_MIN`] to
+  /// [`SIZE_Q_MAX`]; anything else reads as [`SIZE_POWER_Q`]). The exponent enters the mass →
+  /// cross-section conversion (`size_mean_inv_s_um`), the Afρ closure
+  /// ([`Self::mean_speed_factor`]), the tier truncation ([`Self::truncated`]) and, through the
+  /// batch's `size_params.z = 4 − q`, the clusters' size-law word ([`size_law_word`]): the
+  /// continuum's bins keep their `√β`-linear edges and take the law's cross-section share each
+  /// (`splat::bin_xsec_share`) with the in-bin ramp `∝ u^(2q−8)` (`splat::bin_density_ends_q`).
+  pub fn from_diameter_um_range_q(diameter_um: f32, range: f64, q: f64) -> Self {
     let r = (diameter_um as f64 * 0.5).max(1e-3);
     let f = if range.is_finite() && range >= 1.0 {
       range
     } else {
       SIZE_RANGE_FACTOR
     };
+    let q = if q.is_finite() && (SIZE_Q_MIN..=SIZE_Q_MAX).contains(&q) {
+      q
+    } else {
+      SIZE_POWER_Q
+    };
     Self {
       s_min_um: r / f,
       s_max_um: r * f,
-      q: SIZE_POWER_Q,
+      q,
     }
   }
   /// The distribution without grains smaller than `s_min · factor` (capped at `s_max / 2`), and the
@@ -2128,6 +2310,9 @@ pub fn batch_params(
 pub const LIT_MODE_ALWAYS: f32 = 0.0;
 /// [`DustBatch::lit`] mode: the site goes in and out of daylight with the nucleus spin
 pub const LIT_MODE_PERIODIC: f32 = 1.0;
+/// [`DustBatch::lit`] mode: insolation-weighted emission over a varying incidence
+/// (`lit = [ψ_start, ψ0, W, mode]`, `c` in `site_offset.w`, see [`insol_time_map`])
+pub const LIT_MODE_INSOLATION: f32 = 2.0;
 
 /// Illumination of the jet site over `[0, dur]` from a window start, for a nucleus spinning
 /// uniformly about a fixed axis, with the Sun direction frozen over the window (it moves < 1°/day).
@@ -2146,6 +2331,22 @@ pub struct LitWindow {
   pub lit_phase: f64,
   /// lit time over the window (s)
   pub lit_time_s: f64,
+
+  // ── insolation weighting (only read with "Insolation-weighted emission" on) ──
+  /// `c = −A/R`: the site is lit where `cos ψ > c`; `< −1` never sets, `≥ 1` never rises; NaN when
+  /// the incidence does not vary (`R ≈ 0`: Sun or site on the spin axis)
+  pub c: f64,
+  /// spin phase at the window start for the insolation map, `[−π, π)` ([`Self::psi_start`] in
+  /// periodic mode, the true phase when the site never sets; 0 when the incidence is constant)
+  pub insol_psi_start: f64,
+  /// lit half arc of the insolation map: [`Self::psi0`] in periodic mode, π when the site never
+  /// sets, 0 otherwise
+  pub insol_psi0: f64,
+  /// `∫ max(0, cos ψ − c) dψ` over the window (`R` units); 0 when the incidence is constant
+  pub insol_measure: f64,
+  /// `∫ max(0, cos i) dt` over the window (s): the insolation-weighted lit time, `≤ lit_time_s`
+  /// (`cos i ≤ 1`), with equality only where `cos i = 1` over the whole lit time
+  pub insol_time_s: f64,
 }
 
 /// wraps to `[−π, π)`
@@ -2164,12 +2365,19 @@ impl LitWindow {
     } else {
       0.0
     };
-    let constant = |lit: bool| LitWindow {
+    // a constant incidence `cos i = ŝ·n0` (no spin, or the Sun / the site on the axis): lit or
+    // dark for the whole window, the insolation time is `max(0, cos i) · dur`
+    let constant = |lit: bool, cos_i: f64| LitWindow {
       mode: LIT_MODE_ALWAYS,
       psi_start: 0.0,
       psi0: if lit { PI } else { 0.0 },
       lit_phase: 0.0,
       lit_time_s: if lit { dur_s } else { 0.0 },
+      c: f64::NAN,
+      insol_psi_start: 0.0,
+      insol_psi0: 0.0,
+      insol_measure: 0.0,
+      insol_time_s: cos_i.max(0.0) * dur_s,
     };
     let (sa, na) = (dot(sun, axis), dot(n0, axis));
     let s_perp = sub(sun, scale(axis, sa));
@@ -2177,16 +2385,10 @@ impl LitWindow {
     let a = sa * na;
     let r = norm(s_perp) * norm(n_perp);
     if !(omega > 0.0) || !omega.is_finite() || r < 1e-9 {
-      return constant(dot(sun, n0) > 0.0);
+      let cos_i = dot(sun, n0);
+      return constant(cos_i > 0.0, cos_i);
     }
     let c = -a / r;
-    if c <= -1.0 {
-      return constant(true);
-    }
-    if c >= 1.0 {
-      return constant(false);
-    }
-    let psi0 = <f64 as FloatLike>::acos(c);
     // ŝ·n(t) − A = (ŝ⊥·n⊥) cos ωt + ŝ·(a × n⊥) sin ωt = R cos(ωt − φ)
     let a_x_n = [
       axis[1] * n_perp[2] - axis[2] * n_perp[1],
@@ -2195,13 +2397,40 @@ impl LitWindow {
     ];
     let phi = <f64 as FloatLike>::atan2(dot(sun, a_x_n), dot(s_perp, n_perp));
     let psi_start = wrap_pi(-phi);
+    if c <= -1.0 {
+      // never sets: lit over the whole window, the incidence still varies with the spin
+      let insol_measure =
+        insol_measure(psi_start + omega * dur_s, PI, c) - insol_measure(psi_start, PI, c);
+      return LitWindow {
+        c,
+        insol_psi_start: psi_start,
+        insol_psi0: PI,
+        insol_measure,
+        insol_time_s: (r * insol_measure / omega).clamp(0.0, dur_s),
+        ..constant(true, 1.0)
+      };
+    }
+    if c >= 1.0 {
+      return LitWindow {
+        c,
+        ..constant(false, 0.0)
+      };
+    }
+    let psi0 = <f64 as FloatLike>::acos(c);
     let lit_phase = lit_measure(psi_start + omega * dur_s, psi0) - lit_measure(psi_start, psi0);
+    let insol_measure =
+      insol_measure(psi_start + omega * dur_s, psi0, c) - insol_measure(psi_start, psi0, c);
     LitWindow {
       mode: LIT_MODE_PERIODIC,
       psi_start,
       psi0,
       lit_phase,
       lit_time_s: (lit_phase / omega).clamp(0.0, dur_s),
+      c,
+      insol_psi_start: psi_start,
+      insol_psi0: psi0,
+      insol_measure,
+      insol_time_s: (r * insol_measure / omega).clamp(0.0, dur_s),
     }
   }
 
@@ -2214,6 +2443,37 @@ impl LitWindow {
       self.mode,
     ]
   }
+
+  /// [`DustBatch::lit`] encoding of an insolation-weighted window, with the `c` that goes into
+  /// `site_offset.w`: `[ψ_start, ψ0, W, LIT_MODE_INSOLATION]` where the incidence varies (periodic
+  /// or never setting), else the [`Self::to_gpu`] encoding (a constant incidence: uniform
+  /// instants, the mass already weighted) and `c = 0`
+  pub fn to_gpu_insolation(&self) -> ([f32; 4], f32) {
+    if self.insol_psi0 > 0.0 && self.insol_measure > 0.0 && self.c.is_finite() {
+      (
+        [
+          self.insol_psi_start as f32,
+          self.insol_psi0 as f32,
+          self.insol_measure as f32,
+          LIT_MODE_INSOLATION,
+        ],
+        self.c as f32,
+      )
+    } else {
+      (self.to_gpu(), 0.0)
+    }
+  }
+}
+
+/// insolation measure of `[−π, x]` in `R` units: `∫ max(0, cos ψ − c) dψ` with lit arcs
+/// `(−ψ0, ψ0) + 2πk` (monotonic, [`insol_arc_measure`]-sized increments per turn; f64 host form
+/// of [`insol_arc_cum`]). `ψ0 = π` for a site that never sets (`c < −1`)
+fn insol_measure(x: f64, psi0: f64, c: f64) -> f64 {
+  use core::f64::consts::PI;
+  let turns = <f64 as FloatLike>::floor((x + PI) / (2.0 * PI));
+  let y = wrap_pi(x).clamp(-psi0, psi0);
+  let per_turn = 2.0 * <f64 as FloatLike>::sin(psi0) - 2.0 * c * psi0;
+  turns * per_turn + (<f64 as FloatLike>::sin(y) + <f64 as FloatLike>::sin(psi0)) - c * (y + psi0)
 }
 
 /// lit phase measure of `[−π, x]` (monotonic, periodic increments of `2ψ0` per turn)
@@ -2475,11 +2735,39 @@ pub struct JetState {
   /// centre plus `rot · site_offset_m`. Emission turns it with the spin over a window
   /// ([`emit_cluster`]); zero for a jet at the centre.
   pub site_offset_m: [f32; 3],
+  /// Diagnostic only (the frozen-comet comparison, `logic_thread::set_frozen_comet_epoch`): the
+  /// emission conditions of another instant. `None` (always, outside that diagnostic): the
+  /// window's own state gives them.
+  pub conditions: Option<EmissionConditions>,
+}
+
+/// The heliocentric state a window's emission conditions are taken from when they are not the
+/// window's own ([`JetState::conditions`]): the Sun direction of the lit gating and the insolation
+/// weighting ([`JetState::sun_dir`]) and the heliocentric distance and perihelion time of the
+/// emission config. The origin, velocity, attitude and spin stay the window's.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EmissionConditions {
+  /// scaled seconds since the start epoch of the conditions' instant
+  pub t_s: f64,
+  /// heliocentric position (m) at that instant
+  pub r_m: V3,
 }
 
 impl JetState {
+  /// the heliocentric position and scaled time the emission conditions come from: the window's
+  /// own, or [`Self::conditions`] when set
+  pub fn conditions_r_t(&self) -> (V3, f64) {
+    match &self.conditions {
+      Some(c) => (c.r_m, c.t_s),
+      None => (self.r_m, self.t_s),
+    }
+  }
   /// unit direction towards the Sun
   pub fn sun_dir(&self) -> V3 {
+    if let Some(c) = &self.conditions {
+      let n = norm(c.r_m);
+      return if n > 0.0 { scale(c.r_m, -1.0 / n) } else { [0.0, 0.0, 1.0] };
+    }
     let n = norm(self.r_m);
     if n > 0.0 {
       scale(self.r_m, -1.0 / n)
@@ -2565,6 +2853,9 @@ pub struct DustDrawState {
   /// speck pass's defaults)
   pub s_ref_um: f32,
   pub size_q: f32,
+  /// whether the system emits with the orbit-dependent size law (`ParticleSystemEmitParams::orbit_size_law`):
+  /// the frame binds the size-law pipelines when any drawn system has it
+  pub size_law: bool,
   /// the newest live batches (newest first, at most [`DUST_READY_TAIL`]): their first slot's
   /// offset in the drawn range and their ready value, so the renderer's cadence can name the
   /// slots emitted or re-emitted (the provisional window) since its previous frame
@@ -2685,6 +2976,11 @@ pub struct DustHostState {
   /// thread submitted `MAX_SEEK_PASSES` empty compute passes per tick and the driver's host heap
   /// was gone in a minute)
   pub jet_unavailable: bool,
+  /// "Insolation-weighted emission" (`ParticleSystemEmitParams::insolation_weighted`, set by the
+  /// system every tick): a window's mass is `Q · ∫ max(0, cos i) dt` and its emission instants
+  /// follow the cosine of the incidence ([`LitWindow::insol_time_s`], [`insol_time_map`]).
+  /// Off (the default): the binary lit / dark gating, unchanged
+  pub insolation_weighted: bool,
 }
 
 impl DustHostState {
@@ -2711,6 +3007,7 @@ impl DustHostState {
       max_streams: DUST_STREAMS,
       unlit_windows: 0,
       jet_unavailable: false,
+      insolation_weighted: false,
     }
   }
 
@@ -2918,7 +3215,13 @@ impl DustHostState {
     };
     // older tiers keep the larger grains only (the trail population), the rest has left the field
     let (dist, mass_fraction) = cfg.dist.truncated(self.band.s_min_factor);
-    let mass_g = q * 1e3 * lit.lit_time_s * mass_fraction;
+    // insolation-weighted: `Q · ∫ max(0, cos i) dt`; off: `Q · lit_time`, the expression as it
+    // was before the flag (same operands, same order: bit-identical)
+    let mass_g = if self.insolation_weighted {
+      q * 1e3 * lit.insol_time_s * mass_fraction
+    } else {
+      q * 1e3 * lit.lit_time_s * mass_fraction
+    };
     if !(mass_g > 0.0) {
       self.unlit_windows = self.unlit_windows.saturating_add(1);
       return None;
@@ -2953,7 +3256,13 @@ impl DustHostState {
       spin[2] as f32,
       spin[3] as f32,
     ];
-    desc.lit = lit.to_gpu();
+    if self.insolation_weighted {
+      let (l, c) = lit.to_gpu_insolation();
+      desc.lit = l;
+      desc.site_offset[3] = c;
+    } else {
+      desc.lit = lit.to_gpu();
+    }
     desc.jet_dir_aperture = [
       cfg.jet_dir[0],
       cfg.jet_dir[1],
@@ -3020,6 +3329,7 @@ impl DustHostState {
       ttl_s: self.ttl_s as f32,
       s_ref_um: 0.0,
       size_q: 0.0,
+      size_law: false,
       ready_tail,
       ready_tail_len,
     })
@@ -3079,6 +3389,12 @@ pub struct DustSystemState {
   /// (`ParticleSystemEmitParams::size_q`), set by the emission tick: the speck counts
   pub s_ref_um: f32,
   pub size_q: f32,
+  /// whether the system emits with the orbit-dependent size law (`ParticleSystemEmitParams::orbit_size_law`):
+  /// the frame binds the size-law pipelines when any drawn system has it
+  pub size_law: bool,
+  /// "Insolation-weighted emission" of the jet ([`DustHostState::insolation_weighted`]), set by
+  /// the emission tick and handed to every tier; a change re-emits (the jet's parameters changed)
+  pub insolation_weighted: bool,
   /// the emission inputs changed (rotation model, jet parameters): the next [`Self::tick`] drops
   /// the history and re-emits it with the new ones ([`Self::request_reemit`])
   pub reemit: bool,
@@ -3137,6 +3453,8 @@ impl DustSystemState {
       albedo: 0.0,
       s_ref_um: 0.0,
       size_q: 0.0,
+      size_law: false,
+      insolation_weighted: false,
       reemit: false,
       spin_model: None,
       complete: false,
@@ -3245,6 +3563,7 @@ impl DustSystemState {
     let mut budget = MAX_WINDOWS_PER_TICK;
     let mut out = alloc::vec::Vec::new();
     for t in &mut self.tiers {
+      t.insolation_weighted = self.insolation_weighted;
       for b in t.tick_budget(t_now_s, jet_at, cfg_at, &mut budget) {
         out.push((t.ring_base, b, self.upload_seq));
         self.upload_seq += 1;
@@ -3277,6 +3596,7 @@ impl DustSystemState {
       s.albedo = self.albedo;
       s.s_ref_um = self.s_ref_um;
       s.size_q = self.size_q;
+      s.size_law = self.size_law;
     }
     states
   }

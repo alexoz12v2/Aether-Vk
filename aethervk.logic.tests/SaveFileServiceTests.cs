@@ -176,6 +176,33 @@ public sealed class SaveFileServiceTests : IDisposable
   }
 
   /// <summary>
+  /// A state dumped by an older engine is restored when the engine still reads that version and
+  /// describes the live scene, in that version's terms, by the saved hash (an older save opened by
+  /// a newer release); when the engine cannot express the scene in that version, the open seeks.
+  /// </summary>
+  [Theory]
+  [InlineData(true)]
+  [InlineData(false)]
+  public async Task Open_RestoresAnOlderVersionState_WhenTheEngineStillReadsIt(bool expressible)
+  {
+    var saved = Populated();
+    await new SaveFileService(saved, new Clock()).SaveAsync(SaveDir);
+    var (index, _) = SaveIndexIo.Read(SaveDir);
+    var oldVersion = index!.States[0].DumpVersion;
+    // the older engine's description of this scene: what it hashed when it saved
+    var oldJson = File.ReadAllText(Path.Combine(SaveDir, index.States[0].File)).Split('|')[0];
+    // a newer engine: the state is of an older version, matched only through the legacy reader
+    var host = new FakeSaveFileHost(_root) { DumpVersion = oldVersion + 1 };
+    host.LegacyCompatibility[oldVersion] = () => expressible ? oldJson : null;
+    var r = await new SaveFileService(host, new Clock()).OpenAsync(SaveDir);
+    Assert.True(r.Success);
+    Assert.Equal(expressible, r.StateRestored);
+    Assert.Equal(!expressible, r.Sought);
+    Assert.Equal(expressible, host.Calls.Any(c => c.StartsWith("restore", StringComparison.Ordinal)));
+    Assert.Equal(4000ul, host.Timeline.CurrentEpoch!.Nanoseconds);
+  }
+
+  /// <summary>
   /// Expiry at open: only entries that are both unused for more than 10 h and not current
   /// (latest state / committed SPK) go, with their files.
   /// </summary>

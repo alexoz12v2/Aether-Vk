@@ -169,8 +169,7 @@ public sealed class ManualCaptureTests(ITestOutputHelper output)
       c.S.EnsureAlive($"before {stem}");
       c.ResetDelta();
       shot.Setup(c);
-      if (shot.Key != "help-flyout") // a help flyout hides once the pointer leaves it
-        c.Park();
+      c.Park(); // a help flyout is pinned: parking the pointer does not close it
       Thread.Sleep(700); // layout, hover fade
       var crop = shot.Crop(c);
       var rect = Rectangle.Intersect(crop.Rect, new Rectangle(_monitor.Left, _monitor.Top, _monitor.Width, _monitor.Height));

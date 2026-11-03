@@ -23,6 +23,8 @@ public partial class DesignModelTabViewModel
         j.LongitudeDeg = 45f;
         // its own grain, unlike the defaults (100 µm)
         j.DiametreUm = 250f;
+        // the engine's β of that grain (0.8 g/cm³, Q_pr 1): 0.574 / (0.8 · 125)
+        j.Beta = 0.00574f;
     }
     else
     {
@@ -78,15 +80,16 @@ public partial class DesignModelTabViewModel
 
   public AetherVk.Logic.Utils.CurvePlotModel? DustRatePlot { get; } =
     AetherVk.Logic.Utils.DustCurves.DustRatePlot(2, 2, 15, 2000, 1.3);
-  public AetherVk.Logic.Utils.CurvePlotModel? SizeDistributionPlot { get; } =
-    AetherVk.Logic.Utils.DustCurves.SizeDistributionPlot(100, 10, 3.5);
   public AetherVk.Logic.Utils.CurvePlotModel? JetDustRatePlot { get; } =
     AetherVk.Logic.Utils.DustCurves.DustRatePlot(2, 2, 15, 2000, 1.3);
   public AetherVk.Logic.Utils.CurvePlotModel? JetSizeDistributionPlot { get; } =
     AetherVk.Logic.Utils.DustCurves.SizeDistributionPlot(100, 10, 3.5);
+  public AetherVk.Logic.Utils.CurvePlotModel? JetSizeQPlot { get; } =
+    AetherVk.Logic.Utils.DustCurves.SizeQOrbitPlot(AetherVk.Logic.Models.SizeQTable.From(
+      new[] { new AetherVk.Logic.Models.SizeQPoint(-200, 2.5f), new AetherVk.Logic.Models.SizeQPoint(0, 3.5f), new AetherVk.Logic.Models.SizeQPoint(30, 4f) }), 3.5);
 
-  public string SizeRangeNote { get; } = "Simulated grains: diameters 10-1000 µm. The continuous dust assumes q = 3.5 over this range; your q changes only the bright specks.";
-  public string JetSizeRangeNote { get; } = "Simulated grains: diameters 10-1000 µm. The continuous dust assumes q = 3.5 over this range; your q changes only the bright specks.";
+  public string SizeRangeNote { get; } = "Simulated grains: diameters 10-1000 µm. The continuous dust uses q = 3.5 over this range; with the jet's \"Orbit-dependent size distribution\" on, it uses the jet's q or its q(t) table.";
+  public string JetSizeRangeNote { get; } = "Simulated grains: diameters 25-2500 µm. The continuous dust uses q = 3.5 over this range; with the jet's \"Orbit-dependent size distribution\" on, it uses the jet's q or its q(t) table.";
   public string SizeRangeError { get; } = "";
   public string JetSizeRangeError { get; } = "";
   public string DustRateNowText { get; } =

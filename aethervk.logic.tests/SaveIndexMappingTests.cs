@@ -103,6 +103,32 @@ public class SaveIndexMappingTests
   }
 
   /// <summary>
+  /// The q of "Defaults for new jets" (<see cref="ModelSession.SizeQ"/>) survives the save, and a
+  /// save without it loads q = 3.5 whatever the session held before.
+  /// </summary>
+  [Fact]
+  public void ModelSizeQ_RoundTrips_AndAnOldSaveWithoutItLoads3_5()
+  {
+    var written = new ModelSession { SizeQ = 4.2f };
+    string json = SaveIndexIo.ToJson(new SaveIndex { Model = SaveIndexMapping.ToDto(written) });
+    Assert.Contains("\"size_q\"", json);
+
+    var back = System.Text.Json.JsonSerializer.Deserialize(json, SaveIndexJsonContext.Default.SaveIndex)!;
+    var loaded = new ModelSession { SizeQ = 2.7f };
+    SaveIndexMapping.Apply(back.Model, loaded);
+    Assert.Equal(4.2f, loaded.SizeQ);
+
+    // the same save without the field (no jets, so the only size_q is the model's)
+    string old = System.Text.RegularExpressions.Regex.Replace(json, "\"size_q\":\\s*[^,\\r\\n}]*,?", "");
+    Assert.DoesNotContain("\"size_q\"", old);
+    var oldBack = System.Text.Json.JsonSerializer.Deserialize(old, SaveIndexJsonContext.Default.SaveIndex)!;
+    var oldLoaded = new ModelSession { SizeQ = 2.7f };
+    SaveIndexMapping.Apply(oldBack.Model, oldLoaded);
+    Assert.Equal(3.5f, oldLoaded.SizeQ);
+    Assert.Equal(3.5f, oldLoaded.DefaultGrain.SizeQ);
+  }
+
+  /// <summary>
   /// A jet's own grain and activity survive the save (mapping and JSON); a jet without them (an
   /// older save) takes the model's values given to <c>FromDto</c>.
   /// </summary>
@@ -125,8 +151,10 @@ public class SaveIndexMappingTests
     var old = System.Text.Json.JsonSerializer.Deserialize(
       "{\"latitude_deg\": 5, \"seed\": 3}", SaveIndexJsonContext.Default.JetDto)!;
     Assert.Null(old.DiametreUm);
-    Assert.Equal(other, SaveIndexMapping.FromDto(old, other).Grain);
-    Assert.Equal(AetherVk.Logic.Models.JetGrain.Default, SaveIndexMapping.FromDto(old).Grain);
+    // (the dynamic model of an older jet is the old one: pre-start dust from the reference orbit,
+    // whatever the model grain's default for new jets)
+    Assert.Equal(other with { SpkBeforeStart = false }, SaveIndexMapping.FromDto(old, other).Grain);
+    Assert.Equal(AetherVk.Logic.Models.JetGrain.Default with { SpkBeforeStart = false }, SaveIndexMapping.FromDto(old).Grain);
   }
 
   [Fact]

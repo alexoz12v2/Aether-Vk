@@ -326,7 +326,7 @@
     <value>Diametro del più grande grano simulato di questo getto, in µm (da 0,01 a 10000), al massimo 1.000.000 di volte il minimo. Non può essere inferiore al diametro minimo: una coppia non valida non viene applicata (compare un errore) e i due diametri non vengono mai scambiati.</value>
   </data>
   <data name="Tabs_Model_SimulatedGrainsNote" xml:space="preserve">
-    <value>Grani simulati: diametri {0}-{1} µm. La polvere continua assume q = 3,5 su questo intervallo; il tuo q cambia solo i granelli luminosi.</value>
+    <value>Grani simulati: diametri {0}-{1} µm. La polvere continua usa q = 3,5 su questo intervallo; con «Orbit-dependent size distribution» del getto attiva, usa la q del getto o la sua tabella q(t).</value>
   </data>
   <data name="Tabs_Model_GrainRangeOutOfBounds" xml:space="preserve">
     <value>I diametri dei grani devono essere numeri tra {0} e {1} µm. Non è stato modificato nulla.</value>
@@ -642,7 +642,7 @@
     <value>Effemeridi</value>
   </data>
   <data name="Ephemeris_Tip" xml:space="preserve">
-    <value>Effemeridi astrometriche geocentriche della cometa impegnata all'epoca mostrata (corrette per il tempo luce, senza aberrazione), come in una tabella osservatore di JPL Horizons. AP Sole è il PsAng di Horizons: l'angolo di posizione del vettore Sole→cometa esteso sul cielo, da nord verso est; una coda punta vicino a esso.</value>
+    <value>Effemeridi astrometriche geocentriche della cometa impegnata all'epoca mostrata (corrette per il tempo luce, senza aberrazione), come in una tabella osservatore di JPL Horizons. Entrambi gli angoli di posizione sono misurati sul cielo da nord verso est. AP del Sole punta dalla cometa verso il Sole; PsAng (la colonna omonima di Horizons) è la direzione opposta, antisolare, il vettore Sole→cometa esteso, vicino a cui punta una coda. Differiscono di 180°.</value>
   </data>
   <data name="Ephemeris_Epoch" xml:space="preserve">
     <value>Epoca (UTC)</value>
@@ -665,8 +665,17 @@
   <data name="Ephemeris_Elongation" xml:space="preserve">
     <value>Elongazione (Sole–Terra–cometa)</value>
   </data>
-  <data name="Ephemeris_SunPa" xml:space="preserve">
-    <value>AP Sole (N→E)</value>
+  <data name="Ephemeris_PaOfSun" xml:space="preserve">
+    <value>AP del Sole (N→E)</value>
+  </data>
+  <data name="Ephemeris_PaOfSunTip" xml:space="preserve">
+    <value>Angolo di posizione della direzione dalla cometa verso il Sole, sul cielo, da nord verso est (PsAng + 180°). Il lato della chioma rivolto al Sole e il bordo illuminato del nucleo stanno da questa parte.</value>
+  </data>
+  <data name="Ephemeris_PsAng" xml:space="preserve">
+    <value>PsAng, anti-Sole (N→E)</value>
+  </data>
+  <data name="Ephemeris_PsAngTip" xml:space="preserve">
+    <value>PsAng di JPL Horizons: angolo di posizione del vettore Sole→cometa esteso, cioè della direzione antisolare, sul cielo, da nord verso est. Una coda di polveri o di ioni punta vicino a esso. È l'AP del Sole meno 180°.</value>
   </data>
   <data name="Ephemeris_Debug" xml:space="preserve">
     <value>Debug (posizione camera)</value>
@@ -750,7 +759,7 @@ Avanzate: le caselle Inizio / Fine, Ripristina e Riconferma per un intervallo di
     <value>Anticipo della polvere</value>
   </data>
   <data name="Tabs_Comet_HelpDustLead" xml:space="preserve">
-    <value>Giorni in cui i getti iniziano a emettere prima dell'epoca di inizio, da 0 a 30 (30 = una vita della polvere, il default).
+    <value>Giorni in cui i getti iniziano a emettere prima dell'epoca di inizio, da 0 alla vita della polvere più lunga tra i getti (30 giorni di default, una vita).
 
 Con 30 la coda è già completamente formata quando parte la timeline; con 0 i getti si accendono all'inizio e la coda cresce dal nulla.
 
@@ -885,6 +894,9 @@ Scrivi un'epoca dentro l'intervallo confermato e premi Invio, o Vai, per saltarc
   <data name="Tabs_Model_HelpHeaderStreamColor" xml:space="preserve">
     <value>Colore del flusso</value>
   </data>
+  <data name="Tabs_Model_JetBetaRange" xml:space="preserve">
+    <value>Intervallo di β</value>
+  </data>
   <data name="Tabs_Model_HelpHeaderJetBeta" xml:space="preserve">
     <value>β (beta)</value>
   </data>
@@ -970,7 +982,7 @@ Scrivi un'epoca dentro l'intervallo confermato e premi Invio, o Vai, per saltarc
     <value>Colore usato per disegnare questo getto nella vista (la sua polvere e la sua linea di direzione).&#10;&#10;Solo visualizzazione: non cambia la fisica.</value>
   </data>
   <data name="Tabs_Model_HelpJetBeta" xml:space="preserve">
-    <value>Calcolato, sola lettura. β è il rapporto tra la forza della pressione di radiazione solare e la gravità solare sul grano di riferimento:&#10;β ≈ 0,57 · Q_pr / (ρ · s), con ρ la densità in g/cm³ e s il raggio del grano in µm.&#10;&#10;I grani piccoli e leggeri hanno un β maggiore e si allontanano più rapidamente dal Sole.</value>
+    <value>Calcolato, sola lettura. β è il rapporto tra la forza della pressione di radiazione solare e la gravità solare su un grano: β ≈ 0,57 · Q_pr / (ρ · s), con ρ la densità in g/cm³ e s il raggio del grano in µm.&#10;&#10;β ∝ 1/s: i grani piccoli hanno un β maggiore e si allontanano più rapidamente dal Sole.&#10;&#10;La casella mostra il β del grano di riferimento, il cui diametro è la media geometrica tra il diametro minimo e il massimo. L'intervallo di β accanto copre le dimensioni dei grani simulati: il β minimo è quello del grano più grande, il β massimo quello del grano più piccolo.</value>
   </data>
   <data name="Tabs_Model_HelpJetQDust" xml:space="preserve">
     <value>Calcolato, sola lettura. Il tasso di produzione in massa di polvere a 1 UA dal Sole, in kg/s, come lo applica il motore: il Q_d a 1 UA di questo getto limitato al massimo comune al modello (Q_d massimo).</value>
@@ -985,10 +997,10 @@ Scrivi un'epoca dentro l'intervallo confermato e premi Invio, o Vai, per saltarc
     <value>Albedo geometrica della polvere di questo getto (da 0,01 a 0,5; polvere cometaria da 0,03 a 0,06). Scala solo la luminosità; la quantità di polvere è il tasso di produzione Q_d del getto.</value>
   </data>
   <data name="Tabs_Model_HelpJetSizeQ" xml:space="preserve">
-    <value>Esponente q della legge dimensionale dei grani di questo getto, n(d) ∝ d^−q sui diametri simulati (da 2 a 5; 3,5 è il valore usuale). Un q maggiore significa più grani piccoli.&#10;&#10;Limitazione: q cambia solo i singoli granelli luminosi; la resa continua della polvere assume q = 3,5 sullo stesso intervallo.</value>
+    <value>Esponente q della legge dimensionale dei grani di questo getto, n(d) ∝ d^−q sui diametri simulati (da 2 a 5; 3,5 è il valore usuale). Una q maggiore significa più grani piccoli.&#10;&#10;Quale q usa la polvere dipende da «Orbit-dependent size distribution» (Advanced: dynamic model):&#10;Disattivata: la polvere continua usa q = 3,5. Questa q determina solo i singoli grani disegnati vicino alla camera, che sono disattivati per impostazione predefinita.&#10;Attivata: la polvere continua usa questa q. Se la tabella q(t) ha righe, usa invece la tabella: q è interpolata linearmente nei giorni dal perielio e mantenuta costante fuori dalla tabella.</value>
   </data>
   <data name="Tabs_Model_HelpJetGrain" xml:space="preserve">
-    <value>I grani di polvere propri di questo getto: ogni getto ha i suoi, e un nuovo getto parte dai valori predefiniti più in basso.&#10;&#10;I grani simulati hanno diametri d dal minimo al massimo, con densità numerica n(d) ∝ d^−q (predefinito 10-1000 µm, q = 3.5).&#10;&#10;I diametri dei grani, la densità e Q_pr determinano β ∝ Q_pr/(ρ·s), cioè quanto la luce solare spinge i grani lontano dal Sole. L'albedo determina quanto sono luminosi; la quantità di polvere è il tasso di produzione Q_d del getto (Advanced: activity).&#10;&#10;Ogni campo ha il suo ? con il suo intervallo.&#10;&#10;Limitazione: q cambia solo i singoli granelli luminosi; la resa continua della polvere assume q = 3.5 sullo stesso intervallo.</value>
+    <value>I grani di polvere propri di questo getto: ogni getto ha i suoi, e un nuovo getto parte da «Defaults for new jets» più in basso.&#10;&#10;I grani simulati hanno diametri d dal minimo al massimo, con densità numerica n(d) ∝ d^−q (predefinito 10-1000 µm, q = 3,5).&#10;&#10;La dimensione dei grani, la densità e Q_pr determinano β ∝ Q_pr/(ρ·s), cioè quanto la luce solare spinge i grani lontano dal Sole. L'albedo determina quanto sono luminosi; la quantità di polvere è il tasso di produzione Q_d del getto (Advanced: activity).&#10;&#10;Quale q usa la polvere continua: con «Orbit-dependent size distribution» (Advanced: dynamic model) disattivata, q = 3,5 qualunque sia la q di questo getto. Attivata, la q di questo getto, oppure la sua tabella q(t) interpolata linearmente nei giorni dal perielio e mantenuta costante fuori da essa.&#10;&#10;Ogni campo ha il suo ? con il suo intervallo.</value>
   </data>
   <data name="Tabs_Model_HelpJetActivity" xml:space="preserve">
     <value>Il tasso di produzione in massa di polvere Q_d di questo getto a 1 UA dal Sole, in kg/s: quanta polvere produce. I getti si sommano: il totale della cometa è la lettura Σ in Advanced: activity (Q_d) tra i valori predefiniti.&#10;&#10;Q_d(r) = min(max, Q_d₀ · r^−k), nullo oltre il cutoff; l'esponente k, il cutoff e il massimo sono comuni a tutti i getti (Advanced: activity (Q_d) sotto Defaults for new jets).&#10;&#10;Q_d non dipende dal grano (densità, dimensione, albedo) né dalla velocità: questi determinano solo la luminosità e β.&#10;&#10;Le comete vanno da molto meno di 1 kg/s a migliaia di kg/s.</value>
@@ -997,7 +1009,7 @@ Scrivi un'epoca dentro l'intervallo confermato e premi Invio, o Vai, per saltarc
     <value>Il tasso di produzione in massa di polvere di questo getto a 1 UA dal Sole, in kg/s. Scala come r_h^−k fino al massimo e si annulla oltre il cutoff (entrambi comuni a tutti i getti).&#10;&#10;Le comete vanno da molto meno di 1 kg/s a migliaia di kg/s.</value>
   </data>
   <data name="Tabs_Model_HelpCopyGrain" xml:space="preserve">
-    <value>Assegna a tutti gli altri getti i grani e l'attività di questo getto: diametro minimo e massimo, densità, Q_pr, albedo, q e Q_d₀.&#10;&#10;I loro siti, velocità e colori restano invariati.</value>
+    <value>Assegna a tutti gli altri getti i grani e l'attività di questo getto: diametro minimo e massimo, densità, Q_pr, albedo, q e Q_d₀, e il suo modello dinamico: le opzioni insolazione e distribuzione dipendente dall'orbita, la sorgente pre-inizio, la vita della polvere e la tabella di q.&#10;&#10;I loro siti, velocità e colori restano invariati.</value>
   </data>
   <data name="Tabs_Model_HelpJetDefaults" xml:space="preserve">
     <value>Ogni getto ha i propri grani (diametro minimo e massimo, densità, Q_pr, albedo, q) e il proprio Q_d₀: modificali nei pannelli Grain e Activity del getto selezionato.&#10;&#10;I valori qui sono quelli da cui parte un getto appena aggiunto; cambiarli non modifica i getti esistenti. Solo la forma della legge di Q_d (esponente, cutoff, massimo, in Advanced: activity) è comune a tutti i getti.</value>
@@ -1027,7 +1039,7 @@ Scrivi un'epoca dentro l'intervallo confermato e premi Invio, o Vai, per saltarc
     <value>Limite superiore del tasso di produzione di polvere di ciascun getto, in kg/s, perché l'emissione non cresca senza limite vicino al Sole.&#10;&#10;Comune a tutti i getti.</value>
   </data>
   <data name="Tabs_Model_HelpSizeDistribution" xml:space="preserve">
-    <value>L'intervallo di dimensioni dei grani da cui partono i nuovi getti: diametro minimo e massimo del grano, in µm. L'esponente q si imposta per getto, nel pannello Grain di ciascun getto (i nuovi getti partono da q = 3.5).&#10;&#10;I grani simulati hanno diametri d dal minimo al massimo, con densità numerica n(d) ∝ d^−q (predefinito 10-1000 µm, q = 3.5). Il grafico mostra esattamente questo intervallo.&#10;&#10;In numero dominano i grani piccoli; in sezione d'urto (ciò che determina la luminosità) la legge è d^(2−q), quindi la luminosità favorisce i grani piccoli solo lentamente.&#10;&#10;La resa continua della polvere assume q = 3.5 su tutto l'intervallo; cambiare q influisce solo sui singoli granelli luminosi.</value>
+    <value>L'esponente q della legge dimensionale da cui partono i nuovi getti (da 2 a 5; 3,5 è il valore usuale). Cambiarlo non modifica i getti esistenti: ogni getto ha la sua q nel suo pannello Grain.&#10;&#10;I grani simulati hanno diametri d dal minimo al massimo, con densità numerica n(d) ∝ d^−q. Una q maggiore significa più grani piccoli.&#10;&#10;La q di un getto arriva alla sua polvere continua solo con «Orbit-dependent size distribution» del getto attiva. Disattivata, la polvere continua usa q = 3,5.</value>
   </data>
   <data name="Tabs_Settings_HelpDisplayMode" xml:space="preserve">
     <value>Predefinita: disegna il nucleo come una semplice sfera procedurale del raggio del nucleo.&#10;&#10;Mesh personalizzata: disegna una mesh 3D importata con le sue texture, scelte qui sotto (importa le mesh nella scheda Importazioni).&#10;&#10;Solo aspetto: la simulazione non cambia. La scelta si blocca mentre la simulazione è in esecuzione.</value>
@@ -1321,6 +1333,9 @@ Scrivi un'epoca dentro l'intervallo confermato e premi Invio, o Vai, per saltarc
   <data name="Overlay_LegendVelocity" xml:space="preserve">
     <value>Direzione della velocità (eliocentrica)</value>
   </data>
+  <data name="Overlay_LegendAxesAway" xml:space="preserve">
+    <value>Tratteggiato, attenuato: l'asse punta lontano da te (dietro il nucleo)</value>
+  </data>
   <data name="Overlay_LegendJet" xml:space="preserve">
     <value>Direzione del getto {0}</value>
   </data>
@@ -1359,5 +1374,41 @@ Scrivi un'epoca dentro l'intervallo confermato e premi Invio, o Vai, per saltarc
   </data>
   <data name="Tabs_Settings_HelpViewOrbitLines" xml:space="preserve">
     <value>Disegna l'orbita di riferimento della cometa (rossa), l'orbita della Terra (azzurra) e il percorso compiuto in questa simulazione (gialla). La legenda le elenca nelle viste Modello e Orbita.</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderJetDynamics" xml:space="preserve">
+    <value>Modello dinamico</value>
+  </data>
+  <data name="Tabs_Model_HelpJetDynamics" xml:space="preserve">
+    <value>Come l'emissione di questo getto evolve nel tempo. Le due opzioni sono disattivate e la vita è 30 giorni per ogni getto di un salvataggio precedente, la cui polvere resta identica; cambiare un valore qui invalida la simulazione (nuovo commit).</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderJetInsolation" xml:space="preserve">
+    <value>Emissione pesata con l'insolazione</value>
+  </data>
+  <data name="Tabs_Model_HelpJetInsolation" xml:space="preserve">
+    <value>Disattivata: il sito emette al ritmo pieno Q_d quando il Sole è sopra il suo orizzonte e nulla di notte (acceso/spento).&#10;&#10;Attivata: il ritmo è Q_d · cos i, con i l'angolo di incidenza solare al sito, integrato in forma chiusa sulla rotazione; la massa emessa è minore (uguale solo a incidenza normale) e i grani escono più fitti intorno al mezzogiorno locale.</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderJetOrbitSizeLaw" xml:space="preserve">
+    <value>Distribuzione dimensionale dipendente dall'orbita</value>
+  </data>
+  <data name="Tabs_Model_HelpJetOrbitSizeLaw" xml:space="preserve">
+    <value>Disattivata: la polvere continua usa q = 3,5 come prima.&#10;&#10;Attivata: la polvere emessa in ogni finestra usa la q di questo getto oppure, con righe nella tabella sotto, la q interpolata al tempo dal perielio della finestra.</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderJetSpkBeforeStart" xml:space="preserve">
+    <value>Polvere pre-inizio dalle effemeridi</value>
+  </data>
+  <data name="Tabs_Model_HelpJetSpkBeforeStart" xml:space="preserve">
+    <value>I getti si accendono un anticipo prima dell'epoca di inizio (scheda Cometa, anticipo polvere).&#10;&#10;Attivata: quella polvere è emessa dalle effemeridi della cometa (SPK) dove il file copre quelle date; il commit scarica l'SPK da inizio − anticipo. Disattivata: è emessa dall'orbita di riferimento, come nei salvataggi precedenti.</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderJetLifetime" xml:space="preserve">
+    <value>Vita della polvere</value>
+  </data>
+  <data name="Tabs_Model_HelpJetLifetime" xml:space="preserve">
+    <value>Per quanto un grano è mantenuto dopo l'emissione, da 1 a 365 giorni (30 di default).&#10;&#10;La polvere è emessa in tre fasce di età, ciascuna su una griglia di 256 finestre sulla sua fascia (0–1, 1–8 e 8–64 vite); i passi di emissione mostrati sono le lunghezze delle fasce divise per 256. L'anticipo polvere nella scheda Cometa non può superare la vita più lunga tra i getti.</value>
+  </data>
+  <data name="Tabs_Model_HelpHeaderJetSizeQTable" xml:space="preserve">
+    <value>q lungo l'orbita</value>
+  </data>
+  <data name="Tabs_Model_HelpJetSizeQTable" xml:space="preserve">
+    <value>Fino a 8 righe di (giorni dal perielio, q), q da 0 a 6. La q di una finestra di emissione è interpolata linearmente tra le righe e tenuta ai valori estremi fuori da esse; una riga è una q costante; nessuna riga significa la q di questo getto.&#10;&#10;I giorni negativi sono prima del perielio.</value>
   </data>
 </root>

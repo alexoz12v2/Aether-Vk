@@ -27,17 +27,21 @@ public sealed record LegendContext(
 /// The legend of the viewport: the Nucleus view's gizmo (reviewer feedback: the coloured lines
 /// were unexplained) or, in the Model and Orbit views, the orbit lines. (reviewer feedback: the coloured lines were unexplained).
 /// Shown while the view is the Nucleus view and the sphere gizmo is on; its rows follow the gizmo
-/// parts mask (<see cref="SphereGizmoPart"/>) plus one row per jet, in that jet's colour. The
-/// colours mirror <c>assets/sphere_gizmo.vert</c> (grid white, body X red, body Y green, spin axis
-/// blue, Sun yellow, velocity magenta) and the jets' <c>stream_color</c> (their direction lines).
+/// parts mask (<see cref="SphereGizmoPart"/>), a note on the dashed, dimmed axes (an axis pointing
+/// away from the viewer, behind the nucleus) whenever an axis is drawn, plus one row per jet, in
+/// that jet's colour. The colours mirror <c>assets/sphere_gizmo.vert</c> (grid white, body X red,
+/// body Y green, spin axis light blue, Sun yellow, velocity magenta, an away axis at 0.45 of its
+/// colour) and the jets' <c>stream_color</c> (their direction lines).
 /// </summary>
 public sealed partial class SphereGizmoLegendViewModel : ObservableObject, IDisposable
 {
-  // sphere_gizmo.vert: default white; X (1,0,0); Y (0,1,0); Z (0,0,1); Sun (1,1,0); VELOCITY_COLOR (1,0.35,1)
+  // sphere_gizmo.vert: default white; X (1,0,0); Y (0,1,0); SPIN_COLOR (0.45,0.68,1); Sun (1,1,0);
+  // VELOCITY_COLOR (1,0.35,1); AXIS_AWAY_DIM 0.45 (shown on white)
   internal const string GridColor = "#FFFFFF";
   internal const string BodyXColor = "#FF0000";
   internal const string BodyYColor = "#00FF00";
-  internal const string SpinColor = "#0000FF";
+  internal const string SpinColor = "#73ADFF";
+  internal const string AxesAwayColor = "#737373";
   internal const string SunColor = "#FFFF00";
   internal const string VelocityColor = "#FF59FF";
 
@@ -57,6 +61,7 @@ public sealed partial class SphereGizmoLegendViewModel : ObservableObject, IDisp
     ["Overlay_LegendSpin"] = "Spin axis (body Z)",
     ["Overlay_LegendSun"] = "Direction of the Sun",
     ["Overlay_LegendVelocity"] = "Velocity direction (heliocentric)",
+    ["Overlay_LegendAxesAway"] = "Dashed, dimmed: the axis points away from you (behind the nucleus)",
     ["Overlay_LegendJet"] = "Jet {0} direction",
     ["Overlay_LegendCometOrbit"] = "Comet orbit (reference, from the orbital elements)",
     ["Overlay_LegendEarthOrbit"] = "Earth orbit",
@@ -180,6 +185,9 @@ public sealed partial class SphereGizmoLegendViewModel : ObservableObject, IDisp
       rows.Add(new("sun", text("Overlay_LegendSun"), SunColor));
     if ((parts & SphereGizmoPart.Velocity) != 0)
       rows.Add(new("velocity", text("Overlay_LegendVelocity"), VelocityColor));
+    const uint axes = SphereGizmoPart.BodyAxes | SphereGizmoPart.SpinAxis | SphereGizmoPart.Sun | SphereGizmoPart.Velocity;
+    if ((parts & axes) != 0)
+      rows.Add(new("axes_away", text("Overlay_LegendAxesAway"), AxesAwayColor));
     foreach (var (index, color) in jets)
       rows.Add(new($"jet_{index}", string.Format(System.Globalization.CultureInfo.CurrentCulture, text("Overlay_LegendJet"), index), Hex(color)));
     return rows;

@@ -18,7 +18,7 @@ The manual follows this order. "Key" is the panel key used for LaTeX labels
 | 4 | Docking panes and tab headers | `docking` | always visible | `Tab.<Name>` per tab: `Tab.CometTab`, `Tab.TimelineTab`, `Tab.ModelTab`, `Tab.SettingsTab`, `Tab.ImportsTab`, `Tab.Viewport3D` (from `LayoutViewModels.AutomationKey`) | pane buttons: add (+), split (⇆), close (×) |
 | 5 | Comet tab | `comet` | Tab.CometTab | `CometSearchBox` (tab marker) | guided steps `GuidedSteps`/`GuidedStep1..4`; *Comet Selection* (no id); *Simulated range* `SimulatedRangeSection` › *Advanced: Start / End, Restore, Recommit* `RangeAdvancedExpander`; commit block (no expander: `ReferenceOrbitPicker`, `DownloadCommitButton`); *Nucleus* `NucleusSection`; *Rotational Model* `RotationalModelSection` › *Advanced: rates* `PolePrecessionExpander` |
 | 6 | Timeline tab | `timeline` | Tab.TimelineTab | `SpeedPicker` (tab marker) | no expanders: range boxes, speed, transport buttons (`ResetButton`, `PlayPauseButton`, `RunToEndButton`), progress, current epoch + Go |
-| 7 | Model tab | `model` | Tab.ModelTab | `DustSection` (tab marker) | *Sun* `ModelSunSection`; *Nucleus and Spin Axis* `NucleusSpinSection`; *Dust* `DustSection` › jet list + jet detail, *Grain* `JetGrainExpander`, *Advanced: activity (Q_d)* `JetActivityExpander` / `ActivityAdvancedExpander`, *Advanced: grain size distribution* `SizeDistributionAdvancedExpander` |
+| 7 | Model tab | `model` | Tab.ModelTab | `DustSection` (tab marker) | *Sun* `ModelSunSection`; *Nucleus and Spin Axis* `NucleusSpinSection`; *Dust* `DustSection` › jet list + jet detail, *Grain* `JetGrainExpander`, *Advanced: activity (Q_d)* `JetActivityExpander` / `ActivityAdvancedExpander`, *Advanced: dynamic model* `JetDynamicsExpander`; *Defaults for new jets* `JetDefaultsHelp` (size law q `DustSizeQBox`) |
 | 8 | Settings tab | `settings` | Tab.SettingsTab | `ViewportSettingsSection` (tab marker) | *Time scale for dates* `TimeScaleSection`; *General* `GeneralSection`; *Orbital Elements* `OrbitalElementsSection`; *Comet Appearance* `CometAppearanceSection` › *Custom mesh* (no id); *Billboards* `BillboardsSection` › per-billboard expander (no id) › *FITS image* `BillboardFitsSection`; *Particle rendering* `ParticleRenderingSection` (x:Name); *Input bindings* `InputBindingsSection` (x:Name); *Viewport N* `ViewportSettingsSection` › *Advanced: projection* `ProjectionAdvancedExpander` |
 | 9 | Imports tab | `imports` | Tab.ImportsTab | `ImportButton` (tab marker) | Meshes and Textures lists (no ids) |
 | 10 | 3D viewport | `viewport` | Tab.Viewport3D | `ViewportHost` | the viewport content itself (documented per view mode) |
@@ -235,6 +235,7 @@ builds only.
 | Dust | control | ColorPicker | `JetStreamColorPicker` | Stream Color | — |
 | Dust | control | PropertyHelpButton | `JetBetaHelp` | β (beta) | `Tabs_Model_HelpJetBeta` |
 | Dust | control | TextBox | `JetBetaBox` | ? | — |
+| Dust | control | TextBlock | `JetBetaRangeText` | ? | — |
 | Dust | control | PropertyHelpButton | `JetQDustHelp` | Q_dust @ 1 AU | `Tabs_Model_HelpJetQDust` |
 | Dust | control | TextBox | `JetQDustBox` | ? | — |
 | Dust | section | Expander | `JetGrainExpander` | Grain | — |
@@ -260,6 +261,21 @@ builds only.
 | Dust › Advanced: activity (Q_d) | control | TextBox | `JetDustRate0` | — | — |
 | Dust › Advanced: activity (Q_d) | control | CurvePlot | `JetDustRateCurvePlot` | — | — |
 | Dust › Advanced: activity (Q_d) | control | TextBlock | `DustRateNowText` | ? | — |
+| Dust | section | Expander | `JetDynamicsExpander` | Advanced: dynamic model | — |
+| Dust › Advanced: dynamic model | control | PropertyHelpButton | `JetDynamicsHelp` | Dynamic model | `Tabs_Model_HelpJetDynamics` |
+| Dust › Advanced: dynamic model | control | CheckBox | `JetInsolationWeighted` | Insolation-weighted emission | — |
+| Dust › Advanced: dynamic model | control | PropertyHelpButton | `JetInsolationWeightedHelp` | Insolation-weighted emission | `Tabs_Model_HelpJetInsolation` |
+| Dust › Advanced: dynamic model | control | CheckBox | `JetOrbitSizeLaw` | Orbit-dependent size distribution | — |
+| Dust › Advanced: dynamic model | control | PropertyHelpButton | `JetOrbitSizeLawHelp` | Orbit-dependent size distribution | `Tabs_Model_HelpJetOrbitSizeLaw` |
+| Dust › Advanced: dynamic model | control | CheckBox | `JetSpkBeforeStart` | Pre-start dust from the ephemeris | — |
+| Dust › Advanced: dynamic model | control | PropertyHelpButton | `JetSpkBeforeStartHelp` | Pre-start dust from the ephemeris | `Tabs_Model_HelpJetSpkBeforeStart` |
+| Dust › Advanced: dynamic model | control | PropertyHelpButton | `JetLifetimeDaysHelp` | Dust lifetime | `Tabs_Model_HelpJetLifetime` |
+| Dust › Advanced: dynamic model | control | TextBox | `JetLifetimeDays` | — | — |
+| Dust › Advanced: dynamic model | control | TextBlock | `JetEmissionStepsText` | ? | — |
+| Dust › Advanced: dynamic model | control | PropertyHelpButton | `JetSizeQTableHelp` | q along the orbit | `Tabs_Model_HelpJetSizeQTable` |
+| Dust › Advanced: dynamic model | control | ItemsControl | `JetSizeQTable` | — | — |
+| Dust › Advanced: dynamic model | control | Button | `JetSizeQTableAddRow` | Add row | — |
+| Dust › Advanced: dynamic model | control | CurvePlot | `JetSizeQCurvePlot` | — | — |
 | Dust | control | Button | `CopyGrainToAllJetsButton` | Copy to all jets | — |
 | Dust | control | PropertyHelpButton | `CopyGrainToAllJetsButtonHelp` | Copy to all jets | `Tabs_Model_HelpCopyGrain` |
 | Dust | control | PropertyHelpButton | `JetDefaultsHelp` | Defaults for new jets | `Tabs_Model_HelpJetDefaults` |
@@ -273,7 +289,10 @@ builds only.
 | Dust | control | TextBox | `DustQprBox` | Radiation pressure Q_pr | — |
 | Dust | control | PropertyHelpButton | `DustAlbedoHelp` | Geometric albedo p | `Tabs_Model_HelpDustAlbedo` |
 | Dust | control | TextBox | `DustAlbedoBox` | Geometric albedo p | — |
+| Dust | control | PropertyHelpButton | `DustSizeQHelp` | Grain size distribution | `Tabs_Model_HelpSizeDistribution` |
+| Dust | control | TextBox | `DustSizeQBox` | Size law q | — |
 | Dust | control | TextBlock | `SizeRangeError` | ? | — |
+| Dust | control | TextBlock | `SizeRangeNote` | ? | — |
 | Dust | section | Expander | `ActivityAdvancedExpander` | Advanced: activity (Q_d) | — |
 | Dust › Advanced: activity (Q_d) | control | PropertyHelpButton | `ActivityAdvancedHelp` | Activity (Q_d) | `Tabs_Model_HelpActivity` |
 | Dust › Advanced: activity (Q_d) | control | TextBlock | `TotalActivityText` | ? | — |
@@ -286,10 +305,6 @@ builds only.
 | Dust › Advanced: activity (Q_d) | control | PropertyHelpButton | `DustRateMaxBoxHelp` | Q_d max (kg/s) | `Tabs_Model_HelpDustRateMax` |
 | Dust › Advanced: activity (Q_d) | control | TextBox | `DustRateMaxBox` | — | — |
 | Dust › Advanced: activity (Q_d) | control | CurvePlot | `DustRateCurvePlot` | ? | — |
-| Dust | section | Expander | `SizeDistributionAdvancedExpander` | Advanced: grain size distribution | — |
-| Dust › Advanced: grain size distribution | control | PropertyHelpButton | `SizeDistributionAdvancedHelp` | Grain size distribution | `Tabs_Model_HelpSizeDistribution` |
-| Dust › Advanced: grain size distribution | control | CurvePlot | `SizeDistributionPlot` | — | — |
-| Dust › Advanced: grain size distribution | control | TextBlock | `SizeRangeNote` | ? | — |
 
 ## SettingsTabView  (`aethervk.ui-app/Views/SettingsTabView.axaml`)
 
@@ -485,7 +500,8 @@ builds only.
 | — | control | TextBlock | `EphemerisDelta` | ? | — |
 | — | control | TextBlock | `EphemerisPhase` | ? | — |
 | — | control | TextBlock | `EphemerisElongation` | ? | — |
-| — | control | TextBlock | `EphemerisSunPa` | ? | — |
+| — | control | TextBlock | `EphemerisPaOfSun` | ? | — |
+| — | control | TextBlock | `EphemerisPsAng` | ? | — |
 | — | control | StackPanel | `CameraHudDiagnostics` | — | — |
 | — | section | Expander | `CameraHudDebugExpander` | Debug (camera position) | — |
 | — | control | TextBlock | `EarthObserverStatus` | ? | — |
