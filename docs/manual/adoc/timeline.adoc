@@ -11,11 +11,9 @@ Before a commit the Timeline only shows the range typed in the Comet tab and a n
 
 image::img/timeline--empty--light--tagged.png[Timeline,width=900,pdfwidth=170mm]
 
-. *Timeline* -- // TODO: describe
+. *Timeline* -- Tab that shows the simulated range and, once a comet is committed, plays it: speed, reset, play or pause, run to end, and a box to jump to an epoch.
 . *Start Epoch* -- Shows the start of the simulated range in the chosen time scale. It is read-only here; change it in the Comet tab.
 . *End Epoch* -- Shows the end of the simulated range in the chosen time scale. It is read-only here; change it in the Comet tab.
-
-// TODO: some controls have no help text and no description
 
 [[timeline-committed]]
 === Timeline
@@ -27,7 +25,7 @@ After the commit the Timeline shows the committed range, the speed selector, the
 
 image::img/timeline--committed--light--tagged.png[Timeline,width=900,pdfwidth=170mm]
 
-. *Timeline* -- // TODO: describe
+. *Timeline* -- Tab that shows the simulated range and, once a comet is committed, plays it: speed, reset, play or pause, run to end, and a box to jump to an epoch.
 . *2021-12-25T11:00:59 to 2021-12-27T00:14:47* -- The range the simulation runs: the comet's ephemeris covers it, and Play, Reset, Run to End and Go stay inside it.
 . *Start Epoch* -- Shows the start of the simulated range in the chosen time scale. It is read-only here; change it in the Comet tab.
 . *End Epoch* -- Shows the end of the simulated range in the chosen time scale. It is read-only here; change it in the Comet tab.

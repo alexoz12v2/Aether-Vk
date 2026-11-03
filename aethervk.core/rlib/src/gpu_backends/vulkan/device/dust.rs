@@ -1109,6 +1109,48 @@ impl DustViewHost {
       _ => false,
     }
   }
+
+  /// This host for a view recreated over new buffers with the same layout (the cadence's
+  /// class-image span changed: Play turns the temporal reuse off, Pause back on). It keeps what
+  /// the view learned: the white points and medians (plain and 1/ρ-normalised), the unit, the
+  /// feedback (biases, memory, both regimes, warm-up, generation, budget loop, build rate), the
+  /// play pin and its saved paused state, the preview stride, the frame counter, the queue
+  /// estimates, the speck shell, the timings and the test hooks. It forgets what referred to the
+  /// old buffers: every readback slot (the readback buffer and the timestamp pool are new: no
+  /// slot holds a frame to absorb), the frame being recorded (its timestamp slot, its pending
+  /// queue draw, its chunk counts) and the drawn image (the new pyramid holds none: the next
+  /// frame draws, unrefined).
+  pub fn carried_over(self) -> Self {
+    let cold = Self::default();
+    Self {
+      // the old pyramid's image
+      drawn: None,
+      image_refined: false,
+      refine: 0,
+      refine_static: 0,
+      refine_seen: None,
+      // the frame being recorded
+      ts_slot: None,
+      queue_pending: false,
+      vqueue_chunks_frame: 0,
+      vqueue_clusters_frame: 0,
+      // the readback slots of the old readback buffer and timestamp pool
+      slot_valid: cold.slot_valid,
+      slot_nucleus_px: cold.slot_nucleus_px,
+      slot_refined: cold.slot_refined,
+      slot_unit: cold.slot_unit,
+      slot_haze: cold.slot_haze,
+      ts_written: cold.ts_written,
+      ts_frame: cold.ts_frame,
+      ts_stride: cold.ts_stride,
+      ts_reused: cold.ts_reused,
+      slot_clusters: cold.slot_clusters,
+      slot_chunks: cold.slot_chunks,
+      slot_regime: cold.slot_regime,
+      slot_probe: cold.slot_probe,
+      ..self
+    }
+  }
 }
 
 /// The warm-up's lower bias ([`DustViewHost::reset_feedback`]): from `bias`, whose frame did
@@ -2517,9 +2559,16 @@ impl Device {
     // (a changed class-image span recreates the view too: the images sit before the queues)
     let want_images = if cpu { 0 } else { mgr.cadence.get(&pe).map_or(0, |c| c.lock().image_span(&layout)) };
     let stale = mgr.views.get(&pe).is_some_and(|v| v.layout != layout || v.image_words != want_images);
+    // a view recreated for its class-image span alone (the cadence toggled: Play turns the
+    // temporal reuse off, Pause back on) keeps its host ([`DustViewHost::carried_over`]): its
+    // white point, feedback, play pin and preview stride. A new size starts a fresh host.
+    let mut carried: Option<DustViewHost> = None;
     if stale {
       let timeline = res.timeline_manager.get_next_submit_value();
       if let Some((_, mut view)) = mgr.views.remove(&pe) {
+        if view.layout == layout {
+          carried = Some(core::mem::take(view.host.get_mut()).carried_over());
+        }
         mgr.release_query_pool(view.ts_pool);
         let extra = core::mem::take(&mut view.cpu_pyramids).into_iter().map(|(b, _)| b)
       .chain(view.stride_list.get_mut().take().map(|l| l.buf));
@@ -2655,7 +2704,7 @@ impl Device {
           readback: Some(readback),
           readback_mapped: rmapped,
           ts_pool,
-          host: spin::Mutex::new(DustViewHost::default()),
+          host: spin::Mutex::new(carried.take().unwrap_or_default()),
           frame_words: spin::Mutex::new([0; dust::PYRAMID_HEADER_WORDS as usize]),
           splat_records: spin::Mutex::new([
             (u64::MAX, alloc::vec::Vec::new()),
@@ -3776,10 +3825,11 @@ impl Device {
   }
 
   /// The preview's cluster stride of `pe` for the frame about to be recorded: while `budget` is
-  /// some (the preview), a session's first frame starts at the last session's stride
+  /// some (the preview), every session's first frame starts at the preset's cap
   /// ([`dust::play_quality::PlayStride::play`]), then fed with the last GPU timing readback
-  /// ([`dust::play_quality::PlayStride::absorb`]); back to 1 otherwise (the session ends,
-  /// remembering its stride). Logs each change.
+  /// ([`dust::play_quality::PlayStride::absorb`]); back to 1 otherwise (the session ends; the
+  /// next starts at the cap again). The stride lives in the view's host, which a view recreated
+  /// for the cadence's class images keeps ([`DustViewHost::carried_over`]). Logs each change.
   pub fn dust_update_play_stride(
     &self,
     pe: gpu::PresentationEngineHandle,
@@ -3800,7 +3850,7 @@ impl Device {
     let now = host.frame;
     if let Some(s) = host.play_stride.play(now, b) {
       aethervk_oshal_rlib::log!(
-        "[Dust] view {}: preview stride {} (session start or preset cap {}, budget {} ms)",
+        "[Dust] view {}: preview stride {} (session start at the preset cap {}, or the cap lowered; budget {} ms)",
         pe.0, s, b.max_stride, b.budget_ms
       );
     }
@@ -6049,6 +6099,65 @@ mod play_pin_tests {
     h.apply_play_pin();
     assert_eq!((h.split_depth, h.volume_bias, h.ewa_bias), (2, 4, 1));
     assert_eq!(h.full_frame_feedback(), h.fb_full);
+  }
+
+  /// a view recreated for its class-image span (the cadence toggled by Play / Pause) keeps what
+  /// its host learned: the exposure, the feedback, the pin and the preview stride; only the
+  /// readback slots and the drawn image (the old buffers') are forgotten
+  #[test]
+  fn carried_over_keeps_the_exposure_feedback_pin_and_stride() {
+    let mut h = taught_host();
+    h.white = 3.5e-4;
+    h.p50 = 1.25e-5;
+    h.white_norm = 7.0e-3;
+    h.p50_norm = 2.5e-4;
+    h.tau_max = 0.75;
+    h.frame = 1234;
+    h.feedback_gen = 7;
+    h.vqueue_ppc = 91.0;
+    let budget = dust::play_quality::StrideBudget { budget_ms: 33.0, max_stride: 32 };
+    assert_eq!(h.play_stride.play(1200, budget), Some(32));
+    assert!(h.play_pin_enter(PlayFeedback::default().pin(11)));
+    h.feedback_load(1);
+    h.apply_play_pin();
+    // readbacks in flight and a drawn image
+    h.slot_valid = [true; DUST_READBACK_SLOTS];
+    h.ts_written = [1 << DUST_TS_BEGIN; DUST_READBACK_SLOTS];
+    h.ts_frame = [1230; DUST_READBACK_SLOTS];
+    h.ts_slot = Some(1);
+    h.slot_regime = [1; DUST_READBACK_SLOTS];
+    h.slot_probe = [true; DUST_READBACK_SLOTS];
+    h.slot_unit = [2.0; DUST_READBACK_SLOTS];
+    h.drawn = Some((42, alloc::vec![1, 2, 3]));
+    h.queue_pending = true;
+    let saved = h.play_saved;
+    let feedback = h.saved_feedback();
+    let pin = h.play;
+    let stride = h.play_stride;
+    let c = h.carried_over();
+    assert_eq!((c.white, c.p50, c.white_norm, c.p50_norm), (3.5e-4, 1.25e-5, 7.0e-3, 2.5e-4));
+    assert_eq!(c.tau_max, 0.75, "the unit");
+    assert_eq!((c.split_depth, c.volume_bias, c.ewa_bias), (0, 10, 3), "the pinned biases");
+    assert_eq!(c.saved_feedback(), feedback, "biases, memory, both regimes, warm-up");
+    assert_eq!((c.play, c.play_saved), (pin, saved), "the pin and the paused state it restores");
+    assert!(c.play_saved.is_some());
+    assert_eq!(c.play_stride, stride, "the preview stride");
+    assert_eq!(c.play_stride.stride(), 32);
+    assert_eq!((c.frame, c.feedback_gen, c.vqueue_ppc), (1234, 7, 91.0), "the frame counter keeps counting");
+    // the old readback buffer, timestamp pool and pyramid: nothing of them remains
+    assert_eq!(c.slot_valid, [false; DUST_READBACK_SLOTS], "no readback slot is valid");
+    assert_eq!(c.ts_written, [0; DUST_READBACK_SLOTS]);
+    assert_eq!(c.ts_frame, [0; DUST_READBACK_SLOTS]);
+    assert_eq!(c.slot_regime, [0; DUST_READBACK_SLOTS]);
+    assert_eq!(c.slot_probe, [false; DUST_READBACK_SLOTS]);
+    assert_eq!(c.slot_unit, [0.0; DUST_READBACK_SLOTS]);
+    assert_eq!(c.ts_slot, None);
+    assert!(c.drawn.is_none(), "the new pyramid holds no image: the next frame draws");
+    assert!(!c.queue_pending);
+    // the pin still leaves to the paused state saved before the recreation
+    let mut c = c;
+    assert!(c.play_pin_leave());
+    assert_eq!(c.saved_feedback(), saved.unwrap());
   }
 
   /// a feedback reset under the pin (a seek past a day while playing) is what the pause restores
