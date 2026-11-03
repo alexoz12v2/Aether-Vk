@@ -1,9 +1,14 @@
+using System;
 using System.Linq;
+using System.Threading;
 using System.Windows.Input;
 using AetherVk.Controls;
+using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -13,7 +18,7 @@ namespace AetherVk.AppTests;
 
 /// <summary>
 /// The "?" help control: footer action, accessible name, AutomationId forwarding, paragraphs and
-/// the pinned/unpinned flyout states.
+/// the always-pinned flyout.
 /// </summary>
 public class PropertyHelpButtonTests
 {
@@ -135,20 +140,67 @@ public class PropertyHelpButtonTests
   }
 
   [AvaloniaFact]
-  public void KeyboardOpenIsPinned_PointerOpenIsNot()
+  public void KeyboardAndPointerOpensAreBothPinned()
   {
     var (window, help) = Host(new PropertyHelpButton { HelpHeader = "Albedo", HelpContent = "x" });
-    help.OpenFlyout(pinned: true);
+    help.OpenFlyout();
     Dispatcher.UIThread.RunJobs();
     Assert.True(help.IsFlyoutPinned);
     help.CloseFlyout();
     Dispatcher.UIThread.RunJobs();
     Assert.False(help.IsFlyoutOpen);
+    Assert.False(help.IsFlyoutPinned);
 
-    help.OpenFlyout(pinned: false);
+    // a real click on the ?
+    var centre = TriggerCentre(window, help);
+    window.MouseDown(centre, MouseButton.Left);
+    window.MouseUp(centre, MouseButton.Left);
     Dispatcher.UIThread.RunJobs();
     Assert.True(help.IsFlyoutOpen);
-    Assert.False(help.IsFlyoutPinned);
+    Assert.True(help.IsFlyoutPinned);
     window.Close();
+  }
+
+  /// <summary>
+  /// On Win32 opening the popup can raise a PointerExited on the ? (and clear IsPointerOver) while
+  /// the mouse has not moved; the click-opened flyout must survive it and any grace delay.
+  /// </summary>
+  [AvaloniaFact]
+  public void PointerOpen_SpuriousPointerExited_FlyoutStaysOpen()
+  {
+    var (window, help) = Host(new PropertyHelpButton { HelpHeader = "Albedo", HelpContent = "x" });
+    var centre = TriggerCentre(window, help);
+    window.MouseDown(centre, MouseButton.Left);
+    window.MouseUp(centre, MouseButton.Left);
+    Dispatcher.UIThread.RunJobs();
+    Assert.True(help.IsFlyoutOpen);
+
+    var pointer = new Pointer(Pointer.GetNextFreeId(), PointerType.Mouse, true);
+    var exited = new PointerEventArgs(InputElement.PointerExitedEvent, help.TriggerButton, pointer, window, centre,
+      0, new PointerPointProperties(), KeyModifiers.None);
+    help.TriggerButton.RaiseEvent(exited);
+    Dispatcher.UIThread.RunJobs();
+
+    // well past the 350 ms pointer-away grace the flyout used to have
+    var until = DateTime.UtcNow + TimeSpan.FromMilliseconds(800);
+    while (DateTime.UtcNow < until)
+    {
+      Thread.Sleep(50);
+      Dispatcher.UIThread.RunJobs();
+    }
+    Assert.True(help.IsFlyoutOpen);
+    Assert.True(help.IsFlyoutPinned);
+
+    // an explicit close still works
+    help.CloseFlyout();
+    Dispatcher.UIThread.RunJobs();
+    Assert.False(help.IsFlyoutOpen);
+    window.Close();
+  }
+
+  private static Point TriggerCentre(Window window, PropertyHelpButton help)
+  {
+    var b = help.TriggerButton;
+    return b.TranslatePoint(new Point(b.Bounds.Width / 2, b.Bounds.Height / 2), window)!.Value;
   }
 }

@@ -282,6 +282,9 @@ struct Args {
   sky_image_check: bool,
   start: Epoch,
   spk: Option<PathBuf>,
+  /// `--naif-id N`: the comet's NAIF id in `--spk` (default 67P's 1000012; another body needs
+  /// `--spk`, the Horizons download is 67P's)
+  naif_id: i32,
   quiet: bool,
   frames_to_wait: u32,
   no_jet: bool,
@@ -386,7 +389,7 @@ fn usage() -> ! {
     "usage: dust_observer --out DIR [--days 30] [--step-hours 24] [--size 1280x800]\n\
      \x20      [--pose up-zenith|anti-sun|earth|inside] [--play SECONDS] [--play-live SECONDS --sample-s S [--play-quality-off] [--play-live-paused]] [--reemit-every N] [--check] [--dust-budget-ms MS]\n\
      \x20      [--half-height-km KM] [--fov-deg DEG] [--inside-m D | --inside-km D] [--lat DEG --lon DEG --elev M] [--sky-image-check]\n\
-     \x20      [--north-up] [--earth-field-km KM] [--ortho] [--nucleus-from-earth RADII] [--start YYYY-MM-DD[THH:MM:SS[Z]]] [--spk FILE.bsp]\n\
+     \x20      [--north-up] [--earth-field-km KM] [--ortho] [--nucleus-from-earth RADII] [--start YYYY-MM-DD[THH:MM:SS[Z]]] [--spk FILE.bsp [--naif-id N]]\n\
      \x20      [--quiet] [--settle-frames N] [--no-jet] [--hide-sun] [--no-trajectories] [--full-teardown] [--no-sheet]\n\
      \x20      [--jet LAT,LON,SPEED_MS,APERTURE_DEG[,SIGMA_FRAC]]... [--pole RA_DEG,DEC_DEG,W0_DEG,RATE_DEG_PER_DAY]\n\
      \x20      [--ignite-days D] [--prestart] [--ripple-max R] [--spin-hours H] [--mc N] [--mc-max R] [--mc-age-min S] [--view-flags F] [--exposure-ev X]\n\
@@ -427,6 +430,7 @@ fn parse_args() -> Args {
     nucleus_from_earth: None,
     start: Epoch::from_gregorian_utc(2025, 10, 2, 0, 0, 0, 0),
     spk: None,
+    naif_id: SPK_ID_67P,
     quiet: false,
     frames_to_wait: 4,
     no_jet: false,
@@ -619,6 +623,7 @@ fn parse_args() -> Args {
         a.start = Epoch::from_gregorian_utc(p[0], p[1] as u8, p[2] as u8, t[0], t[1], t[2], 0);
       }
       "--spk" => a.spk = Some(PathBuf::from(next(&mut i))),
+      "--naif-id" => a.naif_id = next(&mut i).parse().unwrap_or_else(|_| usage()),
       "-h" | "--help" => usage(),
       other => {
         eprintln!("unknown argument {other}");
@@ -643,6 +648,10 @@ fn parse_args() -> Args {
       eprintln!("--path-keep {k}: beyond the path's {} frames", a.path_frames);
       usage();
     }
+  }
+  if a.naif_id != SPK_ID_67P && a.spk.is_none() {
+    eprintln!("--naif-id other than 67P's needs --spk FILE.bsp (only 67P's SPK is downloaded)");
+    usage();
   }
   if a.out.as_os_str().is_empty() {
     eprintln!("--out DIR is required");
@@ -690,6 +699,20 @@ fn parse_args() -> Args {
 fn ymd(e: Epoch) -> String {
   let (y, m, d, _, _, _, _) = e.to_gregorian_utc();
   format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// `YYYY-MM-DD` (00:00 UTC) or `YYYY-MM-DDTHH:MM:SS` (UTC; a trailing `Z` is allowed)
+fn parse_utc(s: &str) -> Option<Epoch> {
+  let (date, time) = s.split_once(['T', ' ']).unwrap_or((s, "00:00:00"));
+  let p: Vec<i32> = date.split('-').filter_map(|x| x.parse().ok()).collect();
+  let t: Vec<u8> = time.trim_end_matches('Z').split(':').filter_map(|x| x.parse().ok()).collect();
+  if p.len() != 3 || t.len() != 3 || !(1..=12).contains(&p[1]) || !(1..=31).contains(&p[2]) {
+    return None;
+  }
+  if t[0] > 23 || t[1] > 59 || t[2] > 60 {
+    return None;
+  }
+  Some(Epoch::from_gregorian_utc(p[0], p[1] as u8, p[2] as u8, t[0], t[1], t[2], 0))
 }
 
 fn parse_ymd(s: &str) -> Option<Epoch> {
@@ -1848,12 +1871,23 @@ fn jet_params(seed: u32, isotropic: bool) -> ParticleSystemEmitParams {
     dust_rate_power: 2.0,
     dust_rate_cutoff_au: 15.0,
     dust_rate_max_kgs: 0.0,
+    ..bytemuck::Zeroable::zeroed()
   };
   // the activity input is a dust rate (v9); the observer's reference recipe stays the one an Afρ
   // of 100 cm at 1 AU (max 100 000 cm) converts to, so every capture keeps its physics (with
   // `OBSERVER_ALBEDO=0` the conversion is 0: no emission, as before)
   p.dust_rate_1au_kgs = p.dust_rate_from_afrho_kgs(100.0);
   p.dust_rate_max_kgs = p.dust_rate_from_afrho_kgs(100_000.0);
+  // `OBSERVER_SIZE_LAW_Q=<q>` (diagnostics): "Orbit-dependent size distribution" on with a constant
+  // q (the law pipeline variants get created); `OBSERVER_INSOLATION=1`: "Insolation-weighted
+  // emission" on. Both off by default, so every capture keeps its physics.
+  if let Some(q) = std::env::var("OBSERVER_SIZE_LAW_Q").ok().and_then(|v| v.trim().parse::<f32>().ok()) {
+    p.orbit_size_law = 1;
+    p.size_q = q;
+  }
+  if std::env::var("OBSERVER_INSOLATION").is_ok_and(|v| v.trim() == "1") {
+    p.insolation_weighted = 1;
+  }
   p
 }
 
@@ -2562,6 +2596,23 @@ fn main() {
     std::env::var("AETHERVK_PARTICLES_CPU").as_deref() == Ok("1")
   ));
 
+  // the frozen-comet diagnostic (`AETHERVK_DUST_FROZEN_COMET=<UTC epoch>`): every emission
+  // window takes the emission conditions (Sun direction, r_h, perihelion time) of that epoch,
+  // while the origin, velocity and spin phase stay its own. Set before any emission.
+  if let Ok(v) = std::env::var("AETHERVK_DUST_FROZEN_COMET") {
+    let v = v.trim();
+    if !v.is_empty() {
+      let Some(e) = parse_utc(v) else {
+        log_line(&format!(
+          "FATAL: AETHERVK_DUST_FROZEN_COMET={v}: expected YYYY-MM-DD[THH:MM:SS[Z]] (UTC)"
+        ));
+        std::process::exit(2);
+      };
+      aethervk_core_rlib::simulation_api::logic_thread::set_frozen_comet_epoch(e);
+      log_line(&format!("frozen comet: emission conditions of {e}"));
+    }
+  }
+
   // SPK (before the GPU comes up, so a failed download is cheap)
   // a jet ignited before the start (`--ignite-days < 0`) emits from the SPK before it: cover it
   let spk_from = start + Duration::from_days(args.ignite_days.min(0.0));
@@ -2633,7 +2684,7 @@ fn main() {
     .tx()
     .try_send(LogicCommand::TryInitComet {
       scene_id,
-      spk_id: SPK_ID_67P,
+      spk_id: args.naif_id,
       proposed_start: start,
       proposed_end: end,
       keplerian_elements: KeplerianElements {

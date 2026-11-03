@@ -82,7 +82,39 @@ pub mod v2 {
     /// maximum dust production rate, so that when the distance is really low, emission doesn't
     /// get infinitely large values. Unit: kg/s, default 2000 kg/s
     pub dust_rate_max_kgs: f32,
+    /// "Insolation-weighted emission" (0 = off, the default of older records): on, a window's
+    /// mass is `Q · ∫ max(0, cos i) dt` over the spin phase and the emission instants follow the
+    /// same weight ([`crate::scene::dust::LitWindow::insol_time_s`],
+    /// [`crate::scene::dust::insol_time_map`]); off, the site is lit or dark (binary gating,
+    /// `Q · lit_time`), bit for bit as before the flag existed
+    pub insolation_weighted: u32,
+    /// "Orbit-dependent size distribution" (0 = off): on, the continuous dust follows the jet's
+    /// own `q` ([`Self::size_q_at`], from [`Self::size_q_table`] when it has points); off, the
+    /// continuum keeps q = 3.5 as before
+    pub orbit_size_law: u32,
+    /// pre-start dust from the ephemeris (0 = off, the default of older records): on, the jet
+    /// state before the start epoch comes from the SPK whenever it covers that time, else from
+    /// the reference orbit; off, always the reference orbit before the start
+    pub spk_before_start: u32,
+    /// dust lifetime in days (1 to 365); 0 or out of range reads as 30 ([`Self::ttl_days`]), the
+    /// value every record had before the field existed
+    pub ttl_days: f32,
+    /// number of valid rows of [`Self::size_q_table`] (0 to [`SIZE_Q_TABLE_MAX`])
+    pub size_q_table_len: u32,
+    /// `q` along the orbit: rows of (days from perihelion, q), interpolated linearly in time and
+    /// held constant outside the table (one row = a constant q); only the first
+    /// `size_q_table_len` rows count
+    pub size_q_table: [[f32; 2]; SIZE_Q_TABLE_MAX],
   }
+
+  /// rows of [`ParticleSystemEmitParams::size_q_table`]
+  pub const SIZE_Q_TABLE_MAX: usize = 8;
+  /// default dust lifetime (days): the value the engine hard-coded before it was a parameter
+  pub const DEFAULT_TTL_DAYS: f32 = 30.0;
+  /// accepted dust lifetime range (days)
+  pub const TTL_DAYS_RANGE: core::ops::RangeInclusive<f32> = 1.0..=365.0;
+  /// accepted `q` range of the orbit table
+  pub const SIZE_Q_TABLE_RANGE: core::ops::RangeInclusive<f32> = 0.0..=6.0;
 
   impl ParticleSystemEmitParams {
     /// the size law exponent in force: [`Self::size_q`] when within 2..=5, else 3.5 (a zeroed or
@@ -95,6 +127,91 @@ pub mod v2 {
       }
     }
 
+    /// whether the emission is insolation-weighted ([`Self::insolation_weighted`] field ≠ 0)
+    pub fn insolation_weighted(&self) -> bool {
+      self.insolation_weighted != 0
+    }
+
+    /// whether the continuous dust follows the jet's own `q` along the orbit
+    pub fn orbit_size_law(&self) -> bool {
+      self.orbit_size_law != 0
+    }
+
+    /// whether the pre-start dust takes the SPK state when the kernel covers it
+    pub fn spk_before_start(&self) -> bool {
+      self.spk_before_start != 0
+    }
+
+    /// the dust lifetime in force (days): [`Self::ttl_days`] when within [`TTL_DAYS_RANGE`],
+    /// else [`DEFAULT_TTL_DAYS`] (a zeroed or older record)
+    pub fn ttl_days(&self) -> f32 {
+      if self.ttl_days.is_finite() && TTL_DAYS_RANGE.contains(&self.ttl_days) {
+        self.ttl_days
+      } else {
+        DEFAULT_TTL_DAYS
+      }
+    }
+
+    /// the dust lifetime in force (s)
+    pub fn ttl_s(&self) -> f64 {
+      self.ttl_days() as f64 * 86_400.0
+    }
+
+    /// the dust lifetime in force (scaled µs), the unit of
+    /// `ParticleSystemComponent::ttl_us`
+    pub fn ttl_us(&self) -> aethervk_oshal_rlib::os::time::timeus_t {
+      (self.ttl_days() as f64 * 86_400.0e6).round() as aethervk_oshal_rlib::os::time::timeus_t
+    }
+
+    /// the valid rows of the orbit table: (days from perihelion, q)
+    pub fn size_q_table(&self) -> &[[f32; 2]] {
+      let n = (self.size_q_table_len as usize).min(SIZE_Q_TABLE_MAX);
+      &self.size_q_table[..n]
+    }
+
+    /// the size law exponent of the continuous dust at `days_from_perihelion` with the orbit law
+    /// on: the table interpolated linearly in time and held constant outside it (a single row is
+    /// a constant), [`Self::size_q`] without rows; each value clamped to [`SIZE_Q_TABLE_RANGE`].
+    /// A table with unsorted times is read in order (the UI keeps it sorted); a NaN time or `q`
+    /// falls back to [`Self::size_q`]
+    pub fn size_q_at(&self, days_from_perihelion: f64) -> f32 {
+      let rows = self.size_q_table();
+      let fallback = self.size_q();
+      if rows.is_empty() || !days_from_perihelion.is_finite() {
+        return fallback;
+      }
+      let clamp = |q: f32| {
+        if q.is_finite() {
+          q.clamp(*SIZE_Q_TABLE_RANGE.start(), *SIZE_Q_TABLE_RANGE.end())
+        } else {
+          fallback
+        }
+      };
+      let t = days_from_perihelion as f32;
+      if !rows.iter().all(|r| r[0].is_finite()) {
+        return fallback;
+      }
+      if t <= rows[0][0] {
+        return clamp(rows[0][1]);
+      }
+      let last = rows[rows.len() - 1];
+      if t >= last[0] {
+        return clamp(last[1]);
+      }
+      for w in rows.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        if t >= a[0] && t <= b[0] {
+          let span = b[0] - a[0];
+          if !(span > 0.0) {
+            return clamp(b[1]);
+          }
+          let f = (t - a[0]) / span;
+          return clamp(a[1] + (b[1] - a[1]) * f);
+        }
+      }
+      clamp(last[1])
+    }
+
     /// the size range factor in force: [`Self::size_range`] when within 1..=1000, else 10
     pub fn size_range(&self) -> f32 {
       if self.size_range.is_finite() && (1.0..=1000.0).contains(&self.size_range) {
@@ -105,11 +222,45 @@ pub mod v2 {
     }
 
     /// the grain size distribution of the parameters (radius range from [`Self::size_range`])
+    /// with the q = 3.5 law: the distribution of every jet whose orbit-dependent size law is off
     pub fn size_distribution(&self) -> crate::scene::dust::SizeDistribution {
       crate::scene::dust::SizeDistribution::from_diameter_um_range(
         self.diametre_um,
         self.size_range() as f64,
       )
+    }
+
+    /// [`Self::size_distribution`] with the law exponent `q`
+    /// ([`crate::scene::dust::SizeDistribution::from_diameter_um_range_q`])
+    pub fn size_distribution_q(&self, q: f32) -> crate::scene::dust::SizeDistribution {
+      crate::scene::dust::SizeDistribution::from_diameter_um_range_q(
+        self.diametre_um,
+        self.size_range() as f64,
+        q as f64,
+      )
+    }
+
+    /// The size distribution of an emission window `days_from_perihelion` days from the committed
+    /// perihelion: with [`Self::orbit_size_law`] on the table's `q` at that time
+    /// ([`Self::size_q_at`]), else the q = 3.5 law ([`Self::size_distribution`]) whatever the
+    /// jet's `q`, so a save with the law off emits exactly as before. `None` (no reference
+    /// elements) reads as the jet's own `q` ([`Self::size_q`]).
+    pub fn size_distribution_at(
+      &self,
+      days_from_perihelion: Option<f64>,
+    ) -> crate::scene::dust::SizeDistribution {
+      if self.orbit_size_law() {
+        self.size_distribution_q(self.size_q_at(days_from_perihelion.unwrap_or(f64::NAN)))
+      } else {
+        self.size_distribution()
+      }
+    }
+
+    /// the β range of the jet's grains, `(β/F, β·F)` for the radii `r·F .. r/F`
+    /// ([`Self::beta`], [`Self::size_range`]): the UI's range next to the β box
+    pub fn beta_range(&self) -> (f32, f32) {
+      let (b, f) = (self.beta(), self.size_range());
+      (b / f, b * f)
     }
 
     /// computes the Finson-Probstein model ratio between radiation pressure force and sun
@@ -348,6 +499,21 @@ pub mod v2 {
       }
     }
 
+    /// [`Self::dust_emit_config`] for the window `days_from_perihelion` days from the committed
+    /// perihelion: the distribution of [`Self::size_distribution_at`] (the orbit-dependent law
+    /// when on), everything else the same
+    pub fn dust_emit_config_at(
+      &self,
+      r_helio_au: f32,
+      ttl_us: timeus_t,
+      days_from_perihelion: Option<f64>,
+    ) -> crate::scene::dust::DustEmitConfig {
+      crate::scene::dust::DustEmitConfig {
+        dist: self.size_distribution_at(days_from_perihelion),
+        ..self.dust_emit_config(r_helio_au, ttl_us)
+      }
+    }
+
     /// The emission parameters of one jet from its FFI record (add and modify). Every field is
     /// the jet's own: grain (diameter, density, Q_pr, albedo, size law) and activity (Afρ law)
     /// included, so a jet never reads nor writes its siblings' parameters.
@@ -369,6 +535,48 @@ pub mod v2 {
         start_velocity_mean: dto.start_velocity_mean,
         start_velocity_std: dto.start_velocity_std,
         seed: dto.seed,
+        insolation_weighted: dto.insolation_weighted,
+        orbit_size_law: dto.orbit_size_law,
+        spk_before_start: dto.spk_before_start,
+        ttl_days: dto.ttl_days,
+        size_q_table_len: dto.size_q_table_len.min(SIZE_Q_TABLE_MAX as u32),
+        size_q_table: {
+          let mut rows = [[0.0f32; 2]; SIZE_Q_TABLE_MAX];
+          for (i, r) in rows.iter_mut().enumerate() {
+            *r = [dto.size_q_table[2 * i], dto.size_q_table[2 * i + 1]];
+          }
+          rows
+        },
+      }
+    }
+
+    /// The jet's FFI record from its parameters (the inverse of [`Self::from_dto`] for the
+    /// emission fields; site, colour, radius and ignition are the caller's)
+    pub fn write_dto(&self, dto: &mut crate::scene::ParticleSystemDTO) {
+      dto.diametre_um = self.diametre_um;
+      dto.density_gcm3 = self.density_gcm3;
+      dto.scattering_efficiency = self.scattering_efficiency;
+      dto.geometric_albedo = self.geometric_albedo;
+      dto.size_q = self.size_q;
+      dto.size_range = self.size_range;
+      dto.dust_rate_1au_kgs = self.dust_rate_1au_kgs;
+      dto.dust_rate_power = self.dust_rate_power;
+      dto.dust_rate_cutoff_au = self.dust_rate_cutoff_au;
+      dto.dust_rate_max_kgs = self.dust_rate_max_kgs;
+      dto.latitude_rad = self.latitude_rad;
+      dto.longitude_rad = self.longitude_rad;
+      dto.aperture_rad = self.aperture_rad;
+      dto.start_velocity_mean = self.start_velocity_mean;
+      dto.start_velocity_std = self.start_velocity_std;
+      dto.seed = self.seed;
+      dto.insolation_weighted = self.insolation_weighted;
+      dto.orbit_size_law = self.orbit_size_law;
+      dto.spk_before_start = self.spk_before_start;
+      dto.ttl_days = self.ttl_days;
+      dto.size_q_table_len = self.size_q_table_len;
+      for (i, r) in self.size_q_table.iter().enumerate() {
+        dto.size_q_table[2 * i] = r[0];
+        dto.size_q_table[2 * i + 1] = r[1];
       }
     }
   }

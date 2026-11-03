@@ -123,6 +123,12 @@ float prop_edge_factor(uint k) {
     float sb = prop_edge_sb(k);
     return sqrtBeta > 0.0 ? sb / sqrtBeta : 1.0;
 }
+// the lane of edge 13: the record size-law word (dust_size_law_word, REC.eject.w) when its sign
+// bit is set, else the speed factor as before (dust::DustMoments::size_law)
+float prop_edge_lane(uint k) {
+    float w = REC.eject.w;
+    return (k == 13u && (floatBitsToUint(w) >> 31u) != 0u) ? w : prop_edge_factor(k);
+}
 #include "dust_kepler_lr.glsl"
 // the row of lane l of this workgroup
 uvec2 prop_row(uint l) {
@@ -385,7 +391,7 @@ void main() {
             uint k = task - 4u;
             vec3 e = dust_qrot(pc.rot_inv, prop_rel3(moving));
             pc.moments.m[slot].edges[k].xyz = e;
-            if (k == 0u || k == 13u || k == 14u || k == 16u) pc.moments.m[slot].edges[k].w = prop_edge_factor(k);
+            if (k == 0u || k == 13u || k == 14u || k == 16u) pc.moments.m[slot].edges[k].w = prop_edge_lane(k);
             kp_put(DUST_PROP_ROW_X, e.x); kp_put(DUST_PROP_ROW_X + 1u, e.y); kp_put(DUST_PROP_ROW_X + 2u, e.z);
         }
     }
@@ -466,7 +472,7 @@ void main() {
         vec3 e0 = prop_x3(prop_row(l0)), e1 = prop_x3(prop_row(l0 + stride));
         float frac = stride == 2u ? 0.5 : (d == 1u ? 0.25 : (d == 2u ? 0.5 : 0.75));
         pc.moments.m[slot].edges[k].xyz = e0 + (e1 - e0) * frac;
-        if (k == 13u || k == 14u) pc.moments.m[slot].edges[k].w = prop_edge_factor(k);
+        if (k == 13u || k == 14u) pc.moments.m[slot].edges[k].w = prop_edge_lane(k);
     }
 }
 #endif

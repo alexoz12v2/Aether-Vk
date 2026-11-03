@@ -247,3 +247,85 @@ fn decommit_cleanup_removes_jets() {
     "jet2 entity should be destroyed"
   );
 }
+
+/// The dynamic-model fields of the FFI record (insolation weighting, orbit size law, pre-start
+/// source, lifetime, q table) round-trip through [`ParticleSystemEmitParams::from_dto`] and
+/// [`ParticleSystemEmitParams::write_dto`], and the record has the layout the C# side mirrors.
+#[test]
+fn dynamic_model_fields_round_trip_through_the_dto() {
+  use crate::scene::particles::{DEFAULT_TTL_DAYS, SIZE_Q_TABLE_MAX};
+  assert_eq!(core::mem::size_of::<crate::scene::ParticleSystemDTO>(), 184);
+  let mut dto = jet_dto(100.0, 1000.0, 0.3);
+  dto.insolation_weighted = 1;
+  dto.orbit_size_law = 1;
+  dto.spk_before_start = 1;
+  dto.ttl_days = 120.0;
+  dto.size_q_table_len = 3;
+  dto.size_q_table[0..6].copy_from_slice(&[-200.0, 2.5, 0.0, 3.8, 40.0, 4.2]);
+  let p = ParticleSystemEmitParams::from_dto(&dto);
+  assert!(p.insolation_weighted() && p.orbit_size_law() && p.spk_before_start());
+  assert_eq!(p.ttl_days(), 120.0);
+  assert_eq!(p.ttl_us(), 120 * 86_400 * 1_000_000);
+  assert_eq!(p.size_q_table(), &[[-200.0, 2.5], [0.0, 3.8], [40.0, 4.2]]);
+  let mut back = crate::scene::ParticleSystemDTO::zeroed();
+  p.write_dto(&mut back);
+  assert_eq!(
+    (back.insolation_weighted, back.orbit_size_law, back.spk_before_start, back.ttl_days, back.size_q_table_len),
+    (1, 1, 1, 120.0, 3)
+  );
+  assert_eq!(back.size_q_table, dto.size_q_table);
+  assert_eq!(ParticleSystemEmitParams::from_dto(&back), p);
+  // a longer table is cut to the capacity
+  dto.size_q_table_len = 50;
+  assert_eq!(ParticleSystemEmitParams::from_dto(&dto).size_q_table().len(), SIZE_Q_TABLE_MAX);
+  let _ = DEFAULT_TTL_DAYS;
+}
+
+/// An older record (zeroed new fields) reads as the toggles off and the 30-day lifetime that was
+/// the hard-coded constant; an out-of-range lifetime falls back to it too.
+#[test]
+fn zeroed_dynamic_model_fields_are_the_old_behaviour() {
+  use crate::scene::particles::{DEFAULT_TTL_DAYS, TTL_DAYS_RANGE};
+  let p = ParticleSystemEmitParams::from_dto(&jet_dto(100.0, 1000.0, 0.3));
+  assert!(!p.insolation_weighted() && !p.orbit_size_law() && !p.spk_before_start());
+  assert_eq!(p.ttl_days(), DEFAULT_TTL_DAYS);
+  assert_eq!(p.ttl_s(), 30.0 * 86_400.0);
+  // the previous `JET_TTL_US` constant: 30 days in µs
+  assert_eq!(p.ttl_us(), 2_592_000_000_000);
+  assert!(p.size_q_table().is_empty());
+  assert_eq!(p.size_q_at(12.0), p.size_q());
+  for bad in [0.5f32, 400.0, -3.0, f32::NAN, f32::INFINITY] {
+    let mut dto = jet_dto(100.0, 1000.0, 0.3);
+    dto.ttl_days = bad;
+    assert_eq!(ParticleSystemEmitParams::from_dto(&dto).ttl_days(), DEFAULT_TTL_DAYS, "{bad}");
+  }
+  for ok in [*TTL_DAYS_RANGE.start(), 7.5, *TTL_DAYS_RANGE.end()] {
+    let mut dto = jet_dto(100.0, 1000.0, 0.3);
+    dto.ttl_days = ok;
+    assert_eq!(ParticleSystemEmitParams::from_dto(&dto).ttl_days(), ok);
+  }
+}
+
+/// The q table is interpolated linearly in time, held at the end rows outside, clamped to the
+/// accepted range; one row is a constant; a NaN row falls back to the jet's q.
+#[test]
+fn size_q_table_interpolates_and_holds() {
+  let mut dto = jet_dto(100.0, 1000.0, 0.3);
+  dto.size_q = 3.5;
+  dto.size_q_table_len = 1;
+  dto.size_q_table[0..2].copy_from_slice(&[0.0, 2.0]);
+  let one = ParticleSystemEmitParams::from_dto(&dto);
+  assert_eq!((one.size_q_at(-1e4), one.size_q_at(1e4)), (2.0, 2.0));
+  dto.size_q_table_len = 2;
+  dto.size_q_table[0..4].copy_from_slice(&[-100.0, 2.0, 100.0, 4.0]);
+  let two = ParticleSystemEmitParams::from_dto(&dto);
+  assert_eq!(two.size_q_at(-500.0), 2.0);
+  assert!((two.size_q_at(0.0) - 3.0).abs() < 1e-6);
+  assert!((two.size_q_at(50.0) - 3.5).abs() < 1e-6);
+  assert_eq!(two.size_q_at(500.0), 4.0);
+  assert_eq!(two.size_q_at(f64::NAN), 3.5);
+  dto.size_q_table[1] = 9.0;
+  assert_eq!(ParticleSystemEmitParams::from_dto(&dto).size_q_at(-500.0), 6.0);
+  dto.size_q_table[0] = f32::NAN;
+  assert_eq!(ParticleSystemEmitParams::from_dto(&dto).size_q_at(0.0), 3.5);
+}

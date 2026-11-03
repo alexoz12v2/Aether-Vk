@@ -503,17 +503,16 @@ internal static class Shots
         Steps.AlignTop(c, "JetLatitudeSlider");
       },
       c => c.Fit(c.UnionFound(8, "JetLatitudeSlider", "JetLongitudeSlider", "JetApertureSlider", "JetVelocityBox", "JetStreamColorPicker",
-        "JetBetaBox", "JetQDustBox", "JetGrainExpander", "JetActivityExpander", "JetSizeDistributionPlot", "JetDustRateCurvePlot"), "JetLatitudeSlider"));
+        "JetBetaBox", "JetBetaRangeText", "JetQDustBox", "JetGrainExpander", "JetActivityExpander", "JetSizeDistributionPlot", "JetDustRateCurvePlot"), "JetLatitudeSlider"));
     yield return new("model-dust-defaults", "committed", "committed",
       c =>
       {
         Steps.OnlyOpen(c, "ModelTab", Steps.ModelSections, "DustSection");
         Steps.OpenSection(c, "ActivityAdvancedExpander");
-        Steps.OpenSection(c, "SizeDistributionAdvancedExpander");
-        Steps.AlignTop(c, "ActivityAdvancedExpander");
+        Steps.AlignTop(c, "JetDefaultsHelp");
       },
-      c => c.Fit(c.UnionFound(8, "ActivityAdvancedExpander", "SizeDistributionAdvancedExpander", "SizeDistributionPlot", "DustRateCurvePlot"),
-        "ActivityAdvancedExpander"));
+      c => c.Fit(c.UnionFound(8, "JetDefaultsHelp", "DustDensityBox", "DustSizeQBox", "SizeRangeNote", "ActivityAdvancedExpander", "DustRateCurvePlot"),
+        "JetDefaultsHelp"));
 
     // ---- settings
     foreach (var (key, id) in new[]
@@ -609,18 +608,16 @@ internal static class Shots
         c.S.Find("SpeedPickerHelp");
         c.Snapshot();
         c.S.ClickWhenSettled("SpeedPickerHelp");
-        Thread.Sleep(600);
-        // a pointer-opened flyout hides when the pointer leaves; a press inside its panel pins it
-        Rectangle popup;
-        try { popup = c.NewPopup(); }
+        // a click-opened flyout is pinned: it must still be up 1 s later (it used to vanish on
+        // Win32 after a fraction of a second), and the pointer parking away does not close it
+        Thread.Sleep(1000);
+        try { c.NewPopup(TimeSpan.FromMilliseconds(300)); }
         catch (TimeoutException)
         {
           var h = c.S.Find("SpeedPickerHelp");
           var all = Win32.TopLevelWindows(c.S.Process.Id).Select(w => $"{w.ClassName}:{Win32.FrameBounds(w.Handle)}");
           throw new TimeoutException($"no popup; help at {h.Location} {h.Size}, windows {string.Join(" | ", all)}");
         }
-        Win32.ClickAt(popup.Left + popup.Width / 2, popup.Top + Math.Min(28, popup.Height / 3));
-        Thread.Sleep(300);
       },
       c => new Cropped(Rectangle.Inflate(c.NewPopup(), 4, 4), []),
       c => c.Escape());

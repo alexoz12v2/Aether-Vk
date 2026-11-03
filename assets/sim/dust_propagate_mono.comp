@@ -175,7 +175,8 @@ void main() {
                 e = dust_qrot(pc.rot_inv, df3_to_f32(df3_sub(rK, ps)));
             }
             M.edges[k].xyz = e;
-            if (k == 0u || k == 13u || k == 14u || k == 16u) M.edges[k].w = factor;
+            // edge 13: the record size-law word when its sign bit is set (dust::DustMoments::size_law)
+            if (k == 0u || k == 13u || k == 14u || k == 16u) M.edges[k].w = (k == 13u && (floatBitsToUint(C.eject.w) >> 31u) != 0u) ? C.eject.w : factor;
         }
         // the skipped edges from their solved neighbours
         if (stride == 2u) {

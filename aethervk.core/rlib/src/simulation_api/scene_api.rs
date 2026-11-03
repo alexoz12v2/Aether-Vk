@@ -1139,6 +1139,7 @@ impl SimulationContext {
         &logic.almanac_data,
         start,
         t,
+        false,
       )
     })?;
     Some((frac, start, end))

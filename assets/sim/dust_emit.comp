@@ -108,7 +108,9 @@ void emit_fields(uint j, uint st, out vec2 t0, out vec2 dt_in, out vec3 dOff, ou
     // lit time only: dark phases of the jet site get no clusters (full df64 when always lit)
     dt_in = B.lit.w == DUST_LIT_MODE_PERIODIC
         ? vec2(dust_lit_time_map(u_t, B.lit, B.spin.w, dur.x + dur.y), 0.0)
-        : df_mul_f(dur, u_t);
+        : (B.lit.w == DUST_LIT_MODE_INSOLATION
+            ? vec2(dust_insol_time_map(u_t, B.lit, B.site_offset.w, B.spin.w, dur.x + dur.y), 0.0)
+            : df_mul_f(dur, u_t));
     t0 = df_add(t_start, dt_in);
     if (EMIT_ST2A) { kp_put(3u, t0.x); kp_put(7u, t0.y); }
 
@@ -144,7 +146,8 @@ void emit_fields(uint j, uint st, out vec2 t0, out vec2 dt_in, out vec3 dOff, ou
     float s_max = B.size_params.y;
     s_ref = B.vel_params.z;
     beta = B.vel_params.w / s_ref;
-    if (EMIT_ST2A) { kp_put(11u, beta); kp_put(23u, s_ref); }
+    // eject.w: the size-law word (s_ref itself on the q = 3.5 path)
+    if (EMIT_ST2A) { kp_put(11u, beta); kp_put(23u, dust_size_law_word(s_ref, B.size_params)); }
 
     // the stream's share of the time sample's mass: all sizes, 1/S of the sample
     mass_g = B.mass_params.x * share / float(n);

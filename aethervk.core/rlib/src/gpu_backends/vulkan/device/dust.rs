@@ -2221,6 +2221,33 @@ impl Device {
     self.kernels.pipelines.dust_splat_mode.store(0, core::sync::atomic::Ordering::Relaxed);
   }
 
+  /// The size-law pipelines (`physics::DustLawPipelines`, the `.law` blobs) from now on when
+  /// `on`: the frame sets it when any drawn system has the orbit-dependent size law on
+  /// (`DustDrawState::size_law`), the parity tests when the batch has a law. Off, the splat chain,
+  /// the monolith and the speck passes bind the base pipelines, whose blobs have the law compiled
+  /// out (the code before the law, the byte gate). The first `on` builds the law pipelines
+  /// (lazily, so a scene without the law never pays for them); a build failure is logged and
+  /// the binds stay on the base pipelines.
+  pub fn dust_set_size_law(&self, on: bool) {
+    self.kernels.pipelines.dust_size_law.store(on, core::sync::atomic::Ordering::Relaxed);
+    if on {
+      if let Err(e) = self.kernels.pipelines.dust_law_pipelines(&self.device) {
+        aethervk_oshal_rlib::log!("[Physics] dust size-law pipelines unavailable, binding the base ones: {:?}", e);
+      }
+    }
+  }
+  pub fn dust_size_law(&self) -> bool {
+    self.kernels.pipelines.dust_size_law.load(core::sync::atomic::Ordering::Relaxed)
+  }
+  /// the size-law pipelines while the frame asks for them and they are built, else `None`
+  /// (the base pipelines)
+  fn dust_law_pipelines(&self) -> Option<crate::gpu_backends::vulkan::physics::DustLawPipelines> {
+    if !self.dust_size_law() {
+      return None;
+    }
+    *crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::read(&self.kernels.pipelines.dust_law)
+  }
+
   /// Logs the splat path once per change (the byte gate's and the observer's logs say
   /// which path ran), with the other staged switches beside it
   fn dust_splat_log_path(&self, mono: bool) {
@@ -3595,9 +3622,14 @@ impl Device {
     // the trace fill (the test hook). A barrier after every pass: each reads what the previous
     // one wrote, and the indirect args.
     let pipelines = &self.kernels.pipelines;
-    let pipeline = pipelines.dust_specks;
+    // the size-law variants while the frame asks for them (`Self::dust_set_size_law`)
+    let law = self.dust_law_pipelines();
+    let (pipeline, specks_walk, specks_setup, specks_leaves, specks_leaves1, specks_trace) = match law {
+      Some(l) => (l.specks.gate, l.specks.walk, l.specks.setup, l.specks.leaves, l.specks.leaves1, l.specks.trace),
+      None => (pipelines.dust_specks, pipelines.dust_specks_walk, pipelines.dust_specks_setup, pipelines.dust_specks_leaves, pipelines.dust_specks_leaves1, pipelines.dust_specks_trace),
+    };
     pipelines.assert_pc_size(pipeline, core::mem::size_of_val(&pc));
-    pipelines.assert_pc_size(pipelines.dust_specks_walk, core::mem::size_of_val(&pc));
+    pipelines.assert_pc_size(specks_walk, core::mem::size_of_val(&pc));
     let threads = pc.live_count.saturating_mul(dust::SIZE_BINS);
     // the spill's header for this pass, before the gate (both passes read its ring words): no
     // slot claimed, the view's slot count, the trace's capacity (a test hook) and count, the
@@ -3690,12 +3722,12 @@ impl Device {
       .unwrap_or(usize::MAX);
     self.cmd_dust_walk_barrier(cmd);
     if setup_passes >= 1 {
-      bind(pipelines.dust_specks_setup[0]);
+      bind(specks_setup[0]);
       push(&pc);
       unsafe { self.device.cmd_dispatch(cmd, threads.div_ceil(DUST_WG), 1, 1) };
     }
     // setup 2a, 2b, 3, 4, 5: a thread per record (the args at region word 5)
-    for p in pipelines.dust_specks_setup[1..].iter().take(setup_passes.saturating_sub(1)) {
+    for p in specks_setup[1..].iter().take(setup_passes.saturating_sub(1)) {
       self.cmd_dust_walk_barrier(cmd);
       bind(*p);
       push(&pc);
@@ -3708,7 +3740,7 @@ impl Device {
     let steps = aethervk_oshal_rlib::os::env::var("AETHERVK_DUST_WALK_STEPS")
       .and_then(|v| v.trim().parse::<u32>().ok())
       .map_or(dust::DUST_WR_STEPS, |n| n.min(dust::DUST_WR_STEPS));
-    bind(pipelines.dust_specks_walk);
+    bind(specks_walk);
     for s in 0..steps {
       self.cmd_dust_walk_barrier(cmd);
       let step_pc = DustSpecksPushConstants { live_count: s, ..pc };
@@ -3718,16 +3750,16 @@ impl Device {
     // the leaves: many-speck (a workgroup each, args at region word 0) and single-speck (a lane
     // each, args after the single leaf count)
     self.cmd_dust_walk_barrier(cmd);
-    bind(pipelines.dust_specks_leaves);
+    bind(specks_leaves);
     push(&pc);
     indirect(region);
-    bind(pipelines.dust_specks_leaves1);
+    bind(specks_leaves1);
     push(&pc);
     indirect(region + dust::DUST_WR_LEAF1 + 1);
     if trace_cap > 0 {
       // the trace fill (the test hook): a thread per trace entry
       self.cmd_dust_walk_barrier(cmd);
-      bind(pipelines.dust_specks_trace);
+      bind(specks_trace);
       push(&pc);
       unsafe { self.device.cmd_dispatch(cmd, trace_cap.div_ceil(DUST_WG), 1, 1) };
     }
@@ -3986,9 +4018,14 @@ impl Device {
     };
     // the profiler variants while the request is on (`dust_profile.glsl`; same drawing)
     let profiling = crate::gpu_backends::vulkan::physics::dust_profile_requested();
-    let stages = match &self.kernels.pipelines.dust_splat_prof_stages {
-      Some(p) if profiling => p,
-      _ => &self.kernels.pipelines.dust_splat_stages,
+    // and the size-law variants while the frame asks for them (`Self::dust_set_size_law`; they
+    // have no profiler twins: the law wins over the profiler request)
+    let law = self.dust_law_pipelines();
+    let pl = &self.kernels.pipelines;
+    let stages = match (law, profiling, pl.dust_splat_prof_stages) {
+      (Some(l), _, _) => l.splat_stages,
+      (None, true, Some(p)) => p,
+      _ => pl.dust_splat_stages,
     };
     let producer = stages[0];
     // the splat path (`Self::dust_splat_staged`): `Some` the monolithic enumerator
@@ -3996,9 +4033,10 @@ impl Device {
     let splat_mono = if self.dust_splat_staged() {
       None
     } else {
-      match self.kernels.pipelines.dust_splat_mono_prof {
-        Some(p) if profiling => Some(p),
-        _ => self.kernels.pipelines.dust_splat_mono,
+      match (law, profiling, pl.dust_splat_mono_prof) {
+        (Some(l), _, _) => l.splat_mono,
+        (None, true, Some(p)) => Some(p),
+        _ => pl.dust_splat_mono,
       }
     };
     self.dust_splat_log_path(splat_mono.is_some());
@@ -4351,7 +4389,7 @@ impl Device {
           );
           self.device.cmd_dispatch(cmd, ((end - first) * dust::DUST_SPLAT_LANES).div_ceil(DUST_WG), 1, 1);
         } else {
-          self.cmd_dust_splat_chain(cmd, stages, &pc, end - first, pyramid.buffer, sbase);
+          self.cmd_dust_splat_chain(cmd, &stages, &pc, end - first, pyramid.buffer, sbase);
         }
         // the splitter: a workgroup per cluster of the chunk over its records (`dust_split.comp`)
         self.device.synchronization2.cmd_pipeline_barrier2(
@@ -4565,7 +4603,10 @@ impl Device {
     pc.pyramid = pyramid;
     // the chain's first stage (LIVE, a lane per cluster): its first header read faults as the
     // whole enumerator's did (the later stages need the queue's indirect args: not here)
-    let pipeline = self.kernels.pipelines.dust_splat_stages[dust::DUST_SPLAT_STAGE_LIVE];
+    let pipeline = match self.dust_law_pipelines() {
+      Some(l) => l.splat_stages[dust::DUST_SPLAT_STAGE_LIVE],
+      None => self.kernels.pipelines.dust_splat_stages[dust::DUST_SPLAT_STAGE_LIVE],
+    };
     unsafe {
       self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
       self.device.cmd_push_constants(

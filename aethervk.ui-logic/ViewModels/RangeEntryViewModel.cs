@@ -488,8 +488,9 @@ public partial class RangeEntryViewModel : ObservableObject, IDisposable
   // ── Dust lead time (R3) ────────────────────────────────────────────────────
 
   /// <summary>
-  /// Days the jets ignite before the committed start (0 to <see cref="TimelineService.MaxDustLeadDays"/>):
-  /// the tail is already formed when play starts. Used by the next commit.
+  /// Days the jets ignite before the committed start (0 to the longest jet lifetime,
+  /// <see cref="TimelineService.MaxDustLeadDaysNow"/>): the tail is already formed when play
+  /// starts. Used by the next commit.
   /// </summary>
   [ObservableProperty]
   private double _dustLeadDays = TimelineService.MaxDustLeadDays;
@@ -498,7 +499,8 @@ public partial class RangeEntryViewModel : ObservableObject, IDisposable
 
   partial void OnDustLeadDaysChanged(double value)
   {
-    double applied = Math.Min(TimelineService.MaxDustLeadDays, Math.Max(0, double.IsNaN(value) ? TimelineService.MaxDustLeadDays : value));
+    double max = _timeline?.MaxDustLeadDaysNow ?? TimelineService.MaxDustLeadDays;
+    double applied = Math.Min(max, Math.Max(0, double.IsNaN(value) ? Math.Min(TimelineService.MaxDustLeadDays, max) : value));
     if (_timeline is not null)
     {
       _timeline.DustLeadDays = value;

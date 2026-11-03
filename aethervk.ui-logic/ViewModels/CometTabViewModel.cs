@@ -726,12 +726,35 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
   /// always covers the range (feedback #19). The ±5 years around today in
   /// <see cref="LoadSpkRecordsAsync"/> only lists the comet's SPK records; it never sets the range.
   /// </summary>
-  internal static (string Start, string Stop) SpkDownloadDays(TimeRange range)
+  internal static (string Start, string Stop) SpkDownloadDays(TimeRange range) => SpkDownloadDays(range, 0);
+
+  /// <summary>
+  /// <see cref="SpkDownloadDays(TimeRange)"/> with the start moved <paramref name="leadDays"/>
+  /// earlier: the pre-start dust (the jets ignite a lead before the start) takes the SPK state
+  /// where the file covers it, so the commit requests it from start − lead (the margin on top).
+  /// </summary>
+  internal static (string Start, string Stop) SpkDownloadDays(TimeRange range, double leadDays)
   {
     var ci = System.Globalization.CultureInfo.InvariantCulture;
+    var start = TimeUtils.FromTdbParts(range.StartCenturies, range.StartNs).UtcDateTime;
+    if (!double.IsNaN(leadDays) && leadDays > 0)
+      start = start.AddDays(-Math.Ceiling(leadDays));
     return (
-      TimeUtils.FromTdbParts(range.StartCenturies, range.StartNs).UtcDateTime.ToString("yyyy-MM-dd", ci),
+      start.ToString("yyyy-MM-dd", ci),
       TimeUtils.FromTdbParts(range.EndCenturies, range.EndNs).UtcDateTime.ToString("yyyy-MM-dd", ci));
+  }
+
+  /// <summary>
+  /// <paramref name="range"/> with its start <paramref name="leadDays"/> earlier: what the SPK on
+  /// disk must cover for the pre-start dust (<see cref="SpkCovers"/>).
+  /// </summary>
+  internal static TimeRange RangeWithLead(TimeRange range, double leadDays)
+  {
+    if (double.IsNaN(leadDays) || leadDays <= 0)
+      return range;
+    var start = TimeUtils.FromTdbParts(range.StartCenturies, range.StartNs).AddDays(-leadDays);
+    var (c, ns) = TimeUtils.ToTdbParts(start);
+    return new TimeRange(c, ns, range.EndCenturies, range.EndNs);
   }
 
   [RelayCommand]
@@ -872,11 +895,14 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
         EmitInvalidStateBreadcrumb();
         return;
       }
-      var (startStr, endStr) = SpkDownloadDays(_currentProposedTimeRange);
+      // from start − lead: the jets ignite a lead before the start and their pre-start dust takes
+      // the SPK where it covers the time
+      double leadDays = _timeline.DustLeadDays;
+      var (startStr, endStr) = SpkDownloadDays(_currentProposedTimeRange, leadDays);
 
       string? filePath;
       var coverage = SpkCoverageNow();
-      if (coverage is not null && SpkCovers(coverage, SelectedComet.PrimaryDesignation, SelectedSpkRecord.RecordId, _currentProposedTimeRange))
+      if (coverage is not null && SpkCovers(coverage, SelectedComet.PrimaryDesignation, SelectedSpkRecord.RecordId, RangeWithLead(_currentProposedTimeRange, leadDays)))
       {
         // the SPK on disk was fetched for a window holding this range: no download (another
         // observation date over a campaign does not redo the fetch)

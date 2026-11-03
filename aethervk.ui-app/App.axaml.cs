@@ -375,6 +375,8 @@ public class MockNativeRuntimeService : INativeRuntimeService
   public bool DumpSceneToFile(string file) => true;
   public bool RestoreSceneFromFile(string file) => true;
   public string? GetCompatibilityJson() => "{}";
+
+  public string? GetCompatibilityJson(uint dumpVersion) => null;
   public Logic.Models.ExportedAssetFile? ExportAsset(ulong assetId, string destDir) => null;
   public ulong? GetAssetContentHash(ulong assetId) => null;
   public uint SceneDumpVersion => 0;

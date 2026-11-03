@@ -603,6 +603,21 @@ pub fn compatibility_json(
   start: hifitime::Epoch,
   end: hifitime::Epoch,
 ) -> alloc::string::String {
+  let version = crate::simulation_api::structs::SceneDump::CURRENT_VERSION;
+  compatibility_json_for_version(scene_ctx, start, end, version).expect("the current version expresses every scene")
+}
+
+/// [`compatibility_json`] as the engine of dump `version` wrote it, for restoring an older dump:
+/// v9 lists the jets' parameters without the dynamic-model fields. `None` when the version is not
+/// restorable ([`SceneDump::OLDEST_RESTORABLE_VERSION`](crate::simulation_api::structs::SceneDump::OLDEST_RESTORABLE_VERSION))
+/// or the scene uses something that version could not express (a jet with a dynamic-model option
+/// on): no dump of that version can match it.
+pub fn compatibility_json_for_version(
+  scene_ctx: &crate::simulation_api::structs::SceneContext,
+  start: hifitime::Epoch,
+  end: hifitime::Epoch,
+  version: u32,
+) -> Option<alloc::string::String> {
   use alloc::{format, string::String};
   let scene = &scene_ctx.scene;
   let parts = |e: hifitime::Epoch| e.to_tdb_duration().to_parts();
@@ -650,14 +665,14 @@ pub fn compatibility_json(
   scene.query1(|_id, ps: &ParticleSystemComponent| {
     jets.push((ps.emission_params, ps.ttl_us, ps.emission_start_us));
   });
-  let jets = jets_compatibility_json(jets);
-  format!(
+  let jets = jets_compatibility_json_for_version(jets, version)?;
+  Some(format!(
     "{{\"version\":{},\"start\":[{sc},{sn}],\"end\":[{ec},{en}],\"comet_naif\":{naif},\"nucleus_radius_km\":{radius},\"rotation\":{rotation},\"reference_elements\":{elements},\"dust_tiers\":{},\"jets\":[{}]}}",
-    crate::simulation_api::structs::SceneDump::CURRENT_VERSION,
+    version,
     // the age tiers decide which dust history a restore reproduces
     crate::scene::dust::dust_tier_count(),
     jets
-  )
+  ))
 }
 
 /// The `jets` entries of [`compatibility_json`]: each jet's emission parameters, TTL and ignition
@@ -668,9 +683,41 @@ pub fn jets_compatibility_json(
     Item = (crate::scene::particles::v2::ParticleSystemEmitParams, aethervk_oshal_rlib::os::time::timeus_t, i64),
   >,
 ) -> alloc::string::String {
+  use alloc::format;
+  jets_json_of_debug(jets.into_iter().map(|(p, ttl, ignition)| (format!("{p:?}"), ttl, ignition)))
+}
+
+/// [`jets_compatibility_json`] as the engine of dump `version` wrote it (v9: the parameters without
+/// the dynamic-model fields); `None` for a version that is not restorable or a jet that version
+/// could not express
+pub fn jets_compatibility_json_for_version(
+  jets: impl IntoIterator<
+    Item = (crate::scene::particles::v2::ParticleSystemEmitParams, aethervk_oshal_rlib::os::time::timeus_t, i64),
+  >,
+  version: u32,
+) -> Option<alloc::string::String> {
+  use crate::simulation_api::structs::{SceneDump, legacy_v9};
+  use alloc::{format, vec::Vec};
+  match version {
+    SceneDump::CURRENT_VERSION => Some(jets_compatibility_json(jets)),
+    9 => {
+      let mut v9 = Vec::new();
+      for (p, ttl, ignition) in jets {
+        v9.push((format!("{:?}", legacy_v9::ParticleSystemEmitParams::from_current(&p)?), ttl, ignition));
+      }
+      Some(jets_json_of_debug(v9))
+    }
+    _ => None,
+  }
+}
+
+/// [`jets_compatibility_json`] from each jet's parameters already formatted (`Debug`): sorted,
+/// quotes swapped for apostrophes
+fn jets_json_of_debug(
+  jets: impl IntoIterator<Item = (alloc::string::String, aethervk_oshal_rlib::os::time::timeus_t, i64)>,
+) -> alloc::string::String {
   use alloc::{format, string::String, vec::Vec};
-  let mut jets: Vec<(String, _, _)> =
-    jets.into_iter().map(|(p, ttl, ignition)| (format!("{p:?}"), ttl, ignition)).collect();
+  let mut jets: Vec<(String, _, _)> = jets.into_iter().collect();
   jets.sort();
   let jets: Vec<String> = jets
     .into_iter()

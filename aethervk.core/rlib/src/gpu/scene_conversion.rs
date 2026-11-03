@@ -1734,6 +1734,11 @@ impl SceneConversionExt2 for Scene {
           // same per-layer camera `draw_layer_content` draws with (near/far are final here)
           let layer_camera =
             render_scene.camera_data.rebuild_for_layer(l.near, l.far, l.frame_scale);
+          // the Sun arrow's reference: the first sphere-style gizmo's f64 centre
+          let sun_ref_center = sg_list
+            .iter()
+            .find(|g| g.5 == gpu::SPHERE_GIZMO_STYLE_SPHERE)
+            .map(|g| g.2);
           let sg_data: alloc::vec::Vec<_> = sg_list
             .into_iter()
             .filter_map(|(id, m, center, r, sub, style, dash_count, color)| {
@@ -1753,8 +1758,14 @@ impl SceneConversionExt2 for Scene {
               })
             })
             .collect();
-          l.sphere_gizmo_batch_call =
-            device.upload_sphere_gizmos_batch(cmd_buffer, &sg_data).ok().flatten();
+          l.sphere_gizmo_batch_call = device
+            .upload_sphere_gizmos_batch(cmd_buffer, &sg_data)
+            .ok()
+            .flatten()
+            .map(|mut call| {
+              call.sun_ref_center = sun_ref_center;
+              call
+            });
         }
         if let Some((traj_list, anchors)) = traj_batch_buffers.remove(&l.layer_index) {
           let gpu_anchors: alloc::vec::Vec<gpu::TrajectoryAnchorGpu> =

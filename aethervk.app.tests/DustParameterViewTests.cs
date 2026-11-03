@@ -18,8 +18,9 @@ namespace AetherVk.AppTests;
 
 /// <summary>
 /// The dust-parameter layout an astronomer asked for: physical grain parameters on top, the Q_d
-/// production law and the grain size law in collapsed "Advanced" expanders with their plots and "?"
-/// help flyouts; in the Comet tab the period (h) is the control and the °/day rate is advanced.
+/// production law in a collapsed "Advanced" expander with its plot and "?" help flyouts, the defaults'
+/// q in the "Defaults for new jets" grid; in the Comet tab the period (h) is the control and the
+/// °/day rate is advanced.
 /// </summary>
 public class DustParameterViewTests
 {
@@ -33,7 +34,7 @@ public class DustParameterViewTests
     All(root).OfType<Expander>().Single(e => AutomationProperties.GetAutomationId(e) == id);
 
   [AvaloniaFact]
-  public void Model_ActivityAndSizeLawAreAdvanced_WithPlotsAndHelp()
+  public void Model_ActivityIsAdvanced_DefaultsHoldTheSizeLaw()
   {
     var vm = new DesignModelTabViewModel();
     var view = new ModelTabView { DataContext = vm };
@@ -44,9 +45,10 @@ public class DustParameterViewTests
     Dispatcher.UIThread.RunJobs();
 
     var activity = ExpanderById(view, "ActivityAdvancedExpander");
-    var size = ExpanderById(view, "SizeDistributionAdvancedExpander");
     Assert.False(activity.IsExpanded);
-    Assert.False(size.IsExpanded);
+    // the plot-only size distribution expander is gone
+    Assert.DoesNotContain("SizeDistributionAdvancedExpander", Ids(view));
+    Assert.DoesNotContain("SizeDistributionPlot", Ids(view));
 
     var inActivity = Ids(activity);
     Assert.Contains("DustRate0Box", inActivity);
@@ -57,30 +59,34 @@ public class DustParameterViewTests
     Assert.Contains("ActivityAdvancedHelp", inActivity);
     Assert.DoesNotContain("DustMinDiameterBox", inActivity);
 
-    var inSize = Ids(size);
-    Assert.DoesNotContain("SizeQBox", Ids(view)); // q is per jet only (JetSizeQ)
-    Assert.Contains("SizeRangeNote", inSize);
-    Assert.Contains("SizeDistributionPlot", inSize);
-    Assert.Contains("SizeDistributionAdvancedHelp", inSize);
+    Assert.DoesNotContain("SizeQBox", Ids(view));
 
-    // the physical grain parameters stay outside both expanders, each with its "?" flyout
-    var outside = Ids(view).Except(inActivity).Except(inSize).ToList();
-    foreach (var id in new[] { "DustMinDiameterBox", "DustMaxDiameterBox", "SizeRangeError", "DustDensityBox", "DustAlbedoBox", "DustMinDiameterHelp", "DustMaxDiameterHelp", "DustDensityHelp", "DustAlbedoHelp" })
+    // the defaults' physical grain parameters and q stay outside the expander, each with its "?" flyout
+    var outside = Ids(view).Except(inActivity).ToList();
+    foreach (var id in new[] { "DustMinDiameterBox", "DustMaxDiameterBox", "SizeRangeError", "SizeRangeNote", "DustDensityBox", "DustAlbedoBox",
+               "DustSizeQBox", "DustMinDiameterHelp", "DustMaxDiameterHelp", "DustDensityHelp", "DustAlbedoHelp", "DustSizeQHelp" })
       Assert.Contains(id, outside);
+
+    // the defaults' q box is bound to the session's q, its "?" says which q the dust uses
+    var q = All(view).OfType<TextBox>().Single(t => AutomationProperties.GetAutomationId(t) == "DustSizeQBox");
+    Assert.Equal(3.5, double.Parse(q.Text!, System.Globalization.CultureInfo.CurrentCulture), 6);
+    var qHelp = All(view).OfType<PropertyHelpButton>().Single(h => AutomationProperties.GetAutomationId(h) == "DustSizeQHelp");
+    Assert.Equal(vm.StrHelpSizeDistribution, qHelp.HelpContent);
+    Assert.Contains("Orbit-dependent size distribution", qHelp.HelpContent);
+    Assert.Contains("q = 3.5", qHelp.HelpContent);
 
     var help = All(activity).OfType<PropertyHelpButton>().Single(h => AutomationProperties.GetAutomationId(h) == "ActivityAdvancedHelp");
     Assert.Contains("it does not depend on the grain or the speed", help.HelpContent);
 
-    // the plots get their models and draw without throwing once expanded (the defaults' two and
-    // the selected jet's two)
+    // the plots get their models and draw without throwing once expanded (the defaults' one and
+    // the selected jet's three: rate, size distribution, q(t))
     activity.IsExpanded = true;
-    size.IsExpanded = true;
     ExpanderById(view, "JetGrainExpander").IsExpanded = true;
     ExpanderById(view, "JetActivityExpander").IsExpanded = true;
     Dispatcher.UIThread.RunJobs();
     var plots = All(view).OfType<CurvePlot>().ToList();
     Assert.Equal(
-      new[] { "DustRateCurvePlot", "JetDustRateCurvePlot", "JetSizeDistributionPlot", "SizeDistributionPlot" },
+      new[] { "DustRateCurvePlot", "JetDustRateCurvePlot", "JetSizeDistributionPlot", "JetSizeQCurvePlot" },
       plots.Select(AutomationProperties.GetAutomationId).OrderBy(id => id, System.StringComparer.Ordinal));
     Assert.All(plots, p => Assert.NotNull(p.Model));
     window.UpdateLayout();
@@ -129,6 +135,19 @@ public class DustParameterViewTests
     Assert.Equal("25", diameter.Text); // D 250, F 10: 25-2500 um
     var help = All(grain).OfType<PropertyHelpButton>().Single(h => AutomationProperties.GetAutomationId(h) == "JetGrainHelp");
     Assert.Contains("q = 3.5", help.HelpContent);
+    Assert.Contains("Orbit-dependent size distribution", help.HelpContent);
+
+    // the β range next to the β box: β/F (largest grain) to β·F (smallest), 3 significant digits
+    var range = All(view).OfType<TextBlock>().Single(t => AutomationProperties.GetAutomationId(t) == "JetBetaRangeText");
+    Assert.True(range.IsEffectivelyVisible);
+    var jet = vm.SelectedJet!;
+    Assert.True(jet.Beta > 0, "the engine's β reached the jet");
+    var (lo, hi) = AetherVk.Logic.Models.GrainDiameterRange.BetaRange(jet.Beta, jet.SizeRange);
+    Assert.Equal(jet.Beta / jet.SizeRange, lo, 1e-9);
+    Assert.Equal(jet.Beta * jet.SizeRange, hi, 1e-9);
+    Assert.Equal(AetherVk.Logic.Models.GrainDiameterRange.BetaRangeText(jet.Beta, jet.SizeRange), range.Text);
+    Assert.Equal(vm.SelectedJet!.BetaRangeText, range.Text);
+    Assert.Contains(All(view).OfType<TextBlock>(), t => t.Text == vm.StrJetBetaRange);
     window.Close();
   }
 

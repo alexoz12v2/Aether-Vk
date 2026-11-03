@@ -1672,19 +1672,22 @@ fn process_command_internal(
             //    comet, reference orbit, nucleus, jets) can take its state
             {
               use crate::simulation_api::structs::SceneDump;
-              if dump.version != SceneDump::CURRENT_VERSION {
+              if !(SceneDump::OLDEST_RESTORABLE_VERSION..=SceneDump::CURRENT_VERSION).contains(&dump.version) {
                 return Err(EngineError::InvalidOperation(
                   "RestoreSceneDump: unsupported dump version",
                 ));
               }
               let tm =
                 scenes.time_managers.get(&scene_id).ok_or(EngineError::InvalidNullArgument)?;
-              let live = crate::simulation_api::scene_dump::compatibility_json(
+              // an older dump (read into the current types by `SceneDump::decode`) is compared in
+              // its own version's terms: the live scene as that engine would have described it
+              let live = crate::simulation_api::scene_dump::compatibility_json_for_version(
                 scene_write,
                 tm.start_epoch,
                 tm.end_epoch,
+                dump.version,
               );
-              if live != dump.compatibility {
+              if live.as_deref() != Some(dump.compatibility.as_str()) {
                 emit_breadcrumb(2, "Saved state does not match the current configuration");
                 return Err(EngineError::InvalidOperation(
                   "RestoreSceneDump: incompatible configuration",
@@ -3470,6 +3473,34 @@ pub(crate) fn update_reference_errors(scene_ctx: &SceneContext, epoch: anise::ti
   utils::update_reference_errors(scene_ctx, epoch)
 }
 
+/// Diagnostic frozen-comet epoch (dust observer only, never the app): every emission window takes
+/// its emission conditions (the Sun direction of the lit gating / insolation weighting, the
+/// heliocentric distance and perihelion time of the emission config) from the comet's state at
+/// this epoch instead of its own, while the origin, velocity and spin phase stay the window's. Set
+/// once per process; unset (always in the app and the tests) the emission is the dynamic one.
+#[cfg(any(test, feature = "std"))]
+static FROZEN_COMET_EPOCH: std::sync::OnceLock<anise::time::Epoch> = std::sync::OnceLock::new();
+
+/// Sets the frozen-comet diagnostic epoch (`FROZEN_COMET_EPOCH`) before any emission. Returns
+/// `false` when it was already set (the first value stays).
+#[doc(hidden)]
+#[cfg(any(test, feature = "std"))]
+pub fn set_frozen_comet_epoch(epoch: anise::time::Epoch) -> bool {
+  FROZEN_COMET_EPOCH.set(epoch).is_ok()
+}
+
+/// The frozen-comet diagnostic epoch (`FROZEN_COMET_EPOCH`), `None` unless the observer set it
+pub(crate) fn frozen_comet_epoch() -> Option<anise::time::Epoch> {
+  #[cfg(any(test, feature = "std"))]
+  {
+    FROZEN_COMET_EPOCH.get().copied()
+  }
+  #[cfg(not(any(test, feature = "std")))]
+  {
+    None
+  }
+}
+
 pub(crate) mod utils {
   use super::*;
   use crate::{
@@ -4728,10 +4759,12 @@ pub(crate) mod utils {
   /// `W = W0 + rate·d`) times the jet's local rotation, so the site turns with the nucleus window
   /// after window; `spin` is the model's pole · ω (`None` without a model).
   ///
-  /// Outside the SPK coverage (dust history before the start epoch, see
-  /// `dust::DustSystemState`) the comet follows the committed reference orbit (two-body; the
-  /// re-osculated one drifts ~600 km/month, nothing for dust spread over 1e5+ km) and the
-  /// rotational model alone.
+  /// Before the start epoch (dust history, see `dust::DustSystemState`) the comet follows the
+  /// committed reference orbit (two-body; the re-osculated one drifts ~600 km/month, nothing for
+  /// dust spread over 1e5+ km) and the rotational model alone, unless `spk_before_start` is set
+  /// (`ParticleSystemEmitParams::spk_before_start`) **and** the loaded SPK covers `t`: the SPK
+  /// state is used then. Older saves' jets leave the flag off, so their pre-start dust is
+  /// unchanged. After the start the SPK is used when it answers, the reference orbit otherwise.
   pub(crate) fn jet_state_at(
     planet: &crate::scene::AlmanacPlanet,
     rot_model: Option<&crate::scene::BodyRotationalModel>,
@@ -4740,6 +4773,7 @@ pub(crate) mod utils {
     almanac: &AlmanacPackedData,
     start_epoch: anise::time::Epoch,
     t: f64,
+    spk_before_start: bool,
   ) -> Option<crate::scene::dust::JetState> {
     use crate::scene::dust::JetState;
     use aethervk_oshal_rlib::math::quaternion::Quaternion as _;
@@ -4759,7 +4793,14 @@ pub(crate) mod utils {
       ))
     };
     let (pos_km, vel_kms, body_rot) = if t < 0.0 {
-      from_reference()?
+      if spk_before_start && almanac.covers_interval(planet.naif_id, epoch, epoch) {
+        planet
+          .step_with_velocity(epoch, almanac, rot_model.as_ref())
+          .ok()
+          .or_else(from_reference)?
+      } else {
+        from_reference()?
+      }
     } else {
       planet
         .step_with_velocity(epoch, almanac, rot_model.as_ref())
@@ -4813,15 +4854,87 @@ pub(crate) mod utils {
       site_normal,
       spin,
       site_offset_m,
+      conditions: None,
     })
+  }
+
+  /// [`jet_state_at`] at `t` with, when `frozen` is set, the emission conditions of the comet at
+  /// epoch `frozen` ([`crate::scene::dust::JetState::conditions`]: its heliocentric position,
+  /// through `jet_state_at` itself, so the SPK when it covers that epoch and the reference orbit
+  /// otherwise). Origin, velocity, attitude and spin stay those at `t`. `None` also when the frozen
+  /// state cannot be evaluated. `frozen = None` returns `jet_state_at` untouched.
+  pub(crate) fn jet_state_conditioned_at(
+    planet: &crate::scene::AlmanacPlanet,
+    rot_model: Option<&crate::scene::BodyRotationalModel>,
+    jet_local: &TransformComponent,
+    reference: Option<&crate::simulation_api::structs::KeplerianElements>,
+    almanac: &AlmanacPackedData,
+    start_epoch: anise::time::Epoch,
+    t: f64,
+    spk_before_start: bool,
+    frozen: Option<anise::time::Epoch>,
+  ) -> Option<crate::scene::dust::JetState> {
+    let jet = jet_state_at(
+      planet,
+      rot_model,
+      jet_local,
+      reference,
+      almanac,
+      start_epoch,
+      t,
+      spk_before_start,
+    )?;
+    let Some(epoch) = frozen else {
+      return Some(jet);
+    };
+    let t_frozen = (epoch - start_epoch).to_seconds();
+    let at_frozen = jet_state_at(
+      planet,
+      rot_model,
+      jet_local,
+      reference,
+      almanac,
+      start_epoch,
+      t_frozen,
+      spk_before_start,
+    )?;
+    Some(crate::scene::dust::JetState {
+      conditions: Some(crate::scene::dust::EmissionConditions {
+        t_s: t_frozen,
+        r_m: at_frozen.r_m,
+      }),
+      ..jet
+    })
+  }
+
+  /// The heliocentric distance (AU) and the time from the committed perihelion (days, `None`
+  /// without reference elements) a window's emission config is evaluated at: the jet state's own
+  /// or its [`crate::scene::dust::JetState::conditions`].
+  pub(crate) fn emission_r_au_and_days(
+    j: &crate::scene::dust::JetState,
+    reference: Option<&crate::simulation_api::structs::KeplerianElements>,
+    start_epoch: anise::time::Epoch,
+  ) -> (f64, Option<f64>) {
+    use crate::scene::dust::AU_M;
+    let (r_m, t_s) = j.conditions_r_t();
+    let r = (r_m[0] * r_m[0] + r_m[1] * r_m[1] + r_m[2] * r_m[2]).sqrt() / AU_M;
+    // the window's time from the committed perihelion (the orbit-dependent size law)
+    let days = reference.map(|el| {
+      (start_epoch + anise::time::Duration::from_seconds(t_s)).to_jde_tdb_days()
+        - el.time_of_perihelion_jd_tdb
+    });
+    (r, days)
   }
 
   /// Dust v3 emission for every particle system of the scene (logic tick, compute queue).
   ///
-  /// Jet truth state = comet almanac state of this tick (f64, from the cartesian cache) plus the
-  /// jet offset rotated by the body rotation. Records the emit dispatches (or emits on the CPU in
-  /// CPU particle mode) and returns the systems that recorded something, so the caller can mark
-  /// their pending batches submitted.
+  /// The jet state is evaluated per emission window at the window's own time, `jet_at(t)`
+  /// (`jet_state_at`: the SPK or reference-orbit position and velocity, the Sun direction, the
+  /// body attitude and spin at `t`), never the almanac state of the tick: the dust is a function
+  /// of the epoch, not of when the ticks happened. The cartesian cache only tells which comet
+  /// the jet belongs to. Records the emit dispatches (or emits on the CPU in CPU particle mode)
+  /// and returns the systems that recorded something, so the caller can mark their pending
+  /// batches submitted.
   pub fn record_dust_emissions(
     vulkan_device: &Device,
     cmd: ash::vk::CommandBuffer,
@@ -4879,9 +4992,17 @@ pub(crate) mod utils {
       let Some(jet_local) = scene.with_component(ps_id, |t: &TransformComponent| *t) else {
         continue;
       };
-      // jet state at any scaled time, see `jet_state_at`
+      // the jet's dynamic-model flags (its own parameters)
+      let (spk_before_start, insolation_weighted) = scene
+        .with_component(ps_id, |ps: &ParticleSystemComponent| {
+          (ps.emission_params.spk_before_start(), ps.emission_params.insolation_weighted())
+        })
+        .unwrap_or((false, false));
+      // jet state at any scaled time, see `jet_state_at` (`jet_state_conditioned_at`: the
+      // frozen-comet diagnostic, `None` outside the observer)
+      let frozen = frozen_comet_epoch();
       let jet_at = |t: f64| {
-        jet_state_at(
+        jet_state_conditioned_at(
           &planet,
           rot_model.as_ref(),
           &jet_local,
@@ -4889,6 +5010,8 @@ pub(crate) mod utils {
           almanac,
           start_epoch,
           t,
+          spk_before_start,
+          frozen,
         )
       };
       let Some(jet) = jet_at(t_s) else {
@@ -4900,8 +5023,8 @@ pub(crate) mod utils {
       let batches = scene
         .with_component(ps_id, |ps: &ParticleSystemComponent| {
           let cfg_at = |j: &JetState| {
-            let r = (j.r_m[0] * j.r_m[0] + j.r_m[1] * j.r_m[1] + j.r_m[2] * j.r_m[2]).sqrt() / AU_M;
-            ps.emission_params.dust_emit_config(r as f32, ps.ttl_us)
+            let (r, days) = emission_r_au_and_days(j, reference.as_ref(), start_epoch);
+            ps.emission_params.dust_emit_config_at(r as f32, ps.ttl_us, days)
           };
           let mut sys = ps.dust.lock();
           // the jet's ignition on the scaled-time axis (a change re-emits, like a seek)
@@ -4916,6 +5039,12 @@ pub(crate) mod utils {
           // the size law of the speck counts (WP3b)
           sys.s_ref_um = 0.5 * ps.emission_params.diametre_um;
           sys.size_q = ps.emission_params.size_q();
+          // "Orbit-dependent size distribution": the frame binds the size-law pipelines when a
+          // drawn system has it on
+          sys.size_law = ps.emission_params.orbit_size_law();
+          // "Insolation-weighted emission" (a change of the flag re-emits: it is in the
+          // parameters the modify compares)
+          sys.insolation_weighted = insolation_weighted;
           sys.tick(t_s, &jet_at, &cfg_at)
         })
         .unwrap_or_default();
@@ -4984,6 +5113,7 @@ pub(crate) mod utils {
             if rot_model.is_some() { "model" } else { "estimated" },
             batches.last().map_or("-", |b| match b.1.lit[3] {
               m if m == crate::scene::dust::LIT_MODE_PERIODIC => "periodic",
+              m if m == crate::scene::dust::LIT_MODE_INSOLATION => "insolation",
               _ if b.1.lit[1] > 0.0 => "always",
               _ => "dark",
             }),

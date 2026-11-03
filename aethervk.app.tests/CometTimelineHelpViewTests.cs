@@ -72,7 +72,7 @@ public class CometTimelineHelpViewTests
     AssertHelp(view, "RecommitWithRangeButtonHelp", "dust restarts");
     AssertHelp(view, "ModelRangeHelp", "Observation date (UTC)");
     AssertHelp(view, "ModelRangeHelp", "Run at this date");
-    AssertHelp(view, "DustLeadDaysBoxHelp", "one dust lifetime");
+    AssertHelp(view, "DustLeadDaysBoxHelp", "the longest dust lifetime among the jets");
     AssertHelp(view, "ReferenceOrbitPickerHelp", "Required before the first commit");
     AssertHelp(view, "NucleusRadiusSliderHelp", "Horizons");
     AssertHelp(view, "BodyFixedOrientationPickerHelp", "stars");

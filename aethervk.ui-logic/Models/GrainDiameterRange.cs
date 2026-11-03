@@ -56,6 +56,27 @@ public static class GrainDiameterRange
   /// <summary>The largest grain diameter of an engine (D, F) pair (6 significant digits).</summary>
   public static float MaxOf(double diametreUm, double sizeRange) => Round(diametreUm * Math.Max(sizeRange, 1.0));
 
+  /// <summary>
+  /// The β range of the simulated grains: β ∝ 1/s, and β is the reference grain's (diameter D), so
+  /// the largest grain (D·F) has β/F and the smallest (D/F) has β·F.
+  /// </summary>
+  public static (double Min, double Max) BetaRange(double beta, double sizeRange)
+  {
+    double f = IsFinite(sizeRange) ? Math.Max(sizeRange, 1.0) : 1.0;
+    return (beta / f, beta * f);
+  }
+
+  /// <summary>"β_min – β_max" with 3 significant digits (invariant culture); empty while β is not
+  /// known (0, before the engine computed it) or not finite.</summary>
+  public static string BetaRangeText(double beta, double sizeRange)
+  {
+    if (!IsFinite(beta) || beta <= 0)
+      return "";
+    var (lo, hi) = BetaRange(beta, sizeRange);
+    var ci = System.Globalization.CultureInfo.InvariantCulture;
+    return lo.ToString("G3", ci) + " – " + hi.ToString("G3", ci);
+  }
+
   private static bool IsFinite(double v) => !double.IsNaN(v) && !double.IsInfinity(v);
 
   // 30 -> D = 54.7723, F = 1.82574 -> 30.0000x in float: shown as the 30 that was typed

@@ -24,7 +24,12 @@ public static class JetNativeSync
     DustRate1AuKgs: j.DustRate1AuKgs,
     DustRatePower: s.DustRatePower,
     DustRateCutoffAu: s.DustRateCutoffAu,
-    DustRateMaxKgs: s.DustRateMaxKgs);
+    DustRateMaxKgs: s.DustRateMaxKgs,
+    InsolationWeighted: j.InsolationWeighted,
+    OrbitSizeLaw: j.OrbitSizeLaw,
+    SpkBeforeStart: j.SpkBeforeStart,
+    LifetimeDays: j.LifetimeDays,
+    SizeQTable: j.SizeQTable);
 
   public static ParticleSystemJet BuildJet(JetViewModel j, float nucleusRadiusKm, long emissionStartUs = long.MaxValue) => new(
     LatitudeRad: j.LatitudeRad,

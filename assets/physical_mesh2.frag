@@ -185,6 +185,24 @@ void main() {
         N = normalize(TBN * sampledNormal);
     }
 
+    // Physical dark Lambert (sunColor.w = 3, CAMERA_SHADING_PHYSICAL | CAMERA_SHADING_LAMBERT_DARK,
+    // the nucleus-from-Earth view): a pure Lambert surface of the nucleus's dark albedo (the
+    // albedo texture keeps its relative contrast), lit by the direct sunlight only — irradiance
+    // (1 AU / r)² times the exposure in sunColor.rgb, the BRDF's 1/pi cancelled like the physical
+    // branch below — with no ambient or sky fill and a black night side.
+    if (scene.sunColor.w > 2.5) {
+        const float NUCLEUS_DARK_ALBEDO = 0.06; // CameraService.NucleusDarkAlbedo
+        vec3 albedoD = vec3(NUCLEUS_DARK_ALBEDO);
+        if (useAlbedo) albedoD *= texture(albedoMap, inUV).rgb;
+        float cosI = max(dot(lightDir, N), 0.0);
+        vec3 emissionD = mat.emissiveColor.rgb * max(mat.emissiveColor.a, 0.0);
+        if (useEmissive) emissionD *= texture(emissivePaintMap, inUV).rgb;
+        outColor = vec4(albedoD * cosI * scene.sunColor.xyz * ao + emissionD, 1.0);
+        float localDistD = rteDistanceOffset(push.object.centerDist, push.object.invCenterLen, inLocalOffset);
+        outGlobalDepth = vec2(float(push.layerIndex), localDistD);
+        return;
+    }
+
     vec3 diffuse = orenNayar(V, lightDir, N, albedo, roughness);
 
     // Physical shading (sunColor.w = 2, the view's CAMERA_SHADING_PHYSICAL): direct sunlight only,

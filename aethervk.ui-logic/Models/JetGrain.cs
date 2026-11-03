@@ -9,10 +9,15 @@ namespace AetherVk.Logic.Models;
 /// <param name="DensityGCm3">Grain bulk density (g/cm³).</param>
 /// <param name="ScatteringEfficiency">Radiation-pressure efficiency Q_pr (enters β only).</param>
 /// <param name="GeometricAlbedo">Geometric albedo p of the dust.</param>
-/// <param name="SizeQ">Size law exponent q; the specks follow it, the continuum keeps q = 3.5.</param>
+/// <param name="SizeQ">Size law exponent q: the continuous dust follows it with <paramref name="OrbitSizeLaw"/> on (when the table is empty); off, the continuum keeps q = 3.5 and only the near specks follow it.</param>
 /// <param name="SizeRange">Size range factor F = √(D_max/D_min); the UI states the law as D_min / D_max (<see cref="GrainDiameterRange"/>).</param>
 /// <param name="DustRate1AuKgs">Dust mass production rate Q_d at 1 AU (kg/s): this jet's activity. It no
 /// longer depends on the albedo or the grain size (those set the brightness and β only).</param>
+/// <param name="InsolationWeighted">"Insolation-weighted emission": the emitted mass follows cos(incidence) over the day instead of lit / dark gating. Off in older saves.</param>
+/// <param name="OrbitSizeLaw">"Orbit-dependent size distribution": the continuous dust follows this jet's q (<see cref="SizeQTable"/> along the orbit when it has rows). Off in older saves.</param>
+/// <param name="SpkBeforeStart">Pre-start dust from the ephemeris: before the start epoch the jet follows the SPK when it covers the time, else the reference orbit. On for new jets, off in older saves (their SPK covers the lead, so the flag keeps their dust unchanged).</param>
+/// <param name="LifetimeDays">Dust lifetime in days (<see cref="DustLifetime.MinDays"/> to <see cref="DustLifetime.MaxDays"/>, default <see cref="DustLifetime.DefaultDays"/>).</param>
+/// <param name="SizeQTable">q along the orbit, used with <paramref name="OrbitSizeLaw"/> on; empty = the jet's <paramref name="SizeQ"/>.</param>
 public sealed record JetGrain(
   float DiametreUm,
   float DensityGCm3,
@@ -20,8 +25,16 @@ public sealed record JetGrain(
   float GeometricAlbedo,
   float SizeQ,
   float SizeRange,
-  float DustRate1AuKgs)
+  float DustRate1AuKgs,
+  bool InsolationWeighted = false,
+  bool OrbitSizeLaw = false,
+  bool SpkBeforeStart = true,
+  float LifetimeDays = DustLifetime.DefaultDays,
+  SizeQTable SizeQTable = null!)
 {
+  /// <summary>The q table, never null (<see cref="Models.SizeQTable.Empty"/> when none was given).</summary>
+  public SizeQTable SizeQTable { get; init; } = SizeQTable ?? Models.SizeQTable.Empty;
+
   /// <summary>Smallest simulated grain diameter (µm), D/F.</summary>
   public float MinDiameterUm => GrainDiameterRange.MinOf(DiametreUm, SizeRange);
 

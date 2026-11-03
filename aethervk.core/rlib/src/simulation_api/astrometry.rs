@@ -607,6 +607,18 @@ mod tests {
     let (ra_g, dec_g) = ra_dec_of(ecliptic_to_equatorial_j2000(sub(comet, earth)));
     let shift = angle(dir_of_ra_dec(ra_g, dec_g), dir_of_ra_dec(e.ra_rad, e.dec_rad)) / ARCSEC_RAD;
     assert!(shift > 0.1 && shift < 60.0, "light-time shift {shift}″");
+    // absolute PsAng against JPL Horizons (fetched 2026-11-03 from https://ssd.jpl.nasa.gov/api/horizons.api,
+    // source JPL#K284/1; the same row for COMMAND='DES=67P;CAP;NOFRAG'):
+    //   COMMAND='90000703' EPHEM_TYPE='OBSERVER' CENTER='500@399' TLIST='2021-12-27 00:00'
+    //   TIME_TYPE='UT' QUANTITIES='1,19,20,24,27' ANG_FORMAT='DEG' EXTRA_PREC='YES'
+    // → RA 135.393588842° Dec +28.270108636° r 1.388056764787 AU Δ 0.46635679461484 AU
+    //   S-T-O 24.6273° PsAng 271.440° PsAMV 293.268°
+    // so the PA of the Sun (PsAng + 180°) is 91.440°.
+    const HORIZONS_PSANG_DEG: f64 = 271.440;
+    let psang = e.sun_pa_rad.to_degrees();
+    assert!((psang - HORIZONS_PSANG_DEG).abs() < 0.05, "PsAng {psang}° vs Horizons {HORIZONS_PSANG_DEG}°");
+    let pa_of_sun = (psang + 180.0).rem_euclid(360.0);
+    assert!((pa_of_sun - 91.440).abs() < 0.05, "PA of Sun {pa_of_sun}°");
     println!(
       "67P 2021-12-27 00:00 UTC: RA {:.4} h Dec {:+.4}° r {:.5} AU Δ {:.5} AU phase {:.3}° elong {:.3}° PsAng {:.3}° light time {:.1} s",
       e.ra_rad.to_degrees() / 15.0, e.dec_rad.to_degrees(), e.r_au, e.delta_au,

@@ -188,6 +188,8 @@ public sealed class AppSaveFileHost : ISaveFileHost
 
   public string? GetCompatibilityJson() => _runtime.GetCompatibilityJson();
 
+  public string? GetCompatibilityJson(uint dumpVersion) => _runtime.GetCompatibilityJson(dumpVersion);
+
   public uint SceneDumpVersion => _runtime.SceneDumpVersion;
 
   public Task<bool> DumpSceneAsync(string file) =>

@@ -57,13 +57,21 @@ public class ReviewFeedbackVerificationTests
     }
   }
 
-  /// <summary>R7: the size law is per jet: every new jet's grain starts at q = 3.5.</summary>
+  /// <summary>
+  /// R7: the size law is per jet; a new jet starts from the q of "Defaults for new jets" (3.5 unless
+  /// edited there), the defaults' q box is in that grid and the plot-only size expander is gone.
+  /// </summary>
   [Fact]
-  public void Review_mail_R7_NewJetGrainStartsAtQ3_5()
+  public void Review_mail_R7_NewJetGrainStartsAtTheDefaultsQ()
   {
     Assert.Equal(3.5f, AetherVk.Logic.Models.JetGrain.Default.SizeQ);
     Assert.Equal(3.5f, new JetViewModel(new ModelSession().DefaultGrain).SizeQ);
-    Assert.DoesNotContain("AutomationId=\"SizeQBox\"", ModelTabAxaml());
+    Assert.Equal(4.2f, new JetViewModel(new ModelSession { SizeQ = 4.2f }.DefaultGrain).SizeQ);
+    var axaml = ModelTabAxaml();
+    Assert.DoesNotContain("AutomationId=\"SizeQBox\"", axaml);
+    Assert.Contains("AutomationId=\"DustSizeQBox\"", axaml);
+    Assert.Contains("CurrentSession.SizeQ", axaml);
+    Assert.DoesNotContain("SizeDistributionAdvancedExpander", axaml);
   }
 
   // ── docx ─────────────────────────────────────────────────────────────────────

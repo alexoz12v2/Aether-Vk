@@ -676,6 +676,7 @@ void dust_sp_shape(uint c) {
 bool dust_sp_bin_of(uint P, uint sub, out uint b, out uint j, out uint nj) {
     uint g = SP_G;
     dust_group = g;
+    dust_size_law_set(SP_MI);
     uint nj0 = g > 1u ? 1u : dust_bin_subbins(0u);
     // g is a power of two in 1..16. SHAPE is its only writer: 1, or dust_haze_group of dust_lod_group
     // (doubling from 2, capped at 16) and dust_lod_group_depth_cap (doubling from 1), combined by
@@ -879,6 +880,7 @@ bool dust_sp_rec(uint r, out uint a_, out uint P, out uint sub, out uint t) {
     t = id >> 15u;
     dust_pyr_split_word = pc.pyramid.v[DUST_PYR_SPLIT_DEPTH];
     dust_group = (DUST_SPU(DUST_SPR_FS) & DUST_SPFS_MERGED) != 0u ? 1u : SP_G;
+    dust_size_law_set(SP_MI);
     return true;
 }
 // the sub-packet's word and its fields (re-read at every use)

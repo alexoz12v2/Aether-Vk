@@ -269,6 +269,7 @@ fn default_jet_counts_and_shell_radius() {
     dust_rate_power: 2.0,
     dust_rate_cutoff_au: 15.0,
     dust_rate_max_kgs: 0.0,
+    ..bytemuck::Zeroable::zeroed()
   };
   // the activity as a dust rate: the former Afρ 100.0 cm (max 100_000.0 cm) converted
   p.dust_rate_1au_kgs = p.dust_rate_from_afrho_kgs(100.0);

@@ -7,7 +7,6 @@ using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
-using Avalonia.Threading;
 
 namespace AetherVk.Controls;
 
@@ -17,9 +16,11 @@ namespace AetherVk.Controls;
 /// orbital element values.
 /// </summary>
 /// <remarks>
-/// Opened with the pointer the flyout is "unpinned": it hides <see cref="DismissDelay"/> after the
-/// pointer has left both the ? and the panel. A press inside the panel, or opening it with the
-/// keyboard, pins it until a click outside or Escape. The optional footer action
+/// However it is opened (a click on the ?, the keyboard or <see cref="OpenFlyout"/>) the flyout stays
+/// open until a click outside it (light dismiss), a second click on the ?, Escape or the footer
+/// action. It never closes because the pointer left: opening a popup on Win32 can raise a spurious
+/// PointerExited on the ? and clear IsPointerOver until the mouse moves, which made a pointer-away
+/// dismissal hide the flyout a fraction of a second after the click. The optional footer action
 /// (<see cref="ActionText"/> + <see cref="ActionCommand"/>) runs the command and closes the flyout.
 /// </remarks>
 public partial class PropertyHelpButton : UserControl
@@ -29,9 +30,6 @@ public partial class PropertyHelpButton : UserControl
 
   /// <summary>Suffix of the footer action's AutomationId (<c>&lt;owner id&gt;Action</c>).</summary>
   public const string ActionAutomationIdSuffix = "Action";
-
-  /// <summary>Grace time for the pointer to cross the gap between the ? and the panel.</summary>
-  public static readonly TimeSpan DismissDelay = TimeSpan.FromMilliseconds(350);
 
   // ──────────────────────────────────────────────────────────────────────────
   // Dependency Properties
@@ -142,13 +140,14 @@ public partial class PropertyHelpButton : UserControl
   private readonly Flyout _flyout;
   private readonly Control _panel;
   private readonly Button _actionButton;
-  private readonly DispatcherTimer _dismissTimer;
-  private bool _pointerOpening;
 
   /// <summary>True while the flyout is shown.</summary>
   public bool IsFlyoutOpen => _flyout.IsOpen;
 
-  /// <summary>True when the open flyout ignores the pointer leaving (click outside / Escape close it).</summary>
+  /// <summary>
+  /// True while the flyout is open: an open flyout is always pinned (only a click outside, a second
+  /// click on the ?, Escape or the footer action close it; the pointer leaving never does).
+  /// </summary>
   public bool IsFlyoutPinned { get; private set; }
 
   /// <summary>The flyout's footer action button (hidden unless <see cref="ActionText"/> is set).</summary>
@@ -168,13 +167,6 @@ public partial class PropertyHelpButton : UserControl
     _flyout = (Flyout)HelpBtn.Flyout!;
     _panel = (Control)_flyout.Content!;
     _actionButton = ActionBtn;
-    _dismissTimer = new DispatcherTimer { Interval = DismissDelay };
-    _dismissTimer.Tick += (_, _) =>
-    {
-      _dismissTimer.Stop();
-      if (_flyout.IsOpen && !IsFlyoutPinned && !HelpBtn.IsPointerOver && !_panel.IsPointerOver)
-        _flyout.Hide();
-    };
 
     // The Flyout popup lives in a detached visual root; DataContext doesn't
     // propagate reliably through the popup boundary via normal inheritance.
@@ -187,22 +179,11 @@ public partial class PropertyHelpButton : UserControl
     _flyout.Opened += (_, _) =>
     {
       _panel.DataContext = this;
-      // opened with the keyboard (Enter/Space) or programmatically → pinned
-      IsFlyoutPinned = !_pointerOpening;
-      _pointerOpening = false;
+      // pointer, keyboard or programmatic open: always pinned (no pointer-away dismissal)
+      IsFlyoutPinned = true;
     };
-    _flyout.Closed += (_, _) =>
-    {
-      _dismissTimer.Stop();
-      IsFlyoutPinned = false;
-    };
+    _flyout.Closed += (_, _) => IsFlyoutPinned = false;
 
-    HelpBtn.AddHandler(PointerPressedEvent, (_, _) => _pointerOpening = !_flyout.IsOpen, RoutingStrategies.Tunnel, handledEventsToo: true);
-    HelpBtn.PointerEntered += (_, _) => _dismissTimer.Stop();
-    HelpBtn.PointerExited += (_, _) => ScheduleDismiss();
-    _panel.PointerEntered += (_, _) => _dismissTimer.Stop();
-    _panel.PointerExited += (_, _) => ScheduleDismiss();
-    _panel.AddHandler(PointerPressedEvent, (_, _) => IsFlyoutPinned = true, RoutingStrategies.Tunnel, handledEventsToo: true);
     _panel.AddHandler(KeyDownEvent, (_, e) =>
     {
       if (e.Key == Key.Escape)
@@ -222,22 +203,10 @@ public partial class PropertyHelpButton : UserControl
   // Behaviour
   // ──────────────────────────────────────────────────────────────────────────
 
-  /// <summary>Opens the flyout at the ?; <paramref name="pinned"/> as if opened by keyboard.</summary>
-  public void OpenFlyout(bool pinned = true)
-  {
-    _pointerOpening = !pinned;
-    _flyout.ShowAt(HelpBtn);
-  }
+  /// <summary>Opens the flyout at the ? (pinned, like a click or the keyboard).</summary>
+  public void OpenFlyout() => _flyout.ShowAt(HelpBtn);
 
   public void CloseFlyout() => _flyout.Hide();
-
-  private void ScheduleDismiss()
-  {
-    if (!_flyout.IsOpen || IsFlyoutPinned)
-      return;
-    _dismissTimer.Stop();
-    _dismissTimer.Start();
-  }
 
   private void RunAction()
   {

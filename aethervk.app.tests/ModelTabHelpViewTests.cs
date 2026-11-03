@@ -35,8 +35,8 @@ public class ModelTabHelpViewTests
     "JetActivityHelp", "JetDustRate0Help", "CopyGrainToAllJetsButtonHelp",
     // defaults for new jets
     "JetDefaultsHelp", "DustDensityHelp", "DustMinDiameterHelp", "DustMaxDiameterHelp", "DustQprHelp", "DustAlbedoHelp",
+    "DustSizeQHelp",
     "ActivityAdvancedHelp", "DustRate0BoxHelp", "DustRatePowerBoxHelp", "DustRateCutoffBoxHelp", "DustRateMaxBoxHelp",
-    "SizeDistributionAdvancedHelp",
   };
 
   /// <summary>Controls whose tooltip moved into a "?".</summary>
@@ -50,6 +50,7 @@ public class ModelTabHelpViewTests
     "JetMinDiameterUm", "JetMaxDiameterUm", "JetDensity", "JetQpr", "JetAlbedo", "JetSizeQ", "JetDustRate0",
     "CopyGrainToAllJetsButton", "DustQprBox", "TotalActivityText",
     "DustRate0Box", "DustRatePowerBox", "DustRateCutoffBox", "DustRateMaxBox", "DustMinDiameterBox", "DustMaxDiameterBox",
+    "DustSizeQBox",
   };
 
   private static List<Control> All(Control root) =>
@@ -66,7 +67,7 @@ public class ModelTabHelpViewTests
     window.Show();
     ById<Expander>(view, "DustSection").IsExpanded = true;
     Dispatcher.UIThread.RunJobs();
-    foreach (var id in new[] { "JetGrainExpander", "JetActivityExpander", "ActivityAdvancedExpander", "SizeDistributionAdvancedExpander" })
+    foreach (var id in new[] { "JetGrainExpander", "JetActivityExpander", "ActivityAdvancedExpander" })
       ById<Expander>(view, id).IsExpanded = true;
     Dispatcher.UIThread.RunJobs();
     window.UpdateLayout();

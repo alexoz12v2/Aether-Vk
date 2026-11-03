@@ -16,6 +16,9 @@
 //!   label beyond each end, distinct glyphs at the two ends, the +Z one the same in an upside-down
 //!   view;
 //! - a comet gizmo behind the Earth does not show through it;
+//! - a comet-gizmo axis pointing away from the viewer is dimmed and dashed, and the nucleus's lit
+//!   side (nucleus-from-Earth shading: dark Lambert, black night side) is where the Sun arrow
+//!   points;
 //! - an Earth-observer camera (inside the globe's sphere, default mask) renders the same frame with
 //!   and without the globe in the scene.
 
@@ -213,11 +216,18 @@ impl Rig {
   /// Camera `slot` at `dir · VIEW_DISTANCE_R · R` from the Earth's centre looking at it, screen up
   /// = `up` (orthogonalised).
   fn view_earth_from(&self, slot: usize, dir: [f64; 3], up: [f64; 3]) {
-    let d = VIEW_DISTANCE_R * r_km() / AU_KM;
+    self.view_from(slot, EARTH_AU, dir, up, VIEW_DISTANCE_R * r_km() / AU_KM);
+  }
+
+  /// Camera `slot` at `center + dir · d` (AU) looking at `center`, screen up = `up`
+  /// (orthogonalised).
+  fn view_from(&self, slot: usize, center: [f64; 3], dir: [f64; 3], up: [f64; 3], d: f64) {
+    let n = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+    let dir = [dir[0] / n, dir[1] / n, dir[2] / n];
     let pos = Vec3f64::from_components(
-      EARTH_AU[0] + dir[0] * d,
-      EARTH_AU[1] + dir[1] * d,
-      EARTH_AU[2] + dir[2] * d,
+      center[0] + dir[0] * d,
+      center[1] + dir[1] * d,
+      center[2] + dir[2] * d,
     );
     // camera axes: +Y backward (= dir), +Z up, +X = Y × Z
     let norm = |v: [f64; 3]| {
@@ -690,6 +700,151 @@ fn comet_gizmo_behind_the_earth_does_not_show_through() {
   println!("gizmo pixels: inside the disk {diff_in}, outside {diff_out}");
   assert!(diff_out > 100, "the gizmo must be drawn around the Earth");
   assert_eq!(diff_in, 0, "the gizmo must not show through the Earth");
+}
+
+// ── the comet gizmo's axes and Sun arrow over the nucleus ─────────────────────────────────────
+
+/// The comet 1.25 AU from the Sun on world +Y (the Sun lights it from −Y), the camera `slot`
+/// `COMET_VIEW_KM` from the nucleus, the gizmo with only `parts`, the body unrotated. The subtree
+/// position is f32 and the camera aims at the f64 value, so the distance must be exact in f32:
+/// 1.2 rounds to 1.2000000477 AU, ~7 km off the aim, ~125 px at 40 km.
+const COMET_AU: [f64; 3] = [0.0, 1.25, 0.0];
+const COMET_VIEW_KM: f64 = 40.0;
+
+fn pose_comet(rig: &Rig, slot: usize, parts: u32, dir: [f64; 3]) {
+  rig.set_hidden(rig.earth_indicator, true);
+  rig.set_mask(0, RENDER_LAYER_DEFAULT);
+  let cam: crate::scene::EntityId = slotmap::KeyData::from_ffi(rig.cams[slot]).into();
+  rig.with_scene(|s| {
+    let _ = s.with_component_mut(rig.comet.subtree, |t: &mut crate::scene::TransformComponent| {
+      t.position = Vec3f32::from_components(COMET_AU[0] as f32, COMET_AU[1] as f32, COMET_AU[2] as f32);
+    });
+    let _ = s.with_component_mut(rig.comet.body, |t: &mut crate::scene::TransformComponent| {
+      t.position = Vec3f32::from_components(0.0, 0.0, 0.0);
+      t.rotation = Quat::identity();
+    });
+    let parts_component = crate::scene::SphereGizmoPartsComponent { parts, velocity_dir: [0.0; 3] };
+    if s
+      .with_component_mut(rig.comet.body, |p: &mut crate::scene::SphereGizmoPartsComponent| *p = parts_component)
+      .is_none()
+    {
+      let _ = s.add_component(rig.comet.body, parts_component);
+    }
+    // a near plane well inside the 40 km view distance
+    let _ = s.with_component_mut(cam, |c: &mut crate::scene::CameraComponent| {
+      if let crate::scene::CameraProjection::Perspective { near, .. } = &mut c.projection {
+        *near = 1e-9;
+      }
+    });
+  });
+  rig.view_from(slot, COMET_AU, dir, UP, COMET_VIEW_KM / AU_KM);
+}
+
+fn set_gizmo_visible(rig: &Rig, visible: bool) {
+  rig.with_scene(|s| {
+    let _ = s.with_component_mut(rig.comet.body, |g: &mut crate::scene::SphereGizmoComponent| {
+      g.is_visible = visible;
+    });
+  });
+}
+
+/// Pixels where `with` differs from `without` by more than 24 in a channel, with their colour in
+/// `with`.
+fn changed_pixels(with: &[u8], without: &[u8]) -> Vec<([f64; 2], [f64; 3])> {
+  let mut out = Vec::new();
+  for y in 0..H as i32 {
+    for x in 0..W as i32 {
+      let (p, q) = (px(without, x, y), px(with, x, y));
+      if (0..3).any(|i| (p[i] - q[i]).abs() > 24.0) {
+        out.push(([x as f64, y as f64], q));
+      }
+    }
+  }
+  out
+}
+
+/// The spin axis pointing away from the viewer (its far part behind the nucleus) is drawn dimmed
+/// and dashed; the same axis tilted as much towards the viewer is bright and solid. Both project
+/// to the same screen segment (mirror poses about the sky plane).
+#[test]
+fn gizmo_axis_pointing_away_is_dimmed_and_dashed() {
+  let _lock = crate::simulation_api::lock_render_callback_tests();
+  let Some(rig) = Rig::new() else { return };
+  let mut stats = Vec::new();
+  for (name, dir) in [("towards", [1.0, 0.0, 0.5]), ("away", [1.0, 0.0, -0.5])] {
+    pose_comet(&rig, 0, crate::scene::SPHERE_GIZMO_PART_SPIN_AXIS, dir);
+    set_gizmo_visible(&rig, false);
+    let without = rig.grab(0, SETTLE, &format!("spin_axis_{name}_off"));
+    set_gizmo_visible(&rig, true);
+    let with = rig.grab(0, SETTLE, &format!("spin_axis_{name}_on"));
+    let changed = changed_pixels(&with, &without);
+    let max_blue = changed.iter().map(|(_, c)| c[2]).fold(0.0, f64::max);
+    println!("spin axis {name}: {} pixels, max blue {max_blue}", changed.len());
+    stats.push((changed.len(), max_blue));
+  }
+  let ((n_front, b_front), (n_away, b_away)) = (stats[0], stats[1]);
+  assert!(n_front > 30 && b_front > 220.0, "the axis towards the viewer is drawn bright");
+  assert!(n_away > 10, "the axis pointing away is still drawn");
+  assert!(b_away < 160.0, "the axis pointing away is dimmed (max blue {b_away})");
+  assert!(
+    (n_away as f64) < 0.8 * n_front as f64,
+    "the axis pointing away is dashed ({n_away} vs {n_front} pixels)"
+  );
+}
+
+/// The nucleus in the nucleus-from-Earth shading (physical dark Lambert, exposure normalised to the
+/// dark albedo): the lit side is where the Sun arrow points, the side opposite is black (no
+/// ambient, no tint). Two skew poses, the arrow tilted towards the viewer.
+#[test]
+fn terminator_is_on_the_sun_arrow_side() {
+  let _lock = crate::simulation_api::lock_render_callback_tests();
+  let Some(rig) = Rig::new() else { return };
+  let shading = crate::scene::CAMERA_SHADING_PHYSICAL | crate::scene::CAMERA_SHADING_LAMBERT_DARK;
+  assert!(rig.ctx().set_camera_shading(rig.scene_id, rig.cams[0], shading));
+  assert!(rig.ctx().set_camera_exposure(rig.scene_id, rig.cams[0], 1.0 / 0.06));
+  let c0 = [W as f64 / 2.0, H as f64 / 2.0];
+  // the nucleus's disk radius on screen (2 km at 40 km)
+  let f = (H as f64 * 0.5) / (FOV_DEG.to_radians() * 0.5).tan();
+  let disk_px = f * crate::simulation_api::comet_appearance::DEFAULT_NUCLEUS_RADIUS_KM as f64 / COMET_VIEW_KM;
+  for (i, dir) in [[1.0, -0.3, 0.2], [0.7, -0.2, -0.6]].into_iter().enumerate() {
+    pose_comet(&rig, 0, crate::scene::SPHERE_GIZMO_PART_SUN, dir);
+    set_gizmo_visible(&rig, false);
+    let without = rig.grab(0, SETTLE, &format!("terminator_{i}_off"));
+    set_gizmo_visible(&rig, true);
+    let with = rig.grab(0, SETTLE, &format!("terminator_{i}_on"));
+
+    let lit: Vec<[f64; 2]> = (0..H as i32)
+      .flat_map(|y| (0..W as i32).map(move |x| (x, y)))
+      // on the nucleus's disk only (the sky behind may hold stars)
+      .filter(|&(x, y)| ((x as f64 - c0[0]).powi(2) + (y as f64 - c0[1]).powi(2)).sqrt() <= disk_px + 2.0)
+      .filter(|&(x, y)| lum(px(&without, x, y)) > 8.0)
+      .map(|(x, y)| [x as f64, y as f64])
+      .collect();
+    assert!(lit.len() > 50, "pose {i}: the nucleus is lit ({} pixels)", lit.len());
+    let centroid = |v: &[[f64; 2]]| {
+      let n = v.len() as f64;
+      [v.iter().map(|p| p[0]).sum::<f64>() / n, v.iter().map(|p| p[1]).sum::<f64>() / n]
+    };
+    let l = centroid(&lit);
+    let arrow: Vec<[f64; 2]> = changed_pixels(&with, &without)
+      .into_iter()
+      .filter(|(_, c)| c[0] > 100.0 && c[1] > 100.0 && c[2] < 80.0)
+      .map(|(p, _)| p)
+      .collect();
+    assert!(arrow.len() > 20, "pose {i}: the Sun arrow is drawn ({} pixels)", arrow.len());
+    let a = centroid(&arrow);
+    let (v1, v2) = ([l[0] - c0[0], l[1] - c0[1]], [a[0] - c0[0], a[1] - c0[1]]);
+    let n1 = (v1[0] * v1[0] + v1[1] * v1[1]).sqrt();
+    let n2 = (v2[0] * v2[0] + v2[1] * v2[1]).sqrt();
+    assert!(n1 > 3.0 && n2 > 3.0, "pose {i}: offsets {v1:?} {v2:?}");
+    let angle = ((v1[0] * v2[0] + v1[1] * v2[1]) / (n1 * n2)).clamp(-1.0, 1.0).acos().to_degrees();
+    println!("pose {i}: lit centroid {l:?}, Sun arrow centroid {a:?}, angle {angle:.1}°");
+    assert!(angle < 12.0, "pose {i}: the lit side is {angle:.1}° off the Sun arrow");
+    // the anti-solar side of the disk is black: no ambient, no debug tint
+    let night = [c0[0] - v1[0] / n1 * 0.6 * disk_px, c0[1] - v1[1] / n1 * 0.6 * disk_px];
+    let p = mean_patch(&without, night[0].round() as i32, night[1].round() as i32, 1);
+    assert!(p.iter().all(|&c| c < 3.0), "pose {i}: the night side is not black: {p:?}");
+  }
 }
 
 // ── A-3: the Earth-observer view does not see the globe at all ────────────────────────────────

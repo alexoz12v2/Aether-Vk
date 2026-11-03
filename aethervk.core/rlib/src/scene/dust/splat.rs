@@ -990,6 +990,22 @@ impl DustMoments {
   pub fn propagate_stamp(&self) -> u32 {
     self.edges[12][3].to_bits()
   }
+  /// The cluster's size law `q` (`edges[13].w`, the record's word copied by the propagate,
+  /// `super::size_law_word`): `None` on the q = 3.5 path, where the lane holds edge 13's speed
+  /// factor (positive, never read as such: the factors are linear in `j` from edges 0 and 16),
+  /// `Some(q)` when the sign bit is set. Every consumer takes the q = 3.5 expressions bit for bit
+  /// on `None` ([`bin_flux`], [`bin_density_ends_q`], the speck counts). Mirror of
+  /// `dust_size_law_set`.
+  pub fn size_law(&self) -> Option<f32> {
+    super::size_law_q_of(self.edges[13][3])
+  }
+  /// [`DustMoments::size_law`] as the writable word (tests, the CPU emit)
+  pub fn set_size_law(&mut self, q: Option<f32>) {
+    self.edges[13][3] = match q {
+      Some(q) => f32::from_bits(q.to_bits() | 0x8000_0000),
+      None => self.edge_factor(13),
+    };
+  }
   /// `tr(Σ_v)/3`: the mean variance of the velocity dispersion (m²)
   pub fn mean_var(&self) -> f32 {
     (self.cov_a[0] + self.cov_a[3] + self.cov_b_age_id[1]) / 3.0
@@ -1255,7 +1271,14 @@ pub fn packet_moments_detail(
     } else {
       [0.0; 3]
     };
-    *e = [local[0], local[1], local[2], factor];
+    // edge 13's spare lane carries the record's size-law word (`DustMoments::size_law`): the
+    // factor itself on the q = 3.5 path (a positive word), the same bits as before
+    let w13 = if j == 13 && c.size_law_q().is_some() {
+      c.eject[3]
+    } else {
+      factor
+    };
+    *e = [local[0], local[1], local[2], w13];
   }
   // the skipped edges (stride > 1): linear between the solved neighbours, the GPU's expression
   for j in 0..SIZE_EDGES as usize {
@@ -1781,6 +1804,95 @@ pub fn bin_density_ends(f0: f32, f1: f32) -> [f32; 2] {
   [2.0 * f1 / s, 2.0 * f0 / s]
 }
 
+/// [`bin_density_ends`] for a cluster's size law: the q = 3.5 expressions on `None` (bit for
+/// bit), else the ramp `∝ u^(2q−8)` of the law `q` normalised to mean 1 over the chord.
+///
+/// Derivation. The edges are linear in `u = √β` (`size_edge_sqrt_beta`), the speed factor `f =
+/// u / √β_ref` is the chord's affine parameter, and `s ∝ 1/β = c/u²`. The cross-section of the
+/// grains `dσ ∝ s² n(s) ds ∝ s^(2−q) ds`; with `ds = −2c u^-3 du` that is `dσ ∝ u^(2q−4) u^-3 du
+/// = u^(2q−7) du` per unit `u`. The grains' displacement along the syndyne is `∝ β ∝ u²`, so per
+/// unit chord length the density is `u^(2q−7) / (2u) ∝ u^(2q−8)`: `1/u` at q = 3.5 (the
+/// expression of [`bin_density_ends`]), uniform at q = 4, rising with `u` above it. The drawn
+/// ramp is linear between the chord's end densities, normalised by that line's mean `(d0 +
+/// d1)/2` so the packet's flux is conserved exactly, as the q = 3.5 ramp is (there `d = 1/f` and
+/// `2 d0 / (d0 + d1) = 2 f1 / (f0 + f1)`); no integral of the power enters, so no exponent is
+/// singular here. Mirror of `dust_bin_density_ends` with `dust_size_law` set.
+pub fn bin_density_ends_q(f0: f32, f1: f32, q: Option<f32>) -> [f32; 2] {
+  let Some(q) = q else {
+    return bin_density_ends(f0, f1);
+  };
+  let (f0, f1) = (f0.max(1e-6), f1.max(1e-6));
+  let e = 2.0 * q - 8.0;
+  let (d0, d1) = (powf(f0, e), powf(f1, e));
+  let s = d0 + d1;
+  if !(s > 0.0) || !s.is_finite() {
+    return [1.0, 1.0];
+  }
+  [2.0 * d0 / s, 2.0 * d1 / s]
+}
+
+/// The cross-section share of the size bins `b .. b + g` (edge speed factors `fa ≤ fb`) in the
+/// whole polyline (`f0 ≤ f16`) for the law `q`: `∫ u^(2q−7) du` over the bins, over the polyline
+/// ([`bin_density_ends_q`] for the density; `u ∝ f`, so the factors serve as `u`). With `p = 2q
+/// − 6` the antiderivative is `u^p / p`, at `p = 0` (q = 3) `ln u`; the shares are `(fb^p −
+/// fa^p) / (f16^p − f0^p)` and `ln(fb/fa) / ln(f16/f0)`. At q = 3.5 (`p = 1`) the share is the
+/// linear `(fb − fa) / (f16 − f0) = g/16`; the callers take that path's own expression
+/// ([`bin_flux`]). A polyline of one size (`f16 == f0`) shares evenly. Mirror of
+/// `dust_bin_xsec_share`.
+pub fn bin_xsec_share(q: f32, fa: f32, fb: f32, f0: f32, f16: f32, g: usize) -> f32 {
+  let (fa, fb, f0, f16) = (fa.max(1e-6), fb.max(1e-6), f0.max(1e-6), f16.max(1e-6));
+  if !(f16 > f0) {
+    return g as f32 / SIZE_BINS as f32;
+  }
+  let p = 2.0 * q - 6.0;
+  let w = if fabs(p) < 1e-6 {
+    lnf(fb / fa) / lnf(f16 / f0)
+  } else {
+    (powf(fb, p) - powf(fa, p)) / (powf(f16, p) - powf(f0, p))
+  };
+  if w.is_finite() && w >= 0.0 {
+    w
+  } else {
+    g as f32 / SIZE_BINS as f32
+  }
+}
+
+/// [`bin_xsec_share`] of the cluster's group bin `b` (bins `b .. b + group_bins()`), `g/16` on the
+/// q = 3.5 path
+pub fn bin_flux_share(m: &DustMoments, b: usize) -> f32 {
+  let g = group_bins();
+  match m.size_law() {
+    None => g as f32 / SIZE_BINS as f32,
+    Some(q) => bin_xsec_share(
+      q,
+      m.edge_factor(b),
+      m.edge_factor(b + g),
+      m.edge_factor(0),
+      m.edge_factor(SIZE_BINS as usize),
+      g,
+    ),
+  }
+}
+
+/// The flux of sub-bin `j` of `nj` of group bin `b`, over `n_s` sweep pieces: the cluster's flux
+/// times the bin's share ([`bin_flux_share`]) times the sub-bin's ([`sub_share`]). On the q = 3.5
+/// path the expression is the one of before the size law, `flux · g / (16 n_s) · share`, in that
+/// order. Mirror of `dust_bin_flux`.
+pub fn bin_flux(m: &DustMoments, b: usize, j: usize, nj: usize, n_s: usize) -> f32 {
+  let base = match m.size_law() {
+    None => m.flux() * group_bins() as f32 / (SIZE_BINS as usize * n_s) as f32,
+    Some(_) => m.flux() * bin_flux_share(m, b) / n_s as f32,
+  };
+  base * sub_share(m, b, j, nj)
+}
+
+fn powf(x: f32, y: f32) -> f32 {
+  <f32 as FloatLike>::pow(x, y)
+}
+fn lnf(x: f32) -> f32 {
+  <f32 as FloatLike>::ln(x)
+}
+
 /// The packets of a cluster (mirror of `dust_subpackets`): one per size bin of the polyline,
 /// uniform along its chord (a Gaussian of [`CHORD_VAR_FACTOR`] half-chords² along it) with
 /// `Σ_v` scaled by the bin's speed factor, `1/SIZE_BINS` of the flux each; and when the stream
@@ -1833,7 +1945,7 @@ pub fn sub_share(m: &DustMoments, b: usize, j: usize, nj: usize) -> f32 {
   if nj <= 1 {
     return 1.0;
   }
-  let [r0, r1] = bin_density_ends(m.edge_factor(b), m.edge_factor(b + group_bins()));
+  let [r0, r1] = bin_density_ends_q(m.edge_factor(b), m.edge_factor(b + group_bins()), m.size_law());
   let (u0, u1) = (j as f32 / nj as f32, (j + 1) as f32 / nj as f32);
   (u1 - u0) * (r0 + (r1 - r0) * 0.5 * (u0 + u1)) / (0.5 * (r0 + r1))
 }
@@ -1859,7 +1971,7 @@ pub fn bin_packet_sub(m: &DustMoments, b: usize, j: usize, nj: usize, seg: [f32;
       f2 * cv[5] + k * h[2] * h[2],
     ],
     seg,
-    flux: m.flux() * group_bins() as f32 / SIZE_BINS as f32 * sub_share(m, b, j, nj),
+    flux: bin_flux(m, b, j, nj, 1),
     open: [false, false],
     rho: [1.0, 1.0],
     seg_t: scale3(h, 2.0),
@@ -1942,9 +2054,9 @@ pub fn bin_chord_packet_sub(m: &DustMoments, b: usize, j: usize, nj: usize, seg_
       f2 * cv[5] + k * h[2] * h[2],
     ],
     seg: sub3(c, a),
-    flux: m.flux() * group_bins() as f32 / SIZE_BINS as f32 * sub_share(m, b, j, nj),
+    flux: bin_flux(m, b, j, nj, 1),
     open: [b > 0 || j > 0, b + group_bins() < SIZE_BINS as usize || j + 1 < nj],
-    rho: bin_density_ends(fa, fc),
+    rho: bin_density_ends_q(fa, fc, m.size_law()),
     seg_t: scale3(h, 2.0),
   }
 }
@@ -2091,9 +2203,9 @@ pub fn bin_sweep_packet_sub(m: &DustMoments, p: &DustMoments, b: usize, j: usize
       f2 * cv[5] + kv * h[2] * h[2],
     ],
     seg: sub3(ck, ak),
-    flux: m.flux() * group_bins() as f32 / (SIZE_BINS * n_s) as f32 * sub_share(m, b, j, nj),
+    flux: bin_flux(m, b, j, nj, n_s as usize),
     open: [b > 0 || j > 0, b + group_bins() < SIZE_BINS as usize || j + 1 < nj],
-    rho: bin_density_ends(fa, fc),
+    rho: bin_density_ends_q(fa, fc, m.size_law()),
     seg_t: scale3(h, 2.0),
   }
 }

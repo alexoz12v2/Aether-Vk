@@ -602,10 +602,20 @@
                                                  HelpContent="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpJetBeta}"
                                                  FlyoutMaxWidth="300" />
                   </StackPanel>
-                  <TextBox Grid.Row="12" Grid.Column="2"
-                           Classes="computed"
-                           AutomationProperties.AutomationId="JetBetaBox"
-                           Text="{Binding Beta, StringFormat='{}{0:F4}'}" />
+                  <StackPanel Grid.Row="12" Grid.Column="2" Spacing="2">
+                    <TextBox Classes="computed"
+                             AutomationProperties.AutomationId="JetBetaBox"
+                             Text="{Binding Beta, StringFormat='{}{0:F4}'}" />
+                    <!-- β of the largest grain (β/F) to β of the smallest (β·F) -->
+                    <StackPanel Orientation="Horizontal" Spacing="4"
+                                IsVisible="{Binding BetaRangeText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                      <TextBlock Text="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrJetBetaRange}"
+                                 FontSize="11" Foreground="{DynamicResource Text.Secondary}" />
+                      <TextBlock AutomationProperties.AutomationId="JetBetaRangeText"
+                                 Text="{Binding BetaRangeText}"
+                                 FontSize="11" Foreground="{DynamicResource Text.Secondary}" />
+                    </StackPanel>
+                  </StackPanel>
 
                   <!-- Computed: Dust production rate -->
                   <StackPanel Grid.Row="14" Grid.Column="0" Orientation="Horizontal" Spacing="4">
@@ -791,6 +801,122 @@
                 </StackPanel>
               </Expander>
 
+              <!-- ──── This jet's dynamic model: insolation weighting, the size law along the orbit,
+                   the pre-start source, the dust lifetime and the emission steps it implies ── -->
+              <Expander AutomationProperties.AutomationId="JetDynamicsExpander" Margin="12,8,12,0">
+                <Expander.Header>
+                  <StackPanel Orientation="Horizontal" Spacing="4">
+                    <TextBlock Text="Advanced: dynamic model" />
+                    <controls:PropertyHelpButton AutomationProperties.AutomationId="JetDynamicsHelp"
+                                                 HelpHeader="{Binding StrHelpHeaderJetDynamics}"
+                                                 HelpContent="{Binding StrHelpJetDynamics}"
+                                                 FlyoutMaxWidth="320" />
+                  </StackPanel>
+                </Expander.Header>
+                <StackPanel Spacing="8" DataContext="{Binding SelectedJet}" x:DataType="vm:JetViewModel">
+                  <StackPanel Orientation="Horizontal" Spacing="4">
+                    <CheckBox AutomationProperties.AutomationId="JetInsolationWeighted"
+                              Content="Insolation-weighted emission"
+                              IsChecked="{Binding InsolationWeighted}" />
+                    <controls:PropertyHelpButton AutomationProperties.AutomationId="JetInsolationWeightedHelp"
+                                                 VerticalAlignment="Center"
+                                                 HelpHeader="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpHeaderJetInsolation}"
+                                                 HelpContent="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpJetInsolation}" FlyoutMaxWidth="320" />
+                  </StackPanel>
+                  <StackPanel Orientation="Horizontal" Spacing="4">
+                    <CheckBox AutomationProperties.AutomationId="JetOrbitSizeLaw"
+                              Content="Orbit-dependent size distribution"
+                              IsChecked="{Binding OrbitSizeLaw}" />
+                    <controls:PropertyHelpButton AutomationProperties.AutomationId="JetOrbitSizeLawHelp"
+                                                 VerticalAlignment="Center"
+                                                 HelpHeader="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpHeaderJetOrbitSizeLaw}"
+                                                 HelpContent="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpJetOrbitSizeLaw}" FlyoutMaxWidth="320" />
+                  </StackPanel>
+                  <StackPanel Orientation="Horizontal" Spacing="4">
+                    <CheckBox AutomationProperties.AutomationId="JetSpkBeforeStart"
+                              Content="Pre-start dust from the ephemeris"
+                              IsChecked="{Binding SpkBeforeStart}" />
+                    <controls:PropertyHelpButton AutomationProperties.AutomationId="JetSpkBeforeStartHelp"
+                                                 VerticalAlignment="Center"
+                                                 HelpHeader="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpHeaderJetSpkBeforeStart}"
+                                                 HelpContent="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpJetSpkBeforeStart}" FlyoutMaxWidth="320" />
+                  </StackPanel>
+
+                  <Grid ColumnDefinitions="*,12,1.6*" RowDefinitions="Auto,8,Auto">
+                    <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                      <TextBlock Text="Dust lifetime (days)" />
+                      <controls:PropertyHelpButton AutomationProperties.AutomationId="JetLifetimeDaysHelp"
+                                                   HelpHeader="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpHeaderJetLifetime}"
+                                                   HelpContent="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpJetLifetime}" FlyoutMaxWidth="320" />
+                    </StackPanel>
+                    <Panel Grid.Row="0" Grid.Column="2" Classes="unit-overlay">
+                      <TextBox AutomationProperties.AutomationId="JetLifetimeDays">
+                        <i:Interaction.Behaviors>
+                          <b:NumericTextBoxBehavior Value="{Binding LifetimeDays}" Minimum="1" Maximum="365" Format="0.#" />
+                        </i:Interaction.Behaviors>
+                      </TextBox>
+                      <TextBlock Classes="unit-of-measurement" Text="d" />
+                    </Panel>
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Emission steps" VerticalAlignment="Center" />
+                    <TextBlock Grid.Row="2" Grid.Column="2" AutomationProperties.AutomationId="JetEmissionStepsText"
+                               Text="{Binding EmissionStepsText}" VerticalAlignment="Center"
+                               Foreground="{DynamicResource Text.Secondary}" />
+                  </Grid>
+
+                  <StackPanel Spacing="4" IsVisible="{Binding OrbitSizeLaw}">
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                      <TextBlock Text="q along the orbit" />
+                      <controls:PropertyHelpButton AutomationProperties.AutomationId="JetSizeQTableHelp"
+                                                   HelpHeader="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpHeaderJetSizeQTable}"
+                                                   HelpContent="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).StrHelpJetSizeQTable}" FlyoutMaxWidth="320" />
+                    </StackPanel>
+                    <Grid ColumnDefinitions="*,12,*,12,Auto">
+                      <TextBlock Grid.Column="0" Text="days from perihelion" FontSize="11" Foreground="{DynamicResource Text.Secondary}" />
+                      <TextBlock Grid.Column="2" Text="q" FontSize="11" Foreground="{DynamicResource Text.Secondary}" />
+                    </Grid>
+                    <ItemsControl AutomationProperties.AutomationId="JetSizeQTable" ItemsSource="{Binding SizeQRows}">
+                      <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                          <StackPanel Spacing="4" />
+                        </ItemsPanelTemplate>
+                      </ItemsControl.ItemsPanel>
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:SizeQRowViewModel">
+                          <Grid ColumnDefinitions="*,12,*,12,Auto">
+                            <TextBox Grid.Column="0" Classes="size-q-days">
+                              <i:Interaction.Behaviors>
+                                <b:NumericTextBoxBehavior Value="{Binding DaysFromPerihelion}" Minimum="-100000" Maximum="100000" Format="0.#" />
+                              </i:Interaction.Behaviors>
+                            </TextBox>
+                            <TextBox Grid.Column="2" Classes="size-q-q">
+                              <i:Interaction.Behaviors>
+                                <b:NumericTextBoxBehavior Value="{Binding Q}" Minimum="0" Maximum="6" Format="0.##" />
+                              </i:Interaction.Behaviors>
+                            </TextBox>
+                            <Button Grid.Column="4" Classes="size-q-remove" Padding="6,0" Content="−"
+                                    Command="{Binding $parent[ItemsControl].((vm:JetViewModel)DataContext).RemoveSizeQRowCommand}"
+                                    CommandParameter="{Binding}" />
+                          </Grid>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <Button AutomationProperties.AutomationId="JetSizeQTableAddRow" Padding="10,2"
+                            Content="Add row" HorizontalAlignment="Left"
+                            Command="{Binding AddSizeQRowCommand}"
+                            IsEnabled="{Binding CanAddSizeQRow}" />
+                    <controls:CurvePlot AutomationProperties.AutomationId="JetSizeQCurvePlot"
+                                      Model="{Binding $parent[view:ModelTabView].((vm:IModelTabViewModel)DataContext).JetSizeQPlot}"
+                                      Height="140" HorizontalAlignment="Stretch"
+                                      PlotBackground="{DynamicResource Bg.Surface}"
+                                      PrimaryBrush="{DynamicResource Accent.Primary}"
+                                      SecondaryBrush="{DynamicResource Sem.Warning}"
+                                      MarkerBrush="{DynamicResource Sem.Warning}"
+                                      AxisBrush="{DynamicResource Text.Disabled}"
+                                      TextBrush="{DynamicResource Text.Secondary}" />
+                  </StackPanel>
+                </StackPanel>
+              </Expander>
+
               <StackPanel Orientation="Horizontal" Spacing="4"
                           Margin="12,8,12,12"
                           HorizontalAlignment="Right">
@@ -813,7 +939,7 @@
                     Margin="0,0,0,0"
                     Padding="12,8,12,0">
               <StackPanel Orientation="Horizontal" Spacing="4">
-                <TextBlock Text="Defaults for new jets"
+                <TextBlock Text="{Binding StrHelpHeaderJetDefaults}"
                            FontSize="11"
                            FontWeight="SemiBold"
                            Foreground="{DynamicResource Text.Secondary}" />
@@ -825,7 +951,7 @@
             </Border>
 
             <Grid ColumnDefinitions="*,12,1.6*"
-                  RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto"
+                  RowDefinitions="Auto,8,Auto,8,Auto,8,Auto,8,Auto,8,Auto"
                   Margin="12,8,12,8">
 
               <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="4">
@@ -896,15 +1022,32 @@
                 </i:Interaction.Behaviors>
               </TextBox>
 
+              <StackPanel Grid.Row="10" Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                <TextBlock Text="Size law q" />
+                <controls:PropertyHelpButton AutomationProperties.AutomationId="DustSizeQHelp"
+                                             HelpHeader="{Binding StrHelpHeaderSizeDistribution}"
+                                             HelpContent="{Binding StrHelpSizeDistribution}"
+                                             FlyoutMaxWidth="320" />
+              </StackPanel>
+              <TextBox Grid.Row="10" Grid.Column="2" AutomationProperties.AutomationId="DustSizeQBox">
+                <i:Interaction.Behaviors>
+                  <b:NumericTextBoxBehavior Value="{Binding CurrentSession.SizeQ}" Minimum="2" Maximum="5" />
+                </i:Interaction.Behaviors>
+              </TextBox>
+
             </Grid>
             <TextBlock AutomationProperties.AutomationId="SizeRangeError"
                        Text="{Binding SizeRangeError}"
                        IsVisible="{Binding SizeRangeError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
                        TextWrapping="Wrap" FontSize="11" Margin="12,0,12,8"
                        Foreground="{DynamicResource Sem.Error}" />
+            <TextBlock AutomationProperties.AutomationId="SizeRangeNote"
+                       Text="{Binding SizeRangeNote}"
+                       TextWrapping="Wrap" FontSize="11" Margin="12,0,12,8"
+                       Foreground="{DynamicResource Text.Secondary}" />
 
             <!-- Activity law: rarely changed, out of the way (it is not a grain-size law) -->
-            <Expander AutomationProperties.AutomationId="ActivityAdvancedExpander" Margin="12,0,12,8">
+            <Expander AutomationProperties.AutomationId="ActivityAdvancedExpander" Margin="12,0,12,12">
               <Expander.Header>
                 <StackPanel Orientation="Horizontal" Spacing="4">
                   <TextBlock Text="Advanced: activity (Q_d)" />
@@ -992,35 +1135,6 @@
               </StackPanel>
             </Expander>
 
-            <!-- Grain size law: only the discrete specks follow q -->
-            <Expander AutomationProperties.AutomationId="SizeDistributionAdvancedExpander" Margin="12,0,12,12">
-              <Expander.Header>
-                <StackPanel Orientation="Horizontal" Spacing="4">
-                  <TextBlock Text="Advanced: grain size distribution" />
-                  <controls:PropertyHelpButton AutomationProperties.AutomationId="SizeDistributionAdvancedHelp"
-                                               HelpHeader="{Binding StrHelpHeaderSizeDistribution}"
-                                               HelpContent="{Binding StrHelpSizeDistribution}"
-                                               FlyoutMaxWidth="320" />
-                </StackPanel>
-              </Expander.Header>
-              <StackPanel Spacing="8">
-                <!-- the smallest / largest diameters are in the defaults grid above (its error text is under it); q is per jet only -->
-
-                <controls:CurvePlot AutomationProperties.AutomationId="SizeDistributionPlot"
-                                    Model="{Binding SizeDistributionPlot}"
-                                    Height="140" HorizontalAlignment="Stretch"
-                                    PlotBackground="{DynamicResource Bg.Surface}"
-                                    PrimaryBrush="{DynamicResource Accent.Primary}"
-                                    SecondaryBrush="{DynamicResource Sem.Warning}"
-                                    MarkerBrush="{DynamicResource Sem.Warning}"
-                                    AxisBrush="{DynamicResource Text.Disabled}"
-                                    TextBrush="{DynamicResource Text.Secondary}" />
-                <TextBlock AutomationProperties.AutomationId="SizeRangeNote"
-                           Text="{Binding SizeRangeNote}"
-                           TextWrapping="Wrap" FontSize="11"
-                           Foreground="{DynamicResource Text.Secondary}" />
-              </StackPanel>
-            </Expander>
           </StackPanel>
         </Expander>
       </Border>

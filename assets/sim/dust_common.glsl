@@ -373,7 +373,7 @@ struct DustBatch {
     uint  ring_mask;
     uint  seed;
     vec4  lit;              // jet site illumination: psi_start, psi0, total lit phase (rad), mode
-    vec4  site_offset;      // jet site offset from the nucleus centre (m, ps frame), w unused
+    vec4  site_offset;      // jet site offset from the nucleus centre (m, ps frame), w = c of an insolation-weighted window (else 0)
 };
 
 layout(buffer_reference, std430, buffer_reference_align = 16) buffer DustClusterBuffer {
@@ -419,6 +419,43 @@ vec3 dust_sun_dir(uint mi) { return vec3(dust_mom.m[mi].edges[6].w, dust_mom.m[m
 // specks this frame, so the continuum gives up its shell mass; edges[15].w as bits (0 from the
 // propagate), written by dust_specks.comp before the splat (atomicOr on the word)
 uint dust_specks_mask(uint mi) { return floatBitsToUint(dust_mom.m[mi].edges[15].w); }
+// The cluster size law (dust::DustMoments::size_law): edges[13].w is the record word of
+// dust_size_law_word, copied by the propagate. Sign bit clear: the q = 3.5 path (the lane holds
+// edge 13 speed factor, never read as such), every expression below as before the law; set: the
+// law q = abs(word) (q = 0 is -0.0: the bit is the flag). Set per cluster where dust_group is,
+// read by dust_bin_density_ends, dust_bin_flux and the specks.
+// The size law switch, compile time (a specialization constant was NOT enough: the GTX 1070
+// driver kept 8-24 bytes of codegen difference per frame with it specialised to false): the
+// default blobs compile the law code out (`DUST_SIZE_LAW_ON false`, the code before the law,
+// the byte gate of the q = 3.5 path); the `.law` blobs (compile_shaders.sh, -DDUST_SIZE_LAW_ON=true)
+// are the ones the host binds when a drawn system has the orbit law on (Device::dust_set_size_law,
+// physics::DustLawPipelines)
+#ifndef DUST_SIZE_LAW_ON
+#define DUST_SIZE_LAW_ON false
+#endif
+bool  dust_size_law = false;
+float dust_size_q   = 0.0;
+void dust_size_law_set(uint mi) {
+    if (!DUST_SIZE_LAW_ON) return;
+    uint w = floatBitsToUint(dust_mom.m[mi].edges[13].w);
+    dust_size_law = (w >> 31u) != 0u;
+    dust_size_q = uintBitsToFloat(w & 0x7FFFFFFFu);
+}
+void dust_size_law_clear() { dust_size_law = false; dust_size_q = 0.0; }
+// The cross-section share of bins b .. b + dust_group in the polyline for the law q
+// (dust::splat::bin_xsec_share): int u^(2q-7) du over the bins, over the polyline, with the speed
+// factors as u (u = sqrt(beta) is linear in the edge index, the factor is u / sqrt(beta_ref)).
+// p = 2q - 6: (fb^p - fa^p) / (f16^p - f0^p), at p = 0 (q = 3) ln(fb/fa) / ln(f16/f0); the
+// q = 3.5 share (p = 1) is the linear g/16, which dust_bin_flux takes by its own expression.
+float dust_bin_xsec_share(uint mi, uint b) {
+    float fa = max(dust_edge_factor(mi, b), 1e-6), fb = max(dust_edge_factor(mi, b + dust_group), 1e-6);
+    float f0 = max(dust_mom.m[mi].edges[0].w, 1e-6), f16 = max(dust_mom.m[mi].edges[DUST_SIZE_BINS].w, 1e-6);
+    float even = float(dust_group) / float(DUST_SIZE_BINS);
+    if (!(f16 > f0)) return even;
+    float p = 2.0 * dust_size_q - 6.0;
+    float w = abs(p) < 1e-6 ? log(fb / fa) / log(f16 / f0) : (pow(fb, p) - pow(fa, p)) / (pow(f16, p) - pow(f0, p));
+    return (!isnan(w) && !isinf(w) && w >= 0.0) ? w : even;
+}
 const uint  DUST_MOMENTS_WORDS           = 80u;  // uints per DustMoments
 const uint  DUST_MOMENTS_SPECKS_MASK_WORD = 12u + 15u * 4u + 3u;  // edges[15].w
 const float DUST_SPECKS_WALK_MIN         = 0.25; // dust::specks::DUST_SPECKS_WALK_MIN
@@ -553,10 +590,107 @@ float dust_stream_time_u01(DustBatch B, uint j) {
 
 // Whether the jet site was dark since the previous sample of cluster j's stream
 // (dust::stream_dark_before)
+// ─── Insolation-weighted emission (mirror of dust::insol_time_map and friends) ───
+// lit = [psi_start, psi0, W, DUST_LIT_MODE_INSOLATION], c = -A/R in site_offset.w: the emission
+// density over the spin phase is max(0, cos psi - c); within a lit arc the cumulative measure
+// dust_insol_arc_cum is inverted by bisection (no table, no dynamically indexed constants)
+const float DUST_LIT_MODE_INSOLATION = 2.0;
+const uint  DUST_INSOL_BISECT_STEPS  = 24u;   // dust::INSOL_BISECT_STEPS
+
+// ∫_{-psi0}^{psiLocal} (cos psi - c) dpsi (R units), non-decreasing on the arc (dust::insol_arc_cum)
+float dust_insol_arc_cum(float psiLocal, float psi0, float c) {
+    return (sin(psiLocal) + sin(psi0)) - c * (psiLocal + psi0);
+}
+
+// measure of a whole lit arc: 2 sin psi0 - 2 c psi0 (dust::insol_arc_measure)
+float dust_insol_arc_measure(float psi0, float c) {
+    return 2.0 * sin(psi0) - 2.0 * c * psi0;
+}
+
+// the local phase in [lo, psi0] at which the cumulative reaches target (dust::insol_arc_invert)
+float dust_insol_arc_invert(float target, float lo, float psi0, float c) {
+    float hi = psi0;
+    for (uint k = 0u; k < DUST_INSOL_BISECT_STEPS; ++k) {
+        float mid = 0.5 * (lo + hi);
+        if (dust_insol_arc_cum(mid, psi0, c) < target) lo = mid;
+        else                                           hi = mid;
+    }
+    return 0.5 * (lo + hi);
+}
+
+// f32 lit phase measure of [-pi, x] (dust::lit_measure_f32)
+float dust_lit_measure(float x, float psi0) {
+    const float TWO_PI = 2.0 * DUST_PI_F32;
+    float turns = floor((x + DUST_PI_F32) / TWO_PI);
+    float wrapped = x - TWO_PI * turns;
+    return turns * 2.0 * psi0 + clamp(wrapped + psi0, 0.0, 2.0 * psi0);
+}
+
+// Emission offset dt in [0, dur] of the stratified sample u of an insolation-weighted window: u is
+// the quantile of the cumulative insolation. Arc walk of dust_lit_time_map (inclusive arc ends),
+// bisection within the arc. Mirror of dust::insol_time_map.
+float dust_insol_time_map(float u, vec4 lit, float c, float omega, float dur) {
+    const float TWO_PI = 2.0 * DUST_PI_F32;
+    if (!(lit.w == DUST_LIT_MODE_INSOLATION) || !(omega > 0.0) || !(lit.y > 0.0) || !(lit.z > 0.0)) return u * dur;
+    float ps = lit.x, p0 = lit.y;
+    precise float arc = 2.0 * p0;
+    float wArc = dust_insol_arc_measure(p0, c);
+    if (!(wArc > 0.0)) return u * dur;
+    float seg_start, arc_start;
+    if (ps < -p0)     { seg_start = -p0;          arc_start = -p0; }
+    else if (ps < p0) { seg_start = ps;           arc_start = -p0; }
+    else              { seg_start = TWO_PI - p0;  arc_start = TWO_PI - p0; }
+    precise float segLo = seg_start - arc_start - p0;
+    float segCum0 = dust_insol_arc_cum(segLo, p0, c);
+    float segW = max(wArc - segCum0, 0.0);
+    precise float m = u * lit.z;
+    precise float psi;
+    precise float eps = DUST_LIT_ARC_END_EPS * wArc;
+    if (m <= segW + eps) {
+        float target = segCum0 + min(m, segW);
+        psi = arc_start + p0 + dust_insol_arc_invert(target, segLo, p0, c);
+    } else {
+        precise float mr = m - segW;
+        precise float k = floor(mr / wArc);
+        precise float r = mr - k * wArc;
+        // an arc starting past the window's end holds no measure: r is the rounding of the f32
+        // arc measure (2 sin ψ0 − 2cψ0 cancels at high c) against the host's total, and the
+        // sample is the end of the arc before it
+        precise float nextArc = arc_start + TWO_PI + k * TWO_PI;
+        if (r <= eps || nextArc > ps + omega * dur) psi = arc_start + k * TWO_PI + arc;
+        else psi = nextArc + p0 + dust_insol_arc_invert(r, -p0, p0, c);
+    }
+    precise float dt = (psi - ps) / omega;
+    return clamp(dt, 0.0, dur);
+}
+
+// dust_stream_dark_before of an insolation-weighted window: elapsed phase less the lit phase
+// between the two instants (dust::insol_stream_dark_before)
+bool dust_insol_stream_dark_before(DustBatch B, uint j) {
+    uvec2 st = dust_batch_streams(B);
+    uint i = j >> st.x;
+    float omega = B.spin.w;
+    float dur = B.comet_v_dur_hi.w + B.comet_v_dur_lo.w;
+    float c = B.site_offset.w;
+    float u = dust_stream_time_u01(B, j);
+    float dtPrev = 0.0;
+    if (i != 0u) {
+        float uPrev = dust_stream_time_u01(B, j - (1u << st.x));
+        dtPrev = dust_insol_time_map(uPrev, B.lit, c, omega, dur);
+    }
+    float dt = dust_insol_time_map(u, B.lit, c, omega, dur);
+    float ps = B.lit.x, p0 = B.lit.y;
+    precise float elapsed = omega * (dt - dtPrev);
+    precise float litBetween = dust_lit_measure(ps + omega * dt, p0) - dust_lit_measure(ps + omega * dtPrev, p0);
+    precise float dark = elapsed - litBetween;
+    return dark > 2.0 * DUST_PI_F32 * DUST_STREAM_BREAK_TURNS && dark > DUST_STREAM_BREAK_FRACTION * elapsed;
+}
+
 bool dust_stream_dark_before(DustBatch B, uint j) {
     uvec2 st = dust_batch_streams(B);
     uint i = j >> st.x;
     float omega = B.spin.w;
+    if (B.lit.w == DUST_LIT_MODE_INSOLATION && omega > 0.0) return dust_insol_stream_dark_before(B, j);
     if (!(B.lit.w == DUST_LIT_MODE_PERIODIC) || !(omega > 0.0)) return false;
     float dur = B.comet_v_dur_hi.w + B.comet_v_dur_lo.w;
     float u = dust_stream_time_u01(B, j);
@@ -603,6 +737,11 @@ float dust_size_edge_sqrt_beta(float beta, float f, uint j) {
     float lo = sqrt(max(beta, 0.0) / f);
     float hi = sqrt(max(beta, 0.0) * f);
     return lo + (hi - lo) * (float(j) / float(DUST_SIZE_BINS));
+}
+// the record size-law word (dust::size_law_word, DustCluster.eject.w): s_ref on the q = 3.5 path
+// (sizeParams.z == 0.5 bit for bit), else q = 4 - z with its sign bit set (-0.0 for q = 0)
+float dust_size_law_word(float sRef, vec4 sizeParams) {
+    return sizeParams.z == 0.5 ? sRef : uintBitsToFloat(floatBitsToUint(4.0 - sizeParams.z) | 0x80000000u);
 }
 // The cluster's size range factor F from misc.w (half log-size range; child id in the low
 // mantissa bits, break in the sign bit) (dust::size_range_factor)
@@ -941,10 +1080,23 @@ float dust_texel_weight(DustScreenPacket P, vec2 x) {
     return dust_radiance_weight(dust_phot_lut, P.albedo, rVec * (-1.0 / rn), P.eye.xyz - P.eye.w * pos, rn / DUST_AU_M);
 }
 
+// the law q (dust::splat::bin_density_ends_q): density ∝ u^(2q-8) per unit chord (the cross-section
+// u^(2q-7) du over the displacement ∝ u²; 1/u at q = 3.5), the linear ramp between the end densities
+// normalised by its own mean, flux conserved exactly. A function of its own: written inline in
+// dust_bin_density_ends, glslang (SDK 1.4.363) ran out of memory compiling dust_draw_volume.comp
+vec2 dust_size_law_ends(float f0, float f1) {
+    float e = 2.0 * dust_size_q - 8.0;
+    float d0 = pow(f0, e), d1 = pow(f1, e);
+    float sd = d0 + d1;
+    if (!(sd > 0.0) || isinf(sd)) return vec2(1.0);
+    return vec2(2.0 * d0 / sd, 2.0 * d1 / sd);
+}
+
 // the relative density at the two ends of a size bin's chord with edge speed factors f0 <= f1:
 // (f0 + f1)/(2 f0) and (f0 + f1)/(2 f1), mean 1 over the chord (dust::bin_density_ends)
 vec2 dust_bin_density_ends(float f0, float f1) {
     f0 = max(f0, 1e-6); f1 = max(f1, 1e-6);
+    if (DUST_SIZE_LAW_ON && dust_size_law) return dust_size_law_ends(f0, f1);
     float s = f0 + f1;
     // density ∝ 1/f, mean 1 over the chord (dust::bin_density_ends; the reciprocals until
     // 2026-10-16 drew a chord group over a 10x factor range at 3x its flux)
@@ -974,6 +1126,14 @@ float dust_sub_share(uint mi, uint b, uint j, uint nj) {
     vec2 r = dust_bin_density_ends(dust_edge_factor(mi, b), dust_edge_factor(mi, b + dust_group));
     float u0 = float(j) / float(nj), u1 = float(j + 1u) / float(nj);
     return (u1 - u0) * (r.x + (r.y - r.x) * 0.5 * (u0 + u1)) / (0.5 * (r.x + r.y));
+}
+// the flux of sub-bin j of nj of bin b over nS sweep pieces (dust::splat::bin_flux): the q = 3.5
+// path keeps its expression, flux * g / (16 nS) * share, in that order; the law takes the bin
+// cross-section share
+float dust_bin_flux(uint mi, uint b, uint j, uint nj, uint nS) {
+    float base = dust_mom.m[mi].mean_flux.w * float(dust_group) / float(DUST_SIZE_BINS * nS);
+    if (DUST_SIZE_LAW_ON && dust_size_law) base = dust_mom.m[mi].mean_flux.w * dust_bin_xsec_share(mi, b) / float(nS);
+    return base * dust_sub_share(mi, b, j, nj);
 }
 
 // The view direction of `mvp` (dust::view_forward): the depth gradient of the projection, unit;
@@ -1675,7 +1835,7 @@ void dust_bin_packet_at(uint mi, uint b, uint j, uint nj, vec3 a, vec3 c, float 
     S[3] = f2 * dust_mom.m[mi].cov_a.w + k * h.y * h.y;
     S[4] = f2 * dust_mom.m[mi].cov_b_age_id.x + k * h.y * h.z;
     S[5] = f2 * dust_mom.m[mi].cov_b_age_id.y + k * h.z * h.z;
-    flux = dust_mom.m[mi].mean_flux.w * float(dust_group) / float(DUST_SIZE_BINS) * dust_sub_share(mi, b, j, nj);
+    flux = dust_bin_flux(mi, b, j, nj, 1u);
 }
 void dust_bin_packet_sub(uint mi, uint b, uint j, uint nj, out vec3 mean, out float S[6], out float flux) {
     vec3 a, c; float fa, fc;
@@ -1701,7 +1861,7 @@ void dust_bin_chord_at(uint mi, uint b, uint j, uint nj, vec3 a, vec3 c, float f
     S[3] = f2 * dust_mom.m[mi].cov_a.w + k * h.y * h.y;
     S[4] = f2 * dust_mom.m[mi].cov_b_age_id.x + k * h.y * h.z;
     S[5] = f2 * dust_mom.m[mi].cov_b_age_id.y + k * h.z * h.z;
-    flux = dust_mom.m[mi].mean_flux.w * float(dust_group) / float(DUST_SIZE_BINS) * dust_sub_share(mi, b, j, nj);
+    flux = dust_bin_flux(mi, b, j, nj, 1u);
 }
 void dust_bin_chord_sub(uint mi, uint b, uint j, uint nj, vec3 segT, out vec3 mean, out vec3 chord, out float S[6], out float flux) {
     vec3 a, c; float fa, fc;
@@ -1748,7 +1908,7 @@ void dust_bin_sweep_at(uint mi, uint b, uint j, uint nj, vec3 a, vec3 c, float f
     S[3] = f2 * dust_mom.m[mi].cov_a.w + kv * h.y * h.y;
     S[4] = f2 * dust_mom.m[mi].cov_b_age_id.x + kv * h.y * h.z;
     S[5] = f2 * dust_mom.m[mi].cov_b_age_id.y + kv * h.z * h.z;
-    flux = dust_mom.m[mi].mean_flux.w * float(dust_group) / float(DUST_SIZE_BINS * nS) * dust_sub_share(mi, b, j, nj);
+    flux = dust_bin_flux(mi, b, j, nj, nS);
 }
 void dust_bin_sweep_sub(uint mi, uint pi, uint b, uint j, uint nj, uint k, uint nS, out vec3 mean, out vec3 chord, out float S[6], out float flux) {
     vec3 a, c, pa, pc; float fa, fc, pfa, pfc;

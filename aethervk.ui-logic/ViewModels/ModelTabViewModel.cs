@@ -366,9 +366,8 @@ public partial class ModelTabViewModel
     var session = CurrentSession;
     if (session is null) return;
 
-    // q is set per jet only (the model-wide box is gone): a new jet starts at the usual 3.5, whatever
-    // an older save left in the session (its jets without a q of their own still inherit it)
-    var jet = new JetViewModel(session.DefaultGrain with { SizeQ = Models.JetGrain.Default.SizeQ });
+    // the session's defaults, q included (3.5 unless edited in "Defaults for new jets")
+    var jet = new JetViewModel(session.DefaultGrain);
     jet.DisplayIndex = session.Jets.Count + 1;
     bool isFirst = session.Jets.Count == 0;
 
@@ -388,7 +387,8 @@ public partial class ModelTabViewModel
 
   /// <summary>
   /// Gives every other jet the selected jet's grain and activity parameters (diameter, density,
-  /// Q_pr, albedo, q, F, Q_d₀); sites, speeds and colours stay as they are.
+  /// Q_pr, albedo, q, F, Q_d₀) and its dynamic model (the two toggles, the pre-start source, the
+  /// lifetime, the q table); sites, speeds and colours stay as they are.
   /// </summary>
   [RelayCommand]
   private void CopyGrainToAllJets()
@@ -469,10 +469,6 @@ public partial class ModelTabViewModel
   [ObservableProperty]
   private CurvePlotModel? _dustRatePlot;
 
-  /// <summary>Grain size PDFs by number and by cross-section, of the defaults for new jets.</summary>
-  [ObservableProperty]
-  private CurvePlotModel? _sizeDistributionPlot;
-
   /// <summary>Q_d(r_h) of the selected jet (its Q_d₀, the model-wide law); null without a selection.</summary>
   [ObservableProperty]
   private CurvePlotModel? _jetDustRatePlot;
@@ -481,7 +477,11 @@ public partial class ModelTabViewModel
   [ObservableProperty]
   private CurvePlotModel? _jetSizeDistributionPlot;
 
-  /// <summary>Note under the defaults' size plot: the simulated diameters and what q does.</summary>
+  /// <summary>q along the orbit of the selected jet (its table, else its q flat); null without a selection.</summary>
+  [ObservableProperty]
+  private CurvePlotModel? _jetSizeQPlot;
+
+  /// <summary>Note under the defaults for new jets: the simulated diameters and which q the dust uses.</summary>
   [ObservableProperty]
   private string _sizeRangeNote = "";
 
@@ -563,7 +563,7 @@ public partial class ModelTabViewModel
   {
     nameof(JetViewModel.DustRate1AuKgs), nameof(JetViewModel.DiametreUm), nameof(JetViewModel.SizeRange),
     nameof(JetViewModel.SizeQ), nameof(JetViewModel.MinDiameterUm), nameof(JetViewModel.MaxDiameterUm),
-    nameof(JetViewModel.GrainRangeError),
+    nameof(JetViewModel.GrainRangeError), nameof(JetViewModel.SizeQTable), nameof(JetViewModel.OrbitSizeLaw),
   };
 
   /// <summary>
@@ -602,8 +602,25 @@ public partial class ModelTabViewModel
   }
 
   // a savefile open / New clears and refills the list
-  private void OnJetsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e) =>
+  private void OnJetsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+  {
     RefreshTotalActivityText();
+    RefreshMaxDustLead();
+  }
+
+  /// <summary>
+  /// The Dust lead time can reach the longest lifetime among the jets (30 days without jets): a
+  /// tail older than the lifetime does not exist, so a longer lead would be wasted.
+  /// </summary>
+  private void RefreshMaxDustLead()
+  {
+    if (CurrentSession is not { } s)
+      return;
+    double max = 0;
+    foreach (var j in s.Jets)
+      max = Math.Max(max, Models.DustLifetime.Effective(j.LifetimeDays));
+    _timelineService.MaxDustLeadDaysNow = max > 0 ? max : TimelineService.MaxDustLeadDays;
+  }
 
   partial void OnSelectedJetChanged(JetViewModel? oldValue, JetViewModel? newValue)
   {
@@ -626,11 +643,13 @@ public partial class ModelTabViewModel
       });
   }
 
-  // any jet's Q_d₀: the Σ read-out
+  // any jet's Q_d₀: the Σ read-out; any jet's lifetime: the Dust lead maximum
   private void OnAnyJetActivityChanged(string? propertyName)
   {
     if (propertyName is null || propertyName == nameof(JetViewModel.DustRate1AuKgs))
       OnUiThread(RefreshTotalActivityText);
+    if (propertyName is null || propertyName == nameof(JetViewModel.LifetimeDays))
+      OnUiThread(RefreshMaxDustLead);
   }
 
   private void OnUiThread(Action action)
@@ -646,7 +665,6 @@ public partial class ModelTabViewModel
     if (CurrentSession is not { } s)
       return;
     DustRatePlot = DustCurves.DustRatePlot(s.DustRate1AuKgs, s.DustRatePower, s.DustRateCutoffAu, s.DustRateMaxKgs, CurrentRhAu);
-    SizeDistributionPlot = DustCurves.SizeDistributionPlot(s.DiametreUm, s.SizeRange, Models.JetGrain.Default.SizeQ);
     RefreshGrainTexts();
     RefreshDustRateNowText();
     RefreshTotalActivityText();
@@ -659,10 +677,12 @@ public partial class ModelTabViewModel
     {
       JetDustRatePlot = null;
       JetSizeDistributionPlot = null;
+      JetSizeQPlot = null;
       return;
     }
     JetDustRatePlot = DustCurves.DustRatePlot(j.DustRate1AuKgs, s.DustRatePower, s.DustRateCutoffAu, s.DustRateMaxKgs, CurrentRhAu);
     JetSizeDistributionPlot = DustCurves.SizeDistributionPlot(j.DiametreUm, j.SizeRange, j.SizeQ);
+    JetSizeQPlot = DustCurves.SizeQOrbitPlot(j.SizeQTable, j.SizeQ);
   }
 
   private void RefreshDustRateNowText()
@@ -971,12 +991,17 @@ public partial class ModelTabViewModel
         var name = e.EventArgs.PropertyName;
         // computed outputs and the preview toggle (own subscription below) are not forwarded; nor
         // is the grain range view (min/max/error), derived from DiametreUm/SizeRange, which are
+        // (the emission steps text and the row-count flag are derived from LifetimeDays and the
+        // q table, which are; the β range text is derived from Beta and SizeRange)
         if (name == nameof(JetViewModel.Beta) ||
+            name == nameof(JetViewModel.BetaRangeText) ||
             name == nameof(JetViewModel.DustProductionRateAt1AuKgs) ||
             name == nameof(JetViewModel.IsPreviewVisible) ||
             name == nameof(JetViewModel.MinDiameterUm) ||
             name == nameof(JetViewModel.MaxDiameterUm) ||
-            name == nameof(JetViewModel.GrainRangeError))
+            name == nameof(JetViewModel.GrainRangeError) ||
+            name == nameof(JetViewModel.EmissionStepsText) ||
+            name == nameof(JetViewModel.CanAddSizeQRow))
           return false;
 
         // Visual-only edits (draw parameters, read by the renderer every frame) are forwarded

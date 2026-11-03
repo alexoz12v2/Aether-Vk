@@ -154,6 +154,7 @@ void dust_cluster_pieces(uint mi, out DustClusterPieces c) {
     // for the depth rule.
     dust_lod_px = dust_lod_px_of(pc.pyramid);
     dust_group = 1u;
+    dust_size_law_clear();
     c.lodBinDepth = 0.0;
     c.lodNear = 0.0;
     c.lodDepth = c.perspective && dust_polyline_depth(mi, pc.eyeLocal.xyz, c.fwd, c.lodBinDepth, c.lodNear);
@@ -300,6 +301,7 @@ void dust_splat_subpacket(uint i, uint sub) {
         uint g = dust_specks_mask(mi) != 0u ? 1u
                : dust_haze_group(dust_lod_group(hasExt, ext, dust_lod_px, depthCap), hazeDetail, depthCap);
         dust_group = g;
+        dust_size_law_set(mi);
         // this lane's sub-packet (b, j) in the order the per-cluster loop ran them: the slow end
         // bin's DUST_END_SUBBINS sub-bins (dust::subpackets_cells), then a bin each (a group
         // chord each with g > 1); lanes past the count idle
@@ -419,6 +421,7 @@ void dust_splat_subpacket(uint i, uint sub) {
           }
         }
         dust_group = 1u;
+        dust_size_law_clear();
     }
     DUST_PROF_END(subpk)
     DUST_PROF_BEGIN(tracer)

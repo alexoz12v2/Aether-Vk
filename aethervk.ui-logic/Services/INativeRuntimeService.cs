@@ -123,12 +123,18 @@ public interface INativeRuntimeService : IDisposable
   bool DumpSceneToFile(string file);
 
   /// <summary>Restores the scene from exactly <paramref name="file"/>; false when unreadable or of
-  /// another dump version (seek instead). Completion: <see cref="ExternalStateType.SceneRestored"/>.</summary>
+  /// a dump version the engine no longer reads (seek instead). Completion: <see cref="ExternalStateType.SceneRestored"/>.</summary>
   bool RestoreSceneFromFile(string file);
 
   /// <summary>The engine's compatibility JSON of the scene (what a saved state must match); null
   /// without a scene.</summary>
   string? GetCompatibilityJson();
+
+  /// <summary>The compatibility JSON as the engine of dump <paramref name="dumpVersion"/> wrote it,
+  /// what a saved state of that version must match to be restored (an older save's state); null
+  /// without a scene, for a version the engine cannot restore, or when the scene uses something that
+  /// version could not express.</summary>
+  string? GetCompatibilityJson(uint dumpVersion);
 
   /// <summary>The scene dump format the engine writes and restores (<c>SceneDump::CURRENT_VERSION</c>).</summary>
   uint SceneDumpVersion { get; }
@@ -1150,6 +1156,11 @@ internal unsafe static class PInvokeAetherVkCore
   [return: MarshalAs(UnmanagedType.U1)]
   public static extern unsafe bool avkSimulationContext_getCompatibilityJson(
     nint ctx, ulong sceneId, byte* outUtf8, uint outLen, uint* outNeeded);
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.U1)]
+  public static extern unsafe bool avkSimulationContext_getCompatibilityJsonForVersion(
+    nint ctx, ulong sceneId, uint version, byte* outUtf8, uint outLen, uint* outNeeded);
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   [return: MarshalAs(UnmanagedType.U1)]
@@ -3188,6 +3199,21 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     return Encoding.UTF8.GetString(buf, 0, (int)needed);
   }
 
+  public unsafe string? GetCompatibilityJson(uint dumpVersion)
+  {
+    if (_ctx == 0) return null;
+    uint needed;
+    if (!PInvokeAetherVkCore.avkSimulationContext_getCompatibilityJsonForVersion(_ctx, _sceneId, dumpVersion, null, 0, &needed))
+      return null;
+    var buf = new byte[needed + 1];
+    fixed (byte* p = buf)
+    {
+      if (!PInvokeAetherVkCore.avkSimulationContext_getCompatibilityJsonForVersion(_ctx, _sceneId, dumpVersion, p, (uint)buf.Length, &needed))
+        return null;
+    }
+    return Encoding.UTF8.GetString(buf, 0, (int)needed);
+  }
+
   public unsafe ulong? GetAssetContentHash(ulong assetId)
   {
     if (_ctx == 0) return null;
@@ -3582,8 +3608,18 @@ public record ParticleSystemModel(
   float DustRate1AuKgs,
   float DustRatePower,
   float DustRateCutoffAu,
-  float DustRateMaxKgs
-);
+  float DustRateMaxKgs,
+  // the dynamic model (per jet; the defaults are what every record meant before the fields existed)
+  bool InsolationWeighted = false,
+  bool OrbitSizeLaw = false,
+  bool SpkBeforeStart = false,
+  float LifetimeDays = AetherVk.Logic.Models.DustLifetime.DefaultDays,
+  AetherVk.Logic.Models.SizeQTable SizeQTable = null!
+)
+{
+  /// <summary>The q table along the orbit; <see cref="AetherVk.Logic.Models.SizeQTable.Empty"/> when none was given (value equality).</summary>
+  public AetherVk.Logic.Models.SizeQTable SizeQTable { get; init; } = SizeQTable ?? AetherVk.Logic.Models.SizeQTable.Empty;
+}
 
 /// <summary>
 /// Visual and dispersion Properties of a dust jet
@@ -3746,6 +3782,37 @@ internal readonly struct ParticleSystemDTO(ParticleSystemModel model, ParticleSy
   /// pre-existing tail (history filled back before the scene start).
   /// </summary>
   public readonly long EmissionStartUs = jet.EmissionStartUs;
+
+  // -- dynamic model (mirrors the Rust tail: lifetime, three flags, table length, padding, 8 rows) --
+  public readonly float LifetimeDays = model.LifetimeDays;
+  public readonly uint InsolationWeighted = model.InsolationWeighted ? 1u : 0u;
+  public readonly uint OrbitSizeLaw = model.OrbitSizeLaw ? 1u : 0u;
+  public readonly uint SpkBeforeStart = model.SpkBeforeStart ? 1u : 0u;
+  public readonly uint SizeQTableLen = (uint)Math.Min(AetherVk.Logic.Models.SizeQTable.MaxRows, model.SizeQTable?.Count ?? 0);
+  public readonly uint _pad2 = 0;
+  // 8 rows of (days from perihelion, q), unrolled like the colour above
+  public readonly float SizeQTable0Days = Row(model.SizeQTable, 0).DaysFromPerihelion;
+  public readonly float SizeQTable0Q = Row(model.SizeQTable, 0).Q;
+  public readonly float SizeQTable1Days = Row(model.SizeQTable, 1).DaysFromPerihelion;
+  public readonly float SizeQTable1Q = Row(model.SizeQTable, 1).Q;
+  public readonly float SizeQTable2Days = Row(model.SizeQTable, 2).DaysFromPerihelion;
+  public readonly float SizeQTable2Q = Row(model.SizeQTable, 2).Q;
+  public readonly float SizeQTable3Days = Row(model.SizeQTable, 3).DaysFromPerihelion;
+  public readonly float SizeQTable3Q = Row(model.SizeQTable, 3).Q;
+  public readonly float SizeQTable4Days = Row(model.SizeQTable, 4).DaysFromPerihelion;
+  public readonly float SizeQTable4Q = Row(model.SizeQTable, 4).Q;
+  public readonly float SizeQTable5Days = Row(model.SizeQTable, 5).DaysFromPerihelion;
+  public readonly float SizeQTable5Q = Row(model.SizeQTable, 5).Q;
+  public readonly float SizeQTable6Days = Row(model.SizeQTable, 6).DaysFromPerihelion;
+  public readonly float SizeQTable6Q = Row(model.SizeQTable, 6).Q;
+  public readonly float SizeQTable7Days = Row(model.SizeQTable, 7).DaysFromPerihelion;
+  public readonly float SizeQTable7Q = Row(model.SizeQTable, 7).Q;
+
+  /// <summary>The Rust <c>size_of::&lt;ParticleSystemDTO&gt;()</c>; the layout test compares the C# struct with it.</summary>
+  internal const int NativeSize = 184;
+
+  private static AetherVk.Logic.Models.SizeQPoint Row(AetherVk.Logic.Models.SizeQTable? table, int i) =>
+    table is not null && i < table.Count && i < AetherVk.Logic.Models.SizeQTable.MaxRows ? table.Rows[i] : default;
 }
 
 /// <summary>

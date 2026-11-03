@@ -23,8 +23,13 @@ fn comet_state() -> (V3, V3) {
 const T_START: f64 = 4.0e8; // ~12.7 years after the epoch: exercises df64 time
 
 fn test_batch(count: u32, dur: f64, first_index: u32, capacity: u32) -> DustBatch {
+  test_batch_dist(count, dur, first_index, capacity, SizeDistribution::from_diameter_um(100.0))
+}
+
+/// [`test_batch`] with its own size distribution (the orbit-dependent law: `size_params.z` is
+/// `4 − q`, so the emit writes the record word and the splat takes the law)
+fn test_batch_dist(count: u32, dur: f64, first_index: u32, capacity: u32, dist: SizeDistribution) -> DustBatch {
   let (rc, vc) = comet_state();
-  let dist = SizeDistribution::from_diameter_um(100.0);
   let (size_params, vel_params, mass_params) =
     dust::batch_params(&dist, 100.0, 0.533, 0.0213, 2.0, 0.5, 1.0e6, 0.37);
   let mut b: DustBatch = bytemuck::Zeroable::zeroed();
@@ -171,6 +176,8 @@ fn with_dust_device(id: u64, f: impl FnOnce(&Device, u32, vk::Buffer, vk::Buffer
   render_frontend
     .with_device(handle, |dyn_device| {
       let device: &Device = dyn_device.as_any().downcast_ref().unwrap();
+      // every case starts without the size-law pipelines (a law case sets them for its batch)
+      device.dust_set_size_law(false);
       device.create_particle_system(id)?;
       let (capacity, clusters, render) = buffers(device, id);
       f(device, capacity, clusters, render);
@@ -491,6 +498,137 @@ fn gpu_dust_emit_lit_time_matches_reference() {
   });
 }
 
+/// Insolation-weighted windows on the GPU (`LIT_MODE_INSOLATION`): the emission offsets of
+/// `dust_insol_time_map` (arc walk + 24-step bisection), the host-set masses and the stream breaks
+/// of `dust_insol_stream_dark_before` match the CPU reference (`insol_time_map`,
+/// `insol_stream_dark_before`) over partial and whole rotations, a lit arc split by the window
+/// start, a site that never sets and a high `c` close to the no-emission limit.
+///
+/// Tolerance: the bisection resolves the phase to `2ψ0 / 2²⁴ ≤ 3.8e-7 rad` (≈ 1 ms at this spin),
+/// but the phase is an f32 (`ψ_start + ω·dt`, up to ~16 rad here: ulp ≈ 2e-6 rad ≈ 4 ms) and the
+/// GPU `sin`/`cos` differ from the host by ulps; the inversion is ill-conditioned at the arc ends,
+/// where the density `cos ψ − c` vanishes, so a cluster at an arc end may land a sizeable time
+/// away (or on the next arc). Hence: every regular cluster within 0.5 s, at most 0.5 % outliers.
+#[test]
+fn gpu_dust_emit_insolation_matches_reference() {
+  const P_ROT: f64 = 12.4 * 3600.0;
+  let omega = 2.0 * core::f64::consts::PI / P_ROT;
+  let unit = |a: V3| {
+    let n = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
+    [a[0] / n, a[1] / n, a[2] / n]
+  };
+  let dot = |a: V3, b: V3| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  let z = [0.0, 0.0, 1.0];
+  // (sun, site normal at the window start, axis, window length): the windows start where the
+  // closed form puts ψ_start, so a site facing the Sun at the start has its first lit arc split
+  let cases: [(&str, V3, V3, V3, f64); 5] = [
+    // 2.5 rotations, tilted axis, window start inside a lit arc (split arc)
+    ("whole rotations, split arc", unit([0.35, 0.93, 0.04]), unit([1.0, -0.3, 0.1]), unit([0.2, 0.1, 0.97]), 2.5 * P_ROT),
+    // a partial rotation (0.37) starting mid arc
+    ("partial rotation", unit([1.0, 0.0, 0.0]), unit([0.7, 0.7, 0.1]), z, 0.37 * P_ROT),
+    // a partial rotation starting in the dark, ending in the lit arc
+    ("partial from the dark", unit([1.0, 0.0, 0.0]), unit([-0.9, -0.4, 0.0]), z, 0.6 * P_ROT),
+    // midnight sun: the site never sets (c < −1, ψ0 = π), the incidence still varies
+    ("never sets", unit([1.0, 0.0, 2.0]), unit([1.0, 0.0, 3.0]), z, 1.3 * P_ROT),
+    // Sun 31° below the equator, site at 57° latitude: c ≈ 0.92, a lit arc of ±23°
+    ("high c", unit([1.0, 0.0, -0.6]), unit([0.545, 0.0, 0.839]), z, 1.8 * P_ROT),
+  ];
+  with_dust_device(9004, |device, capacity, clusters, _| {
+    for prop in [false, true] {
+    device.dust_set_prop_staged(Some(prop));
+    std::println!("[dust prop family] staged {prop}");
+    for (name, sun, n0, axis, dur) in cases {
+      let mut batch = test_batch(2048, dur, 0, capacity);
+      batch.rot_start = [0.0, 0.0, 0.0, 1.0];
+      batch.jet_dir_aperture = [n0[0] as f32, n0[1] as f32, n0[2] as f32, 0.6];
+      batch.spin = [axis[0] as f32, axis[1] as f32, axis[2] as f32, omega as f32];
+      // 16 streams: the stream-break rule runs between consecutive samples of a stream
+      batch.mass_params[3] = dust::batch_streams_word(4, false);
+      let lit = dust::LitWindow::new(sun, n0, axis, omega, dur);
+      let (enc, c) = lit.to_gpu_insolation();
+      batch.lit = enc;
+      batch.site_offset[3] = c;
+      assert_eq!(batch.lit[3], dust::LIT_MODE_INSOLATION, "{name}");
+      if name == "never sets" {
+        assert!(c < -1.0 && (lit.insol_psi0 - core::f64::consts::PI).abs() < 1e-12, "{name}: c = {c}");
+      }
+      if name == "high c" {
+        assert!(c > 0.85 && c < 1.0, "{name}: c = {c}");
+      }
+      emit(device, 9004, &batch);
+      let bytes = read_back(
+        device,
+        clusters,
+        true,
+        capacity as u64 * core::mem::size_of::<DustCluster>() as u64,
+      );
+      let ring: &[DustCluster] = bytemuck::cast_slice(&bytes);
+      let (mut outliers, mut break_mismatches, mut breaks) = (0u32, 0u32, 0u32);
+      let mut worst_dt = 0.0f64;
+      let (mut end_samples, mut worst_end_dt) = (0u32, 0.0f64);
+      for j in 0..batch.count {
+        let gpu = &ring[(j & batch.ring_mask) as usize];
+        let cpu = dust::emit_cluster(&batch, j);
+        // the CPU reference is the insolation quantile map of the stream sample
+        let u = dust::stream_time_u01(&batch, j);
+        let dt_ref = dust::insol_time_map(u, batch.lit, c, omega as f32, dur as f32) as f64;
+        let dt_cpu = cpu.t0().to_f64() - T_START;
+        assert!((dt_cpu - dt_ref).abs() < 1e-3, "{name}: CPU cluster {j} off its map: {dt_cpu} vs {dt_ref}");
+        let dt_gpu = gpu.t0().to_f64() - T_START;
+        assert!(dt_gpu >= 0.0 && dt_gpu <= dur + 1e-2, "{name}: dt {dt_gpu}");
+        // never in the dark (the density vanishes at the arc ends: a hair past them is rounding)
+        let n = dust::rotate_axis_angle(n0, axis, omega * dt_gpu);
+        let n_cpu = dust::rotate_axis_angle(n0, axis, omega * dt_cpu);
+        assert!(
+          dot(n, sun) > -1e-3,
+          "{name}: cluster {j} emitted in the dark: GPU dt {dt_gpu} s (n·sun {}), CPU dt {dt_cpu} s (n·sun {}), u {u}, c {c}",
+          dot(n, sun),
+          dot(n_cpu, sun)
+        );
+        // the mass is set by the host per window: identical words
+        assert_eq!(gpu.mass_g().to_bits(), cpu.mass_g().to_bits(), "{name}: mass of cluster {j}");
+        // the stream break (dark phase between consecutive samples of the stream)
+        let brk_cpu = dust::stream_break(cpu.misc[3]);
+        assert_eq!(brk_cpu, dust::stream_breaks_before(&batch, j), "{name}: CPU break rule {j}");
+        breaks += brk_cpu as u32;
+        if dust::stream_break(gpu.misc[3]) != brk_cpu {
+          break_mismatches += 1;
+        }
+        let ddt = (dt_gpu - dt_cpu).abs();
+        // a stream's last sample (u = 1) is the end of the window's last lit arc, where the
+        // density vanishes: the f32 bisection stops seconds short of it, the arc walk lands on it
+        if u >= 1.0 {
+          worst_end_dt = worst_end_dt.max(ddt);
+          if ddt > 0.5 {
+            end_samples += 1;
+          }
+          continue;
+        }
+        if ddt > 0.5 {
+          outliers += 1;
+          continue;
+        }
+        worst_dt = worst_dt.max(ddt);
+      }
+      std::println!(
+        "[dust gpu] insolation emit parity ({name}): worst |Δt0| = {worst_dt:.4} s, {outliers} arc-end outliers, {end_samples} stream ends off by up to {worst_end_dt:.2} s, {breaks} breaks, {break_mismatches} break mismatches"
+      );
+      assert!(outliers <= batch.count / 200, "{name}: {outliers} clusters off the reference instants");
+      assert!(worst_end_dt < 60.0, "{name}: a stream's last sample {worst_end_dt} s off the reference");
+      // a break differs only where the instants do (a sample at an arc end)
+      assert!(break_mismatches <= outliers + end_samples, "{name}: {break_mismatches} break mismatches for {outliers} outliers");
+      if name == "whole rotations, split arc" || name == "high c" {
+        assert!(breaks > 0, "{name}: the dark phases between the lit arcs break the streams");
+      }
+      if name == "never sets" {
+        assert_eq!(breaks, 0, "{name}: no dark phase, no break");
+      }
+    }
+    }
+    device.dust_set_prop_staged(None);
+  });
+}
+
 /// Age tiers on the GPU: a batch emitted into a sub-ring at `ring_base` and evaluated with an age
 /// band lands in the tier's part of the render buffer, and the band gate (min age, no fade) matches
 /// the CPU reference cluster by cluster.
@@ -745,6 +883,7 @@ fn decoupling_scene(
         site_normal: [-r[0] / n, -r[1] / n, -r[2] / n],
         spin: Some([0.0, 0.0, 1.0, 0.0]),
         site_offset_m: [0.0; 3],
+        conditions: None,
       })
     };
     let mut sys = ps.dust.lock();
@@ -1466,6 +1605,8 @@ fn splat_parity_in(
     std::println!("[dust gpu] splat parity case {id}: split family {}", if split { "staged" } else { "mono" });
     let batch = batch_of(capacity);
     emit(device, id, &batch);
+    // the size-law pipelines when the batch has a law (`size_params.z != 0.5`)
+    device.dust_set_size_law(batch.size_params[2] != 0.5);
     let first_slot = batch.first_index & batch.ring_mask;
     let pe = crate::gpu::PresentationEngineHandle(u64::MAX - 9);
     let (w, h) = (640u32, 400u32);
@@ -2048,6 +2189,29 @@ fn gpu_dust_splat_matches_reference() {
 /// case asserts the rule groups at least a twentieth of the live polylines (and, with pieces, caps
 /// at least one time segment) on the GPU's moments, then compares the pyramids under the parity
 /// rules.
+/// The size law on the GPU mirror: the five-day scene with a q = 4.2 law (`size_params.z = −0.2`,
+/// the record word with its sign bit, the moments lane, the bin shares `∫ u^(2q−7)` and the
+/// `u^(2q−8)` ramp), compared with the CPU reference under the parity rules; and q = 3 (the log
+/// form of the shares). The q = 3.5 cases above stay the byte gate of the path without a law.
+#[test]
+fn gpu_dust_splat_matches_reference_size_law() {
+  for (id, q) in [(9070u64, 4.2f64), (9071, 3.0)] {
+    splat_parity(
+      id,
+      &|cap| test_batch_dist(1024, 3600.0, 3, cap, SizeDistribution::from_diameter_um_range_q(100.0, 10.0, q)),
+      frame_after(5.0),
+      2.0e7,
+      1.0,
+      false,
+      0.04,
+      None,
+      None,
+      false,
+      None,
+    );
+  }
+}
+
 #[test]
 fn gpu_dust_splat_matches_reference_lod() {
   // the five-day scene over ±1e8 m (312 km per pixel): most polylines grouped, no time pieces to

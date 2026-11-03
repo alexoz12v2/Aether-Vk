@@ -99,6 +99,46 @@ pub fn dust_splat_staged_default(vendor_id: u32) -> bool {
   }
 }
 
+/// The speck passes of the size law ([`DustLawPipelines`]): the gate, the walk step, the six
+/// setup passes, the two leaf passes and the trace fill
+#[derive(Clone, Copy)]
+pub struct DustSpecksLawPipelines {
+  pub gate: vk::Pipeline,
+  pub walk: vk::Pipeline,
+  pub setup: [vk::Pipeline; 6],
+  pub leaves: vk::Pipeline,
+  pub leaves1: vk::Pipeline,
+  pub trace: vk::Pipeline,
+}
+
+/// The dust size-law pipelines: the `.law` blobs (`compile_shaders.sh`, `-DDUST_SIZE_LAW_ON=true`
+/// in `dust_common.glsl`; a compile-time switch, since a specialization constant left the driver's
+/// code of the off path different) of the splat chain, of the monolith (when the base monolith is
+/// built) and of the speck passes. Built lazily by [`PhysicsPipelines::dust_law_pipelines`] at the
+/// first frame that asks for the law (`Device::dust_set_size_law`), so the ~25 extra pipelines
+/// never delay the first frames of a scene without the law; bound while
+/// [`PhysicsPipelines::dust_size_law`] is set. The `.law` blobs have no `.d` debug twins and no
+/// `.prof` variants: under `AETHERVK_SHADER_DEBUG_INFO` and while profiling, the law pipelines
+/// are these plain ones (the profiler's clock words then stay zero on the law path).
+#[derive(Clone, Copy)]
+pub struct DustLawPipelines {
+  pub splat_stages: [vk::Pipeline; crate::scene::dust::DUST_SPLAT_STAGES],
+  pub splat_mono: Option<vk::Pipeline>,
+  pub specks: DustSpecksLawPipelines,
+}
+
+/// What [`PhysicsPipelines::dust_law_pipelines`] needs to build the [`DustLawPipelines`] after
+/// `new`: the blob directory, the memory-model infix and the creation inputs of every pipeline
+pub struct DustLawFactory {
+  pub sim_dir: alloc::string::String,
+  pub vmm_infix: &'static str,
+  pub debug_shaders: bool,
+  pub subgroup_size: u32,
+  pub pipeline_flags: vk::PipelineCreateFlags,
+  /// the base monolith is built ([`dust_splat_mono_wanted`]): its law variant is too
+  pub mono: bool,
+}
+
 /// Whether the monolithic enumerator's pipeline is built: not on the devices whose
 /// compiler rejects the dust monoliths (`staged_dust`, [`dust_staged_passes`]) unless
 /// `AETHERVK_DUST_SPLAT_STAGED=0` asks for it; without it the splat runs the chain
@@ -135,6 +175,13 @@ pub struct PhysicsPipelines {
   /// 2 the monolith: `Device::dust_set_splat_staged`) and the path last logged (0 none, 1, 2)
   pub dust_splat_mode: core::sync::atomic::AtomicU8,
   pub dust_splat_logged: core::sync::atomic::AtomicU8,
+  /// the size-law pipelines ([`DustLawPipelines`]: `None` until the first frame with the law
+  /// builds them through [`Self::dust_law_pipelines`]) and whether the frame binds them
+  /// (`Device::dust_set_size_law`: the frame sets it when any drawn system has the orbit law on,
+  /// the parity tests when the batch has a law)
+  pub dust_law: crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock<Option<DustLawPipelines>>,
+  pub dust_law_factory: DustLawFactory,
+  pub dust_size_law: core::sync::atomic::AtomicBool,
   /// per-frame white-point measurement grid from the finished pyramid (`dust_measure.comp`, wg 64)
   pub dust_measure: vk::Pipeline,
   /// per-frame packet queue: a workgroup per queued large packet (`dust_draw_queue.comp`, wg 64,
@@ -326,159 +373,9 @@ impl PhysicsPipelines {
     };
 
     let mut create_pipeline = |spv_path: &str| -> GpuResult<(vk::Pipeline, u32, [u32; 3])> {
-      let mut spv_code = aethervk_oshal_rlib::os::fs::read(spv_path)
-        .map_err(|_| GpuError::BackendSpecific(alloc::format!("Failed to read {}", spv_path)))?;
-
-      if cfg!(debug_assertions) || cfg!(test) {
-        let (_, code_mut, _) = unsafe { spv_code.align_to_mut::<u32>() };
-        crate::gpu_backends::vulkan::device::shader_manager::patch_spirv_prevent_inlining(code_mut);
-        // TODO: re-enable once fixed issues .NET Side
-        // crate::gpu_backends::vulkan::device::shader_manager::disassemble_and_log_spirv(
-        //   spv_code.as_slice(),
-        // );
-      }
-
-      let (prefix, code, suffix) = unsafe { spv_code.align_to::<u32>() };
-      assert!(prefix.is_empty() && suffix.is_empty());
-
-      // ── SPIR-V reflection: extract push constant block size and wg size ─────────────
-      let (reflected_pc_size, workgroup_size) = {
-        let spv_module = spirv_reflect::create_shader_module(&spv_code).map_err(|_| {
-          GpuError::BackendSpecific(alloc::format!("spirv-reflect failed for {}", spv_path))
-        })?;
-        let pcs = spv_module.enumerate_push_constant_blocks(None).map_err(|_| {
-          GpuError::BackendSpecific(alloc::format!(
-            "spirv-reflect PC enum failed for {}",
-            spv_path
-          ))
-        })?;
-
-        let pc_size = if let Some(pc_block) = pcs.first() {
-          pc_block.size
-        } else {
-          0 // shader has no push constants
-        };
-
-        let local_size = spv_module
-          .enumerate_entry_points()
-          .unwrap()
-          .iter()
-          .find(|ep| ep.name == "main")
-          .map(|ep| [ep.local_size.x, ep.local_size.y, ep.local_size.z])
-          .unwrap();
-
-        (pc_size, local_size)
-      };
-      aethervk_oshal_rlib::log!(
-        "[SPIR-V] {} -> push_constant_size = {} bytes",
-        spv_path,
-        reflected_pc_size
-      );
-
-      let shader_info = vk::ShaderModuleCreateInfo::default().code(code);
-      let shader_module =
-        unsafe { device.create_shader_module(&shader_info, None) }.map_err(|e| {
-          GpuError::BackendSpecific(alloc::format!("Failed to create shader module: {:?}", e))
-        })?;
-
-      let main_name = alloc::ffi::CString::new("main").unwrap();
-
-      let mut spec_map_entries = alloc::vec::Vec::new();
-      let mut spec_data = alloc::vec::Vec::new();
-      let sg_size = subgroup_size;
-      spec_map_entries.push(vk::SpecializationMapEntry {
-        constant_id: 0,
-        offset: 0,
-        size: 4,
-      });
-      spec_data.extend_from_slice(&sg_size.to_le_bytes());
-
-      let debug_shaders_val = if debug_shaders { 1u32 } else { 0u32 };
-      spec_map_entries.push(vk::SpecializationMapEntry {
-        constant_id: 10,
-        offset: 4,
-        size: 4,
-      });
-      spec_data.extend_from_slice(&debug_shaders_val.to_le_bytes());
-
-      // BVH traversal stack depths — computed to keep shared memory ≤ 16 KB.
-      // With WG=256: subgroups_per_wg = 256/sg, budget_per_sg = 16384/(subgroups_per_wg*4) uints.
-      let subgroups_per_wg = 256u32 / sg_size;
-      let budget_per_sg = 16384u32 / (subgroups_per_wg * 4); // in uints
-      let bvh_stack_depth = budget_per_sg.saturating_sub(1).min(128);
-      let bvh_stack_depth_short = budget_per_sg.saturating_sub(1).min(64);
-      spec_map_entries.push(vk::SpecializationMapEntry {
-        constant_id: 2,
-        offset: 8,
-        size: 4,
-      });
-      spec_data.extend_from_slice(&bvh_stack_depth.to_le_bytes());
-      spec_map_entries.push(vk::SpecializationMapEntry {
-        constant_id: 3,
-        offset: 12,
-        size: 4,
-      });
-      spec_data.extend_from_slice(&bvh_stack_depth_short.to_le_bytes());
-
-      let spec_info = vk::SpecializationInfo::default()
-        .map_entries(&spec_map_entries)
-        .data(&spec_data);
-
-      let stage_info = vk::PipelineShaderStageCreateInfo::default()
-        .stage(vk::ShaderStageFlags::COMPUTE)
-        .module(shader_module)
-        .name(&main_name)
-        .specialization_info(&spec_info);
-
-      let compute_info = vk::ComputePipelineCreateInfo::default()
-        .flags(pipeline_flags)
-        .stage(stage_info)
-        .layout(pipeline_layout);
-
-      use crate::gpu_backends::vulkan::device::VulkanDebugNameExt;
-      let pipeline = unsafe {
-        let mut p = vk::Pipeline::null();
-        (device.handle.fp_v1_0().create_compute_pipelines)(
-          device.handle.handle(),
-          vk::PipelineCache::null(),
-          1u32,
-          core::ptr::from_ref(&compute_info),
-          core::ptr::null(),
-          core::ptr::from_mut(&mut p),
-        )
-        .result_with_success(p)
-        .with_name(device, last_segment(spv_path))
-      }
-      .map_err(|e| {
-        GpuError::BackendSpecific(alloc::format!(
-          "Failed to create compute pipeline ({}): {:?}",
-          spv_path,
-          e
-        ))
-      })?;
-      crate::gpu_backends::vulkan::utils::dump_pipeline_cache(
-        &device.handle,
-        last_segment(spv_path),
-        |cache| unsafe {
-          let mut p = vk::Pipeline::null();
-          (device.handle.fp_v1_0().create_compute_pipelines)(
-            device.handle.handle(),
-            cache,
-            1u32,
-            core::ptr::from_ref(&compute_info),
-            core::ptr::null(),
-            core::ptr::from_mut(&mut p),
-          )
-          .result_with_success(p)
-        },
-      );
-
-      unsafe {
-        device.destroy_shader_module(shader_module, None);
-      }
-      created_pipelines.push(pipeline);
-
-      Ok((pipeline, reflected_pc_size, workgroup_size))
+      let r = create_compute_pipeline(device, spv_path, subgroup_size, debug_shaders, pipeline_flags, pipeline_layout)?;
+      created_pipelines.push(r.0);
+      Ok(r)
     };
 
     // Need to adjust path depending on where the test runs from.
@@ -574,7 +471,7 @@ impl PhysicsPipelines {
         if use_debug {
           path = path.replace(".spv", ".d.spv");
         }
-        let (pipeline, pc_size, wg_size) = create_pipeline(&path)?;
+        let (pipeline, pc_size, wg_size) = create_pipeline(&path, false)?;
         pc_sizes.insert(ash::vk::Handle::as_raw(pipeline), pc_size);
         wg_sizes.insert(ash::vk::Handle::as_raw(pipeline), wg_size);
         pipeline
@@ -594,7 +491,7 @@ impl PhysicsPipelines {
         if use_debug {
           path = path.replace(".spv", ".d.spv");
         }
-        let (pipeline, pc_size, wg_size) = create_pipeline(&path)?;
+        let (pipeline, pc_size, wg_size) = create_pipeline(&path, false)?;
         pc_sizes.insert(ash::vk::Handle::as_raw(pipeline), pc_size);
         wg_sizes.insert(ash::vk::Handle::as_raw(pipeline), wg_size);
         pipeline
@@ -618,7 +515,7 @@ impl PhysicsPipelines {
         if use_debug {
           path = path.replace(".spv", ".d.spv");
         }
-        let (pipeline, pc_size, wg_size) = create_pipeline(&path)?;
+        let (pipeline, pc_size, wg_size) = create_pipeline(&path, false)?;
         pc_sizes.insert(ash::vk::Handle::as_raw(pipeline), pc_size);
         wg_sizes.insert(ash::vk::Handle::as_raw(pipeline), wg_size);
         pipeline
@@ -654,7 +551,7 @@ impl PhysicsPipelines {
         if use_debug {
           path = path.replace(".spv", ".d.spv");
         }
-        let (pipeline, pc_size, wg_size) = create_pipeline(&path)?;
+        let (pipeline, pc_size, wg_size) = create_pipeline(&path, false)?;
         pc_sizes.insert(ash::vk::Handle::as_raw(pipeline), pc_size);
         wg_sizes.insert(ash::vk::Handle::as_raw(pipeline), wg_size);
         pipeline
@@ -689,7 +586,7 @@ impl PhysicsPipelines {
         if use_debug {
           path = path.replace(".spv", ".d.spv");
         }
-        let (pipeline, pc_size, wg_size) = create_pipeline(&path)?;
+        let (pipeline, pc_size, wg_size) = create_pipeline(&path, false)?;
         pc_sizes.insert(ash::vk::Handle::as_raw(pipeline), pc_size);
         wg_sizes.insert(ash::vk::Handle::as_raw(pipeline), wg_size);
         pipeline
@@ -798,6 +695,17 @@ impl PhysicsPipelines {
         dust_splat_mono_prof,
         dust_splat_mode: core::sync::atomic::AtomicU8::new(0),
         dust_splat_logged: core::sync::atomic::AtomicU8::new(0),
+        // the size-law pipelines: lazily, at the first frame with the law
+        dust_law: crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::new(None),
+        dust_law_factory: DustLawFactory {
+          sim_dir: sim_dir.clone(),
+          vmm_infix,
+          debug_shaders,
+          subgroup_size,
+          pipeline_flags,
+          mono: dust_splat_mono.is_some(),
+        },
+        dust_size_law: core::sync::atomic::AtomicBool::new(false),
         dust_measure: mk!("dust_measure.comp.spv"),
         dust_draw_queue: mk!("dust_draw_queue.comp.spv"),
         dust_specks: mk!("dust_specks.comp.spv"),
@@ -1003,7 +911,86 @@ impl PhysicsPipelines {
     }
   }
 
+  /// The size-law pipelines ([`DustLawPipelines`]), built on the first call: the `.law` blobs
+  /// next to the base ones (the vmm infix as the base, never the `.d` twin: see the struct). The
+  /// frame calls it from `Device::dust_set_size_law(true)` before recording, on the frame thread,
+  /// so the creation never races the binds (the device's pipeline creation needs no external
+  /// synchronisation anyway). An error (a missing blob: shaders compiled without the law set)
+  /// leaves `None`: the binds then fall back to the base pipelines and the error is returned once
+  /// per call.
+  pub fn dust_law_pipelines(&self, device: &LogicalDevice) -> GpuResult<DustLawPipelines> {
+    use crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock;
+    if let Some(l) = *DebugTrackedRwLock::read(&self.dust_law) {
+      return Ok(l);
+    }
+    let mut slot = DebugTrackedRwLock::write(&self.dust_law);
+    if let Some(l) = *slot {
+      return Ok(l);
+    }
+    let f = &self.dust_law_factory;
+    let mut created = alloc::vec::Vec::new();
+    let mut mk = |name: &str, base: vk::Pipeline| -> GpuResult<vk::Pipeline> {
+      let path = alloc::format!("{}/{}", f.sim_dir, name).replace(".spv", &alloc::format!("{}.spv", f.vmm_infix));
+      let (p, pc_size, _) = create_compute_pipeline(device, &path, f.subgroup_size, f.debug_shaders, f.pipeline_flags, self.pipeline_layout)?;
+      created.push(p);
+      // the law blob's push-constant block is the base blob's (the binds assert against the base)
+      if let Some(&b) = self.pc_sizes.get(&ash::vk::Handle::as_raw(base)) {
+        debug_assert_eq!(pc_size, b, "size-law blob {} has a different push-constant block than its base", path);
+      }
+      Ok(p)
+    };
+    let build = |mk: &mut dyn FnMut(&str, vk::Pipeline) -> GpuResult<vk::Pipeline>| -> GpuResult<DustLawPipelines> {
+      let mut splat_stages = [vk::Pipeline::null(); crate::scene::dust::DUST_SPLAT_STAGES];
+      for (st, p) in splat_stages.iter_mut().enumerate() {
+        *p = mk(&alloc::format!("dust_splat.comp.law.st{}.spv", st), self.dust_splat_stages[st])?;
+      }
+      let splat_mono = match self.dust_splat_mono {
+        Some(base) if f.mono => Some(mk("dust_splat_mono.comp.law.spv", base)?),
+        _ => None,
+      };
+      let setup_names = ["setup1", "setup2a", "setup2b", "setup3", "setup4", "setup5"];
+      let mut setup = [vk::Pipeline::null(); 6];
+      for (i, p) in setup.iter_mut().enumerate() {
+        *p = mk(&alloc::format!("dust_specks.comp.law.{}.spv", setup_names[i]), self.dust_specks_setup[i])?;
+      }
+      Ok(DustLawPipelines {
+        splat_stages,
+        splat_mono,
+        specks: DustSpecksLawPipelines {
+          gate: mk("dust_specks.comp.law.spv", self.dust_specks)?,
+          walk: mk("dust_specks.comp.law.walk.spv", self.dust_specks_walk)?,
+          setup,
+          leaves: mk("dust_specks.comp.law.leaves.spv", self.dust_specks_leaves)?,
+          leaves1: mk("dust_specks.comp.law.leaves1.spv", self.dust_specks_leaves1)?,
+          trace: mk("dust_specks.comp.law.trace.spv", self.dust_specks_trace)?,
+        },
+      })
+    };
+    match build(&mut mk) {
+      Ok(l) => {
+        aethervk_oshal_rlib::log!("[Physics] dust size-law pipelines built ({} pipelines)", created.len());
+        *slot = Some(l);
+        Ok(l)
+      }
+      Err(e) => {
+        for p in created {
+          unsafe { device.destroy_pipeline(p, None) };
+        }
+        Err(e)
+      }
+    }
+  }
+
   pub fn discard(&mut self, discard_pool: &resources::DiscardPool, timeline: u64) {
+    // the size-law pipelines, when built
+    if let Some(l) = crate::gpu_backends::vulkan::device::locks::DebugTrackedRwLock::get_mut(&mut self.dust_law).take() {
+      for p in l.splat_stages.into_iter().chain(l.splat_mono).chain(l.specks.setup) {
+        discard_pool.discard_pipeline(p, timeline);
+      }
+      for p in [l.specks.gate, l.specks.walk, l.specks.leaves, l.specks.leaves1, l.specks.trace] {
+        discard_pool.discard_pipeline(p, timeline);
+      }
+    }
     // (emit and propagate: discarded below, as the staged passes or the monoliths)
     // (the monolithic enumerator and its profiler variant, when built)
     for p in [self.dust_splat_mono, self.dust_splat_mono_prof].into_iter().flatten() {
@@ -1427,6 +1414,170 @@ impl VulkanComputeKernels {
     // since this is called after `vkDeviceWaitIdle`, we are safe
     unsafe { device.destroy_semaphore(self.timeline, None) };
   }
+}
+
+/// Creates one compute pipeline from a SPIR-V blob: reflection (push-constant block size, the
+/// workgroup size), the specialization data (0 the subgroup size, 10 the debug flag, 2 / 3 the BVH
+/// stack depths: offsets 0..16, no more), the module freed after creation
+fn create_compute_pipeline(
+  device: &LogicalDevice,
+  spv_path: &str,
+  subgroup_size: u32,
+  debug_shaders: bool,
+  pipeline_flags: vk::PipelineCreateFlags,
+  pipeline_layout: vk::PipelineLayout,
+) -> GpuResult<(vk::Pipeline, u32, [u32; 3])> {
+  let mut spv_code = aethervk_oshal_rlib::os::fs::read(spv_path)
+    .map_err(|_| GpuError::BackendSpecific(alloc::format!("Failed to read {}", spv_path)))?;
+
+  if cfg!(debug_assertions) || cfg!(test) {
+    let (_, code_mut, _) = unsafe { spv_code.align_to_mut::<u32>() };
+    crate::gpu_backends::vulkan::device::shader_manager::patch_spirv_prevent_inlining(code_mut);
+    // TODO: re-enable once fixed issues .NET Side
+    // crate::gpu_backends::vulkan::device::shader_manager::disassemble_and_log_spirv(
+    //   spv_code.as_slice(),
+    // );
+  }
+
+  let (prefix, code, suffix) = unsafe { spv_code.align_to::<u32>() };
+  assert!(prefix.is_empty() && suffix.is_empty());
+
+  // ── SPIR-V reflection: extract push constant block size and wg size ─────────────
+  let (reflected_pc_size, workgroup_size) = {
+    let spv_module = spirv_reflect::create_shader_module(&spv_code).map_err(|_| {
+      GpuError::BackendSpecific(alloc::format!("spirv-reflect failed for {}", spv_path))
+    })?;
+    let pcs = spv_module.enumerate_push_constant_blocks(None).map_err(|_| {
+      GpuError::BackendSpecific(alloc::format!(
+        "spirv-reflect PC enum failed for {}",
+        spv_path
+      ))
+    })?;
+
+    let pc_size = if let Some(pc_block) = pcs.first() {
+      pc_block.size
+    } else {
+      0 // shader has no push constants
+    };
+
+    let local_size = spv_module
+      .enumerate_entry_points()
+      .unwrap()
+      .iter()
+      .find(|ep| ep.name == "main")
+      .map(|ep| [ep.local_size.x, ep.local_size.y, ep.local_size.z])
+      .unwrap();
+
+    (pc_size, local_size)
+  };
+  aethervk_oshal_rlib::log!(
+    "[SPIR-V] {} -> push_constant_size = {} bytes",
+    spv_path,
+    reflected_pc_size
+  );
+
+  let shader_info = vk::ShaderModuleCreateInfo::default().code(code);
+  let shader_module =
+    unsafe { device.create_shader_module(&shader_info, None) }.map_err(|e| {
+      GpuError::BackendSpecific(alloc::format!("Failed to create shader module: {:?}", e))
+    })?;
+
+  let main_name = alloc::ffi::CString::new("main").unwrap();
+
+  let mut spec_map_entries = alloc::vec::Vec::new();
+  let mut spec_data = alloc::vec::Vec::new();
+  let sg_size = subgroup_size;
+  spec_map_entries.push(vk::SpecializationMapEntry {
+    constant_id: 0,
+    offset: 0,
+    size: 4,
+  });
+  spec_data.extend_from_slice(&sg_size.to_le_bytes());
+
+  let debug_shaders_val = if debug_shaders { 1u32 } else { 0u32 };
+  spec_map_entries.push(vk::SpecializationMapEntry {
+    constant_id: 10,
+    offset: 4,
+    size: 4,
+  });
+  spec_data.extend_from_slice(&debug_shaders_val.to_le_bytes());
+
+  // BVH traversal stack depths — computed to keep shared memory ≤ 16 KB.
+  // With WG=256: subgroups_per_wg = 256/sg, budget_per_sg = 16384/(subgroups_per_wg*4) uints.
+  let subgroups_per_wg = 256u32 / sg_size;
+  let budget_per_sg = 16384u32 / (subgroups_per_wg * 4); // in uints
+  let bvh_stack_depth = budget_per_sg.saturating_sub(1).min(128);
+  let bvh_stack_depth_short = budget_per_sg.saturating_sub(1).min(64);
+  spec_map_entries.push(vk::SpecializationMapEntry {
+    constant_id: 2,
+    offset: 8,
+    size: 4,
+  });
+  spec_data.extend_from_slice(&bvh_stack_depth.to_le_bytes());
+  spec_map_entries.push(vk::SpecializationMapEntry {
+    constant_id: 3,
+    offset: 12,
+    size: 4,
+  });
+  spec_data.extend_from_slice(&bvh_stack_depth_short.to_le_bytes());
+
+  let spec_info = vk::SpecializationInfo::default()
+    .map_entries(&spec_map_entries)
+    .data(&spec_data);
+
+  let stage_info = vk::PipelineShaderStageCreateInfo::default()
+    .stage(vk::ShaderStageFlags::COMPUTE)
+    .module(shader_module)
+    .name(&main_name)
+    .specialization_info(&spec_info);
+
+  let compute_info = vk::ComputePipelineCreateInfo::default()
+    .flags(pipeline_flags)
+    .stage(stage_info)
+    .layout(pipeline_layout);
+
+  use crate::gpu_backends::vulkan::device::VulkanDebugNameExt;
+  let pipeline = unsafe {
+    let mut p = vk::Pipeline::null();
+    (device.handle.fp_v1_0().create_compute_pipelines)(
+      device.handle.handle(),
+      vk::PipelineCache::null(),
+      1u32,
+      core::ptr::from_ref(&compute_info),
+      core::ptr::null(),
+      core::ptr::from_mut(&mut p),
+    )
+    .result_with_success(p)
+    .with_name(device, last_segment(spv_path))
+  }
+  .map_err(|e| {
+    GpuError::BackendSpecific(alloc::format!(
+      "Failed to create compute pipeline ({}): {:?}",
+      spv_path,
+      e
+    ))
+  })?;
+  crate::gpu_backends::vulkan::utils::dump_pipeline_cache(
+    &device.handle,
+    last_segment(spv_path),
+    |cache| unsafe {
+      let mut p = vk::Pipeline::null();
+      (device.handle.fp_v1_0().create_compute_pipelines)(
+        device.handle.handle(),
+        cache,
+        1u32,
+        core::ptr::from_ref(&compute_info),
+        core::ptr::null(),
+        core::ptr::from_mut(&mut p),
+      )
+      .result_with_success(p)
+    },
+  );
+
+  unsafe {
+    device.destroy_shader_module(shader_module, None);
+  }
+  Ok((pipeline, reflected_pc_size, workgroup_size))
 }
 
 fn last_segment(path: &str) -> &str {

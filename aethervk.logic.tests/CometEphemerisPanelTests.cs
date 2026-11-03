@@ -52,7 +52,7 @@ public sealed class CometEphemerisPanelTests
     {
       Poll(schedulers);
       foreach (var row in new[] { vm.EphemerisEpoch, vm.EphemerisRa, vm.EphemerisDec, vm.EphemerisR,
-                 vm.EphemerisDelta, vm.EphemerisPhase, vm.EphemerisElongation, vm.EphemerisSunPa })
+                 vm.EphemerisDelta, vm.EphemerisPhase, vm.EphemerisElongation, vm.EphemerisPaOfSun, vm.EphemerisPsAng })
         Assert.Equal(CameraMatrixDebugViewModel.NoValue, row);
     }
   }
@@ -79,7 +79,9 @@ public sealed class CometEphemerisPanelTests
       Assert.Equal("0.4402 AU", vm.EphemerisDelta);
       Assert.Equal("48.2°", vm.EphemerisPhase);
       Assert.Equal("112.3°", vm.EphemerisElongation);
-      Assert.Equal("287.6°", vm.EphemerisSunPa);
+      // PsAng 287.61° is anti-solar; the Sun is 180° away
+      Assert.Equal("107.6°", vm.EphemerisPaOfSun);
+      Assert.Equal("287.6°", vm.EphemerisPsAng);
     }
   }
 
@@ -95,7 +97,38 @@ public sealed class CometEphemerisPanelTests
     Assert.Equal("0.4402 AU", t.Delta);
     Assert.Equal("48.2°", t.Phase);
     Assert.Equal("112.3°", t.Elongation);
-    Assert.Equal("287.6°", t.SunPa);
+    Assert.Equal("107.6°", t.PaOfSun);
+    Assert.Equal("287.6°", t.PsAng);
+  }
+
+  /// <summary>PA of Sun = PsAng + 180° wrapped to [0, 360): both directions of the wrap, and a
+  /// rounding carry to 360.0 shown as 0.0.</summary>
+  [Fact]
+  public void PaOfSun_IsPsAngPlus180_Wrapped()
+  {
+    CometEphemeris WithPsAng(double deg) => Sample() with { SunPaRad = deg * Deg };
+    // PsAng below 180°: no wrap
+    var t = CameraMatrixDebugViewModel.FormatEphemeris(WithPsAng(91.44));
+    Assert.Equal("91.4°", t.PsAng);
+    Assert.Equal("271.4°", t.PaOfSun);
+    // PsAng above 180°: wraps through 360
+    t = CameraMatrixDebugViewModel.FormatEphemeris(WithPsAng(271.44));
+    Assert.Equal("271.4°", t.PsAng);
+    Assert.Equal("91.4°", t.PaOfSun);
+    // exactly 180° and 0°
+    t = CameraMatrixDebugViewModel.FormatEphemeris(WithPsAng(180.0));
+    Assert.Equal("180.0°", t.PsAng);
+    Assert.Equal("0.0°", t.PaOfSun);
+    t = CameraMatrixDebugViewModel.FormatEphemeris(WithPsAng(0.0));
+    Assert.Equal("0.0°", t.PsAng);
+    Assert.Equal("180.0°", t.PaOfSun);
+    // 179.97° rounds the PA of the Sun up to 360.0 → 0.0, and PsAng 359.97° likewise
+    t = CameraMatrixDebugViewModel.FormatEphemeris(WithPsAng(179.97));
+    Assert.Equal("0.0°", t.PaOfSun);
+    t = CameraMatrixDebugViewModel.FormatEphemeris(WithPsAng(359.97));
+    Assert.Equal("0.0°", t.PsAng);
+    Assert.Equal("180.0°", t.PaOfSun);
+    Assert.Equal("90.0°", CameraMatrixDebugViewModel.FormatPositionAngle(-270.0));
   }
 
   [Fact]

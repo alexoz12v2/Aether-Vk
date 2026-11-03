@@ -2018,6 +2018,7 @@ fn spinning_jet_from(state: (V3, V3), t: f64, axis: V3, n0: V3, model_spin: bool
     site_normal: rotate_axis_angle(n0, axis, OMEGA * t),
     spin: model_spin.then_some([axis[0], axis[1], axis[2], OMEGA]),
     site_offset_m: [0.0; 3],
+    conditions: None,
   }
 }
 
@@ -2051,6 +2052,7 @@ fn orbit_jet(t: f64) -> Option<JetState> {
     site_normal: scale(r, -1.0 / norm(r)),
     spin: Some([0.0, 0.0, 1.0, 0.0]),
     site_offset_m: [0.0; 3],
+    conditions: None,
   })
 }
 
@@ -4568,6 +4570,7 @@ fn spiral_image(omega: f64, half: f32, px: u32) -> alloc::vec::Vec<f32> {
       site_normal: axis,
       spin: Some([axis[0], axis[1], axis[2], omega]),
       site_offset_m: [0.0; 3],
+      conditions: None,
     })
   };
   let cfg = DustEmitConfig {
@@ -4721,6 +4724,7 @@ fn lod_keeps_the_drawn_light() {
       site_normal: axis,
       spin: Some([axis[0], axis[1], axis[2], omega]),
       site_offset_m: [0.0; 3],
+      conditions: None,
     })
   };
   let cfg = DustEmitConfig {
@@ -6878,6 +6882,7 @@ fn no_rotation_model_history_settles() {
       site_normal: [1.0, 0.0, 0.0],
       spin: None,
       site_offset_m: [0.0; 3],
+      conditions: None,
     })
   };
   let cfg_at = |_: &JetState| cfg;
@@ -14898,6 +14903,7 @@ fn trajectory_test_system() -> (DustSystemState, f64) {
       site_normal: axis,
       spin: Some([axis[0], axis[1], axis[2], 0.0]),
       site_offset_m: [0.0; 3],
+      conditions: None,
     })
   };
   let cfg = test_cfg(1e-3, 2.0 * 86400.0);
@@ -15154,3 +15160,477 @@ fn trajectories_flag_is_a_user_flag_stripped_from_the_draw_flags() {
     assert_eq!((f & DUST_VIEW_USER_MASK) & DUST_VIEW_DRAW_MASK & DUST_VIEW_TRAJECTORIES, 0);
   }
 }
+
+// ─── The orbit-dependent size law ────────────────────────────────────────────
+
+/// `∫_a^b u^e du` by the midpoint rule (the reference the closed forms are checked against)
+fn numeric_power_integral(a: f64, b: f64, e: f64, n: usize) -> f64 {
+  let h = (b - a) / n as f64;
+  (0..n).map(|i| (a + (i as f64 + 0.5) * h).powf(e) * h).sum()
+}
+
+/// A moments record with the speed factors of a range `f` and, when given, the law word
+fn size_law_moments(f: f32, flux: f32, q: Option<f32>) -> DustMoments {
+  let mut m = DustMoments::default();
+  m.mean_flux[3] = flux;
+  m.edges[0][3] = 1.0 / f.sqrt();
+  m.edges[SIZE_BINS as usize][3] = f.sqrt();
+  for k in 0..SIZE_EDGES as usize {
+    m.edges[k][0] = k as f32 * 1.0e4; // a straight polyline
+    if k != 0 && k != SIZE_BINS as usize {
+      m.edges[k][3] = m.edge_factor(k); // the propagate's lanes: the factor everywhere
+    }
+  }
+  m.set_size_law(q);
+  m
+}
+
+/// The bin shares of every law sum to 1 and match the numeric integral of `u^(2q−7)` over the
+/// `√β`-linear edges, including the log form at q = 3 and the q = 4 corner (`p = 2`), over
+/// every size range
+#[test]
+fn size_law_bin_shares_sum_to_one_and_match_the_integral() {
+  for &q in &[0.0f32, 1.0, 2.0, 3.0, 3.5, 4.0, 5.0, 6.0] {
+    for &f in &[1.5f32, 10.0, 100.0, 1000.0] {
+      let (lo, hi) = (1.0 / (f as f64).sqrt(), (f as f64).sqrt());
+      let edge = |k: usize| lo + (hi - lo) * (k as f64 / SIZE_BINS as f64);
+      let e = 2.0 * q as f64 - 7.0;
+      let total = numeric_power_integral(lo, hi, e, 200_000);
+      let mut sum = 0.0f64;
+      for b in 0..SIZE_BINS as usize {
+        let w = splat::bin_xsec_share(q, edge(b) as f32, edge(b + 1) as f32, lo as f32, hi as f32, 1);
+        let want = numeric_power_integral(edge(b), edge(b + 1), e, 20_000) / total;
+        assert!(
+          (w as f64 - want).abs() < 2.0e-3 * want.max(1.0 / SIZE_BINS as f64),
+          "q {q} F {f} bin {b}: share {w} vs integral {want}"
+        );
+        sum += w as f64;
+      }
+      assert!((sum - 1.0).abs() < 1.0e-3, "q {q} F {f}: shares sum to {sum}");
+      // a group of bins is the sum of its bins
+      let m = size_law_moments(f, 1.0, Some(q));
+      let g4 = splat::bin_xsec_share(q, m.edge_factor(4), m.edge_factor(8), m.edge_factor(0), m.edge_factor(16), 4);
+      let singles: f32 = (4..8).map(|b| splat::bin_xsec_share(q, m.edge_factor(b), m.edge_factor(b + 1), m.edge_factor(0), m.edge_factor(16), 1)).sum();
+      assert!((g4 - singles).abs() < 1.0e-4, "q {q} F {f}: group share {g4} vs {singles}");
+    }
+    // one size: an even split whatever the law
+    assert_eq!(splat::bin_xsec_share(q, 1.0, 1.0, 1.0, 1.0, 1), 1.0 / SIZE_BINS as f32);
+  }
+}
+
+/// Without the law word (the propagate's speed factor in the lane, a positive word) every
+/// expression is the one before the law, bit for bit: the share `g/16`, the ramp ends, the
+/// sub-bin flux of every packet kind and the record word itself
+#[test]
+fn size_law_off_path_is_the_legacy_arithmetic_bit_for_bit() {
+  let mut h = 0x9E37_79B9u32;
+  let mut next = || {
+    h = pcg(h);
+    u01(h)
+  };
+  for _ in 0..500 {
+    let f = 1.0 + 999.0 * next();
+    let flux = 1.0e-3 + 1.0e9 * next();
+    let m = size_law_moments(f, flux, None);
+    assert_eq!(m.size_law(), None);
+    assert!(m.edges[13][3] > 0.0, "the lane keeps the factor");
+    assert_eq!(m.edges[13][3], m.edge_factor(13));
+    let (f0, f1) = (m.edge_factor(3), m.edge_factor(4));
+    assert_eq!(splat::bin_density_ends_q(f0, f1, None), splat::bin_density_ends(f0, f1));
+    let legacy = splat::bin_density_ends(f0, f1);
+    assert_eq!(legacy, {
+      let s = f0 + f1;
+      [2.0 * f1 / s, 2.0 * f0 / s]
+    });
+    for b in [0usize, 5, 15] {
+      assert_eq!(splat::bin_flux_share(&m, b).to_bits(), (1.0f32 / SIZE_BINS as f32).to_bits());
+      for (nj, n_s) in [(1usize, 1usize), (2, 1), (1, 3), (2, 7)] {
+        for j in 0..nj {
+          let want = m.flux() * 1.0f32 / (SIZE_BINS as usize * n_s) as f32 * splat::sub_share(&m, b, j, nj);
+          assert_eq!(splat::bin_flux(&m, b, j, nj, n_s).to_bits(), want.to_bits(), "b {b} j {j}/{nj} nS {n_s}");
+        }
+      }
+    }
+    // the packets' flux and ramp
+    let p = splat::bin_chord_packet(&m, 2, [0.0; 3]);
+    assert_eq!(p.flux.to_bits(), (m.flux() * 1.0 / SIZE_BINS as f32).to_bits());
+    assert_eq!(p.rho, splat::bin_density_ends(m.edge_factor(2), m.edge_factor(3)));
+  }
+  // the record word: the reference radius on the q = 3.5 path (`size_params.z == 0.5` exactly)
+  let dist = SizeDistribution::from_diameter_um_range(100.0, 10.0);
+  let (sp, _, _) = batch_params(&dist, 100.0, 0.5, 0.02, 2.0, 0.5, 1.0e6, 0.37);
+  assert_eq!(sp[2], 0.5);
+  assert_eq!(size_law_word(50.0, sp).to_bits(), 50.0f32.to_bits());
+  assert_eq!(size_law_q_of(50.0), None);
+  // and the law otherwise, the bits of `4 − z` with the sign set (q = 0 is −0.0, still a law)
+  for &q in &[0.0f32, 3.0, 4.2, 6.0] {
+    let dist = SizeDistribution::from_diameter_um_range_q(100.0, 10.0, q as f64);
+    let (sp, _, _) = batch_params(&dist, 100.0, 0.5, 0.02, 2.0, 0.5, 1.0e6, 0.37);
+    let w = size_law_word(50.0, sp);
+    assert_eq!(w.to_bits() >> 31, 1, "q {q}: the sign bit");
+    let back = size_law_q_of(w).expect("a law");
+    assert!((back - q).abs() < 1.0e-6, "q {q} read back as {back}");
+  }
+  // q = 3.5 given explicitly is the q = 3.5 path too
+  let dist = SizeDistribution::from_diameter_um_range_q(100.0, 10.0, 3.5);
+  let (sp, _, _) = batch_params(&dist, 100.0, 0.5, 0.02, 2.0, 0.5, 1.0e6, 0.37);
+  assert_eq!(size_law_q_of(size_law_word(50.0, sp)), None);
+  // out-of-range exponents read as 3.5
+  assert_eq!(SizeDistribution::from_diameter_um_range_q(100.0, 10.0, 7.0).q, SIZE_POWER_Q);
+  assert_eq!(SizeDistribution::from_diameter_um_range_q(100.0, 10.0, f64::NAN).q, SIZE_POWER_Q);
+}
+
+/// The law's ramp: at q = 3.5 the ends equal the q = 3.5 ones (to rounding), the drawn linear
+/// ramp has mean 1 for every law so the sub-bin shares sum to the bin, uniform at q = 4, and
+/// the ends follow `u^(2q−8)` against the numeric density
+#[test]
+fn size_law_ramp_matches_the_density_and_conserves_the_flux() {
+  for &f in &[1.5f32, 10.0, 1000.0] {
+    for b in [0usize, 7, 15] {
+      let m0 = size_law_moments(f, 1.0, None);
+      let (f0, f1) = (m0.edge_factor(b), m0.edge_factor(b + 1));
+      let legacy = splat::bin_density_ends(f0, f1);
+      let at35 = splat::bin_density_ends_q(f0, f1, Some(3.5));
+      for k in 0..2 {
+        assert!((legacy[k] - at35[k]).abs() <= 4.0e-6 * legacy[k], "F {f} bin {b}: {legacy:?} vs {at35:?}");
+      }
+      let at4 = splat::bin_density_ends_q(f0, f1, Some(4.0));
+      assert!((at4[0] - 1.0).abs() < 1.0e-6 && (at4[1] - 1.0).abs() < 1.0e-6, "uniform at q = 4: {at4:?}");
+      for &q in &[0.0f32, 2.0, 3.0, 4.0, 5.0, 6.0] {
+        let r = splat::bin_density_ends_q(f0, f1, Some(q));
+        // mean 1 over the chord
+        assert!((0.5 * (r[0] + r[1]) - 1.0).abs() < 2.0e-6, "q {q}: ends {r:?}");
+        // the ratio of the ends is the density ratio u^(2q−8)
+        let want = (f0 as f64 / f1 as f64).powf(2.0 * q as f64 - 8.0);
+        let got = r[0] as f64 / r[1] as f64;
+        assert!((got - want).abs() < 1.0e-4 * want.max(1.0), "q {q} F {f} bin {b}: ratio {got} vs {want}");
+        // the sub-bin shares of the ramp sum to the bin
+        let m = size_law_moments(f, 1.0, Some(q));
+        for nj in [2usize, 3, 5] {
+          let sum: f32 = (0..nj).map(|j| splat::sub_share(&m, b, j, nj)).sum();
+          assert!((sum - 1.0).abs() < 1.0e-5, "q {q} nj {nj}: shares sum to {sum}");
+        }
+        // the packets' flux is the bin share
+        let share = splat::bin_flux_share(&m, b);
+        let p = splat::bin_chord_packet(&m, b, [0.0; 3]);
+        assert!((p.flux - share).abs() < 1.0e-6 * share.max(1.0e-3), "q {q}: packet flux {} vs share {share}", p.flux);
+        assert_eq!(p.rho, r);
+      }
+    }
+  }
+}
+
+/// The record word reaches the moments through the CPU propagate mirror: edge 13's lane holds
+/// the law when the record has one, the speed factor otherwise, everything else unchanged
+#[test]
+fn packet_moments_carries_the_size_law_word() {
+  let r = [1.2 * AU_M, 0.0, 0.0];
+  let v = [0.0, (SUN_MU_M3_S2 / norm(r)).sqrt(), 0.0];
+  let mut b = test_batch(2, 0.0);
+  b.set_comet(r, v, T_START, 0.0);
+  let age = 86400.0;
+  let (rc, _) = kepler::propagate_f64(r, v, SUN_MU_M3_S2, age);
+  let frame = DustFrame::new(rc, T_START + age, [0.0, 0.0, 0.0, 1.0], 1.0e9);
+  let c = emit_cluster(&b, 0);
+  let (_, m) = packet_moments_in(&c, 0, RENDER_SLOT_BITS, &frame);
+  assert_eq!(c.size_law_q(), None, "the test batch is on the q = 3.5 path");
+  assert_eq!(m.size_law(), None);
+  assert_eq!(m.edges[13][3], m.edge_factor(13));
+  let mut cq = c;
+  cq.eject[3] = f32::from_bits(4.2f32.to_bits() | 0x8000_0000);
+  assert_eq!(cq.size_law_q(), Some(4.2));
+  let (_, mq) = packet_moments_in(&cq, 0, RENDER_SLOT_BITS, &frame);
+  assert_eq!(mq.size_law(), Some(4.2));
+  for k in 0..SIZE_EDGES as usize {
+    assert_eq!(mq.edge(k), m.edge(k), "edge {k}");
+    if k != 13 {
+      assert_eq!(mq.edges[k][3], m.edges[k][3], "lane {k}");
+    }
+  }
+  assert_eq!((mq.mean_flux, mq.cov_a, mq.cov_b_age_id), (m.mean_flux, m.cov_a, m.cov_b_age_id));
+}
+
+/// The emit writes the record word from the batch's `size_params.z`: a q = 3.5 batch gives
+/// `s_ref`, a q = 4.2 batch gives the law (the CPU emit mirror; the GPU emit does the same)
+#[test]
+fn emit_cluster_writes_the_size_law_word() {
+  let r = [1.2 * AU_M, 0.0, 0.0];
+  let v = [0.0, (SUN_MU_M3_S2 / norm(r)).sqrt(), 0.0];
+  let mut b = test_batch(2, 0.0);
+  b.set_comet(r, v, T_START, 0.0);
+  let c = emit_cluster(&b, 0);
+  assert_eq!(c.size_law_q(), None);
+  assert_eq!(c.eject[3], b.vel_params[2], "s_ref on the q = 3.5 path");
+  let dist = SizeDistribution::from_diameter_um_range_q(2.0 * b.vel_params[2], 10.0, 4.2);
+  let (sp, _, _) = batch_params(&dist, 2.0 * b.vel_params[2], b.mass_params[1], 0.02, b.vel_params[0], 0.5, 1.0e6, 0.37);
+  b.size_params = sp;
+  let cq = emit_cluster(&b, 0);
+  assert_eq!(cq.size_law_q(), Some(4.2), "the emit writes `size_law_word(s_ref, size_params)` into `eject.w`");
+  assert_eq!(cq.eject[3].to_bits(), size_law_word(b.vel_params[2], sp).to_bits());
+}
+
+// ───── insolation-weighted windows ─────────────────────────────────────────────────────────────
+
+/// `∫ max(0, cos i) dt` over the window, midpoint rule
+fn brute_insol_time(sun: V3, n0: V3, axis: V3, omega: f64, dur: f64, samples: usize) -> f64 {
+  let h = dur / samples as f64;
+  (0..samples)
+    .map(|i| dot(rotate_axis_angle(n0, axis, omega * (i as f64 + 0.5) * h), sun).max(0.0))
+    .sum::<f64>()
+    * h
+}
+
+/// `∫_0^t max(0, cos i) dt'` (midpoint rule)
+fn brute_insol_cum(sun: V3, n0: V3, axis: V3, omega: f64, t: f64, samples: usize) -> f64 {
+  if t <= 0.0 {
+    return 0.0;
+  }
+  brute_insol_time(sun, n0, axis, omega, t, samples)
+}
+
+/// the lit-window cases: periodic (partial and many rotations, prograde and retrograde, tilted
+/// axis), never setting, never rising, constant incidence
+fn lit_window_cases() -> alloc::vec::Vec<(V3, V3, V3, f64, f64)> {
+  let z = [0.0, 0.0, 1.0];
+  let mut cases: alloc::vec::Vec<(V3, V3, V3, f64, f64)> = alloc::vec![
+    ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], z, OMEGA, 3.25 * P_ROT),
+    ([0.866_025_4, 0.0, 0.5], [0.0, 0.939_692_6, 0.342_020_1], z, OMEGA, 3.25 * P_ROT),
+    ([0.3, -0.9, 0.1], [0.6, 0.7, -0.2], [0.0, 0.0, -1.0], OMEGA, 0.37 * P_ROT),
+    ([0.35, 0.93, 0.04], [1.0, 0.0, 0.0], [0.2, 0.1, 0.97], OMEGA, 0.8 * P_ROT),
+    ([0.35, 0.93, 0.04], [1.0, 0.0, 0.0], z, OMEGA, 37.6 * P_ROT),
+    // a quarter and a tenth of a rotation, starting in the lit arc and in the dark
+    ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], z, OMEGA, 0.25 * P_ROT),
+    ([1.0, 0.0, 0.0], [0.0, -1.0, 0.0], z, OMEGA, 0.1 * P_ROT),
+    ([1.0, 0.0, 0.0], [-1.0, 0.0, 0.0], z, OMEGA, 0.6 * P_ROT),
+    // midnight sun (never sets) and polar night at mid latitudes, partial and many rotations
+    ([1.0, 0.0, 2.0], [1.0, 0.0, 3.0], z, OMEGA, 1.3 * P_ROT),
+    ([1.0, 0.0, 2.0], [1.0, 0.0, 3.0], z, OMEGA, 0.45 * P_ROT),
+    ([-1.0, 0.0, -2.0], [1.0, 0.0, 3.0], z, OMEGA, 2.2 * P_ROT),
+    // slow rotator: the window is a small fraction of a turn
+    ([0.5, 0.5, 0.7], [0.9, 0.1, 0.3], [0.1, 0.0, 0.99], OMEGA / 40.0, 0.3 * P_ROT),
+    // constant incidence: the Sun on the axis, and no spin
+    ([0.0, 0.0, 1.0], [0.6, 0.0, 0.8], z, OMEGA, 2.0 * P_ROT),
+    ([0.6, 0.0, 0.8], [0.6, 0.0, 0.8], z, 0.0, 2.0 * P_ROT),
+  ];
+  for c in cases.iter_mut() {
+    c.0 = unit(c.0);
+    c.1 = unit(c.1);
+    c.2 = unit(c.2);
+  }
+  cases
+}
+
+/// The closed-form insolation time `∫ max(0, cos i) dt` of a window matches the numeric integral
+/// at every latitude, declination and window length, including partial rotations, and never
+/// exceeds the binary lit time (`cos i ≤ 1`), with equality only where the incidence is normal
+/// over the whole lit time.
+#[test]
+fn insolation_window_closed_form() {
+  for (k, (sun, n0, axis, omega, dur)) in lit_window_cases().into_iter().enumerate() {
+    let w = LitWindow::new(sun, n0, axis, omega, dur);
+    let brute = brute_insol_time(sun, n0, axis, omega, dur, 400_000);
+    assert!(
+      (w.insol_time_s - brute).abs() < 1e-4 * dur,
+      "case {k}: closed form {} vs brute {brute} (dur {dur})",
+      w.insol_time_s
+    );
+    assert!(
+      w.insol_time_s <= w.lit_time_s + 1e-9 * dur,
+      "case {k}: insolation {} > lit {}",
+      w.insol_time_s,
+      w.lit_time_s
+    );
+    if w.lit_time_s > 0.0 && dot(sun, n0).abs() < 1.0 - 1e-9 {
+      assert!(
+        w.insol_time_s < w.lit_time_s,
+        "case {k}: a varying or oblique incidence weighs less than the binary gate"
+      );
+    }
+  }
+  // normal incidence over the whole window: the Sun on the axis, the site facing it
+  let z = [0.0, 0.0, 1.0];
+  let w = LitWindow::new(z, z, z, OMEGA, 1000.0);
+  assert_eq!((w.lit_time_s, w.insol_time_s), (1000.0, 1000.0));
+  // the dark site: nothing either way
+  let w = LitWindow::new(unit([0.3, 0.0, -1.0]), z, z, OMEGA, 1000.0);
+  assert_eq!((w.lit_time_s, w.insol_time_s), (0.0, 0.0));
+}
+
+/// The binary lit window as it was before the insolation fields existed (pinned copy): mode,
+/// phase at the start, half arc, lit phase and lit time.
+fn pinned_binary_lit_window(sun: V3, n0: V3, axis: V3, omega: f64, dur_s: f64) -> (f32, f64, f64, f64, f64) {
+  use core::f64::consts::PI;
+  let dur_s = if dur_s.is_finite() { dur_s.max(0.0) } else { 0.0 };
+  let constant = |lit: bool| {
+    (LIT_MODE_ALWAYS, 0.0, if lit { PI } else { 0.0 }, 0.0, if lit { dur_s } else { 0.0 })
+  };
+  let (sa, na) = (dot(sun, axis), dot(n0, axis));
+  let s_perp = sub(sun, scale(axis, sa));
+  let n_perp = sub(n0, scale(axis, na));
+  let a = sa * na;
+  let r = norm(s_perp) * norm(n_perp);
+  if !(omega > 0.0) || !omega.is_finite() || r < 1e-9 {
+    return constant(dot(sun, n0) > 0.0);
+  }
+  let c = -a / r;
+  if c <= -1.0 {
+    return constant(true);
+  }
+  if c >= 1.0 {
+    return constant(false);
+  }
+  let a_x_n = [
+    axis[1] * n_perp[2] - axis[2] * n_perp[1],
+    axis[2] * n_perp[0] - axis[0] * n_perp[2],
+    axis[0] * n_perp[1] - axis[1] * n_perp[0],
+  ];
+  let phi = <f64 as FloatLike>::atan2(dot(sun, a_x_n), dot(s_perp, n_perp));
+  let psi_start = wrap_pi(-phi);
+  let psi0 = <f64 as FloatLike>::acos(c);
+  let lit_phase = lit_measure(psi_start + omega * dur_s, psi0) - lit_measure(psi_start, psi0);
+  (LIT_MODE_PERIODIC, psi_start, psi0, lit_phase, (lit_phase / omega).clamp(0.0, dur_s))
+}
+
+/// Retro-compatibility of the binary gate: with the insolation weighting off the engine reads
+/// only `mode`, `psi_start`, `psi0`, `lit_phase` and `lit_time_s` (`to_gpu`, the window mass),
+/// and those are bit-identical to the pinned implementation in every regime.
+#[test]
+fn binary_lit_window_is_bit_identical_to_the_pinned_one() {
+  let mut cases = lit_window_cases();
+  cases.push(([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], OMEGA, f64::NAN));
+  cases.push(([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], OMEGA, -5.0));
+  cases.push(([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], f64::INFINITY, 100.0));
+  for (k, (sun, n0, axis, omega, dur)) in cases.into_iter().enumerate() {
+    let w = LitWindow::new(sun, n0, axis, omega, dur);
+    let (mode, ps, p0, lp, lt) = pinned_binary_lit_window(sun, n0, axis, omega, dur);
+    assert_eq!(w.mode.to_bits(), mode.to_bits(), "case {k}: mode");
+    assert_eq!(w.psi_start.to_bits(), ps.to_bits(), "case {k}: psi_start");
+    assert_eq!(w.psi0.to_bits(), p0.to_bits(), "case {k}: psi0");
+    assert_eq!(w.lit_phase.to_bits(), lp.to_bits(), "case {k}: lit_phase");
+    assert_eq!(w.lit_time_s.to_bits(), lt.to_bits(), "case {k}: lit_time_s");
+    assert_eq!(w.to_gpu().map(f32::to_bits), [ps as f32, p0 as f32, lp as f32, mode].map(f32::to_bits));
+  }
+}
+
+/// With the weighting off the batch carries the binary encoding, and the emission offsets and
+/// stream breaks are those of `lit_time_map` / the binary `stream_dark_before` (the insolation
+/// branches are entered only on `LIT_MODE_INSOLATION`, which `to_gpu` never writes).
+#[test]
+fn binary_emission_offsets_never_take_the_insolation_path() {
+  let axis = unit([0.2, 0.1, 0.97]);
+  let n0 = unit([1.0, -0.3, 0.1]);
+  let dur = 3.3 * P_ROT;
+  let (mut b, sun) = spinning_batch(64, dur, n0, axis, 0.2);
+  let w = LitWindow::new(sun, n0, axis, OMEGA, dur);
+  assert_eq!(w.mode, LIT_MODE_PERIODIC);
+  assert_ne!(b.lit[3], LIT_MODE_INSOLATION);
+  b.site_offset[3] = 0.37; // whatever the word holds, the binary path ignores it
+  for i in 0..=50 {
+    let u = i as f32 / 50.0;
+    let off = emission_offset(&b, u);
+    let pinned = Df::from_f32(lit_time_map(u, b.lit, b.spin[3], dur as f32));
+    assert_eq!((off.hi.to_bits(), off.lo.to_bits()), (pinned.hi.to_bits(), pinned.lo.to_bits()));
+  }
+  // a constant incidence encodes the same for both: no insolation mode without a varying `cos i`
+  let z = [0.0, 0.0, 1.0];
+  let lit = LitWindow::new(z, z, z, OMEGA, 1000.0);
+  let (enc, c) = lit.to_gpu_insolation();
+  assert_eq!((enc, c), (lit.to_gpu(), 0.0));
+}
+
+/// `insol_time_map` is the quantile function of the cumulative insolation: the emission instants
+/// are non-decreasing in `u` and the insolation gathered up to `dt(u)` is the share `u` of the
+/// window's, at every latitude and window length (including a site that never sets).
+#[test]
+fn insol_time_map_is_the_insolation_quantile() {
+  for (k, (sun, n0, axis, omega, dur)) in lit_window_cases().into_iter().enumerate() {
+    let w = LitWindow::new(sun, n0, axis, omega, dur);
+    let (lit, c) = w.to_gpu_insolation();
+    if lit[3] != LIT_MODE_INSOLATION {
+      continue;
+    }
+    let total = brute_insol_time(sun, n0, axis, omega, dur, 200_000);
+    let mut prev = -1.0f32;
+    for i in 0..=40 {
+      let u = i as f32 / 40.0;
+      let dt = insol_time_map(u, lit, c, omega as f32, dur as f32);
+      assert!(dt >= prev, "case {k}: dt({u}) = {dt} < {prev}");
+      assert!(dt >= 0.0 && dt <= dur as f32, "case {k}: dt({u}) = {dt} outside [0, {dur}]");
+      prev = dt;
+      let share = brute_insol_cum(sun, n0, axis, omega, dt as f64, 100_000) / total;
+      assert!(
+        (share - u as f64).abs() < 3e-3,
+        "case {k}: the insolation up to dt({u}) = {dt} s is the share {share}"
+      );
+    }
+    // the first sample is the first lit instant, the last the end of the last lit arc
+    let dt0 = insol_time_map(0.0, lit, c, omega as f32, dur as f32);
+    assert!(brute_insol_cum(sun, n0, axis, omega, dt0 as f64, 100_000) < 1e-3 * total);
+    let dt1 = insol_time_map(1.0, lit, c, omega as f32, dur as f32);
+    assert!(brute_insol_cum(sun, n0, axis, omega, dt1 as f64, 100_000) > (1.0 - 1e-3) * total);
+  }
+}
+
+/// The weighted emission instants crowd around local noon (the quantiles move away from the lit
+/// arc's ends) and the window's mass is the weighted time.
+#[test]
+fn insolation_weighting_moves_the_instants_and_the_mass() {
+  let z = [0.0, 0.0, 1.0];
+  let sun = unit([0.866_025_4, 0.0, 0.5]);
+  let n0 = unit([0.0, 0.939_692_6, 0.342_020_1]);
+  let dur = P_ROT;
+  let w = LitWindow::new(sun, n0, z, OMEGA, dur);
+  let (ins, c) = w.to_gpu_insolation();
+  assert_eq!(ins[3], LIT_MODE_INSOLATION);
+  let bin = w.to_gpu();
+  let mid_bin = lit_time_map(0.5, bin, OMEGA as f32, dur as f32);
+  let mid_ins = insol_time_map(0.5, ins, c, OMEGA as f32, dur as f32);
+  // the site is already lit at the window's start (n0 · sun > 0), so the lit time wraps around
+  // the window's ends and the two medians differ; a brute-force integration of this geometry
+  // (400 000 samples) gives 31 975.7 s (binary) and 33 349.9 s (weighted)
+  assert!((mid_bin - 31_975.7).abs() < 5.0, "binary median {mid_bin}");
+  assert!((mid_ins - 33_349.9).abs() < 5.0, "weighted median {mid_ins}");
+  // but the quartiles are closer to noon than the binary ones
+  let q1_bin = lit_time_map(0.25, bin, OMEGA as f32, dur as f32);
+  let q1_ins = insol_time_map(0.25, ins, c, OMEGA as f32, dur as f32);
+  assert!(q1_ins > q1_bin + 60.0, "first quartile {q1_ins} vs binary {q1_bin}");
+  // the mass is the weighted time
+  assert!(w.insol_time_s < w.lit_time_s && w.insol_time_s > 0.5 * w.lit_time_s);
+}
+
+/// A window ending in the dark at high `c` (a short lit arc, where the f32 arc measure
+/// `2 sin ψ0 − 2cψ0` cancels): a host total a hair above the f32 arcs' sum (the GPU's sin/cos
+/// rounding) must not send the last sample into the next lit arc, past the window's end. It is
+/// the end of the window's last lit arc.
+#[test]
+fn insolation_last_sample_stays_on_the_last_lit_arc() {
+  let z = [0.0, 0.0, 1.0];
+  // Sun 31° below the equator, site at 57° latitude: c ≈ 0.92, lit arcs of ±23°; 1.8 rotations
+  // from local noon: the window ends in the dark, before the third arc
+  let sun = unit([1.0, 0.0, -0.6]);
+  let n0 = unit([0.545, 0.0, 0.839]);
+  let dur = 1.8 * P_ROT;
+  let w = LitWindow::new(sun, n0, z, OMEGA, dur);
+  let (ins, c) = w.to_gpu_insolation();
+  assert_eq!(ins[3], LIT_MODE_INSOLATION);
+  assert!(c > 0.85 && c < 1.0, "c = {c}");
+  let (ps, p0) = (ins[0] as f64, ins[1] as f64);
+  // the end of the last lit arc inside the window
+  let last_end = ((ps + p0) / (2.0 * core::f64::consts::PI)).floor() * 2.0 * core::f64::consts::PI
+    + 2.0 * core::f64::consts::PI
+    + p0;
+  assert!(last_end < ps + OMEGA * dur, "the window ends in the dark");
+  let t_end = (last_end - ps) / OMEGA;
+  for rel in [0.0f32, 1e-5, 1e-4, 1e-3] {
+    let mut nudged = ins;
+    nudged[2] = ins[2] * (1.0 + rel);
+    let dt = insol_time_map(1.0, nudged, c, OMEGA as f32, dur as f32) as f64;
+    let n = rotate_axis_angle(n0, z, OMEGA * dt);
+    let cos_i = n[0] * sun[0] + n[1] * sun[1] + n[2] * sun[2];
+    assert!(
+      (dt - t_end).abs() < 30.0 && cos_i > -1e-3,
+      "total +{rel}: last sample at {dt} s (n·sun {cos_i}), the last lit arc ends at {t_end} s"
+    );
+  }
+}
+

@@ -7,9 +7,9 @@
   <!--
     A small circled question-mark icon that opens an informational flyout.
     HelpHeader and HelpContent are bound by the parent view via StyledProperty.
-    Opened with the pointer, the flyout stays while the pointer is over the ? or the panel and
-    hides shortly after it leaves both; a click inside the panel (or opening it with the
-    keyboard) pins it until a click outside or Escape. The hover ToolTip on the ? shows the
+    However it is opened (click or keyboard) the flyout stays until a click outside, a second
+    click on the ?, Escape or the footer action; the pointer leaving never closes it (on Win32 a
+    spurious PointerExited follows the popup opening). The hover ToolTip on the ? shows the
     header. Accessible name and AutomationId are forwarded to the inner button in code.
   -->
   <!--
@@ -58,9 +58,9 @@
 
     <Button.Flyout>
       <!--
-        ShowMode=Transient: a click outside or Escape closes it. The pointer-away dismissal of
-        an unpinned flyout is done in code over the union of the ? and the panel (the built-in
-        TransientWithDismissOnPointerMoveAway closed it while the text was being read).
+        ShowMode=Transient: a click outside or Escape closes it. There is no pointer-away
+        dismissal (TransientWithDismissOnPointerMoveAway closed it while the text was being read,
+        and on Win32 a spurious PointerExited closed it right after the click).
         Placement is overridden from FlyoutPlacement in code.
       -->
       <Flyout
