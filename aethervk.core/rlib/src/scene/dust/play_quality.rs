@@ -315,10 +315,12 @@ pub const STRIDE_LOWER_AFTER: u32 = 16;
 /// under half the budget lower it the same way. Readbacks of frames recorded before a change are
 /// ignored (they measured the old stride).
 ///
-/// A play session ([`Self::play`] .. [`Self::end_session`]) starts at the stride the previous
-/// session ended on ([`session_start_stride`]), clamped to the preset's cap, so the first preview
-/// frame after Play does not draw every cluster (a frame of several hundred ms that stalls the
-/// logic thread). Outside a session the stride is 1: the paused full render draws every cluster.
+/// Every play session ([`Self::play`] .. [`Self::end_session`]) starts at the preset's cap
+/// ([`session_start_stride`]), so the first preview frame after Play does not draw every cluster
+/// (a frame of several hundred ms that stalls the logic thread); the controller lowers it from
+/// there. No stride is remembered across sessions: a low stride a light session settled on made
+/// the next, heavier session's first frames slow. Outside a session the stride is 1: the paused
+/// full render draws every cluster.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PlayStride {
   stride: u32,
@@ -328,17 +330,14 @@ pub struct PlayStride {
   low_run: u32,
   /// a play session is running ([`Self::play`] since the last [`Self::end_session`])
   active: bool,
-  /// the stride the last play session ended on (0: no session yet)
-  last_session: u32,
 }
 
-/// The stride a play session's first frame draws with: the stride the previous session ended on
-/// (`last_session`, 0 for none), never above the budget's cap; the cap itself for the first
-/// session (no measurement yet: the cheapest frame, so Play never stalls on a full-density
-/// frame; the controller lowers it after [`STRIDE_LOWER_AFTER`] fast readbacks per halving)
-pub fn session_start_stride(last_session: u32, b: StrideBudget) -> u32 {
-  let max = b.max_stride.max(1).next_power_of_two();
-  if last_session == 0 { max } else { last_session.next_power_of_two().min(max) }
+/// The stride a play session's first frame draws with: the budget's cap (a power of two), for
+/// every session (no measurement of this session yet: the cheapest frame, so Play never stalls
+/// on a full-density frame; the controller lowers it after [`STRIDE_LOWER_AFTER`] fast readbacks
+/// per halving)
+pub fn session_start_stride(b: StrideBudget) -> u32 {
+  b.max_stride.max(1).next_power_of_two()
 }
 
 impl PlayStride {
@@ -347,17 +346,15 @@ impl PlayStride {
     self.stride.max(1)
   }
 
-  /// back to every cluster and no memory of earlier sessions (the next session starts as the
-  /// first one)
+  /// back to every cluster, no session running
   pub fn reset(&mut self) {
     *self = Self::default();
   }
 
-  /// the play session ended (paused, or the preview off): back to every cluster, remembering the
-  /// stride the session ended on for the next one's first frame
+  /// the play session ended (paused, or the preview off): back to every cluster; the next
+  /// session starts at the cap again
   pub fn end_session(&mut self) {
-    let last = if self.active { self.stride() } else { self.last_session };
-    *self = Self { last_session: last, ..Self::default() };
+    *self = Self::default();
   }
 
   /// A preview frame `now_frame` is about to be recorded under budget `b`: the first frame of a
@@ -373,7 +370,7 @@ impl PlayStride {
       max
     } else {
       self.active = true;
-      session_start_stride(self.last_session, b)
+      session_start_stride(b)
     };
     let changed = next != self.stride();
     self.stride = next;
@@ -582,55 +579,47 @@ mod tests {
     assert_eq!(q.absorb(6, 0.0, 7, b), None);
   }
 
-  /// settle a session at stride `S` under `b`: one slow readback after the session's first frame
-  fn settle(p: &mut PlayStride, frame: &mut u64, total_ms: f64, b: StrideBudget) {
-    p.play(*frame, b);
-    *frame += 4;
-    p.play(*frame, b);
-    p.absorb(*frame - 1, total_ms, *frame, b);
-    *frame += 1;
-  }
-
-  /// A new play session's first frame draws at the stride the previous session ended on, not 1;
-  /// the paused frames in between draw every cluster
+  /// Every play session's first frame draws at the preset's cap, whatever stride the previous
+  /// session ended on (a low stride a light session settled on made the next, heavier session's
+  /// first frames slow); the paused frames in between draw every cluster
   #[test]
-  fn play_stride_next_session_starts_at_the_last_stride() {
+  fn play_stride_every_session_starts_at_the_cap() {
     let b = StrideBudget { budget_ms: 33.0, max_stride: 32 };
     let mut p = PlayStride::default();
     let mut f = 10;
-    p.play(f, b);
-    // lowered to 8 by a long run of fast readbacks from the cap
-    p.stride = 8;
-    p.changed_at = f;
-    f += 1;
+    assert_eq!(p.play(f, b), Some(32));
+    // lowered to 4 by runs of fast readbacks from the cap
+    for want in [16, 8, 4] {
+      let mut changed = None;
+      for _ in 0..STRIDE_LOWER_AFTER {
+        f += 1;
+        changed = p.absorb(f, 2.0, f + 4, b);
+      }
+      assert_eq!(changed, Some(want));
+      f += 4;
+    }
+    assert_eq!(p.stride(), 4);
     p.end_session();
     assert_eq!(p.stride(), 1, "paused: every cluster");
-    // paused frames keep the memory
+    assert_eq!(p, PlayStride::default(), "nothing remembered");
+    // paused frames change nothing
     p.end_session();
     p.end_session();
     assert_eq!(p.stride(), 1);
     f += 20;
-    assert_eq!(p.play(f, b), Some(8), "the next session's first frame: the last session's stride");
-    assert_eq!(p.stride(), 8);
+    assert_eq!(p.play(f, b), Some(32), "the next session's first frame: the cap again");
+    assert_eq!(p.stride(), 32);
     // readbacks of frames up to the session's start measured the paused render: ignored
     assert_eq!(p.absorb(f, 2_000.0, f + 1, b), None);
     assert_eq!(p.absorb(f - 3, 2_000.0, f + 1, b), None);
-    assert_eq!(p.stride(), 8);
+    assert_eq!(p.stride(), 32);
     // later frames: no change, and the controller adapts as before
     assert_eq!(p.play(f + 1, b), None);
-    assert_eq!(p.absorb(f + 1, 300.0, f + 4, b), Some(32));
-    // a session that settled through the controller hands its stride on
-    let mut q = PlayStride::default();
-    let mut g = 1;
-    settle(&mut q, &mut g, 140.0, b);
-    let settled = q.stride();
-    assert_eq!(settled, 32);
-    q.end_session();
-    assert_eq!(q.play(g + 10, b), Some(settled));
-    // a session that ended at 1 starts the next at 1 (fast machine: no change)
-    let mut r = PlayStride { last_session: 1, ..PlayStride::default() };
-    assert_eq!(r.play(5, b), None);
-    assert_eq!(r.stride(), 1);
+    let mut changed = None;
+    for g in f + 1..f + 1 + STRIDE_LOWER_AFTER as u64 {
+      changed = p.absorb(g, 4.0, g + 4, b);
+    }
+    assert_eq!(changed, Some(16));
   }
 
   /// The first session ever (or after `reset`) starts at the preset's cap: no measurement yet,
@@ -643,7 +632,7 @@ mod tests {
       (StrideBudget { budget_ms: 66.0, max_stride: 8 }, 8),
       (StrideBudget { budget_ms: 33.0, max_stride: 0 }, 1),
     ] {
-      assert_eq!(session_start_stride(0, b), cap);
+      assert_eq!(session_start_stride(b), cap);
       let mut p = PlayStride::default();
       assert_eq!(p.stride(), 1);
       // paused frames before the first session change nothing
@@ -668,25 +657,25 @@ mod tests {
     assert_eq!(changed, Some(16));
   }
 
-  /// A preset change clamps: a session never starts above the new preset's cap, and a preset
-  /// lowered while playing brings the stride under the cap on the next frame
+  /// A preset change clamps: a session starts at its own preset's cap, and a preset lowered
+  /// while playing brings the stride under the cap on the next frame
   #[test]
   fn play_stride_preset_change_clamps() {
     let smooth = StrideBudget { budget_ms: 16.0, max_stride: 64 };
     let quality = StrideBudget { budget_ms: 66.0, max_stride: 8 };
     let balanced = StrideBudget { budget_ms: 33.0, max_stride: 32 };
-    assert_eq!(session_start_stride(64, quality), 8);
-    assert_eq!(session_start_stride(64, balanced), 32);
-    assert_eq!(session_start_stride(4, smooth), 4);
-    assert_eq!(session_start_stride(5, smooth), 8, "a power of two");
+    assert_eq!(session_start_stride(quality), 8);
+    assert_eq!(session_start_stride(balanced), 32);
+    assert_eq!(session_start_stride(smooth), 64);
+    assert_eq!(session_start_stride(StrideBudget { budget_ms: 33.0, max_stride: 5 }), 8, "a power of two");
     // a Smooth session at 64, then Play under Quality: 8, not 64
     let mut p = PlayStride::default();
     assert_eq!(p.play(1, smooth), Some(64));
     p.end_session();
     assert_eq!(p.play(10, quality), Some(8));
-    // a lower cap remembered: a session under a higher cap starts at the remembered stride
+    // a session under a higher cap starts at that cap, not at the previous session's stride
     p.end_session();
-    assert_eq!(p.play(20, smooth), Some(8));
+    assert_eq!(p.play(20, smooth), Some(64));
     // the preset changed while playing: clamped at once, and readbacks up to the change ignored
     let mut q = PlayStride::default();
     assert_eq!(q.play(1, smooth), Some(64));
@@ -696,6 +685,6 @@ mod tests {
     assert_eq!(q.absorb(3, 2_000.0, 4, quality), None);
     assert_eq!(q.play(4, balanced), None, "under the new cap: kept");
     q.end_session();
-    assert_eq!(q.play(9, balanced), Some(8));
+    assert_eq!(q.play(9, balanced), Some(32));
   }
 }

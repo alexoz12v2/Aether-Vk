@@ -164,11 +164,11 @@ In Orbit mode the section shows the projection type and its advanced values, the
 image::img/settings-viewport--orbit--light--tagged.png[Settings › Viewport,width=577,pdfwidth=98mm]
 
 . *Viewport 1* -- Section with the camera and display settings of the viewport; the options shown depend on the mode.
-. *Mode: UpZenith* -- // TODO: describe
+. *Mode: UpZenith* -- Shows the camera mode of the viewport. UpZenith (Orbit view): the camera only pans; rotation and zoom are locked. CometOrbiting (Nucleus view): the camera orbits the comet, and zoom is allowed.
 . *Show diagnostic panels (all viewports)* -- Shows the camera coordinates, dust history, observer line and orbit debug panels over the viewport, in all viewports at once.
 . *Lock viewport for comparison* -- Refuses mouse orbit, pan and zoom and greys out the projection settings, so the view stays matched to a telescope image.
-. *Perspective* -- // TODO: describe
-. *Orthographic* -- // TODO: describe
+. *Perspective* -- Perspective projection: distant objects look smaller, like a camera; the field of view sets the zoom. Greyed out while the viewport is locked for comparison.
+. *Orthographic* -- Orthographic projection: an object's size does not depend on its distance, like a map or a flat telescope image; the half-width and half-height set what is visible. Greyed out while the viewport is locked for comparison.
 . *Advanced: projection* -- The field of view (perspective) or the half-width and half-height (orthographic), the near and far clip planes and the units they are shown in.
 . *Background stars* -- The stars are a decorative procedural field; they do not match the real sky, and their field of view is fixed.
 . *Orbit lines* -- Draws the comet's reference orbit (red), the Earth's orbit (light blue) and the path travelled in this run (yellow).
@@ -185,6 +185,13 @@ Lock viewport for comparison::
   Refuses mouse orbit, pan and zoom and greys out the projection settings, so the view stays matched to a telescope image.
 
   Turn it off to move the camera again.
+
+Projection type::
+  Perspective: distant objects look smaller, like a camera. The field of view sets the zoom.
+
+  Orthographic: no perspective, the size of an object does not depend on its distance (like a map or a flat telescope image). The half-width and half-height set what is visible.
+
+  The parameters of both are under Advanced: projection.
 
 Advanced: projection::
   The field of view (perspective) or the half-width and half-height (orthographic), the near and far clip planes and the units they are shown in.
@@ -213,11 +220,11 @@ In Nucleus mode the section also shows the nucleus lighting and exposure control
 image::img/settings-viewport--nucleus--light--tagged.png[Settings › Viewport,width=577,pdfwidth=98mm]
 
 . *Viewport 1* -- Section with the camera and display settings of the viewport; the options shown depend on the mode.
-. *Mode: CometOrbiting* -- // TODO: describe
+. *Mode: CometOrbiting* -- Shows the camera mode of the viewport. UpZenith (Orbit view): the camera only pans; rotation and zoom are locked. CometOrbiting (Nucleus view): the camera orbits the comet, and zoom is allowed.
 . *Show diagnostic panels (all viewports)* -- Shows the camera coordinates, dust history, observer line and orbit debug panels over the viewport, in all viewports at once.
 . *Lock viewport for comparison* -- Refuses mouse orbit, pan and zoom and greys out the projection settings, so the view stays matched to a telescope image.
-. *Perspective* -- // TODO: describe
-. *Orthographic* -- // TODO: describe
+. *Perspective* -- Perspective projection: distant objects look smaller, like a camera; the field of view sets the zoom. Greyed out while the viewport is locked for comparison.
+. *Orthographic* -- Orthographic projection: an object's size does not depend on its distance, like a map or a flat telescope image; the half-width and half-height set what is visible. Greyed out while the viewport is locked for comparison.
 . *Advanced: projection* -- The field of view (perspective) or the half-width and half-height (orthographic), the near and far clip planes and the units they are shown in.
 . *Physical lighting* -- Direct sunlight only, scaled with the comet's heliocentric distance r as (1 AU / r)², and exposed so that a white surface facing the Sun at 1 AU is drawn white.
 . *Background stars* -- The stars are a decorative procedural field; they do not match the real sky, and their field of view is fixed.
@@ -236,6 +243,13 @@ Lock viewport for comparison::
   Refuses mouse orbit, pan and zoom and greys out the projection settings, so the view stays matched to a telescope image.
 
   Turn it off to move the camera again.
+
+Projection type::
+  Perspective: distant objects look smaller, like a camera. The field of view sets the zoom.
+
+  Orthographic: no perspective, the size of an object does not depend on its distance (like a map or a flat telescope image). The half-width and half-height set what is visible.
+
+  The parameters of both are under Advanced: projection.
 
 Advanced: projection::
   The field of view (perspective) or the half-width and half-height (orthographic), the near and far clip planes and the units they are shown in.
@@ -278,8 +292,8 @@ image::img/settings-viewport--model--light--tagged.png[Settings › Viewport,wid
 . *Viewport 1* -- Section with the camera and display settings of the viewport; the options shown depend on the mode.
 . *Show diagnostic panels (all viewports)* -- Shows the camera coordinates, dust history, observer line and orbit debug panels over the viewport, in all viewports at once.
 . *Lock viewport for comparison* -- Refuses mouse orbit, pan and zoom and greys out the projection settings, so the view stays matched to a telescope image.
-. *Perspective* -- // TODO: describe
-. *Orthographic* -- // TODO: describe
+. *Perspective* -- Perspective projection: distant objects look smaller, like a camera; the field of view sets the zoom. Greyed out while the viewport is locked for comparison.
+. *Orthographic* -- Orthographic projection: an object's size does not depend on its distance, like a map or a flat telescope image; the half-width and half-height set what is visible. Greyed out while the viewport is locked for comparison.
 . *Advanced: projection* -- The field of view (perspective) or the half-width and half-height (orthographic), the near and far clip planes and the units they are shown in.
 . *Background stars* -- The stars are a decorative procedural field; they do not match the real sky, and their field of view is fixed.
 . *Orbit lines* -- Draws the comet's reference orbit (red), the Earth's orbit (light blue) and the path travelled in this run (yellow).
@@ -289,7 +303,7 @@ image::img/settings-viewport--model--light--tagged.png[Settings › Viewport,wid
 . *North up* -- On: the view is levelled to celestial north (J2000), north up and east left, like a telescope image.
 . *Latitude (°N)* -- Latitude of the observing site in degrees, positive north of the equator (−90 to 90).
 . *Longitude (°E)* -- Longitude of the observing site in degrees, positive east of Greenwich (−180 to 180).
-. *Free look* -- // TODO: describe
+. *Free look* -- Drag in the viewport to look around; the look direction stays fixed among the stars.
 
 ==== Properties
 
@@ -302,6 +316,13 @@ Lock viewport for comparison::
   Refuses mouse orbit, pan and zoom and greys out the projection settings, so the view stays matched to a telescope image.
 
   Turn it off to move the camera again.
+
+Projection type::
+  Perspective: distant objects look smaller, like a camera. The field of view sets the zoom.
+
+  Orthographic: no perspective, the size of an object does not depend on its distance (like a map or a flat telescope image). The half-width and half-height set what is visible.
+
+  The parameters of both are under Advanced: projection.
 
 Advanced: projection::
   The field of view (perspective) or the half-width and half-height (orthographic), the near and far clip planes and the units they are shown in.
@@ -344,6 +365,17 @@ Latitude::
 Longitude::
   Longitude of the observing site in degrees, positive east of Greenwich (−180 to 180). Used by the topocentric observer.
 
+Look direction::
+  Free look: drag to look around; the direction stays fixed among the stars.
+
+  Comet tracking: keeps the comet exactly at the centre of the view.
+
+  Sun tracking: keeps the Sun at the centre of the view.
+
+  From the surface, while the tracked target is below the horizon, the view faces the horizon where it will rise.
+
+  Restore preset projection re-applies the tracking projection where the target spans 10% of the view.
+
 [[settings-viewport-persp]]
 === Viewport: perspective projection
 Location:: Settings › Viewport
@@ -361,7 +393,7 @@ image::img/settings-viewport-persp--orbit--light--tagged.png[Settings › Viewpo
 . *Units* -- Unit used to show the half-width, the half-height and the clip planes: AU, km or m.
 . *Keep Proportions Locked* -- Keeps the half-width to half-height ratio equal to the viewport's shape, also when the window is resized, so the image is never stretched.
 . *Show objects behind camera* -- Orthographic only: also draws the geometry behind the camera plane (within the far distance), as a telescope image does.
-. *Restore Proportions* -- // TODO: describe
+. *Restore Proportions* -- Recomputes the half-width from the half-height once, so the orthographic view matches the viewport's proportions again. Available in the orthographic projection when the proportions differ.
 
 ==== Properties
 
@@ -408,7 +440,7 @@ image::img/settings-viewport-ortho--orbit--light--tagged.png[Settings › Viewpo
 . *Units* -- Unit used to show the half-width, the half-height and the clip planes: AU, km or m.
 . *Keep Proportions Locked* -- Keeps the half-width to half-height ratio equal to the viewport's shape, also when the window is resized, so the image is never stretched.
 . *Show objects behind camera* -- Orthographic only: also draws the geometry behind the camera plane (within the far distance), as a telescope image does.
-. *Restore Proportions* -- // TODO: describe
+. *Restore Proportions* -- Recomputes the half-width from the half-height once, so the orthographic view matches the viewport's proportions again. Available in the orthographic projection when the proportions differ.
 
 ==== Properties
 
@@ -449,11 +481,11 @@ The viewport settings in Nucleus mode: projection, lighting and exposure of the 
 image::img/settings-viewport-nucleus--nucleus--light--tagged.png[Settings › Viewport,width=577,pdfwidth=98mm]
 
 . *Viewport 1* -- Section with the camera and display settings of the viewport; the options shown depend on the mode.
-. *Mode: CometOrbiting* -- // TODO: describe
+. *Mode: CometOrbiting* -- Shows the camera mode of the viewport. UpZenith (Orbit view): the camera only pans; rotation and zoom are locked. CometOrbiting (Nucleus view): the camera orbits the comet, and zoom is allowed.
 . *Show diagnostic panels (all viewports)* -- Shows the camera coordinates, dust history, observer line and orbit debug panels over the viewport, in all viewports at once.
 . *Lock viewport for comparison* -- Refuses mouse orbit, pan and zoom and greys out the projection settings, so the view stays matched to a telescope image.
-. *Perspective* -- // TODO: describe
-. *Orthographic* -- // TODO: describe
+. *Perspective* -- Perspective projection: distant objects look smaller, like a camera; the field of view sets the zoom. Greyed out while the viewport is locked for comparison.
+. *Orthographic* -- Orthographic projection: an object's size does not depend on its distance, like a map or a flat telescope image; the half-width and half-height set what is visible. Greyed out while the viewport is locked for comparison.
 . *Advanced: projection* -- The field of view (perspective) or the half-width and half-height (orthographic), the near and far clip planes and the units they are shown in.
 . *Physical lighting* -- Direct sunlight only, scaled with the comet's heliocentric distance r as (1 AU / r)², and exposed so that a white surface facing the Sun at 1 AU is drawn white.
 . *Background stars* -- The stars are a decorative procedural field; they do not match the real sky, and their field of view is fixed.
@@ -472,6 +504,13 @@ Lock viewport for comparison::
   Refuses mouse orbit, pan and zoom and greys out the projection settings, so the view stays matched to a telescope image.
 
   Turn it off to move the camera again.
+
+Projection type::
+  Perspective: distant objects look smaller, like a camera. The field of view sets the zoom.
+
+  Orthographic: no perspective, the size of an object does not depend on its distance (like a map or a flat telescope image). The half-width and half-height set what is visible.
+
+  The parameters of both are under Advanced: projection.
 
 Advanced: projection::
   The field of view (perspective) or the half-width and half-height (orthographic), the near and far clip planes and the units they are shown in.
