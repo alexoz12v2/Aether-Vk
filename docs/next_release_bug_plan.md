@@ -254,6 +254,16 @@ the 1070 at Balanced, which is at the cap). Both need the GPU reference tests
 - The e2e now reads the committed range, runs its UIA searches before the Play click, and refuses
   to measure a stopped clock (`PlaybackPerfTests.CheckRoom`).
 - A play session now starts at the previous session's stride (`PlayStride::play`).
+  Superseded: every play session now starts at the preset's cap
+  (`play_quality::session_start_stride`); the stride memory was removed because a remembered low
+  stride made the next, heavier session's first frames slow.
+- The dust view now keeps its host across the Play/Pause rebuild. Play turns the temporal reuse
+  off and Pause back on, which changes the class-image span and recreates the view. The new view
+  now takes the old host (`DustViewHost::carried_over`: white point, median, unit, feedback, play
+  pin, stride, frame counter) instead of a fresh one; only the readback slots and the drawn image
+  are forgotten. Before, the first second after Play was dark (the white re-seeded) and the pin
+  was entered on a cold host. Tests: `carried_over_keeps_the_exposure_feedback_pin_and_stride`
+  and `gpu_dust_view_keeps_its_exposure_when_the_cadence_toggles`.
 
 The original note follows. **Open:** the e2e's 1 d/s phase hit the committed range's end 8 s in (epoch 693921600) in one of
 five runs (and in the 17:26 run) after the seek to start + 1 h: the comment's "16 days" margin does not hold for this
