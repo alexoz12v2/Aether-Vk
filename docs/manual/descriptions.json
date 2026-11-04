@@ -66,7 +66,8 @@
   "overlay--orbit": "The overlay in Orbit mode: the orbit legend, the ephemeris table, the scale ruler and the epoch label.",
   "overlay--model": "The overlay in Model mode: the legend, the ephemeris table, the scale ruler, the epoch and the reference frame of the Earth view.",
   "splash": "The splash window is shown while the application starts and loads.",
-  "dlg-fatal": "The error window appears when the application meets an error it cannot recover from, and shows the message."
+  "dlg-fatal": "The error window appears when the application meets an error it cannot recover from, and shows the message.",
+  "model-dust-jet-dynamics": "The selected jet's Advanced: dynamic model section as a save opens it, with every option off. Turning on Orbit-dependent size distribution adds the q table (days from perihelion, q), its Add row button and the q(t) plot under the lifetime."
  },
  "controls": {
   "ReferenceOrbitPicker": {
@@ -655,6 +656,66 @@
   "RestoreOrthoProportionsButton": {
    "label": "Restore Proportions",
    "text": "Recomputes the half-width from the half-height once, so the orthographic view matches the viewport's proportions again. Available in the orthographic projection when the proportions differ."
+  },
+  "JetDynamicsExpander": {
+   "label": "Advanced: dynamic model",
+   "text": "How this jet's emission evolves in time: insolation weighting, the size law along the orbit, the source of the pre-start dust and the dust lifetime. Older saves open with both toggles off and a 30-day lifetime, so their dust is unchanged. Changing any value here invalidates the simulation: commit again."
+  },
+  "JetInsolationWeighted": {
+   "label": "Insolation-weighted emission",
+   "text": "Off: the site emits at the full rate Q_d while the Sun is above its horizon and nothing at night. On: the rate is Q_d·cos i (i = solar incidence angle at the site), so less mass is emitted and the grains leave mostly around local noon."
+  },
+  "JetOrbitSizeLaw": {
+   "label": "Orbit-dependent size distribution",
+   "text": "Off: the continuous dust uses q = 3.5. On: it uses this jet's own q, or, when the q table below has rows, the q interpolated at each emission window's time from perihelion. Turning it on shows the table and its plot."
+  },
+  "JetSpkBeforeStart": {
+   "label": "Pre-start dust from the ephemeris",
+   "text": "The jets ignite a lead time before the start epoch. On: that pre-start dust is emitted from the comet's ephemeris (SPK), which the commit downloads from start minus the lead. Off: it is emitted from the reference orbit, as in older saves."
+  },
+  "JetLifetimeDays": {
+   "label": "Dust lifetime",
+   "text": "How long a grain is kept after emission, 1 to 365 days (default 30). The Dust lead time in the Comet tab cannot exceed the longest lifetime among the jets."
+  },
+  "JetEmissionStepsText": {
+   "label": "Emission steps",
+   "text": "Read only: the time between emission windows in the three age tiers (0–1, 1–8 and 8–64 lifetimes, 256 windows each) that the lifetime implies."
+  },
+  "JetSizeQTable": {
+   "label": "q along the orbit",
+   "text": "Up to 8 rows of (days from perihelion, q), q from 0 to 6; negative days are before perihelion. q is interpolated linearly between rows and held at the end values outside them. One row is a constant q; no row means the jet's own q. The − button removes a row."
+  },
+  "JetSizeQTableAddRow": {
+   "label": "Add row",
+   "text": "Adds a row to the q table (at most 8)."
+  },
+  "JetSizeQCurvePlot": {
+   "label": "q(t) plot",
+   "text": "The q this jet's dust uses over the simulated range, from the table above."
+  },
+  "JetDefaultsHelp": {
+   "label": "Defaults for new jets",
+   "text": "The grain and activity values a newly added jet starts from. Changing them does not change existing jets; each jet's own values are in its Grain and Activity panels. Only the shape of the Q_d law (Advanced: activity) is shared by every jet."
+  },
+  "DustDensityBox": {
+   "label": "Dust density",
+   "text": "Bulk density of the grains of new jets, in g/cm³ (cometary dust is about 0.5 to 1). It enters β and the dust mass that a given brightness needs."
+  },
+  "DustMinDiameterBox": {
+   "label": "Smallest grain diameter",
+   "text": "Smallest grain diameter a new jet starts with, in μm. It must stay below the largest grain diameter."
+  },
+  "DustMaxDiameterBox": {
+   "label": "Largest grain diameter",
+   "text": "Largest grain diameter a new jet starts with, in μm. Together with the smallest grain diameter it sets the size range the size law q spreads the grains over."
+  },
+  "DustQprBox": {
+   "label": "Radiation pressure Q_pr",
+   "text": "Radiation-pressure efficiency of the grains of a new jet (0.5 to 2). With density and diameter it sets the grains' β, so a higher Q_pr pushes the dust further anti-sunward."
+  },
+  "DustAlbedoBox": {
+   "label": "Geometric albedo p",
+   "text": "Geometric albedo of the grains of a new jet (0.01 to 0.5). It scales how bright the dust looks; it does not change where the grains go."
   }
  },
  "help_ids": {

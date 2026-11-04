@@ -11,7 +11,7 @@ public partial class DesignCameraMatrixDebugViewModel : ICameraMatrixDebugViewMo
     public bool   CanClose { get; set; } = true;
 
     public string StrTitle { get; set; } = "Ephemeris";
-    public string StrTip { get; set; } = "Geocentric astrometric ephemeris of the committed comet at the shown epoch (light-time corrected, no aberration), as in a JPL Horizons observer table. Sun PA is Horizons' PsAng: the position angle of the extended Sun→comet vector on the sky, from north through east; a tail points near it.";
+    public string StrTip { get; set; } = "Geocentric astrometric ephemeris of the committed comet at the shown epoch (light-time corrected, no aberration), as in a JPL Horizons observer table. Both position angles are measured on the sky from north through east. PA of Sun points from the comet towards the Sun; PsAng (Horizons' column of that name) is the opposite, anti-solar direction, the extended Sun→comet vector, which a tail points near. They differ by 180°.";
     public string StrEpoch { get; set; } = "Epoch (UTC)";
     public string StrRa { get; set; } = "RA (J2000)";
     public string StrDec { get; set; } = "Dec (J2000)";
@@ -19,7 +19,10 @@ public partial class DesignCameraMatrixDebugViewModel : ICameraMatrixDebugViewMo
     public string StrDelta { get; set; } = "Δ (Earth–comet)";
     public string StrPhase { get; set; } = "Phase (Sun–comet–Earth)";
     public string StrElongation { get; set; } = "Elongation (Sun–Earth–comet)";
-    public string StrSunPa { get; set; } = "Sun PA (N→E)";
+    public string StrPaOfSun { get; set; } = "PA of Sun (N→E)";
+    public string StrPaOfSunTip { get; set; } = "Position angle of the direction from the comet towards the Sun, on the sky, from north through east (PsAng + 180°). The sunward side of the coma and the nucleus's lit limb face this way.";
+    public string StrPsAng { get; set; } = "PsAng, anti-Sun (N→E)";
+    public string StrPsAngTip { get; set; } = "JPL Horizons' PsAng: position angle of the extended Sun→comet vector, i.e. the anti-solar direction, on the sky, from north through east. A dust or ion tail points near it. It is the PA of the Sun minus 180°.";
     public string StrDebug { get; set; } = "Debug (camera position)";
     public string StrViewportRect { get; set; } = "Viewport on the desktop (x, y, w, h px)";
 }

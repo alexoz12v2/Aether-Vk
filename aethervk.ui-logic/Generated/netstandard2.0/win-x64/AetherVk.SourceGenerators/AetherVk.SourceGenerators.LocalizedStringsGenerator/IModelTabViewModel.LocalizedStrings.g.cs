@@ -51,6 +51,7 @@ public partial interface IModelTabViewModel
     string StrHelpHeaderGizmo { get; set; }
     string StrHelpHeaderJetAngles { get; set; }
     string StrHelpHeaderStreamColor { get; set; }
+    string StrJetBetaRange { get; set; }
     string StrHelpHeaderJetBeta { get; set; }
     string StrHelpHeaderJetQDust { get; set; }
     string StrHelpHeaderQpr { get; set; }
@@ -99,4 +100,16 @@ public partial interface IModelTabViewModel
     string StrHelpDustRateCutoff { get; set; }
     string StrHelpDustRateMax { get; set; }
     string StrHelpSizeDistribution { get; set; }
+    string StrHelpHeaderJetDynamics { get; set; }
+    string StrHelpJetDynamics { get; set; }
+    string StrHelpHeaderJetInsolation { get; set; }
+    string StrHelpJetInsolation { get; set; }
+    string StrHelpHeaderJetOrbitSizeLaw { get; set; }
+    string StrHelpJetOrbitSizeLaw { get; set; }
+    string StrHelpHeaderJetSpkBeforeStart { get; set; }
+    string StrHelpJetSpkBeforeStart { get; set; }
+    string StrHelpHeaderJetLifetime { get; set; }
+    string StrHelpJetLifetime { get; set; }
+    string StrHelpHeaderJetSizeQTable { get; set; }
+    string StrHelpJetSizeQTable { get; set; }
 }

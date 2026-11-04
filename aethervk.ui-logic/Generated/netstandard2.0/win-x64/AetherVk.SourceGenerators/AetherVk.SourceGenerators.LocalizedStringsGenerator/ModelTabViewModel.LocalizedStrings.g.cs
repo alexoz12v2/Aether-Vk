@@ -522,6 +522,18 @@ partial class ModelTabViewModel
         }
     }
 
+    private string _strJetBetaRange = string.Empty;
+    public string StrJetBetaRange
+    {
+        get => _strJetBetaRange;
+        set
+        {
+            if (_strJetBetaRange == value) return;
+            _strJetBetaRange = value;
+            OnPropertyChanged(nameof(StrJetBetaRange));
+        }
+    }
+
     private string _strHelpHeaderJetBeta = string.Empty;
     public string StrHelpHeaderJetBeta
     {
@@ -1098,6 +1110,150 @@ partial class ModelTabViewModel
         }
     }
 
+    private string _strHelpHeaderJetDynamics = string.Empty;
+    public string StrHelpHeaderJetDynamics
+    {
+        get => _strHelpHeaderJetDynamics;
+        set
+        {
+            if (_strHelpHeaderJetDynamics == value) return;
+            _strHelpHeaderJetDynamics = value;
+            OnPropertyChanged(nameof(StrHelpHeaderJetDynamics));
+        }
+    }
+
+    private string _strHelpJetDynamics = string.Empty;
+    public string StrHelpJetDynamics
+    {
+        get => _strHelpJetDynamics;
+        set
+        {
+            if (_strHelpJetDynamics == value) return;
+            _strHelpJetDynamics = value;
+            OnPropertyChanged(nameof(StrHelpJetDynamics));
+        }
+    }
+
+    private string _strHelpHeaderJetInsolation = string.Empty;
+    public string StrHelpHeaderJetInsolation
+    {
+        get => _strHelpHeaderJetInsolation;
+        set
+        {
+            if (_strHelpHeaderJetInsolation == value) return;
+            _strHelpHeaderJetInsolation = value;
+            OnPropertyChanged(nameof(StrHelpHeaderJetInsolation));
+        }
+    }
+
+    private string _strHelpJetInsolation = string.Empty;
+    public string StrHelpJetInsolation
+    {
+        get => _strHelpJetInsolation;
+        set
+        {
+            if (_strHelpJetInsolation == value) return;
+            _strHelpJetInsolation = value;
+            OnPropertyChanged(nameof(StrHelpJetInsolation));
+        }
+    }
+
+    private string _strHelpHeaderJetOrbitSizeLaw = string.Empty;
+    public string StrHelpHeaderJetOrbitSizeLaw
+    {
+        get => _strHelpHeaderJetOrbitSizeLaw;
+        set
+        {
+            if (_strHelpHeaderJetOrbitSizeLaw == value) return;
+            _strHelpHeaderJetOrbitSizeLaw = value;
+            OnPropertyChanged(nameof(StrHelpHeaderJetOrbitSizeLaw));
+        }
+    }
+
+    private string _strHelpJetOrbitSizeLaw = string.Empty;
+    public string StrHelpJetOrbitSizeLaw
+    {
+        get => _strHelpJetOrbitSizeLaw;
+        set
+        {
+            if (_strHelpJetOrbitSizeLaw == value) return;
+            _strHelpJetOrbitSizeLaw = value;
+            OnPropertyChanged(nameof(StrHelpJetOrbitSizeLaw));
+        }
+    }
+
+    private string _strHelpHeaderJetSpkBeforeStart = string.Empty;
+    public string StrHelpHeaderJetSpkBeforeStart
+    {
+        get => _strHelpHeaderJetSpkBeforeStart;
+        set
+        {
+            if (_strHelpHeaderJetSpkBeforeStart == value) return;
+            _strHelpHeaderJetSpkBeforeStart = value;
+            OnPropertyChanged(nameof(StrHelpHeaderJetSpkBeforeStart));
+        }
+    }
+
+    private string _strHelpJetSpkBeforeStart = string.Empty;
+    public string StrHelpJetSpkBeforeStart
+    {
+        get => _strHelpJetSpkBeforeStart;
+        set
+        {
+            if (_strHelpJetSpkBeforeStart == value) return;
+            _strHelpJetSpkBeforeStart = value;
+            OnPropertyChanged(nameof(StrHelpJetSpkBeforeStart));
+        }
+    }
+
+    private string _strHelpHeaderJetLifetime = string.Empty;
+    public string StrHelpHeaderJetLifetime
+    {
+        get => _strHelpHeaderJetLifetime;
+        set
+        {
+            if (_strHelpHeaderJetLifetime == value) return;
+            _strHelpHeaderJetLifetime = value;
+            OnPropertyChanged(nameof(StrHelpHeaderJetLifetime));
+        }
+    }
+
+    private string _strHelpJetLifetime = string.Empty;
+    public string StrHelpJetLifetime
+    {
+        get => _strHelpJetLifetime;
+        set
+        {
+            if (_strHelpJetLifetime == value) return;
+            _strHelpJetLifetime = value;
+            OnPropertyChanged(nameof(StrHelpJetLifetime));
+        }
+    }
+
+    private string _strHelpHeaderJetSizeQTable = string.Empty;
+    public string StrHelpHeaderJetSizeQTable
+    {
+        get => _strHelpHeaderJetSizeQTable;
+        set
+        {
+            if (_strHelpHeaderJetSizeQTable == value) return;
+            _strHelpHeaderJetSizeQTable = value;
+            OnPropertyChanged(nameof(StrHelpHeaderJetSizeQTable));
+        }
+    }
+
+    private string _strHelpJetSizeQTable = string.Empty;
+    public string StrHelpJetSizeQTable
+    {
+        get => _strHelpJetSizeQTable;
+        set
+        {
+            if (_strHelpJetSizeQTable == value) return;
+            _strHelpJetSizeQTable = value;
+            OnPropertyChanged(nameof(StrHelpJetSizeQTable));
+        }
+    }
+
     // ── formatted strings (implement the partial methods below) ─────────────
     private string _strJetNeverLit = string.Empty;
     public string StrJetNeverLit
@@ -1181,6 +1337,7 @@ partial class ModelTabViewModel
         StrHelpHeaderGizmo = _translationService.GetString("Tabs_Model_HelpHeaderGizmo");
         StrHelpHeaderJetAngles = _translationService.GetString("Tabs_Model_HelpHeaderJetAngles");
         StrHelpHeaderStreamColor = _translationService.GetString("Tabs_Model_HelpHeaderStreamColor");
+        StrJetBetaRange = _translationService.GetString("Tabs_Model_JetBetaRange");
         StrHelpHeaderJetBeta = _translationService.GetString("Tabs_Model_HelpHeaderJetBeta");
         StrHelpHeaderJetQDust = _translationService.GetString("Tabs_Model_HelpHeaderJetQDust");
         StrHelpHeaderQpr = _translationService.GetString("Tabs_Model_HelpHeaderQpr");
@@ -1229,6 +1386,18 @@ partial class ModelTabViewModel
         StrHelpDustRateCutoff = _translationService.GetString("Tabs_Model_HelpDustRateCutoff");
         StrHelpDustRateMax = _translationService.GetString("Tabs_Model_HelpDustRateMax");
         StrHelpSizeDistribution = _translationService.GetString("Tabs_Model_HelpSizeDistribution");
+        StrHelpHeaderJetDynamics = _translationService.GetString("Tabs_Model_HelpHeaderJetDynamics");
+        StrHelpJetDynamics = _translationService.GetString("Tabs_Model_HelpJetDynamics");
+        StrHelpHeaderJetInsolation = _translationService.GetString("Tabs_Model_HelpHeaderJetInsolation");
+        StrHelpJetInsolation = _translationService.GetString("Tabs_Model_HelpJetInsolation");
+        StrHelpHeaderJetOrbitSizeLaw = _translationService.GetString("Tabs_Model_HelpHeaderJetOrbitSizeLaw");
+        StrHelpJetOrbitSizeLaw = _translationService.GetString("Tabs_Model_HelpJetOrbitSizeLaw");
+        StrHelpHeaderJetSpkBeforeStart = _translationService.GetString("Tabs_Model_HelpHeaderJetSpkBeforeStart");
+        StrHelpJetSpkBeforeStart = _translationService.GetString("Tabs_Model_HelpJetSpkBeforeStart");
+        StrHelpHeaderJetLifetime = _translationService.GetString("Tabs_Model_HelpHeaderJetLifetime");
+        StrHelpJetLifetime = _translationService.GetString("Tabs_Model_HelpJetLifetime");
+        StrHelpHeaderJetSizeQTable = _translationService.GetString("Tabs_Model_HelpHeaderJetSizeQTable");
+        StrHelpJetSizeQTable = _translationService.GetString("Tabs_Model_HelpJetSizeQTable");
         { var r = string.Empty; FormatStr_JetNeverLit(ref r); StrJetNeverLit = r; }
         { var r = string.Empty; FormatStr_SimulatedGrainsNote(ref r); StrSimulatedGrainsNote = r; }
         { var r = string.Empty; FormatStr_GrainRangeOutOfBounds(ref r); StrGrainRangeOutOfBounds = r; }

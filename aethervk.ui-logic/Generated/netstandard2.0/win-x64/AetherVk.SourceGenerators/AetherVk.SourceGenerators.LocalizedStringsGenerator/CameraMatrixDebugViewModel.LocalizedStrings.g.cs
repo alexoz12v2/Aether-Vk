@@ -114,15 +114,51 @@ partial class CameraMatrixDebugViewModel
         }
     }
 
-    private string _strSunPa = string.Empty;
-    public string StrSunPa
+    private string _strPaOfSun = string.Empty;
+    public string StrPaOfSun
     {
-        get => _strSunPa;
+        get => _strPaOfSun;
         set
         {
-            if (_strSunPa == value) return;
-            _strSunPa = value;
-            OnPropertyChanged(nameof(StrSunPa));
+            if (_strPaOfSun == value) return;
+            _strPaOfSun = value;
+            OnPropertyChanged(nameof(StrPaOfSun));
+        }
+    }
+
+    private string _strPaOfSunTip = string.Empty;
+    public string StrPaOfSunTip
+    {
+        get => _strPaOfSunTip;
+        set
+        {
+            if (_strPaOfSunTip == value) return;
+            _strPaOfSunTip = value;
+            OnPropertyChanged(nameof(StrPaOfSunTip));
+        }
+    }
+
+    private string _strPsAng = string.Empty;
+    public string StrPsAng
+    {
+        get => _strPsAng;
+        set
+        {
+            if (_strPsAng == value) return;
+            _strPsAng = value;
+            OnPropertyChanged(nameof(StrPsAng));
+        }
+    }
+
+    private string _strPsAngTip = string.Empty;
+    public string StrPsAngTip
+    {
+        get => _strPsAngTip;
+        set
+        {
+            if (_strPsAngTip == value) return;
+            _strPsAngTip = value;
+            OnPropertyChanged(nameof(StrPsAngTip));
         }
     }
 
@@ -162,7 +198,10 @@ partial class CameraMatrixDebugViewModel
         StrDelta = _translationService.GetString("Ephemeris_Delta");
         StrPhase = _translationService.GetString("Ephemeris_Phase");
         StrElongation = _translationService.GetString("Ephemeris_Elongation");
-        StrSunPa = _translationService.GetString("Ephemeris_SunPa");
+        StrPaOfSun = _translationService.GetString("Ephemeris_PaOfSun");
+        StrPaOfSunTip = _translationService.GetString("Ephemeris_PaOfSunTip");
+        StrPsAng = _translationService.GetString("Ephemeris_PsAng");
+        StrPsAngTip = _translationService.GetString("Ephemeris_PsAngTip");
         StrDebug = _translationService.GetString("Ephemeris_Debug");
         StrViewportRect = _translationService.GetString("Ephemeris_ViewportRect");
     }

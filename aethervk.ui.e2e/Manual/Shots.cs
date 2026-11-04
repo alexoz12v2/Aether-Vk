@@ -504,6 +504,19 @@ internal static class Shots
       },
       c => c.Fit(c.UnionFound(8, "JetLatitudeSlider", "JetLongitudeSlider", "JetApertureSlider", "JetVelocityBox", "JetStreamColorPicker",
         "JetBetaBox", "JetBetaRangeText", "JetQDustBox", "JetGrainExpander", "JetActivityExpander", "JetSizeDistributionPlot", "JetDustRateCurvePlot"), "JetLatitudeSlider"));
+    // the jet's dynamic model as the save has it (every option off): a toggle here would invalidate
+    // the committed simulation the following shots need
+    yield return new("model-dust-jet-dynamics", "selected", "committed",
+      c =>
+      {
+        Steps.OnlyOpen(c, "ModelTab", Steps.ModelSections, "DustSection");
+        Steps.SelectFirstJet(c);
+        Steps.CloseSection(c, "JetGrainExpander");
+        Steps.CloseSection(c, "JetActivityExpander");
+        Steps.OpenSection(c, "JetDynamicsExpander");
+        Steps.AlignTop(c, "JetDynamicsExpander");
+      },
+      c => Steps.Section(c, "JetDynamicsExpander"));
     yield return new("model-dust-defaults", "committed", "committed",
       c =>
       {

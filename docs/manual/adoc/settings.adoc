@@ -147,6 +147,7 @@ image::img/settings-billboards-fits--committed--light--tagged.png[Settings › B
 . *Billboards* -- Section to create billboard windows that show imported images over the desktop.
 . *FITS image* -- Section for a FITS billboard: key header facts, the header, the stretch and the comparison buttons.
 . *Flip longitude sign* -- Uses the opposite sign for the longitude of the observing site, for headers that give west as a positive value.
+. *Header* -- Table of the FITS header cards with their key, value and comment.
 
 ==== Properties
 
@@ -548,7 +549,7 @@ Shown:: Nucleus mode, committed comet
 .Settings › Viewport
 The Earth observer settings: switch to the view of the nucleus from Earth, set the exposure, choose a site on the Earth's surface and the look direction, and read the telescope scale.
 
-image::img/settings-viewport-observer--nucleus--light--tagged.png[Settings › Viewport,width=433,pdfwidth=73mm]
+image::img/settings-viewport-observer--nucleus--light--tagged.png[Settings › Viewport,width=449,pdfwidth=76mm]
 
 . *Nucleus from Earth* -- Switches to the Earth observer tracking the comet, with north up and a field a few nucleus diameters tall.
 . *Nucleus exposure* -- Brightness of the sunlit nucleus in stops (EV); each whole step doubles or halves it.

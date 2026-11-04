@@ -183,7 +183,7 @@ image::img/model-dust-jet--selected--light--tagged.png[Model › Dust,width=509,
 . *Density* -- Bulk density of this jet's grains in g/cm³, typically 0.5 to 1 for cometary dust.
 . *Q_pr* -- Radiation-pressure efficiency of this jet's grains, from 0.5 to 2; 1 is a grey body. It scales β only.
 . *Albedo* -- Geometric albedo of this jet's dust, from 0.01 to 0.5. It scales the brightness only.
-. *Size law q* -- Exponent q of the grain size law n(d) ∝ d^-q, from 2 to 5; 3.5 is the usual value. A larger q means more small grains.
+. *Size law q* -- Exponent q of the grain size law n(d) ∝ d^-q, from 2 to 5; 3.5 is the usual value. The continuous dust uses it only with the jet's orbit-dependent size distribution on; off, it uses q = 3.5.
 
 ==== Properties
 
@@ -213,7 +213,48 @@ Albedo::
 Size law q::
   Exponent q of this jet's grain size law n(d) ∝ d^−q over the simulated diameters (2 to 5; 3.5 is the usual value). A larger q means more small grains.
 
-  Limitation: q only changes the individual bright specks; the continuous dust rendering assumes q = 3.5 over the same range.
+  Which q the dust uses depends on "Orbit-dependent size distribution" (Advanced: dynamic model):
+  Off: the continuous dust uses q = 3.5. This q only sets the single grains drawn close to the camera, which are off by default.
+  On: the continuous dust uses this q. If the q(t) table has rows, it uses the table instead: q is interpolated linearly in days from perihelion and held constant outside the table.
+
+[[model-dust-jet-dynamics]]
+=== Model dust jet dynamics
+Location:: Model › Model dust jet dynamics
+Shown:: a jet selected, committed comet
+
+.Model › Model dust jet dynamics
+The selected jet's Advanced: dynamic model section as a save opens it, with every option off. Turning on Orbit-dependent size distribution adds the q table (days from perihelion, q), its Add row button and the q(t) plot under the lifetime.
+
+image::img/model-dust-jet-dynamics--selected--light--tagged.png[Model › Model dust jet dynamics,width=505,pdfwidth=86mm]
+
+. *Advanced: dynamic model* -- How this jet's emission evolves in time: insolation weighting, the size law along the orbit, the source of the pre-start dust and the dust lifetime. Older saves open with both toggles off and a 30-day lifetime, so their dust is unchanged. Changing any value here invalidates the simulation: commit again.
+. *Insolation-weighted emission* -- Off: the site emits at the full rate Q_d while the Sun is above its horizon and nothing at night. On: the rate is Q_d·cos i (i = solar incidence angle at the site), so less mass is emitted and the grains leave mostly around local noon.
+. *Orbit-dependent size distribution* -- Off: the continuous dust uses q = 3.5. On: it uses this jet's own q, or, when the q table below has rows, the q interpolated at each emission window's time from perihelion. Turning it on shows the table and its plot.
+. *Pre-start dust from the ephemeris* -- The jets ignite a lead time before the start epoch. On: that pre-start dust is emitted from the comet's ephemeris (SPK), which the commit downloads from start minus the lead. Off: it is emitted from the reference orbit, as in older saves.
+. *Dust lifetime* -- How long a grain is kept after emission, 1 to 365 days (default 30). The Dust lead time in the Comet tab cannot exceed the longest lifetime among the jets.
+. *Emission steps* -- Read only: the time between emission windows in the three age tiers (0–1, 1–8 and 8–64 lifetimes, 256 windows each) that the lifetime implies.
+
+==== Properties
+
+Insolation-weighted emission::
+  Off: the site emits at the full rate Q_d whenever the Sun is above its horizon and nothing at night (on/off gating).
+
+  On: the rate is Q_d · cos i, with i the solar incidence angle at the site, integrated in closed form over the spin; the emitted mass is lower (equal only at normal incidence) and the grains are released more densely around local noon.
+
+Orbit-dependent size distribution::
+  Off: the continuous dust uses q = 3.5 as before.
+
+  On: the dust emitted in each window uses this jet's own q, or, with rows in the table below, the q interpolated at the window's time from perihelion.
+
+Pre-start dust from the ephemeris::
+  The jets ignite a lead time before the start epoch (Comet tab, Dust lead time).
+
+  On: that pre-start dust is emitted from the comet's ephemeris (SPK) where the file covers those dates; the commit downloads the SPK from start − lead. Off: it is emitted from the reference orbit, as older saves do.
+
+Dust lifetime::
+  How long a grain is kept after emission, 1 to 365 days (30 by default).
+
+  The dust is emitted in three age tiers, each on a grid of 256 windows over its age band (0–1, 1–8 and 8–64 lifetimes); the emission steps shown are the band lengths divided by 256. The Dust lead time in the Comet tab cannot exceed the longest lifetime among the jets.
 
 [[model-dust-defaults]]
 === Dust: default grain and activity
@@ -221,18 +262,23 @@ Location:: Model › Dust
 Shown:: committed comet (67P, December 2021)
 
 .Model › Dust
-The values that new jets start from, under Advanced: the dust production law (Q_d) and the grain size distribution, each with a plot. Existing jets keep their own values.
+The values that new jets start from, including the size law q, and under Advanced the dust production law (Q_d) with its plot. Existing jets keep their own values.
 
 image::img/model-dust-defaults--committed--light--tagged.png[Model › Dust,width=509,pdfwidth=86mm]
 
+. *Dust density* -- Bulk density of the grains of new jets, in g/cm³ (cometary dust is about 0.5 to 1). It enters β and the dust mass that a given brightness needs.
+. *Smallest grain diameter* -- Smallest grain diameter a new jet starts with, in μm. It must stay below the largest grain diameter.
+. *Largest grain diameter* -- Largest grain diameter a new jet starts with, in μm. Together with the smallest grain diameter it sets the size range the size law q spreads the grains over.
+. *Radiation pressure Q_pr* -- Radiation-pressure efficiency of the grains of a new jet (0.5 to 2). With density and diameter it sets the grains' β, so a higher Q_pr pushes the dust further anti-sunward.
+. *Geometric albedo p* -- Geometric albedo of the grains of a new jet (0.01 to 0.5). It scales how bright the dust looks; it does not change where the grains go.
+. *Size law q* -- Size law exponent q that new jets start from, from 2 to 5; 3.5 is the usual value. Each jet then has its own.
+. *Grain size range* -- States the simulated grain diameters and which q the continuous dust uses: 3.5, or the jet's q or q(t) table with its orbit-dependent size distribution on.
 . *Advanced: activity (Q_d)* -- Opens the dust production law shared by all jets and the default rate for new jets.
 . *Total activity* -- Shows the sum of the dust production rates of all jets at 1 AU and at the current distance from the Sun, in kg/s.
 . *Q_d at 1 AU (kg/s)* -- Default dust production rate at 1 AU for new jets, in kg/s. Each jet then has its own.
 . *Q_d law exponent* -- Exponent k of the law Q_d = Q_d0 times r to the power -k, from 1 to 4; 2 is the usual value. Shared by all jets.
 . *Cutoff (AU)* -- Distance from the Sun in AU, from 3 to 100, beyond which no dust is emitted. Shared by all jets.
 . *Q_d max (kg/s)* -- Upper limit of each jet's production rate in kg/s, so that it stays finite close to the Sun. Shared by all jets.
-. *Advanced: grain size distribution* -- Opens the plot of the grain size range that new jets start from.
-. *Grain size range* -- States the simulated grain diameters and that the continuous dust assumes q = 3.5 over that range.
 
 ==== Properties
 

@@ -304,23 +304,44 @@ namespace AetherVk.Logic.ViewModels.Debug
             }
         }
 
-        /// <inheritdoc cref="_ephemerisSunPa"/>
+        /// <inheritdoc cref="_ephemerisPaOfSun"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-        public string EphemerisSunPa
+        public string EphemerisPaOfSun
         {
-            get => _ephemerisSunPa;
+            get => _ephemerisPaOfSun;
             set
             {
-                if (!global::System.Collections.Generic.EqualityComparer<string>.Default.Equals(_ephemerisSunPa, value))
+                if (!global::System.Collections.Generic.EqualityComparer<string>.Default.Equals(_ephemerisPaOfSun, value))
                 {
-                    OnEphemerisSunPaChanging(value);
-                    OnEphemerisSunPaChanging(default, value);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.EphemerisSunPa);
-                    _ephemerisSunPa = value;
-                    OnEphemerisSunPaChanged(value);
-                    OnEphemerisSunPaChanged(default, value);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.EphemerisSunPa);
+                    OnEphemerisPaOfSunChanging(value);
+                    OnEphemerisPaOfSunChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.EphemerisPaOfSun);
+                    _ephemerisPaOfSun = value;
+                    OnEphemerisPaOfSunChanged(value);
+                    OnEphemerisPaOfSunChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.EphemerisPaOfSun);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_ephemerisPsAng"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public string EphemerisPsAng
+        {
+            get => _ephemerisPsAng;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<string>.Default.Equals(_ephemerisPsAng, value))
+                {
+                    OnEphemerisPsAngChanging(value);
+                    OnEphemerisPsAngChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.EphemerisPsAng);
+                    _ephemerisPsAng = value;
+                    OnEphemerisPsAngChanged(value);
+                    OnEphemerisPsAngChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.EphemerisPsAng);
                 }
             }
         }
@@ -780,28 +801,50 @@ namespace AetherVk.Logic.ViewModels.Debug
         /// <remarks>This method is invoked right after the value of <see cref="EphemerisElongation"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnEphemerisElongationChanged(string? oldValue, string newValue);
-        /// <summary>Executes the logic for when <see cref="EphemerisSunPa"/> is changing.</summary>
+        /// <summary>Executes the logic for when <see cref="EphemerisPaOfSun"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="EphemerisSunPa"/> is changed.</remarks>
+        /// <remarks>This method is invoked right before the value of <see cref="EphemerisPaOfSun"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnEphemerisSunPaChanging(string value);
-        /// <summary>Executes the logic for when <see cref="EphemerisSunPa"/> is changing.</summary>
+        partial void OnEphemerisPaOfSunChanging(string value);
+        /// <summary>Executes the logic for when <see cref="EphemerisPaOfSun"/> is changing.</summary>
         /// <param name="oldValue">The previous property value that is being replaced.</param>
         /// <param name="newValue">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="EphemerisSunPa"/> is changed.</remarks>
+        /// <remarks>This method is invoked right before the value of <see cref="EphemerisPaOfSun"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnEphemerisSunPaChanging(string? oldValue, string newValue);
-        /// <summary>Executes the logic for when <see cref="EphemerisSunPa"/> just changed.</summary>
+        partial void OnEphemerisPaOfSunChanging(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="EphemerisPaOfSun"/> just changed.</summary>
         /// <param name="value">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="EphemerisSunPa"/> is changed.</remarks>
+        /// <remarks>This method is invoked right after the value of <see cref="EphemerisPaOfSun"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnEphemerisSunPaChanged(string value);
-        /// <summary>Executes the logic for when <see cref="EphemerisSunPa"/> just changed.</summary>
+        partial void OnEphemerisPaOfSunChanged(string value);
+        /// <summary>Executes the logic for when <see cref="EphemerisPaOfSun"/> just changed.</summary>
         /// <param name="oldValue">The previous property value that was replaced.</param>
         /// <param name="newValue">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="EphemerisSunPa"/> is changed.</remarks>
+        /// <remarks>This method is invoked right after the value of <see cref="EphemerisPaOfSun"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnEphemerisSunPaChanged(string? oldValue, string newValue);
+        partial void OnEphemerisPaOfSunChanged(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="EphemerisPsAng"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="EphemerisPsAng"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisPsAngChanging(string value);
+        /// <summary>Executes the logic for when <see cref="EphemerisPsAng"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="EphemerisPsAng"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisPsAngChanging(string? oldValue, string newValue);
+        /// <summary>Executes the logic for when <see cref="EphemerisPsAng"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="EphemerisPsAng"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisPsAngChanged(string value);
+        /// <summary>Executes the logic for when <see cref="EphemerisPsAng"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="EphemerisPsAng"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnEphemerisPsAngChanged(string? oldValue, string newValue);
         /// <summary>Executes the logic for when <see cref="PosX"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="PosX"/> is changed.</remarks>

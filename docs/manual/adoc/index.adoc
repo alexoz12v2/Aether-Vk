@@ -2,7 +2,7 @@
 :toc: left
 :toclevels: 3
 :imagesdir: ..
-:screenshots: AetherVk 1.0.0+7afdd82740d13078d11a0690176a766d87f21045, captured 2026-11-02, en-US, light theme
+:screenshots: AetherVk 1.0.0+8a88e07fd9c4481145935912aa313ec21ccfe252, captured 2026-11-04, en-US, light theme
 
 Screenshots: {screenshots}.
 

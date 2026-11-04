@@ -46,7 +46,7 @@ namespace AetherVk.Logic.SaveFile
 
         private static global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[] JetDtoPropInit(global::System.Text.Json.JsonSerializerOptions options)
         {
-            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[18];
+            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[24];
 
             var info0 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<float>
             {
@@ -390,7 +390,127 @@ namespace AetherVk.Logic.SaveFile
             
             properties[16] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<float?>(options, info16);
 
-            var info17 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<float?>
+            var info17 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<bool?>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.JetDto),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.JetDto)obj).InsolationWeighted,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.JetDto)obj).InsolationWeighted = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "InsolationWeighted",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.JetDto).GetProperty("InsolationWeighted", InstanceMemberBindingFlags, null, typeof(bool?), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[17] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<bool?>(options, info17);
+
+            var info18 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<bool?>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.JetDto),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.JetDto)obj).OrbitSizeLaw,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.JetDto)obj).OrbitSizeLaw = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "OrbitSizeLaw",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.JetDto).GetProperty("OrbitSizeLaw", InstanceMemberBindingFlags, null, typeof(bool?), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[18] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<bool?>(options, info18);
+
+            var info19 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<bool?>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.JetDto),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.JetDto)obj).SpkBeforeStart,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.JetDto)obj).SpkBeforeStart = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "SpkBeforeStart",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.JetDto).GetProperty("SpkBeforeStart", InstanceMemberBindingFlags, null, typeof(bool?), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[19] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<bool?>(options, info19);
+
+            var info20 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<float?>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.JetDto),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.JetDto)obj).LifetimeDays,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.JetDto)obj).LifetimeDays = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "LifetimeDays",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.JetDto).GetProperty("LifetimeDays", InstanceMemberBindingFlags, null, typeof(float?), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[20] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<float?>(options, info20);
+
+            var info21 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<float[]>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.JetDto),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.JetDto)obj).SizeQTableDays,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.JetDto)obj).SizeQTableDays = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "SizeQTableDays",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.JetDto).GetProperty("SizeQTableDays", InstanceMemberBindingFlags, null, typeof(float[]), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[21] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<float[]>(options, info21);
+
+            var info22 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<float[]>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.JetDto),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.JetDto)obj).SizeQTableQ,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.JetDto)obj).SizeQTableQ = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "SizeQTableQ",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.JetDto).GetProperty("SizeQTableQ", InstanceMemberBindingFlags, null, typeof(float[]), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[22] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<float[]>(options, info22);
+
+            var info23 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<float?>
             {
                 IsProperty = true,
                 IsPublic = true,
@@ -408,7 +528,7 @@ namespace AetherVk.Logic.SaveFile
                 AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.JetDto).GetProperty("Afrho0Cm", InstanceMemberBindingFlags, null, typeof(float?), global::System.Array.Empty<global::System.Type>(), null),
             };
             
-            properties[17] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<float?>(options, info17);
+            properties[23] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<float?>(options, info23);
 
             return properties;
         }
@@ -452,6 +572,18 @@ namespace AetherVk.Logic.SaveFile
             global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.SaveFile.JetDto)value).MaxDiameterUm, NullableSingle);
             writer.WritePropertyName(PropName_dust_rate_1au_kgs);
             global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.SaveFile.JetDto)value).DustRate1AuKgs, NullableSingle);
+            writer.WritePropertyName(PropName_insolation_weighted);
+            global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.SaveFile.JetDto)value).InsolationWeighted, NullableBoolean);
+            writer.WritePropertyName(PropName_orbit_size_law);
+            global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.SaveFile.JetDto)value).OrbitSizeLaw, NullableBoolean);
+            writer.WritePropertyName(PropName_spk_before_start);
+            global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.SaveFile.JetDto)value).SpkBeforeStart, NullableBoolean);
+            writer.WritePropertyName(PropName_lifetime_days);
+            global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.SaveFile.JetDto)value).LifetimeDays, NullableSingle);
+            writer.WritePropertyName(PropName_size_q_table_days);
+            SingleArraySerializeHandler(writer, ((global::AetherVk.Logic.SaveFile.JetDto)value).SizeQTableDays);
+            writer.WritePropertyName(PropName_size_q_table_q);
+            SingleArraySerializeHandler(writer, ((global::AetherVk.Logic.SaveFile.JetDto)value).SizeQTableQ);
             float? __value_Afrho0Cm = ((global::AetherVk.Logic.SaveFile.JetDto)value).Afrho0Cm;
             if (__value_Afrho0Cm is not null)
             {
