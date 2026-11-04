@@ -15634,3 +15634,32 @@ fn insolation_last_sample_stays_on_the_last_lit_arc() {
   }
 }
 
+
+/// An orbit-law `q` within `SIZE_Q_SNAP` of 1, 3 or 4 is snapped to the integer, so the power
+/// integrals take their exact log forms on every mirror (an interpolated q(t) table crossing 3
+/// lands an ulp off it, where the f32 `(b^ε − a^ε)/ε` loses most of its digits); anything else,
+/// and the q = 3.5 law, is untouched.
+#[test]
+fn size_law_q_near_a_log_case_snaps_to_it() {
+  for (q, want) in [
+    (3.0 + 2.4e-7, 3.0),
+    (3.0 - 9.0e-4, 3.0),
+    (4.0 + 5.0e-4, 4.0),
+    (1.0 - 1.0e-6, 1.0),
+    (3.0 + 2.0e-3, 3.0 + 2.0e-3),
+    (2.1, 2.1),
+    (3.5, 3.5),
+  ] {
+    let d = SizeDistribution::from_diameter_um_range_q(100.0, 10.0, q);
+    assert_eq!(d.q, want, "q {q}");
+  }
+  // snapped to 3: the batch's exponent is exactly 4 − 3 = 1, so the record's law word carries 3
+  let d = SizeDistribution::from_diameter_um_range_q(100.0, 10.0, 3.0 + 2.4e-7);
+  let (e, _) = d.mass_weight_params();
+  assert_eq!(e, 1.0);
+  assert_eq!(size_law_q_of(size_law_word(50.0, [5.0, 500.0, e as f32, 0.0])), Some(3.0));
+  // the f64 mean ⟨1/s⟩ at the snapped q is the exact log-form value
+  let m = size_mean_inv_s_um([5.0, 500.0, 1.0, 0.0]) as f64;
+  let exact = (500.0f64 - 5.0) / (500.0f64 / 5.0).ln();
+  assert!((m / exact - 1.0).abs() < 1e-6, "{m} vs {exact}");
+}

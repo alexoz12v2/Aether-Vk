@@ -1621,6 +1621,43 @@ fn speck_sizes_follow_the_size_law_and_the_fade_follows_the_tier() {
   assert!((age_fade(99.0, 100.0, 1.0) - 0.1).abs() < 1e-5);
 }
 
+/// A cluster whose moments carry the orbit size law (`DustMoments::size_law`, the q(t) table's
+/// value at its emission) draws its speck sizes with that law, not the system `q` of the push
+/// constants: the mean drawn cross-section is the cluster law's `⟨πs²⟩_j` (what the count divides
+/// by) within 1 %, in the big-grain bin where the two laws differ by 17 % (q 2.0 vs 3.5, F = 10).
+#[test]
+fn speck_sizes_take_the_cluster_size_law() {
+  let mut m = DustMoments::default();
+  m.mean_flux = [0.0, 0.0, 0.0, 1.0];
+  m.cov_a = [1.0, 0.0, 0.0, 1.0];
+  m.cov_b_age_id = [0.0, 1.0, 100.0, 0.0];
+  let f = SIZE_RANGE as f32;
+  for j in 0..=SIZE_BINS as usize {
+    m.edges[j] = [100.0 * j as f32, 0.0, 0.0, 0.0];
+  }
+  m.edges[0][3] = 1.0 / f.sqrt();
+  m.edges[SIZE_BINS as usize][3] = f.sqrt();
+  let (q_law, q_sys) = (2.0f32, 3.5f32);
+  m.set_size_law(Some(q_law));
+  assert_eq!(m.size_law(), Some(q_law));
+  let x_law = bin_mean_cross_section_f32(50.0, q_law, f, 0) as f64;
+  let x_sys = bin_mean_cross_section_f32(50.0, q_sys, f, 0) as f64;
+  assert!((x_sys / x_law - 1.0).abs() > 0.1, "the laws differ: {x_sys} vs {x_law}");
+  let sc = SpeckCluster::new(&m, 0, [0.0; 3], 1, 50.0, q_sys, 1.0e4, 0.0);
+  let n = 100_000u32;
+  let mut sum = 0.0f64;
+  for i in 0..n {
+    let s = sc.speck_size_um(dust_hash32(i.wrapping_mul(2_654_435_761))) as f64;
+    sum += core::f64::consts::PI * (s * 1e-6).powi(2);
+  }
+  let mean = sum / n as f64;
+  std::println!(
+    "[specks] cluster law q {q_law} under system q {q_sys}: mean drawn πs² {mean:.4e}, law {x_law:.4e} ({:+.2} %), system {x_sys:.4e}",
+    100.0 * (mean / x_law - 1.0)
+  );
+  assert!((mean / x_law - 1.0).abs() < 0.01, "mean πs² {mean} vs the law's {x_law}");
+}
+
 /// The speck offsets are summed in df64: a cluster 6·10⁵ m from the local origin and 10⁵ m
 /// wide, the eye 1σ off its mean, a 6 m shell. Every speck's `dp = (μ − eye) + L ξ` is the f64
 /// value of the same f32 inputs (products of two f32 are exact in f64) within 2⁻²² of `|dp|` plus

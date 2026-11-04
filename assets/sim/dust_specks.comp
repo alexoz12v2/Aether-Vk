@@ -1668,7 +1668,12 @@ void main() {
         if (hasPlane && dot(dp, V.fwd) <= 0.0) break;
         uint hs = leaf_hs(at, leaf_k());
         vec2 sf = unpackHalf2x16(pc.sizeFade);
-        float s = dust_specks_size_um(hs, sf.x, wr_f(DUST_WR_F0), wr_f(DUST_WR_F1), dust_specks_q(pc.color)) * 1e-6;
+        // the sizes take the law the count took (dust_specks_q_of: the cluster's q(t) when its
+        // moments carry one, else the system q), so the drawn cross-sections average to the count's
+        // <pi s^2>_j (dust::specks::SpeckCluster::new)
+        groupMemoryBarrier();
+        float qSize = dust_specks_q_of(wr_vu(DUST_WR_ID), pc.color);
+        float s = dust_specks_size_um(hs, sf.x, wr_f(DUST_WR_F0), wr_f(DUST_WR_F1), qSize) * 1e-6;
         float xsec = DUST_PI_F32 * s * s * wr_f(DUST_WR_FADE);
         // the budget
         uint drawn = atomicAdd(pc.pyramid.v[DUST_PYR_SPECKS], 1u);
