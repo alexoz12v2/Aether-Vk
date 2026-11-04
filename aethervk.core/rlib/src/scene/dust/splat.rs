@@ -1867,8 +1867,8 @@ pub fn bin_flux_share(m: &DustMoments, b: usize) -> f32 {
       q,
       m.edge_factor(b),
       m.edge_factor(b + g),
-      m.edge_factor(0),
-      m.edge_factor(SIZE_BINS as usize),
+      m.edges[0][3], // the polyline ends as the GPU reads them (dust_bin_xsec_share)
+      m.edges[SIZE_BINS as usize][3],
       g,
     ),
   }

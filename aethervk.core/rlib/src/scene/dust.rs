@@ -718,6 +718,25 @@ pub const SIZE_POWER_Q: f64 = 3.5;
 pub const SIZE_Q_MIN: f64 = 0.0;
 pub const SIZE_Q_MAX: f64 = 6.0;
 
+/// How close to 1, 3 or 4 an orbit-law `q` is snapped to the integer ([`snap_size_q`])
+pub const SIZE_Q_SNAP: f64 = 1.0e-3;
+
+/// `q` snapped to 1, 3 or 4 when within [`SIZE_Q_SNAP`] of it. The power integrals of the size
+/// law (`∫ s^k ds` with `k + 1` one of `3 − q`, `4 − q`, `1 − q`; `bin_xsec_share`'s `p = 2q − 6`)
+/// take their exact log forms at those integers, but evaluate `(b^ε − a^ε)/ε` in f32 on the GPU
+/// for any `ε ≠ 0`: within ~1e-5 of the integer that loses most of its digits (10 % at one f32
+/// ulp from q = 3 over a 100× size range, and the f64 host mirror disagrees). An interpolated
+/// q(t) table crossing 3 or 4 lands there; snapping moves `q` by at most 1e-3 and routes those
+/// windows through the exact branch on every mirror (the batch carries `4 − q`, exact for these).
+pub fn snap_size_q(q: f64) -> f64 {
+  for k in [1.0, 3.0, 4.0] {
+    if (q - k).abs() < SIZE_Q_SNAP {
+      return k;
+    }
+  }
+  q
+}
+
 /// The cluster record's size-law word (`DustCluster::eject.w`, never read as `s_ref`): the
 /// reference radius `s_ref` (µm, > 0) when the batch's law is the q = 3.5 one (`size_params.z =
 /// 4 − q == 0.5` bit for bit), else `q` with its sign bit set (`q = 0` is `−0.0`: the bit, not the
@@ -2116,7 +2135,7 @@ impl SizeDistribution {
       SIZE_RANGE_FACTOR
     };
     let q = if q.is_finite() && (SIZE_Q_MIN..=SIZE_Q_MAX).contains(&q) {
-      q
+      snap_size_q(q)
     } else {
       SIZE_POWER_Q
     };
