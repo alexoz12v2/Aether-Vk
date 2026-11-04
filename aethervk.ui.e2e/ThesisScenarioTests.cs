@@ -774,7 +774,12 @@ public sealed class ThesisScenarioTests(ITestOutputHelper output)
 
   private static int? LastBias(string log, string kind)
   {
-    var re = new System.Text.RegularExpressions.Regex($@"\[Dust {kind}\].*bias (\d+) for the next frames");
+    // a static view refines past the budget's bias ("[Dust refine] … EWA bias N"): that is the
+    // bias it is left at, so a refine line counts too (a FITS frame's lone EWA readback between
+    // the budget and its refine is no measure of the detail the session settled at)
+    var re = new System.Text.RegularExpressions.Regex(kind == "EWA"
+      ? @"\[Dust (?:EWA\].*|refine\].*EWA )bias (\d+) for the next frames"
+      : $@"\[Dust {kind}\].*bias (\d+) for the next frames");
     int? last = null;
     using var f = new FileStream(log, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
     using var r = new StreamReader(f);

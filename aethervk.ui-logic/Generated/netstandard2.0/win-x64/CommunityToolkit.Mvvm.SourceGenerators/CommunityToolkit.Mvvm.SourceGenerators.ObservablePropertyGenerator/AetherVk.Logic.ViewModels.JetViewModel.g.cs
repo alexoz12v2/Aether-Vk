@@ -313,10 +313,12 @@ namespace AetherVk.Logic.ViewModels
                     OnSizeRangeChanging(value);
                     OnSizeRangeChanging(default, value);
                     OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.SizeRange);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.BetaRangeText);
                     _sizeRange = value;
                     OnSizeRangeChanged(value);
                     OnSizeRangeChanged(default, value);
                     OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.SizeRange);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.BetaRangeText);
                 }
             }
         }
@@ -342,6 +344,92 @@ namespace AetherVk.Logic.ViewModels
             }
         }
 
+        /// <inheritdoc cref="_insolationWeighted"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public bool InsolationWeighted
+        {
+            get => _insolationWeighted;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_insolationWeighted, value))
+                {
+                    OnInsolationWeightedChanging(value);
+                    OnInsolationWeightedChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.InsolationWeighted);
+                    _insolationWeighted = value;
+                    OnInsolationWeightedChanged(value);
+                    OnInsolationWeightedChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.InsolationWeighted);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_orbitSizeLaw"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public bool OrbitSizeLaw
+        {
+            get => _orbitSizeLaw;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_orbitSizeLaw, value))
+                {
+                    OnOrbitSizeLawChanging(value);
+                    OnOrbitSizeLawChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.OrbitSizeLaw);
+                    _orbitSizeLaw = value;
+                    OnOrbitSizeLawChanged(value);
+                    OnOrbitSizeLawChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.OrbitSizeLaw);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_spkBeforeStart"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public bool SpkBeforeStart
+        {
+            get => _spkBeforeStart;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_spkBeforeStart, value))
+                {
+                    OnSpkBeforeStartChanging(value);
+                    OnSpkBeforeStartChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.SpkBeforeStart);
+                    _spkBeforeStart = value;
+                    OnSpkBeforeStartChanged(value);
+                    OnSpkBeforeStartChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.SpkBeforeStart);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_lifetimeDays"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public float LifetimeDays
+        {
+            get => _lifetimeDays;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<float>.Default.Equals(_lifetimeDays, value))
+                {
+                    OnLifetimeDaysChanging(value);
+                    OnLifetimeDaysChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.LifetimeDays);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.EmissionStepsText);
+                    _lifetimeDays = value;
+                    OnLifetimeDaysChanged(value);
+                    OnLifetimeDaysChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.LifetimeDays);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.EmissionStepsText);
+                }
+            }
+        }
+
         /// <inheritdoc cref="_beta"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
@@ -355,10 +443,12 @@ namespace AetherVk.Logic.ViewModels
                     OnBetaChanging(value);
                     OnBetaChanging(default, value);
                     OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.Beta);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.BetaRangeText);
                     _beta = value;
                     OnBetaChanged(value);
                     OnBetaChanged(default, value);
                     OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.Beta);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.BetaRangeText);
                 }
             }
         }
@@ -736,6 +826,94 @@ namespace AetherVk.Logic.ViewModels
         /// <remarks>This method is invoked right after the value of <see cref="DustRate1AuKgs"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnDustRate1AuKgsChanged(float oldValue, float newValue);
+        /// <summary>Executes the logic for when <see cref="InsolationWeighted"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="InsolationWeighted"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnInsolationWeightedChanging(bool value);
+        /// <summary>Executes the logic for when <see cref="InsolationWeighted"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="InsolationWeighted"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnInsolationWeightedChanging(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="InsolationWeighted"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="InsolationWeighted"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnInsolationWeightedChanged(bool value);
+        /// <summary>Executes the logic for when <see cref="InsolationWeighted"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="InsolationWeighted"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnInsolationWeightedChanged(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="OrbitSizeLaw"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="OrbitSizeLaw"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnOrbitSizeLawChanging(bool value);
+        /// <summary>Executes the logic for when <see cref="OrbitSizeLaw"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="OrbitSizeLaw"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnOrbitSizeLawChanging(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="OrbitSizeLaw"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="OrbitSizeLaw"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnOrbitSizeLawChanged(bool value);
+        /// <summary>Executes the logic for when <see cref="OrbitSizeLaw"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="OrbitSizeLaw"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnOrbitSizeLawChanged(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="SpkBeforeStart"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="SpkBeforeStart"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnSpkBeforeStartChanging(bool value);
+        /// <summary>Executes the logic for when <see cref="SpkBeforeStart"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="SpkBeforeStart"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnSpkBeforeStartChanging(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="SpkBeforeStart"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="SpkBeforeStart"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnSpkBeforeStartChanged(bool value);
+        /// <summary>Executes the logic for when <see cref="SpkBeforeStart"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="SpkBeforeStart"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnSpkBeforeStartChanged(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="LifetimeDays"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="LifetimeDays"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnLifetimeDaysChanging(float value);
+        /// <summary>Executes the logic for when <see cref="LifetimeDays"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="LifetimeDays"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnLifetimeDaysChanging(float oldValue, float newValue);
+        /// <summary>Executes the logic for when <see cref="LifetimeDays"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="LifetimeDays"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnLifetimeDaysChanged(float value);
+        /// <summary>Executes the logic for when <see cref="LifetimeDays"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="LifetimeDays"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnLifetimeDaysChanged(float oldValue, float newValue);
         /// <summary>Executes the logic for when <see cref="Beta"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="Beta"/> is changed.</remarks>

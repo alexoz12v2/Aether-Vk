@@ -23,6 +23,10 @@ namespace AetherVk.Logic.SaveFile
             {
                 return Create_Boolean(options);
             }
+            if (type == typeof(bool?))
+            {
+                return Create_NullableBoolean(options);
+            }
             if (type == typeof(double))
             {
                 return Create_Double(options);

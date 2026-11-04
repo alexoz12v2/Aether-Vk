@@ -526,6 +526,8 @@ public sealed class SaveFileService
       if (!restored && index.Timeline.CurrentEpoch is { } epoch)
         sought = await _host.SeekAsync(epoch);
     }
+    // the app log's record of how the scene came back (the e2e reads it: a compatible save restores, it does not seek)
+    Console.WriteLine($"[Open] state restored: {restored}, sought: {sought}");
 
     _host.ApplyViewports(index.Viewports);
     _host.ApplyBillboards([.. index.Billboards.Select(b => Remap(b, byKey))]);

@@ -155,27 +155,6 @@ namespace AetherVk.Logic.ViewModels
             }
         }
 
-        /// <inheritdoc cref="_sizeDistributionPlot"/>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-        public global::AetherVk.Logic.Utils.CurvePlotModel? SizeDistributionPlot
-        {
-            get => _sizeDistributionPlot;
-            set
-            {
-                if (!global::System.Collections.Generic.EqualityComparer<global::AetherVk.Logic.Utils.CurvePlotModel?>.Default.Equals(_sizeDistributionPlot, value))
-                {
-                    OnSizeDistributionPlotChanging(value);
-                    OnSizeDistributionPlotChanging(default, value);
-                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.SizeDistributionPlot);
-                    _sizeDistributionPlot = value;
-                    OnSizeDistributionPlotChanged(value);
-                    OnSizeDistributionPlotChanged(default, value);
-                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.SizeDistributionPlot);
-                }
-            }
-        }
-
         /// <inheritdoc cref="_jetDustRatePlot"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
@@ -214,6 +193,27 @@ namespace AetherVk.Logic.ViewModels
                     OnJetSizeDistributionPlotChanged(value);
                     OnJetSizeDistributionPlotChanged(default, value);
                     OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.JetSizeDistributionPlot);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_jetSizeQPlot"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public global::AetherVk.Logic.Utils.CurvePlotModel? JetSizeQPlot
+        {
+            get => _jetSizeQPlot;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<global::AetherVk.Logic.Utils.CurvePlotModel?>.Default.Equals(_jetSizeQPlot, value))
+                {
+                    OnJetSizeQPlotChanging(value);
+                    OnJetSizeQPlotChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.JetSizeQPlot);
+                    _jetSizeQPlot = value;
+                    OnJetSizeQPlotChanged(value);
+                    OnJetSizeQPlotChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.JetSizeQPlot);
                 }
             }
         }
@@ -689,28 +689,6 @@ namespace AetherVk.Logic.ViewModels
         /// <remarks>This method is invoked right after the value of <see cref="DustRatePlot"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnDustRatePlotChanged(global::AetherVk.Logic.Utils.CurvePlotModel? oldValue, global::AetherVk.Logic.Utils.CurvePlotModel? newValue);
-        /// <summary>Executes the logic for when <see cref="SizeDistributionPlot"/> is changing.</summary>
-        /// <param name="value">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="SizeDistributionPlot"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnSizeDistributionPlotChanging(global::AetherVk.Logic.Utils.CurvePlotModel? value);
-        /// <summary>Executes the logic for when <see cref="SizeDistributionPlot"/> is changing.</summary>
-        /// <param name="oldValue">The previous property value that is being replaced.</param>
-        /// <param name="newValue">The new property value being set.</param>
-        /// <remarks>This method is invoked right before the value of <see cref="SizeDistributionPlot"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnSizeDistributionPlotChanging(global::AetherVk.Logic.Utils.CurvePlotModel? oldValue, global::AetherVk.Logic.Utils.CurvePlotModel? newValue);
-        /// <summary>Executes the logic for when <see cref="SizeDistributionPlot"/> just changed.</summary>
-        /// <param name="value">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="SizeDistributionPlot"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnSizeDistributionPlotChanged(global::AetherVk.Logic.Utils.CurvePlotModel? value);
-        /// <summary>Executes the logic for when <see cref="SizeDistributionPlot"/> just changed.</summary>
-        /// <param name="oldValue">The previous property value that was replaced.</param>
-        /// <param name="newValue">The new property value that was set.</param>
-        /// <remarks>This method is invoked right after the value of <see cref="SizeDistributionPlot"/> is changed.</remarks>
-        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
-        partial void OnSizeDistributionPlotChanged(global::AetherVk.Logic.Utils.CurvePlotModel? oldValue, global::AetherVk.Logic.Utils.CurvePlotModel? newValue);
         /// <summary>Executes the logic for when <see cref="JetDustRatePlot"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="JetDustRatePlot"/> is changed.</remarks>
@@ -755,6 +733,28 @@ namespace AetherVk.Logic.ViewModels
         /// <remarks>This method is invoked right after the value of <see cref="JetSizeDistributionPlot"/> is changed.</remarks>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         partial void OnJetSizeDistributionPlotChanged(global::AetherVk.Logic.Utils.CurvePlotModel? oldValue, global::AetherVk.Logic.Utils.CurvePlotModel? newValue);
+        /// <summary>Executes the logic for when <see cref="JetSizeQPlot"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="JetSizeQPlot"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnJetSizeQPlotChanging(global::AetherVk.Logic.Utils.CurvePlotModel? value);
+        /// <summary>Executes the logic for when <see cref="JetSizeQPlot"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="JetSizeQPlot"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnJetSizeQPlotChanging(global::AetherVk.Logic.Utils.CurvePlotModel? oldValue, global::AetherVk.Logic.Utils.CurvePlotModel? newValue);
+        /// <summary>Executes the logic for when <see cref="JetSizeQPlot"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="JetSizeQPlot"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnJetSizeQPlotChanged(global::AetherVk.Logic.Utils.CurvePlotModel? value);
+        /// <summary>Executes the logic for when <see cref="JetSizeQPlot"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="JetSizeQPlot"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnJetSizeQPlotChanged(global::AetherVk.Logic.Utils.CurvePlotModel? oldValue, global::AetherVk.Logic.Utils.CurvePlotModel? newValue);
         /// <summary>Executes the logic for when <see cref="SizeRangeNote"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="SizeRangeNote"/> is changed.</remarks>

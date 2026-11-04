@@ -14,7 +14,10 @@ public partial interface ICameraMatrixDebugViewModel
     string StrDelta { get; set; }
     string StrPhase { get; set; }
     string StrElongation { get; set; }
-    string StrSunPa { get; set; }
+    string StrPaOfSun { get; set; }
+    string StrPaOfSunTip { get; set; }
+    string StrPsAng { get; set; }
+    string StrPsAngTip { get; set; }
     string StrDebug { get; set; }
     string StrViewportRect { get; set; }
 }

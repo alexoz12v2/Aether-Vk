@@ -73,6 +73,12 @@ namespace AetherVk.Logic.SaveFile
         private static readonly global::System.Text.Json.JsonEncodedText PropName_min_diameter_um = global::System.Text.Json.JsonEncodedText.Encode("min_diameter_um");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_max_diameter_um = global::System.Text.Json.JsonEncodedText.Encode("max_diameter_um");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_dust_rate_1au_kgs = global::System.Text.Json.JsonEncodedText.Encode("dust_rate_1au_kgs");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_insolation_weighted = global::System.Text.Json.JsonEncodedText.Encode("insolation_weighted");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_orbit_size_law = global::System.Text.Json.JsonEncodedText.Encode("orbit_size_law");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_spk_before_start = global::System.Text.Json.JsonEncodedText.Encode("spk_before_start");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_lifetime_days = global::System.Text.Json.JsonEncodedText.Encode("lifetime_days");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_size_q_table_days = global::System.Text.Json.JsonEncodedText.Encode("size_q_table_days");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_size_q_table_q = global::System.Text.Json.JsonEncodedText.Encode("size_q_table_q");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_afrho0_cm = global::System.Text.Json.JsonEncodedText.Encode("afrho0_cm");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_dust_rate_power = global::System.Text.Json.JsonEncodedText.Encode("dust_rate_power");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_dust_rate_cutoff_au = global::System.Text.Json.JsonEncodedText.Encode("dust_rate_cutoff_au");

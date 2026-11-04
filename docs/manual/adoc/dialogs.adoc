@@ -11,6 +11,16 @@ The splash window is shown while the application starts and loads.
 
 image::img/splash--launch--light--tagged.png[Splash window,width=500,pdfwidth=85mm]
 
+[[help-flyout]]
+=== Help flyout
+Location:: Help flyout
+Shown:: help flyout open, committed comet
+
+.Help flyout
+Many settings have a small ? button. Pressing it opens a flyout with the full explanation of the setting.
+
+image::img/help-flyout--flyout--light--tagged.png[Help flyout,width=392,pdfwidth=66mm]
+
 [[combo-dropdown]]
 === Drop-down list
 Location:: Drop-down list

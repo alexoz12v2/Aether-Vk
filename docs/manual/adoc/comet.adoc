@@ -134,7 +134,7 @@ image::img/comet-simulated-range--committed--light--tagged.png[Comet › Simulat
 ==== Properties
 
 Dust lead time::
-  Days the jets start emitting before the start epoch, from 0 to 30 (30 = one dust lifetime, the default).
+  Days the jets start emitting before the start epoch, from 0 to the longest dust lifetime among the jets (30 days by default, one lifetime).
 
   With 30 the tail is already fully formed when the timeline starts; with 0 the jets switch on at the start and the tail grows from nothing.
 
@@ -233,7 +233,7 @@ image::img/comet-simulated-range--locked--light--tagged.png[Comet › Simulated 
 ==== Properties
 
 Dust lead time::
-  Days the jets start emitting before the start epoch, from 0 to 30 (30 = one dust lifetime, the default).
+  Days the jets start emitting before the start epoch, from 0 to the longest dust lifetime among the jets (30 days by default, one lifetime).
 
   With 30 the tail is already fully formed when the timeline starts; with 0 the jets switch on at the start and the tail grows from nothing.
 
