@@ -2826,6 +2826,84 @@ fn test_jet_added_while_paused_builds_its_dust_history() {
   ctx.threads.logic_thread.tx().try_send(LogicCommand::Shutdown).unwrap();
 }
 
+/// A jet edited while paused re-emits its dust history from the paused logic loop, without Play
+/// or a seek: the scene seeked to start + 5 d (paused, the history built by the seek), then the
+/// jet's lifetime set to 1 d as `avkSimulationContext_modifyParticleSystem` sets it (the record's
+/// `ttl_days`, the component's `ttl_us`, a re-emit request). The loop alone rebuilds it: every
+/// tier's band becomes {0, 1, 8}–{1, 8, 64} d, the history is complete and caught up, and the
+/// clock did not move. Used to keep the 30 d history until Play: the paused loop builds only
+/// while a system is building, and a pending re-emit did not count. Needs the 67P SPK and a GPU.
+#[test]
+fn test_jet_edited_while_paused_reemits_its_dust_history() {
+  use crate::scene::particles::ParticleSystemComponent;
+  use core::sync::atomic::Ordering;
+  let Some((ctx, scene_id, start)) = ignition_scene(2.0) else {
+    return;
+  };
+  let scene_arc = ctx.get_scene(scene_id).unwrap();
+  let busy = || scene_arc.read().active_physics_task.load(Ordering::Acquire);
+  let running = || scene_arc.read().simulation_running.load(Ordering::Acquire);
+  let sim_s = || scene_arc.read().scene.sim_time_s();
+  let any_building = || {
+    let g = scene_arc.read();
+    utils::any_dust_building(&g.scene)
+  };
+  let wait_built = |what: &str| {
+    let t0 = std::time::Instant::now();
+    loop {
+      let tiers = ctx.dust_stats(scene_id);
+      if !busy() && !any_building() && !tiers.is_empty() && tiers.iter().all(|t| t.caught_up) {
+        return tiers;
+      }
+      assert!(t0.elapsed().as_secs_f64() < 120.0, "{what}: dust never built: {tiers:?}");
+      std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+  };
+  let bands_days = |tiers: &[crate::scene::dust::DustTierStats]| -> alloc::vec::Vec<(f64, f64)> {
+    tiers.iter().map(|t| (t.band_min_s / 86_400.0, t.band_max_s / 86_400.0)).collect()
+  };
+
+  assert!(ctx.seek_epoch_sync(scene_id, start + Duration::from_days(5.0)), "seek +5 d");
+  let before = wait_built("after the seek");
+  assert!(before.iter().any(|t| t.live_clusters > 0), "the jet's dust: {before:?}");
+  let ttl0 = before[0].band_max_s / 86_400.0;
+  assert!(!running(), "a seek leaves the clock paused");
+  let at_seek_s = sim_s();
+
+  // the lifetime edit, as the FFI modify applies it
+  let mut jets = alloc::vec::Vec::new();
+  scene_arc.read().scene.query1(|id, _: &ParticleSystemComponent| jets.push(id));
+  assert!(!jets.is_empty(), "no particle system");
+  for &id in &jets {
+    let g = scene_arc.write();
+    g.scene
+      .with_component_mut(id, |p: &mut ParticleSystemComponent| {
+        p.emission_params.ttl_days = 1.0;
+        p.ttl_us = p.emission_params.ttl_us();
+      })
+      .expect("the particle system");
+    g.scene
+      .with_component(id, |p: &ParticleSystemComponent| p.dust.lock().request_reemit())
+      .expect("the particle system");
+  }
+
+  let after = wait_built("the jet edited while paused");
+  println!("lifetime {ttl0} d -> 1 d, paused: {:?}", bands_days(&after));
+  let want = [(0.0, 1.0), (1.0, 8.0), (8.0, 64.0)];
+  assert_eq!(after.len(), want.len());
+  for (t, (lo, hi)) in after.iter().zip(want) {
+    assert!(
+      (t.band_min_s - lo * 86_400.0).abs() <= 1e-6 && (t.band_max_s - hi * 86_400.0).abs() <= 1e-6,
+      "a tier still has its {ttl0} d band: {:?}",
+      bands_days(&after)
+    );
+  }
+  assert!(after[0].live_clusters > 0, "the re-emitted history is empty: {after:?}");
+  assert!(!running(), "the loop rebuilt it without Play");
+  assert_eq!(sim_s(), at_seek_s, "the paused clock did not move");
+  ctx.threads.logic_thread.tx().try_send(LogicCommand::Shutdown).unwrap();
+}
+
 /// A jet ignited at `start + 2 d` through the real seek path (`seek_epoch_sync` →
 /// `apply_seek` → `fill_dust_history`): at `start + 5 d` no tier holds dust older than 3 d (plus
 /// one emission window), at `start + 1 d` every tier is empty and caught up, and seeking forward

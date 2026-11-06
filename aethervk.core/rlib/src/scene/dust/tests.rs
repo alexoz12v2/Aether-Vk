@@ -3142,6 +3142,35 @@ fn reemit_rebuilds_the_history_with_the_new_spin() {
   }
 }
 
+/// A pending re-emit counts as building: the paused logic tick (`dust_build_key`) and the seek's
+/// `fill_dust_history` build only while a system is building, so without it a jet edited while
+/// paused (another lifetime, velocity, q…) kept its old dust until Play. The flag is consumed by
+/// the next tick, and the refilled history stops building as a fresh one does.
+#[test]
+fn a_pending_reemit_keeps_the_system_building() {
+  let cfg = test_cfg(1.5e-3, 86400.0);
+  let fill = |sys: &mut DustSystemState, t: f64| {
+    for i in 0..MAX_SEEK_PASSES {
+      sys.tick(t, &orbit_jet, &|_| cfg);
+      sys.mark_submitted(1000 + i as u64);
+    }
+  };
+  let t = 3.0 * 86400.0;
+  let mut sys = DustSystemState::with_tiers(RING_CAPACITY_LOW, 3);
+  fill(&mut sys, t);
+  assert!(!sys.building(), "a filled history is not building");
+  sys.request_reemit();
+  assert!(sys.building(), "a pending re-emit is building");
+  fill(&mut sys, t);
+  assert!(!sys.reemit);
+  assert!(!sys.building(), "the re-emitted history is complete");
+  let mut fresh = DustSystemState::with_tiers(RING_CAPACITY_LOW, 3);
+  fill(&mut fresh, t);
+  for (a, b) in sys.tiers.iter().zip(&fresh.tiers) {
+    assert_eq!(a.ring.live(), b.ring.live(), "the re-emitted history is a fresh fill");
+  }
+}
+
 /// The streams tile the jet cone: the gaussian lateral dispersions of the S streams sum to a
 /// uniform density over the cone instead of S islands (`detached.rdc`: 64 blobs thousands of km
 /// apart at 25 days). Directions are rebuilt from the emitted state: v0 minus the comet's velocity

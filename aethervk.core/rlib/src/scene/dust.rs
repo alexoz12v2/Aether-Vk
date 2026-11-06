@@ -3492,16 +3492,20 @@ impl DustSystemState {
     self.complete = false;
   }
 
-  /// The history is not complete yet: a tier has due windows not emitted (`next_window <
-  /// due_window`, "building" in [`Self::stats`]) or a batch awaiting re-emission
+  /// The history is not complete yet: a re-emit is pending ([`Self::request_reemit`]: a jet
+  /// parameter, the lifetime or the spin changed), or a tier has due windows not emitted
+  /// (`next_window < due_window`, "building" in [`Self::stats`]) or a batch awaiting re-emission
   /// ([`READY_NEEDS_EMIT`]). The logic tick keeps emitting (up to [`MAX_SEEK_PASSES`] passes)
-  /// while this holds, and nothing is drawn until it clears ([`Self::complete`]).
+  /// while this holds, and nothing is drawn until it clears ([`Self::complete`]). The paused
+  /// logic tick builds only while it holds: without the pending re-emit, a jet edited while
+  /// paused kept its old dust until Play or a seek.
   pub fn building(&self) -> bool {
-    self.tiers.iter().any(|t| {
-      !t.jet_unavailable
-        && (!t.next_window.is_some_and(|k| k >= t.due_window)
-          || t.ring.batches.iter().any(|b| b.ready == READY_NEEDS_EMIT))
-    })
+    self.reemit
+      || self.tiers.iter().any(|t| {
+        !t.jet_unavailable
+          && (!t.next_window.is_some_and(|k| k >= t.due_window)
+            || t.ring.batches.iter().any(|b| b.ready == READY_NEEDS_EMIT))
+      })
   }
 
   /// Every tier of the system: the jet cannot be evaluated ([`DustHostState::mark_jet_unavailable`]);
