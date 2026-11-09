@@ -612,7 +612,7 @@ public sealed class SaveFileService
         Id = b.Id, TextureKey = m.Key, CenterX = b.CenterX, CenterY = b.CenterY, WidthPx = b.WidthPx,
         HeightPx = b.HeightPx, Alpha = b.Alpha, RotationDeg = b.RotationDeg, Visible = b.Visible,
         ImageArcsecPerPx = b.ImageArcsecPerPx, ImageHeightKm = b.ImageHeightKm, ImageWidthPx = b.ImageWidthPx, ImageHeightPx = b.ImageHeightPx,
-        PhysicalSizeBound = b.PhysicalSizeBound, FitsStretch = b.FitsStretch,
+        PhysicalSizeBound = b.PhysicalSizeBound, FitsStretch = b.FitsStretch, FitsTwoDigitYearCentury = b.FitsTwoDigitYearCentury, FitsPlane = b.FitsPlane,
         ImageNucleusX = b.ImageNucleusX, ImageNucleusY = b.ImageNucleusY,
         ViewportOffsetX = b.ViewportOffsetX, ViewportOffsetY = b.ViewportOffsetY, ViewportScaling = b.ViewportScaling,
       }

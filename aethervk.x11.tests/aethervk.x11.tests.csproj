@@ -28,4 +28,8 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
+  <ItemGroup>
+    <!-- test_assets/ASSETS.tsv: assets fetched on demand -->
+    <Compile Include="..\tests-shared\TestAssets.cs" Link="TestAssets.cs" />
+  </ItemGroup>
 </Project>

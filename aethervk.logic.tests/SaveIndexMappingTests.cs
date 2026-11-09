@@ -351,7 +351,7 @@ public class SaveIndexMappingTests
   }
 
   /// <summary>The reviewer's save (pre-Q_d, Afρ₀ 100 cm per jet) opens with every jet's Q_d₀ converted.</summary>
-  [Fact]
+  [SkippableFact]
   public void ReviewFixture_JetsGetConvertedDustRates()
   {
     var (index, error) = SaveIndexIo.Read(ReviewSaveReproTests.FixtureDir());

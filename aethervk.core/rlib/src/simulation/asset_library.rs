@@ -42,9 +42,9 @@ use aethervk_oshal_rlib::{
 
 use crate::{
   scene::sky_image::{
-    self,
-    fits_metadata::FitsMetadata,
+    fits_metadata::{self, FitsMetadata},
     fits_stretch::{self, FitsStretch},
+    hips::{self, HipsFacts},
   },
   simulation::{
     comet::{
@@ -122,7 +122,7 @@ pub enum AssetError {
   Load(CometLoadError),
   /// The file extension is not one of obj, ply, gltf, glb, png, jpg, jpeg, ktx2, fit, fits, fts.
   UnsupportedExtension(String),
-  /// A FITS file could not be decoded (message of `sky_image::parse_fits`).
+  /// A FITS file could not be decoded (message of `fits_metadata::read_fits`).
   Fits(String),
   /// Not a FITS texture, or invalid stretch parameters.
   NotFits,
@@ -251,7 +251,8 @@ impl TextureAsset {
 /// viewer does (north up, east left for a standard WCS); a header with the non-standard
 /// `ROWORDER = 'TOP-DOWN'` is not flipped ([`Self::flipped`]). The raster lives in its own mapped cache
 /// file (`<hash>.avkf`, f32 native endian, already in texture row order), so a re-stretch
-/// ([`AssetLibrary::set_fits_stretch`]) never re-reads the source.
+/// ([`AssetLibrary::set_fits_stretch`]) never re-reads the source. A cube's plane is chosen
+/// with [`AssetLibrary::set_fits_plane`] (that one re-reads the source file: `metadata.plane`).
 pub struct FitsAsset {
   pub metadata: FitsMetadata,
   pub stretch: FitsStretch,
@@ -267,6 +268,9 @@ pub struct FitsAsset {
   pub flipped: bool,
   /// re-stretch counter (names the texel cache files)
   generation: u32,
+  /// HiPS facts when the image is a HiPS tile / Allsky without a celestial WCS (recognised at
+  /// import from its `ORDER` / `NPIX` cards or its `Norder*/Dir*/Npix*` path, `hips::load_mapping`)
+  pub hips: Option<HipsFacts>,
 }
 
 impl FitsAsset {
@@ -682,7 +686,7 @@ impl AssetLibrary {
 
     match ext.as_str() {
       "obj" | "ply" | "gltf" | "glb" => self.import_mesh_file(path, &key, &ext),
-      "png" | "jpg" | "jpeg" | "ktx2" | "fit" | "fits" | "fts" => {
+      "png" | "jpg" | "jpeg" | "ktx2" | "fit" | "fits" | "fts" | "fz" => {
         let mut outcome = ImportOutcome::default();
         let (id, added) = self.import_texture_file(path, None)?;
         outcome.textures.push(id);
@@ -951,7 +955,7 @@ impl AssetLibrary {
     if let Some(&id) = self.by_key.get(&key) {
       return Ok((id, false));
     }
-    if matches!(extension_of(path).as_str(), "fit" | "fits" | "fts") {
+    if matches!(extension_of(path).as_str(), "fit" | "fits" | "fts" | "fz") {
       return self.import_fits_file(path, key, hint);
     }
     let kind = EncodedImageKind::from_path(path)
@@ -987,6 +991,91 @@ impl AssetLibrary {
     let rgba = fits_stretch::render_rgba8(&raster, black, white, stretch.transfer);
     drop(raster);
     let generation = f.generation.wrapping_add(1);
+    self.replace_fits_texels(id, nx, ny, rgba, generation)?;
+    let f = self.fits.get_mut(&id).ok_or(AssetError::NotFits)?;
+    f.stretch = stretch;
+    f.black = black;
+    f.white = white;
+    f.generation = generation;
+    Ok((black, white))
+  }
+
+  /// Shows plane `plane` (0-based flat index, `fits_metadata::read_fits_plane`) of the cube FITS
+  /// texture `id`: the source file is read again for that plane (its path at import), the raster
+  /// cache and the texels are replaced, the stretch is kept (its black / white points are
+  /// recomputed on the new plane, as at import) and `metadata` is the new plane's. A later
+  /// [`Self::copy_texture_rgba8`] / `FitsAsset::raster` returns the new plane. The asset's
+  /// identity (content hash, key) does not change. Errors: not a FITS texture, a plane out of
+  /// range or an unreadable source (`AssetError::Fits` with the reader's message), a plane of
+  /// another size (cannot happen for a well-formed cube), a cache write failure.
+  pub fn set_fits_plane(&mut self, id: AssetId, plane: u64) -> Result<(), AssetError> {
+    let f = self.fits.get(&id).ok_or(AssetError::NotFits)?;
+    let t = self.textures.get(&id).ok_or(AssetError::UnknownAsset)?;
+    if plane == f.metadata.plane {
+      return Ok(());
+    }
+    let (nx, ny) = (t.texture.width, t.texture.height);
+    let encoded = MappedFile::new(&t.source_path)
+      .map_err(|_| AssetError::Fits(format!("source file not readable: {}", t.source_path)))?;
+    let (img, metadata) = fits_metadata::read_fits_plane(&encoded, plane).map_err(AssetError::Fits)?;
+    drop(encoded);
+    if (img.nx, img.ny) != (nx, ny) {
+      return Err(AssetError::Fits(format!(
+        "plane {plane} is {} × {}, the texture {nx} × {ny}",
+        img.nx, img.ny
+      )));
+    }
+    let mut data = img.data;
+    if f.flipped {
+      fits_stretch::flip_rows(&mut data, nx, ny);
+    }
+    let (black, white) = fits_stretch::black_white(&data, nx, ny, f.stretch.mode);
+    let rgba = fits_stretch::render_rgba8(&data, black, white, f.stretch.transfer);
+    let generation = f.generation.wrapping_add(1);
+    let hash = t.content_hash;
+    let raster_hash = f.raster_hash;
+    // the new raster in its own cache file (the old one stays mapped until replaced below)
+    let dir = self.cache_dir.as_ref().ok_or(AssetError::NoCacheDir)?;
+    let raster_path = format!("{dir}/{hash:016x}_p{plane}_g{generation}.avkf");
+    let raster_bytes: &[u8] = bytemuck::cast_slice(&data);
+    let header = CacheHeader {
+      kind: AssetKind::Texture,
+      format: 0,
+      a: nx as u64,
+      b: ny as u64,
+      payload_len: raster_bytes.len() as u64,
+      content_hash: raster_hash,
+    };
+    let raster = write_and_map(&raster_path, &header, &[raster_bytes])?;
+    drop(data);
+    if let Err(e) = self.replace_fits_texels(id, nx, ny, rgba, generation) {
+      drop(raster);
+      let _ = fs::remove_file(raster_path.as_str());
+      return Err(e);
+    }
+    let f = self.fits.get_mut(&id).ok_or(AssetError::NotFits)?;
+    let old_raster_path = core::mem::replace(&mut f.raster_cache_path, raster_path);
+    f.raster = raster;
+    f.metadata = metadata;
+    f.black = black;
+    f.white = white;
+    f.generation = generation;
+    self.pending_deletes.push(old_raster_path);
+    self.pending_deletes.retain(|p| fs::remove_file(p.as_str()).is_err());
+    Ok(())
+  }
+
+  /// Writes `rgba` (`nx × ny`) to a new texel cache file named by `generation` and makes it the
+  /// texture of `id` (thumbnail refreshed, the old file queued for deletion).
+  fn replace_fits_texels(
+    &mut self,
+    id: AssetId,
+    nx: u32,
+    ny: u32,
+    rgba: Vec<u8>,
+    generation: u32,
+  ) -> Result<(), AssetError> {
+    let t = self.textures.get(&id).ok_or(AssetError::UnknownAsset)?;
     let hash = t.content_hash;
     let dir = self.cache_dir.as_ref().ok_or(AssetError::NoCacheDir)?;
     let new_path = format!("{dir}/{hash:016x}_s{generation}.avkt");
@@ -1011,18 +1100,13 @@ impl AssetLibrary {
     self.cache_files.push(new_path);
     self.pending_deletes.push(old_path);
     self.pending_deletes.retain(|p| fs::remove_file(p.as_str()).is_err());
-    let f = self.fits.get_mut(&id).ok_or(AssetError::NotFits)?;
-    f.stretch = stretch;
-    f.black = black;
-    f.white = white;
-    f.generation = generation;
-    Ok((black, white))
+    Ok(())
   }
 
-  /// Decodes a FITS primary image ([`sky_image::parse_fits`]: every BITPIX, BZERO / BSCALE,
-  /// BLANK → NaN), flips its rows, stretches it (zscale, linear) to RGBA8 and inserts it like
-  /// any texture; the raster and the header are kept ([`FitsAsset`]). The same raster under
-  /// another path is the same asset.
+  /// Decodes a FITS image ([`fits_metadata::read_fits`]: the first image HDU, every BITPIX,
+  /// BZERO / BSCALE, BLANK → NaN), flips its rows, stretches it (zscale, linear) to RGBA8 and
+  /// inserts it like any texture; the raster and the header are kept ([`FitsAsset`]). The same
+  /// raster under another path is the same asset.
   fn import_fits_file(
     &mut self,
     path: &str,
@@ -1031,11 +1115,10 @@ impl AssetLibrary {
   ) -> Result<(AssetId, bool), AssetError> {
     let encoded =
       MappedFile::new(path).map_err(|_| AssetError::Load(CometLoadError::TextureNotFound))?;
-    let (nx, ny, mut data, _) = sky_image::parse_fits(&encoded).map_err(AssetError::Fits)?;
-    let mut metadata = FitsMetadata::from_fits_bytes(&encoded);
+    // one decode (the file is opened once; the session lock sits inside the library's lock)
+    let (img, metadata) = fits_metadata::read_fits(&encoded).map_err(AssetError::Fits)?;
     drop(encoded);
-    metadata.naxis1 = nx;
-    metadata.naxis2 = ny;
+    let (nx, ny, mut data) = (img.nx, img.ny, img.data);
     // FITS stores bottom-up; a non-standard `ROWORDER = 'TOP-DOWN'` (some capture software) is
     // already in display order
     let flipped = !metadata
@@ -1087,6 +1170,16 @@ impl AssetLibrary {
       }
     };
     drop(data);
+    // a HiPS tile / Allsky carries no WCS: the path (or ORDER / NPIX) places it
+    let hips = if metadata.facts.wcs_projection.is_none() {
+      let header = fits_metadata::header_of_cards(&metadata.cards);
+      match hips::load_mapping(Some(path), &header, nx, ny) {
+        Ok(Some((_, f))) => Some(f),
+        _ => None,
+      }
+    } else {
+      None
+    };
     self.fits.insert(
       id,
       FitsAsset {
@@ -1099,6 +1192,7 @@ impl AssetLibrary {
         raster_hash,
         flipped,
         generation: 0,
+        hips,
       },
     );
     Ok((id, true))

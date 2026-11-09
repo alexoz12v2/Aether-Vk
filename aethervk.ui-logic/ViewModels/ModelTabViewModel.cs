@@ -144,7 +144,6 @@ public partial class ModelTabViewModel
   [ObservableProperty]
   private bool _isSimulationRunning;
 
-  private bool _snapshotExists;
   private readonly TimelineService _timelineService;
 
   // ── Construction ─────────────────────────────────────────────────────────────────
@@ -192,11 +191,7 @@ public partial class ModelTabViewModel
 
     _timelineService.IsSimulationRunning
       .ObserveOn(schedulerProvider.MainThread)
-      .Subscribe(running =>
-      {
-          IsSimulationRunning = running;
-          if (running) _snapshotExists = true;
-      })
+      .Subscribe(running => IsSimulationRunning = running)
       .AddDisposableTo(_disposables);
 
     // Track _modelChangeSub and _radiusChanges lifetime alongside all other subs.
@@ -721,9 +716,6 @@ public partial class ModelTabViewModel
 
   private void OnSessionRestored()
   {
-    // a savefile open / New replaced the scene: the Play snapshot belongs to the old one, and
-    // restoring it on the next edit would undo the open (back to its pre-open epoch)
-    _snapshotExists = false;
     _dispatcher.Dispatch(() =>
     {
       if (CurrentSession is { } s)
@@ -973,13 +965,6 @@ public partial class ModelTabViewModel
     _runtimeService?.SetReferenceErrorVisible(value);
   }
 
-  /// <summary>
-  /// Jet properties that only affect drawing (not emission or physics): editing them while paused
-  /// must not restore the snapshot.
-  /// </summary>
-  internal static readonly System.Collections.Generic.HashSet<string?> VisualOnlyJetProperties =
-    new() { nameof(JetViewModel.StreamColor) };
-
   private void SubscribeJetChanges(JetViewModel jet, ModelSession session)
   {
     Observable
@@ -1004,20 +989,11 @@ public partial class ModelTabViewModel
             name == nameof(JetViewModel.CanAddSizeQRow))
           return false;
 
-        // Visual-only edits (draw parameters, read by the renderer every frame) are forwarded
-        // without restoring the snapshot: a restore swaps in the scene cloned at Play, whose dust
-        // ring only re-emits on simulation ticks, so the tail vanished while paused.
-        if (!VisualOnlyJetProperties.Contains(name))
-        {
-            _dispatcher.Dispatch(() =>
-            {
-                if (!_timelineService.IsSimulationRunningValue && _snapshotExists)
-                {
-                    _timelineService.SnapshotRestore();
-                    _snapshotExists = false;
-                }
-            });
-        }
+        // Every other edit is forwarded as it is, at the current date, playing or paused: the
+        // engine re-emits the dust of a changed jet (paused, its own loop rebuilds the history at
+        // the paused time). An edit after Play used to restore the scene snapshot taken at Play
+        // first, which rewound the clock and left the engine without the comet's state until
+        // Play, so the model did not show again until a seek or a reopen.
         return true;
       })
       .Throttle(TimeSpan.FromMilliseconds(250), _schedulerProvider.Background)

@@ -571,12 +571,13 @@ mod tests {
   /// moves ≤ 50 km/s relative to the Earth · 233 s ≈ 11 650 km at 0.47 AU ≈ 34″ at most).
   #[test]
   fn review_67p_ephemeris_at_2021_12_27() {
+    let spk = aethervk_test_assets::test_asset!("saves/review_67p_2021-12/spk/spk_67P_90000703_2021-12-12_2021-12-28.bsp");
     let mut almanac = crate::simulation::almanac::AlmanacPackedData::default();
     for f in [
       "../../assets/planets/pck00011.pca",
       "../../assets/planets/gm_de431.pca",
       "../../assets/planets/de442.bsp",
-      "../../test_assets/saves/review_67p_2021-12/spk/spk_67P_90000703_2021-12-12_2021-12-28.bsp",
+      spk.to_str().unwrap(),
     ] {
       almanac.load_almanac(f).expect(f);
     }

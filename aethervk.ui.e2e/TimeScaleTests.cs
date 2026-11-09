@@ -20,7 +20,7 @@ public sealed class TimeScaleTests(ITestOutputHelper output)
     if (Directory.Exists(artifacts))
       Directory.Delete(artifacts, recursive: true);
     var saveDir = Path.Combine(artifacts, "review_67p_2021-12");
-    ReviewerMailTests.CopyDir(Path.Combine(AppSession.RepoRoot(), "test_assets", "saves", "review_67p_2021-12"), saveDir);
+    ReviewerMailTests.CopyDir(ReviewSave.FixtureDir, saveDir);
     var midUtc = DateTime.ParseExact(FitsComparisonSteps.DateMidUtc, "yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture);
 
     using var s = AppSession.Launch(Path.Combine(artifacts, "app.log"), diagnosticPanels: false);

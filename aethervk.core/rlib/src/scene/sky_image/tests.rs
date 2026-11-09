@@ -27,6 +27,83 @@ fn fits_bytes(cards: &[String], data: &[u8]) -> Vec<u8> {
   out
 }
 
+/// The in-memory FITS images this module decodes, as `(name, bytes)`: the corpus the CFITSIO
+/// read path is compared with the pure-Rust parser on (`fits_tests`).
+#[cfg(feature = "cfitsio")]
+pub(crate) fn fits_corpus() -> Vec<(String, Vec<u8>)> {
+  let mut out = Vec::new();
+  // BITPIX -32 with WCS, site and date cards
+  let (nx, ny) = (7u32, 5u32);
+  let mut data = Vec::new();
+  for i in 0..nx * ny {
+    data.extend_from_slice(&(i as f32 * 0.25 - 1.0).to_be_bytes());
+  }
+  let mut cards = vec![
+    card("SIMPLE", "T"),
+    card("BITPIX", "-32"),
+    card("NAXIS", "2"),
+    card("NAXIS1", &format!("{nx}")),
+    card("NAXIS2", &format!("{ny}")),
+    card("DATE-OBS", "'2025-01-01T00:00:00.000'"),
+    card("TIMESYS", "'UTC'"),
+    card("EXPTIME", "120.0"),
+    card("SITELAT", "'+45:30:00'"),
+    card("SITELONG", "-110.5"),
+    card("SITEELEV", "1234.5"),
+    format!("{:<80}", "COMMENT a commentary card is skipped"),
+  ];
+  cards.extend(wcs_cards(150.0, 20.0, [4.0, 3.0], 1.5));
+  out.push(("minus32 wcs".to_string(), fits_bytes(&cards, &data)));
+  // BITPIX 16, BZERO 32768, one BLANK pixel, MJD-OBS
+  let mut data = Vec::new();
+  for i in 0..12u32 {
+    let raw = if i == 5 { -32768i16 } else { ((i * 5000 + 7) as i32 - 32768) as i16 };
+    data.extend_from_slice(&raw.to_be_bytes());
+  }
+  let cards = vec![
+    card("SIMPLE", "T"),
+    card("BITPIX", "16"),
+    card("NAXIS", "2"),
+    card("NAXIS1", "4"),
+    card("NAXIS2", "3"),
+    card("BZERO", "32768"),
+    card("BSCALE", "1"),
+    card("BLANK", "-32768"),
+    card("MJD-OBS", "60676.0"),
+  ];
+  out.push(("bitpix16 bzero blank".to_string(), fits_bytes(&cards, &data)));
+  // BITPIX 8 / 32 / 64 / -64 with a D-exponent BSCALE
+  for (bitpix, enc) in [
+    (8i64, (|v: i64| vec![v as u8]) as fn(i64) -> Vec<u8>),
+    (32, |v| (v as i32).to_be_bytes().to_vec()),
+    (64, |v| v.to_be_bytes().to_vec()),
+    (-64, |v| (v as f64).to_be_bytes().to_vec()),
+  ] {
+    let data: Vec<u8> = [0i64, 1, 17, 200].iter().flat_map(|&v| enc(v)).collect();
+    let cards = vec![
+      card("SIMPLE", "T"),
+      card("BITPIX", &format!("{bitpix}")),
+      card("NAXIS", "2"),
+      card("NAXIS1", "2"),
+      card("NAXIS2", "2"),
+      card("BSCALE", "2.0D0"),
+      card("BZERO", "-1.0"),
+    ];
+    out.push((format!("bitpix {bitpix} scaled"), fits_bytes(&cards, &data)));
+  }
+  // a 1 x 1 x 1 cube counts as 2-D
+  let cards = vec![
+    card("SIMPLE", "T"),
+    card("BITPIX", "-32"),
+    card("NAXIS", "3"),
+    card("NAXIS1", "2"),
+    card("NAXIS2", "2"),
+    card("NAXIS3", "1"),
+  ];
+  out.push(("degenerate third axis".to_string(), fits_bytes(&cards, &[0u8; 16])));
+  out
+}
+
 fn wcs_cards(ra: f64, dec: f64, crpix: [f64; 2], cdelt_arcsec: f64) -> Vec<String> {
   vec![
     card("CTYPE1", "'RA---TAN'"),
@@ -173,7 +250,9 @@ fn fits_refuses_what_it_cannot_read() {
     ]
   };
   assert!(parse_fits(&fits_bytes(&base("0"), &[])).is_err());
-  assert!(parse_fits(&fits_bytes(&base("3"), &[0; 64])).is_err());
+  // a cube: its first plane in both modes (the pure-Rust 2-D parser is handed that plane)
+  let cube = parse_fits(&fits_bytes(&base("3"), &[0; 64]));
+  assert_eq!(cube.map(|(nx, ny, v, _)| (nx, ny, v.len())), Ok((2, 2, 4)));
   assert!(parse_fits(b"NOT A FITS FILE").is_err());
   // truncated data
   let mut b = fits_bytes(&base("2"), &[]);
@@ -184,13 +263,7 @@ fn fits_refuses_what_it_cannot_read() {
 fn test_wcs(ra: f64, dec: f64, rot_deg: f64, cdelt_arcsec: f64) -> Wcs {
   let r = rot_deg * DEG;
   let d = cdelt_arcsec * ARCSEC;
-  Wcs {
-    crval_deg: [ra, dec],
-    crpix: [512.3, 384.7],
-    cd_deg: [[-d * r.cos(), d * r.sin()], [d * r.sin(), d * r.cos()]],
-    sip_ignored: false,
-    frame_assumed: false,
-  }
+  Wcs::tan([ra, dec], [512.3, 384.7], [[-d * r.cos(), d * r.sin()], [d * r.sin(), d * r.cos()]])
 }
 
 /// pixel → RA/Dec → pixel within 1e-6 px over the image, at several declinations, rotations and
@@ -290,7 +363,7 @@ fn wcs_cd_cdelt_crota_and_pc_agree() {
     card("PC2_1", &format!("{:.15E}", (d1 / d2) * r.sin())),
     card("PC2_2", &format!("{:.15E}", r.cos())),
   ]);
-  assert!(cd.sip_ignored);
+  assert!(!cd.has_distortion(), "-SIP without A_ORDER: no polynomial");
   for w in [crota, pc] {
     for i in 0..2 {
       for j in 0..2 {
@@ -325,23 +398,26 @@ fn wcs_frames_and_projections() {
   assert!(w(vec![]).unwrap().is_none());
   assert!(w(tan()).unwrap().unwrap().frame_assumed);
   assert!(!w(with(tan(), &[card("RADESYS", "'FK5'")])).unwrap().unwrap().frame_assumed);
-  assert!(w(with(tan(), &[card("RADESYS", "'FK4'")])).is_err());
-  assert!(w(with(tan(), &[card("EQUINOX", "1950.0")])).is_err());
-  assert!(w(with(tan(), &[card("LONPOLE", "170.0")])).is_err());
-  assert!(
-    w(vec![
-      card("CTYPE1", "'RA---SIN'"),
-      card("CTYPE2", "'DEC--SIN'")
-    ])
-    .is_err()
-  );
-  assert!(
-    w(vec![
-      card("CTYPE1", "'GLON-TAN'"),
-      card("CTYPE2", "'GLAT-TAN'")
-    ])
-    .is_err()
-  );
+  // frames, LONPOLE and other projections are honoured (`wcs::tests` checks the numbers)
+  let fk4 = w(with(tan(), &[card("RADESYS", "'FK4'")])).unwrap().unwrap();
+  assert_eq!(fk4.facts().frame, "FK4");
+  assert_eq!(fk4.facts().equinox, Some(1950.0));
+  let by_equinox = w(with(tan(), &[card("EQUINOX", "1950.0")])).unwrap().unwrap();
+  assert_eq!(by_equinox.facts().frame, "FK4");
+  assert!(!by_equinox.frame_assumed);
+  let lp = w(with(tan(), &[card("LONPOLE", "170.0")])).unwrap().unwrap();
+  assert_eq!(lp.facts().lonpole_deg, 170.0);
+  assert!(!lp.is_plain_tan());
+  let sin = w(vec![card("CTYPE1", "'RA---SIN'"), card("CTYPE2", "'DEC--SIN'")]).unwrap().unwrap();
+  assert_eq!(sin.facts().projection, "SIN");
+  let gal = w(vec![card("CTYPE1", "'GLON-TAN'"), card("CTYPE2", "'GLAT-TAN'")]).unwrap().unwrap();
+  assert_eq!(gal.facts().frame, "galactic");
+  // the galactic centre is where astropy puts it
+  let (p1, p2) = gal.world_to_pixel(0.0, 0.0).unwrap();
+  let (ra, dec) = gal.pixel_to_radec_deg(p1, p2);
+  assert!((ra - 266.40498829).abs() < 2e-7 && (dec + 28.93617776).abs() < 2e-7, "{ra} {dec}");
+  assert!(w(vec![card("CTYPE1", "'RA---TNX'"), card("CTYPE2", "'DEC--TNX'")]).is_err());
+  assert!(w(vec![card("CTYPE1", "'HPLN-TAN'"), card("CTYPE2", "'HPLT-TAN'")]).is_err());
 }
 
 /// The astrometry.net `.wcs` sidecar is a FITS header without newlines; one card per line works

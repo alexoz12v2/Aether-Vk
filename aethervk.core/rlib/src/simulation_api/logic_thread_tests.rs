@@ -14,6 +14,15 @@ use std::sync::mpsc;
 static MOCK_SENDER: parking_lot::Mutex<Option<mpsc::Sender<CCometInitialized>>> =
   parking_lot::Mutex::new(None);
 
+/// Serialises the tests that install the process-wide external-state callback and
+/// [`MOCK_SENDER`]: run in parallel, a later test replaced the sender, so an earlier test's
+/// receiver saw `Disconnected` (or the other test's comet). Held for the whole test, since every
+/// context of the process reports its comet to the one callback.
+fn lock_comet_init_callback_tests() -> parking_lot::MutexGuard<'static, ()> {
+  static LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+  LOCK.lock()
+}
+
 unsafe extern "C" fn mock_external_state_cb(state_id: u32, data_ptr: *const core::ffi::c_void) {
   if state_id == 4 {
     // CometInitialized
@@ -143,6 +152,7 @@ fn test_update_trajectory_command_exists() {
 
 #[test]
 fn test_two_phase_commit_comet() {
+  let _comet_init_lock = lock_comet_init_callback_tests();
   let Some(spk_path) = fetch_67p_spk("1000012_two_phase.bsp") else {
     println!("Skipping: Horizons unreachable");
     return;
@@ -1719,8 +1729,7 @@ fn test_import_asset_command_fills_library_without_duplicates_and_wires_comet() 
   use crate::simulation_api::comet_appearance::{
     CometAppearanceWiring, CometDisplayMode, CometVisualOffset,
   };
-  let glb =
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../test_assets/BoxTextured.glb");
+  let glb = aethervk_test_assets::test_asset!("BoxTextured.glb");
   let cache_dir = std::env::temp_dir().join(format!("avk_import_cmd_{}", std::process::id()));
   let _ = std::fs::remove_dir_all(&cache_dir);
 
@@ -1842,8 +1851,7 @@ fn test_remove_asset_command_ejects_comet_and_is_locked_while_playing() {
     CometAppearanceComponent, CometAppearanceWiring, CometDisplayMode, CometVisualOffset,
     DEFAULT_COMET_ASSET_PATH,
   };
-  let glb =
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../test_assets/BoxTextured.glb");
+  let glb = aethervk_test_assets::test_asset!("BoxTextured.glb");
   let cache_dir = std::env::temp_dir().join(format!("avk_remove_cmd_{}", std::process::id()));
   let _ = std::fs::remove_dir_all(&cache_dir);
 
@@ -2753,6 +2761,7 @@ fn spawn_ignition_jet(
 /// `fill_dust_history` besides a seek, runs only while playing. Needs the 67P SPK and a GPU.
 #[test]
 fn test_jet_added_while_paused_builds_its_dust_history() {
+  let _comet_init_lock = lock_comet_init_callback_tests();
   use crate::scene::particles::{ParticleSystemComponent, emission_start_us_from_epoch};
   use core::sync::atomic::Ordering;
   let Some((ctx, scene_id, start)) = ignition_scene(2.0) else {
@@ -2835,6 +2844,7 @@ fn test_jet_added_while_paused_builds_its_dust_history() {
 /// while a system is building, and a pending re-emit did not count. Needs the 67P SPK and a GPU.
 #[test]
 fn test_jet_edited_while_paused_reemits_its_dust_history() {
+  let _comet_init_lock = lock_comet_init_callback_tests();
   use crate::scene::particles::ParticleSystemComponent;
   use core::sync::atomic::Ordering;
   let Some((ctx, scene_id, start)) = ignition_scene(2.0) else {
@@ -2904,6 +2914,320 @@ fn test_jet_edited_while_paused_reemits_its_dust_history() {
   ctx.threads.logic_thread.tx().try_send(LogicCommand::Shutdown).unwrap();
 }
 
+/// A jet edited while paused after a Play rebuilds its dust history at the paused date (the
+/// reviewer's "model that won't show"): the scene seeked to start + 5 d, Play as the UI does it
+/// (a scene snapshot, then about 2 s of real time), Pause, then the lifetime set to 1 d and the
+/// ejection speed doubled as `avkSimulationContext_modifyParticleSystem` sets them (the record,
+/// the component's `ttl_us`, a re-emit request). The paused loop alone rebuilds it: every tier's
+/// band becomes {0, 1, 8}–{1, 8, 64} d, the history is complete and caught up, the comet is in
+/// the cartesian cache and the clock is where the Pause left it. (The UI used to restore the
+/// Play snapshot on such an edit: the clock rewound and the cache was emptied, so the re-emit
+/// found no comet and nothing showed until Play, a seek or a reopen.) Needs the 67P SPK and a
+/// GPU.
+#[test]
+fn test_jet_edited_after_play_while_paused_rebuilds_at_the_same_date() {
+  let _comet_init_lock = lock_comet_init_callback_tests();
+  use crate::scene::particles::ParticleSystemComponent;
+  use aethervk_oshal_rlib::os::time::v2::SimSpeed;
+  use core::sync::atomic::Ordering;
+  let Some((ctx, scene_id, start)) = ignition_scene(2.0) else {
+    return;
+  };
+  let scene_arc = ctx.get_scene(scene_id).unwrap();
+  let busy = || scene_arc.read().active_physics_task.load(Ordering::Acquire);
+  let running = || scene_arc.read().simulation_running.load(Ordering::Acquire);
+  let sim_s = || scene_arc.read().scene.sim_time_s();
+  let any_building = || {
+    let g = scene_arc.read();
+    utils::any_dust_building(&g.scene)
+  };
+  let wait_built = |what: &str| {
+    let t0 = std::time::Instant::now();
+    loop {
+      let tiers = ctx.dust_stats(scene_id);
+      if !busy() && !any_building() && !tiers.is_empty() && tiers.iter().all(|t| t.caught_up) {
+        return tiers;
+      }
+      assert!(t0.elapsed().as_secs_f64() < 120.0, "{what}: dust never built: {tiers:?}");
+      std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+  };
+  let bands_days = |tiers: &[crate::scene::dust::DustTierStats]| -> alloc::vec::Vec<(f64, f64)> {
+    tiers.iter().map(|t| (t.band_min_s / 86_400.0, t.band_max_s / 86_400.0)).collect()
+  };
+  let comet_body = scene_arc.read().comet.unwrap().body;
+  let comet_cached = || {
+    ctx
+      .scenes
+      .read()
+      .cartesian_state_cache
+      .get(&crate::simulation_api::structs::SceneEntityId::new(scene_id, comet_body))
+      .is_some_and(|c| c.comet_state.is_some())
+  };
+
+  assert!(ctx.seek_epoch_sync(scene_id, start + Duration::from_days(5.0)), "seek +5 d");
+  let before = wait_built("after the seek");
+  assert!(before.iter().any(|t| t.live_clusters > 0), "the jet's dust: {before:?}");
+  let ttl0 = before[0].band_max_s / 86_400.0;
+  let at_seek_s = sim_s().expect("sim time");
+
+  // Play as the UI does it: the scene snapshot, then about 2 s of real time
+  assert!(ctx.snapshot_scene_sync(scene_id), "the snapshot at Play");
+  let t0 = std::time::Instant::now();
+  while !ctx.start_simulation(scene_id, SimSpeed::Realtime) {
+    assert!(t0.elapsed().as_secs_f64() < 10.0, "the play never started");
+    std::thread::sleep(std::time::Duration::from_millis(20));
+  }
+  std::thread::sleep(std::time::Duration::from_secs(2));
+  assert!(ctx.pause_simulation_sync(scene_id), "pause");
+  assert!(!running(), "paused");
+  let _ = wait_built("after the pause");
+  let at_pause_s = sim_s().expect("sim time");
+  assert!(at_pause_s > at_seek_s, "the clock did not move while playing ({at_pause_s} s)");
+  assert!(comet_cached(), "the comet left the cartesian cache during the play");
+
+  // the edit, as the FFI modify applies it: lifetime 1 d, ejection speed doubled, a re-emit
+  let mut jets = alloc::vec::Vec::new();
+  scene_arc.read().scene.query1(|id, _: &ParticleSystemComponent| jets.push(id));
+  assert!(!jets.is_empty(), "no particle system");
+  for &id in &jets {
+    let g = scene_arc.write();
+    g.scene
+      .with_component_mut(id, |p: &mut ParticleSystemComponent| {
+        p.emission_params.ttl_days = 1.0;
+        p.emission_params.start_velocity_mean *= 2.0;
+        p.ttl_us = p.emission_params.ttl_us();
+      })
+      .expect("the particle system");
+    g.scene
+      .with_component(id, |p: &ParticleSystemComponent| p.dust.lock().request_reemit())
+      .expect("the particle system");
+  }
+
+  let after = wait_built("the jet edited after Play, paused");
+  println!("lifetime {ttl0} d -> 1 d after Play, paused: {:?}", bands_days(&after));
+  let want = [(0.0, 1.0), (1.0, 8.0), (8.0, 64.0)];
+  assert_eq!(after.len(), want.len());
+  for (t, (lo, hi)) in after.iter().zip(want) {
+    assert!(
+      (t.band_min_s - lo * 86_400.0).abs() <= 1e-6 && (t.band_max_s - hi * 86_400.0).abs() <= 1e-6,
+      "a tier still has its {ttl0} d band: {:?}",
+      bands_days(&after)
+    );
+  }
+  assert!(after[0].live_clusters > 0, "the re-emitted history is empty: {after:?}");
+  assert!(after.iter().all(|t| !t.jet_unavailable), "a tier lost its jet state: {after:?}");
+  assert!(!running(), "the loop rebuilt it without Play");
+  assert_eq!(sim_s(), Some(at_pause_s), "the paused edit moved the clock");
+  assert!(comet_cached(), "the comet is not in the cartesian cache after the edit");
+  ctx.threads.logic_thread.tx().try_send(LogicCommand::Shutdown).unwrap();
+}
+
+/// The engine guard on its own: `RestoreSnapshot` (the command behind the UI's former paused-edit
+/// restore) ends like a seek to the restored instant, so an edit after it rebuilds the dust.
+/// Seek to start + 5 d, snapshot, about 1 s of Play, Pause, restore: the clock is back at the
+/// snapshot's instant and the comet is in the cartesian cache (the restore used to empty it and
+/// leave it so until Play, so a re-emit found no jet state); the lifetime edit then re-emits a
+/// complete 1 d history at that instant. Needs the 67P SPK and a GPU.
+#[test]
+fn test_restore_snapshot_then_edit_rebuilds_dust_with_the_comet_cached() {
+  let _comet_init_lock = lock_comet_init_callback_tests();
+  use crate::scene::particles::ParticleSystemComponent;
+  use aethervk_oshal_rlib::os::time::v2::SimSpeed;
+  use core::sync::atomic::Ordering;
+  let Some((ctx, scene_id, start)) = ignition_scene(2.0) else {
+    return;
+  };
+  let scene_arc = ctx.get_scene(scene_id).unwrap();
+  let busy = || scene_arc.read().active_physics_task.load(Ordering::Acquire);
+  let running = || scene_arc.read().simulation_running.load(Ordering::Acquire);
+  let sim_s = || scene_arc.read().scene.sim_time_s();
+  let any_building = || {
+    let g = scene_arc.read();
+    utils::any_dust_building(&g.scene)
+  };
+  let wait_built = |what: &str| {
+    let t0 = std::time::Instant::now();
+    loop {
+      let tiers = ctx.dust_stats(scene_id);
+      if !busy() && !any_building() && !tiers.is_empty() && tiers.iter().all(|t| t.caught_up) {
+        return tiers;
+      }
+      assert!(t0.elapsed().as_secs_f64() < 120.0, "{what}: dust never built: {tiers:?}");
+      std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+  };
+  let bands_days = |tiers: &[crate::scene::dust::DustTierStats]| -> alloc::vec::Vec<(f64, f64)> {
+    tiers.iter().map(|t| (t.band_min_s / 86_400.0, t.band_max_s / 86_400.0)).collect()
+  };
+  let comet_body = scene_arc.read().comet.unwrap().body;
+  let comet_cached = || {
+    ctx
+      .scenes
+      .read()
+      .cartesian_state_cache
+      .get(&crate::simulation_api::structs::SceneEntityId::new(scene_id, comet_body))
+      .is_some_and(|c| c.comet_state.is_some())
+  };
+
+  assert!(ctx.seek_epoch_sync(scene_id, start + Duration::from_days(5.0)), "seek +5 d");
+  let before = wait_built("after the seek");
+  assert!(before.iter().any(|t| t.live_clusters > 0), "the jet's dust: {before:?}");
+  let ttl0 = before[0].band_max_s / 86_400.0;
+  let at_seek_s = sim_s().expect("sim time");
+
+  assert!(ctx.snapshot_scene_sync(scene_id), "the snapshot at Play");
+  let t0 = std::time::Instant::now();
+  while !ctx.start_simulation(scene_id, SimSpeed::Realtime) {
+    assert!(t0.elapsed().as_secs_f64() < 10.0, "the play never started");
+    std::thread::sleep(std::time::Duration::from_millis(20));
+  }
+  std::thread::sleep(std::time::Duration::from_secs(1));
+  assert!(ctx.pause_simulation_sync(scene_id), "pause");
+  let _ = wait_built("after the pause");
+  let at_pause_s = sim_s().expect("sim time");
+  assert!(at_pause_s > at_seek_s, "the clock did not move while playing ({at_pause_s} s)");
+
+  // the restore: back at the snapshot's instant like a seek there, the comet cached again
+  assert!(ctx.restore_snapshot_sync(scene_id), "restore");
+  let restored = wait_built("after the restore");
+  let restored_s = sim_s().expect("sim time");
+  println!("seek {at_seek_s} s, pause {at_pause_s} s, restored {restored_s} s: {restored:?}");
+  assert!(!running(), "a restore leaves the clock paused");
+  assert!(restored_s < at_pause_s, "the restore did not rewind the clock");
+  assert!(
+    (restored_s - at_seek_s).abs() < 1.0,
+    "the restore did not go back to the snapshot's instant: {restored_s} vs {at_seek_s} s"
+  );
+  assert!(comet_cached(), "after the restore the comet is not in the cartesian cache");
+
+  // the lifetime edit, as the FFI modify applies it
+  let mut jets = alloc::vec::Vec::new();
+  scene_arc.read().scene.query1(|id, _: &ParticleSystemComponent| jets.push(id));
+  assert!(!jets.is_empty(), "no particle system");
+  for &id in &jets {
+    let g = scene_arc.write();
+    g.scene
+      .with_component_mut(id, |p: &mut ParticleSystemComponent| {
+        p.emission_params.ttl_days = 1.0;
+        p.ttl_us = p.emission_params.ttl_us();
+      })
+      .expect("the particle system");
+    g.scene
+      .with_component(id, |p: &ParticleSystemComponent| p.dust.lock().request_reemit())
+      .expect("the particle system");
+  }
+
+  let after = wait_built("the jet edited after the restore");
+  println!("lifetime {ttl0} d -> 1 d after the restore: {:?}", bands_days(&after));
+  let want = [(0.0, 1.0), (1.0, 8.0), (8.0, 64.0)];
+  assert_eq!(after.len(), want.len());
+  for (t, (lo, hi)) in after.iter().zip(want) {
+    assert!(
+      (t.band_min_s - lo * 86_400.0).abs() <= 1e-6 && (t.band_max_s - hi * 86_400.0).abs() <= 1e-6,
+      "a tier still has its {ttl0} d band: {:?}",
+      bands_days(&after)
+    );
+  }
+  assert!(after[0].live_clusters > 0, "the re-emitted history is empty: {after:?}");
+  assert!(after.iter().all(|t| !t.jet_unavailable), "a tier lost its jet state: {after:?}");
+  assert!(!running(), "the loop rebuilt it without Play");
+  assert_eq!(sim_s(), Some(restored_s), "the edit after the restore moved the clock");
+  assert!(comet_cached(), "the comet is not in the cartesian cache after the edit");
+  ctx.threads.logic_thread.tx().try_send(LogicCommand::Shutdown).unwrap();
+}
+
+/// The paused build's guard on its own: the comet dropped out of the cartesian cache while paused
+/// (emptied here by hand, as the former restore left it) and a jet asks for a re-emit with the
+/// same parameters. The emission pass finds no jet state; the paused loop then caches the comet
+/// at the paused epoch and the rebuild goes through, with the seek's live counts, instead of the
+/// jet staying unavailable until Play. Needs the 67P SPK and a GPU.
+#[test]
+fn test_paused_reemit_caches_the_comet_when_the_cache_lost_it() {
+  let _comet_init_lock = lock_comet_init_callback_tests();
+  use crate::scene::particles::ParticleSystemComponent;
+  use core::sync::atomic::Ordering;
+  let Some((ctx, scene_id, start)) = ignition_scene(2.0) else {
+    return;
+  };
+  let scene_arc = ctx.get_scene(scene_id).unwrap();
+  let busy = || scene_arc.read().active_physics_task.load(Ordering::Acquire);
+  let running = || scene_arc.read().simulation_running.load(Ordering::Acquire);
+  let sim_s = || scene_arc.read().scene.sim_time_s();
+  let any_building = || {
+    let g = scene_arc.read();
+    utils::any_dust_building(&g.scene)
+  };
+  let wait_built = |what: &str| {
+    let t0 = std::time::Instant::now();
+    loop {
+      let tiers = ctx.dust_stats(scene_id);
+      if !busy() && !any_building() && !tiers.is_empty() && tiers.iter().all(|t| t.caught_up) {
+        return tiers;
+      }
+      assert!(t0.elapsed().as_secs_f64() < 120.0, "{what}: dust never built: {tiers:?}");
+      std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+  };
+  let comet_body = scene_arc.read().comet.unwrap().body;
+  let comet_cached = || {
+    ctx
+      .scenes
+      .read()
+      .cartesian_state_cache
+      .get(&crate::simulation_api::structs::SceneEntityId::new(scene_id, comet_body))
+      .is_some_and(|c| c.comet_state.is_some())
+  };
+
+  assert!(ctx.seek_epoch_sync(scene_id, start + Duration::from_days(5.0)), "seek +5 d");
+  let before = wait_built("after the seek");
+  assert!(before.iter().any(|t| t.live_clusters > 0), "the jet's dust: {before:?}");
+  assert!(!running(), "a seek leaves the clock paused");
+  let at_seek_s = sim_s();
+  assert!(comet_cached(), "the seek did not cache the comet");
+
+  // the cache of this scene emptied, as the former restore left it
+  {
+    let scenes = ctx.scenes.read();
+    let keys: alloc::vec::Vec<_> = scenes
+      .cartesian_state_cache
+      .iter()
+      .map(|kv| *kv.key())
+      .filter(|k| k.scene_id == scene_id)
+      .collect();
+    for k in keys {
+      scenes.cartesian_state_cache.remove(&k);
+    }
+  }
+  assert!(!comet_cached(), "the cache still holds the comet");
+
+  // a re-emit with the same parameters
+  let mut jets = alloc::vec::Vec::new();
+  scene_arc.read().scene.query1(|id, _: &ParticleSystemComponent| jets.push(id));
+  assert!(!jets.is_empty(), "no particle system");
+  for &id in &jets {
+    scene_arc
+      .read()
+      .scene
+      .with_component(id, |p: &ParticleSystemComponent| p.dust.lock().request_reemit())
+      .expect("the particle system");
+  }
+
+  let after = wait_built("the re-emit without the comet in the cache");
+  println!("re-emitted with the cache emptied: {after:?}");
+  assert!(comet_cached(), "the paused loop did not cache the comet");
+  assert!(after[0].live_clusters > 0, "the re-emitted history is empty: {after:?}");
+  assert!(after.iter().all(|t| !t.jet_unavailable), "a tier kept its jet unavailable: {after:?}");
+  assert_eq!(
+    after.iter().map(|t| t.live_clusters).collect::<alloc::vec::Vec<_>>(),
+    before.iter().map(|t| t.live_clusters).collect::<alloc::vec::Vec<_>>(),
+    "the rebuilt history differs from the seek's"
+  );
+  assert!(!running(), "the loop rebuilt it without Play");
+  assert_eq!(sim_s(), at_seek_s, "the paused clock moved");
+  ctx.threads.logic_thread.tx().try_send(LogicCommand::Shutdown).unwrap();
+}
+
 /// A jet ignited at `start + 2 d` through the real seek path (`seek_epoch_sync` →
 /// `apply_seek` → `fill_dust_history`): at `start + 5 d` no tier holds dust older than 3 d (plus
 /// one emission window), at `start + 1 d` every tier is empty and caught up, and seeking forward
@@ -2911,6 +3235,7 @@ fn test_jet_edited_while_paused_reemits_its_dust_history() {
 /// ignition and the epoch). Needs the 67P SPK (cache or Horizons) and a GPU.
 #[test]
 fn test_jet_ignition_bounds_dust_age_across_seeks() {
+  let _comet_init_lock = lock_comet_init_callback_tests();
   let Some((ctx, scene_id, start)) = ignition_scene(2.0) else {
     return;
   };
@@ -2996,6 +3321,7 @@ fn test_jet_ignition_bounds_dust_age_across_seeks() {
 /// Needs the 67P SPK and a GPU.
 #[test]
 fn test_reset_rebuilds_the_dust_lead_at_the_start() {
+  let _comet_init_lock = lock_comet_init_callback_tests();
   let Some((ctx, scene_id, start)) = ignition_scene(-0.5) else {
     return;
   };
@@ -3097,6 +3423,7 @@ fn test_reset_rebuilds_the_dust_lead_at_the_start() {
 
 #[test]
 fn test_jet_without_rotation_model_emits_and_settles() {
+  let _comet_init_lock = lock_comet_init_callback_tests();
   use crate::scene::{
     BodyRotationalModel, StaticMeshComponent, TransformComponent,
     particles::{ParticleSystemComponent, ParticleSystemDrawParams, ParticleSystemEmitParams},
@@ -3944,8 +4271,9 @@ fn nucleus_view_from_earth_follows_the_comet_until_cleared() {
 /// (on the thread pool the load could win, be deduplicated, and the unload then drop the file).
 #[test]
 fn test_unload_then_load_of_the_same_spk_leaves_it_loaded() {
-  let spk = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-    .join("../../test_assets/saves/review_67p_2021-12/spk/spk_67P_90000703_2021-12-12_2021-12-28.bsp");
+  let spk = aethervk_test_assets::test_asset!(
+    "saves/review_67p_2021-12/spk/spk_67P_90000703_2021-12-12_2021-12-28.bsp"
+  );
   let spk = std::fs::canonicalize(&spk).expect("the test save's SPK");
   // canonicalize gives a \?\ path on Windows; the app passes Path.GetFullPath's form
   let path = spk.to_str().unwrap().trim_start_matches(r"\?\").to_string();

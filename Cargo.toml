@@ -3,6 +3,9 @@ members = [
     "aethervk.core/cdylib",
     "aethervk.core/rlib",
     "aethervk.oshal/rlib", "aethervk.utils/avkscene", "aethervk.utils/spktool", "aethervk.utils/tpc2pca",
+    "aethervk.cfitsio/sys",
+    "aethervk.cfitsio/rlib",
+    "aethervk.test-assets",
     # "aethervk.ui-logic-rs",
     # "aethervk.ui-app-rs",
 ]

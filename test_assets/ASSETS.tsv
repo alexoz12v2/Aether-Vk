@@ -1,0 +1,8 @@
+# Test asset groups downloaded on demand by the tests (Rust: aethervk-test-assets; C#: TestAssets.cs).
+# base https://github.com/alexoz12v2/Aether-Vk/releases/download/test-assets-1/
+# group	paths (test_assets-relative, comma-separated)	file	sha256	size
+spk	spk	spk.tar.gz	c3cbae8cd6eb12b49c7c14012beb8e4f9b97ed749cfa19c1c2efecce04969165	8052
+fits_fixtures	fits_lt_67p_header_4x3.fits,fits_lt_67p_header_4x3.fits.Z,fits_image_extension_4x3.fits,fits_tile_compressed_4x3.fz,fits_cube_4x3x3.fits,fits_cube_4x3x3.fz,fits_date_variants	fits_fixtures.tar.gz	baf1cf565d08ec8303647ae8d1a53bb9cbe6ecd441fbdfef281eb2ddd758d50c	17061
+models	BoxTextured.glb,BoxTextured.LICENSE.md,cloud.png,rain.png,sun.png	models.tar.gz	b32985bbeb4bbed2f9d8b44c2dc7c5fb5b37f5288283a57016a37834e4c50df2	7326
+fits_reference	fits_corpus/wcs_reference,fits_corpus/hips_reference	fits_reference.tar.gz	40fa08ba72038a8f71c6ad63e22d881eda81f8ccffd3ac6f9291d57a40b240e2	211973
+saves	saves/review_67p_2021-12,saves/review_67p_2021-12.avk,saves/review_slow_rotator_2026-11.avk	saves.tar.gz	3c7df75f74a3fa22c9cbf9070bb15f3cc61e563114517d8698b42ecb314e1575	4573041

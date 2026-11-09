@@ -60,7 +60,9 @@ impl Instance {
 
     #[cfg(debug_assertions)]
     {
-      if aethervk_oshal_rlib::os::env::var("AETHERVK_DISABLE_SYNC_VAL").is_none() {
+      if aethervk_oshal_rlib::os::env::var("AETHERVK_DISABLE_SYNC_VAL").is_none()
+        && some_device_lacks_native_sync2(&vk_entry, &app_info)
+      {
         layer_names.push(c"VK_LAYER_KHRONOS_synchronization2");
       }
     }
@@ -820,6 +822,49 @@ impl Instance {
     eligible_devices.sort_by(|a, b| b.score.cmp(&a.score));
     Ok(eligible_devices)
   }
+}
+
+/// Decides whether the `VK_LAYER_KHRONOS_synchronization2` emulation layer is worth loading.
+///
+/// The layer only does work on drivers without native `VK_KHR_synchronization2`. On a driver
+/// that has it the layer runs in pass-through mode, and in that mode it does not intercept
+/// `vkDestroyDevice`: the layer's per-device record is never erased, so a later device that
+/// reuses the same dispatch key finds the stale record during `vkCreateDevice` and jumps through a
+/// function pointer that belonged to the destroyed device (a host SIGSEGV inside `vkCreateDevice`
+/// with no GPU fault, seen when test suites create devices back to back). A layer-less probe
+/// instance tells us whether any device actually needs the emulation. A failed probe keeps the
+/// layer, which is the behaviour this function replaces.
+#[cfg(debug_assertions)]
+fn some_device_lacks_native_sync2(vk_entry: &ash::Entry, app_info: &vk::ApplicationInfo) -> bool {
+  let create_info = vk::InstanceCreateInfo::default().application_info(app_info);
+  let instance = match unsafe { vk_entry.create_instance(&create_info, None) } {
+    Ok(instance) => instance,
+    Err(_) => return true,
+  };
+  let lacks_native_sync2 = |pd: vk::PhysicalDevice| -> bool {
+    let props = unsafe { instance.get_physical_device_properties(pd) };
+    if vk::api_version_major(props.api_version) > 1 || vk::api_version_minor(props.api_version) >= 3
+    {
+      return false;
+    }
+    match unsafe { instance.enumerate_device_extension_properties(pd) } {
+      Ok(exts) => !exts
+        .iter()
+        .any(|e| e.extension_name_as_c_str().ok() == Some(ash::khr::synchronization2::NAME)),
+      Err(_) => true,
+    }
+  };
+  let needed = match unsafe { instance.enumerate_physical_devices() } {
+    Ok(devices) => devices.iter().any(|&pd| lacks_native_sync2(pd)),
+    Err(_) => true,
+  };
+  unsafe { instance.destroy_instance(None) };
+  if !needed {
+    oshal::log!(
+      "Every physical device has native VK_KHR_synchronization2; not loading the emulation layer."
+    );
+  }
+  needed
 }
 
 impl Drop for Instance {

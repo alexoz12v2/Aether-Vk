@@ -34,17 +34,9 @@ public sealed class ReviewArchiveFixtureTests : IDisposable
     try { Directory.Delete(_root, recursive: true); } catch (IOException) { }
   }
 
-  internal static string FixtureArchive()
-  {
-    for (var d = new DirectoryInfo(AppContext.BaseDirectory); d is not null; d = d.Parent)
-    {
-      var p = Path.Combine(d.FullName, "test_assets", "saves", "review_67p_2021-12.avk");
-      if (File.Exists(p)) return p;
-    }
-    throw new FileNotFoundException("test_assets/saves/review_67p_2021-12.avk");
-  }
+  internal static string FixtureArchive() => TestAssets.TestAssets.Require("saves/review_67p_2021-12.avk");
 
-  [Fact]
+  [SkippableFact]
   public async Task TheWindowsArchive_OpensFromItsState_WithTheFourJetsAndTheCommittedRange()
   {
     // opened from a copy: the fixture itself is never rewritten

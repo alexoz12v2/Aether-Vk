@@ -29,9 +29,10 @@ namespace AetherVk.Logic.Tests;
 public class ObservationRunTests
 {
   /// <summary>The loaded image as the chain sees it; every call is logged.</summary>
-  private sealed class FakeImage(List<string> log, DateTimeOffset? utc, bool canCompare = true) : IObservationImage
+  private sealed class FakeImage(List<string> log, DateTimeOffset? utc, bool canCompare = true, string? dateCard = null) : IObservationImage
   {
     public DateTimeOffset? ObservationUtc => utc;
+    public string? DateCardText => dateCard;
     public bool CanSetUpComparison => canCompare;
     public string StatusMessage { get; private set; } = string.Empty;
     public Task SetUpComparisonAsync()
@@ -65,6 +66,9 @@ public class ObservationRunTests
     public readonly List<(short C, ulong Ns)> Seeks = [];
     public bool CommitSucceeds = true;
     public int Recommits;
+    /// <summary>When set, the engine seek (on the thread pool) waits for it: a test can observe the
+    /// chain mid-run without racing the pool.</summary>
+    public System.Threading.ManualResetEventSlim? SeekGate;
 
     public Rig(TimeScale scale = AetherVk.Logic.Services.TimeScale.Utc, double rateDegDay = 696.0, bool seekOk = true)
     {
@@ -76,7 +80,7 @@ public class ObservationRunTests
         .Callback<SessionId, Action<TimelineSession>>((_, a) => a(Session));
 
       Runtime.Setup(r => r.SeekEpochSync(It.IsAny<short>(), It.IsAny<ulong>()))
-        .Returns<short, ulong>((c, ns) => { Log.Add("seek"); Seeks.Add((c, ns)); return seekOk; });
+        .Returns<short, ulong>((c, ns) => { SeekGate?.Wait(TimeSpan.FromSeconds(30)); Log.Add("seek"); Seeks.Add((c, ns)); return seekOk; });
       var config = new CometConfigService(Runtime.Object, new ImmediateSchedulers());
       Timeline = new TimelineService(Runtime.Object, new ImmediateSchedulers(), config, new BreadcrumbService());
       Range = new RangeEntryViewModel(sessions.Object, Timeline, null, () => rateDegDay, TimeScale);
@@ -118,8 +122,11 @@ public class ObservationRunTests
     var statuses = new List<string>();
     rig.Range.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(RangeEntryViewModel.RunStatus)) statuses.Add(rig.Range.RunStatus); };
 
+    // the seek waits on the gate, so the chain is still running when the busy state is checked
+    rig.SeekGate = new System.Threading.ManualResetEventSlim(false);
     var run = rig.Range.RunAtDateCommand.ExecuteAsync(null);
     Assert.True(rig.Range.IsRunning); // the busy state while the chain runs
+    rig.SeekGate.Set();
     await run;
 
     Assert.Equal(["propose", "recommit", "seek", "compare"], rig.Log);
@@ -215,6 +222,26 @@ public class ObservationRunTests
   }
 
   // ── the date box, "from image", the span text ──────────────────────────────
+
+  /// <summary>An image without a readable date is not "no image": the status names its date card,
+  /// else the keywords tried.</summary>
+  [Fact]
+  public void FromImage_WithAnImageWithoutADate_NamesItsDateCard()
+  {
+    var rig = new Rig();
+    var image = new FakeImage(rig.Log, null, dateCard: "DATE-OBS= '27/12/21'");
+    rig.Timeline.ObservationImageSource = () => image;
+    rig.Range.FromImageCommand.Execute(null);
+    Assert.Equal(string.Empty, rig.Range.ObservationEpoch);
+    Assert.Equal(RangeEntryViewModel.FitsWithoutDateText(image), rig.Range.RunStatus);
+    Assert.Contains("DATE-OBS= '27/12/21'", rig.Range.RunStatus);
+    Assert.NotEqual(RangeEntryViewModel.NoImageText, rig.Range.RunStatus);
+
+    var noCard = new FakeImage(rig.Log, null);
+    rig.Timeline.ObservationImageSource = () => noCard;
+    rig.Range.FromImageCommand.Execute(null);
+    Assert.Contains("DATE-OBS / MJD-OBS / JD", rig.Range.RunStatus);
+  }
 
   [Fact]
   public void FromImage_TakesTheLoadedImagesDate_OrSaysThereIsNone()

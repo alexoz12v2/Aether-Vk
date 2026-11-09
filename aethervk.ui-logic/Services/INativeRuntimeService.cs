@@ -87,6 +87,14 @@ public interface INativeRuntimeService : IDisposable
   void RemoveViewport(ulong presentationEngineId);
   void ResizeViewport(ulong presentationEngineId, uint width, uint height);
 
+  /// <summary>
+  /// Image export: the next presented frame of the viewport <paramref name="presentationEngineId"/>,
+  /// drawn without the engine's labels (Comet, Sun, leader lines) when
+  /// <paramref name="hideLabels"/>; the scene is not touched. Null when the viewport has no size,
+  /// renders no frame within a few seconds (minimised) or the core is down. Runs off the UI thread.
+  /// </summary>
+  Task<Models.CapturedImage?> CaptureViewportAsync(ulong presentationEngineId, bool hideLabels);
+
   // Swapping for swapchain driven rendering, not needed
   // /// <summary>
   // /// Safely polls getTaskStatus without blocking, then copies the frame to the buffer.
@@ -551,6 +559,15 @@ public interface INativeRuntimeService : IDisposable
   /// null when refused (not FITS, bad codes / parameters, library busy).
   /// </summary>
   Models.FitsStretchResult? SetFitsStretch(ulong assetId, uint mode, uint transfer, double p0, double p1);
+
+  /// <summary>
+  /// Shows plane <paramref name="plane"/> (0-based flat index over the extra axes, NAXIS3 fastest)
+  /// of cube FITS texture <paramref name="assetId"/>: the source file is read again, the texels and
+  /// the raster are replaced, the stretch mode is kept. Blocks on the library's write lock: call it
+  /// off the UI thread. False for an unknown / non-FITS asset, a plane out of range or an
+  /// unreadable source.
+  /// </summary>
+  bool SetFitsPlane(ulong assetId, ulong plane);
 
   /// <summary>
   /// Requests a comet appearance change (validated synchronously, applied by the logic thread
@@ -1025,8 +1042,33 @@ internal unsafe static class PInvokeAetherVkCore
     CTimeRange* taiRange
   );
 
-  // associated with get task status. We are not using it anymore, so drop it
-  // avkSimulationContext_downloadImage
+  // ── Image export (aethervk.core/cdylib/src/ffi.rs: captureViewport / getTaskStatus / downloadImage) ──
+
+  /// <summary>Task id of the frame holding the copy, or 0; see the Rust doc comment.</summary>
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern ulong avkSimulationContext_captureViewport(
+    nint ctx,
+    ulong viewportId,
+    [MarshalAs(UnmanagedType.U1)] bool hideLabels,
+    uint timeoutMs,
+    uint* outWidth,
+    uint* outHeight,
+    uint* outFormat
+  );
+
+  /// <summary>0 = pending, 1 = completed, 2 = error, -1 = invalid task id.</summary>
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern int avkSimulationContext_getTaskStatus(nint ctx, ulong taskId);
+
+  /// <summary>Copies the completed task's image (width × height × 4 bytes) into the buffer.</summary>
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.U1)]
+  public static extern bool avkSimulationContext_downloadImage(
+    nint ctx,
+    ulong taskId,
+    byte* buffer,
+    nuint bufferSize
+  );
 
 #if DEBUG
   // *mut *const c_char -> nint*. Each nint is a pointer to a UTF-8 null terminated string
@@ -1172,6 +1214,10 @@ internal unsafe static class PInvokeAetherVkCore
   public static extern unsafe bool avkSimulationContext_setFitsStretch(
     nint ctx, ulong assetId, uint mode, uint transfer, double p0, double p1,
     double* outBlack, double* outWhite);
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.U1)]
+  public static extern bool avkSimulationContext_setFitsPlane(nint ctx, ulong assetId, ulong plane);
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   public static extern uint avkSceneDumpVersion();
@@ -2388,6 +2434,53 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     throw new NotImplementedException();
   }
 
+  /// <summary>The render thread gets this long to present a frame of the viewport (a minimised
+  /// viewport presents none: the capture fails cleanly).</summary>
+  private const uint CaptureFrameTimeoutMs = 3000;
+
+  /// <summary>Then this long for the GPU to finish that frame.</summary>
+  private static readonly TimeSpan CaptureCompletionTimeout = TimeSpan.FromSeconds(10);
+
+  public Task<Models.CapturedImage?> CaptureViewportAsync(ulong presentationEngineId, bool hideLabels)
+  {
+    if (presentationEngineId == 0)
+      return Task.FromResult<Models.CapturedImage?>(null);
+    // the FFI waits for the render thread: never on the UI thread
+    return Task.Run(() => CaptureViewportBlocking(presentationEngineId, hideLabels));
+  }
+
+  private unsafe Models.CapturedImage? CaptureViewportBlocking(ulong presentationEngineId, bool hideLabels)
+  {
+    if (!TryEnterQuery())
+      return null;
+    try
+    {
+      uint width = 0, height = 0, format = 0;
+      ulong task = PInvokeAetherVkCore.avkSimulationContext_captureViewport(
+        _ctx, presentationEngineId, hideLabels, CaptureFrameTimeoutMs, &width, &height, &format);
+      if (task == 0 || width == 0 || height == 0)
+        return null;
+      var deadline = DateTime.UtcNow + CaptureCompletionTimeout;
+      while (PInvokeAetherVkCore.avkSimulationContext_getTaskStatus(_ctx, task) == 0)
+      {
+        if (DateTime.UtcNow > deadline || _shutdown)
+          return null;
+        Thread.Sleep(5);
+      }
+      var pixels = new byte[checked((int)(width * height * 4))];
+      fixed (byte* p = pixels)
+      {
+        if (!PInvokeAetherVkCore.avkSimulationContext_downloadImage(_ctx, task, p, (nuint)pixels.Length))
+          return null;
+      }
+      return Models.CapturedImage.FromNative((int)width, (int)height, pixels, format);
+    }
+    finally
+    {
+      ExitQuery();
+    }
+  }
+
   // ── INativeRuntimeService — Simulation Flow ───────────────────────────────
 
   public bool ResetSimulationSync()
@@ -3296,6 +3389,9 @@ public sealed class NativeRuntimeService : INativeRuntimeService
       ? new Models.FitsStretchResult(black, white)
       : null;
   }
+
+  public bool SetFitsPlane(ulong assetId, ulong plane) =>
+    _ctx != 0 && PInvokeAetherVkCore.avkSimulationContext_setFitsPlane(_ctx, assetId, plane);
 
   public unsafe Models.CometAppearanceStatus SetCometAppearance(Models.CometAppearanceDto appearance)
   {
@@ -4440,13 +4536,14 @@ public sealed record SkyImageInfo(
   public const uint FlagSiteLat = 1u << 2;
   public const uint FlagSiteLon = 1u << 3;
   public const uint FlagSiteElev = 1u << 4;
-  public const uint FlagSipIgnored = 1u << 5;
+  /// <summary>A distortion polynomial (SIP / TPV / …) is applied to the WCS mapping.</summary>
+  public const uint FlagDistortionApplied = 1u << 5;
   public const uint FlagRaster = 1u << 6;
   public const uint FlagWcsSidecar = 1u << 7;
   public const uint FlagFrameAssumed = 1u << 8;
   public const uint FlagTimesysAssumed = 1u << 9;
 
-  public bool SipIgnored => (Flags & FlagSipIgnored) != 0;
+  public bool DistortionApplied => (Flags & FlagDistortionApplied) != 0;
   public bool IsRaster => (Flags & FlagRaster) != 0;
 
   internal static SkyImageInfo FromNative(in CSkyImageInfo c) => new(

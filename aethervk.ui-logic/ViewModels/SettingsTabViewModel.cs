@@ -124,7 +124,8 @@ public partial class SettingsTabViewModel
       fitsImageService,
       timelineService.SeekAsync,
       timelineService.RequestModelRange,
-      translationService);
+      translationService,
+      _timeScale.Converter);
     // the main window's Model button runs the FITS comparison through these rows
     modeBar?.AttachBillboards(Billboards).AddDisposableTo(_disposables);
     // the Comet tab's Observation block ("from image", the comparison step) finds the image here

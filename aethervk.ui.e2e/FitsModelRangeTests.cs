@@ -22,7 +22,7 @@ public sealed class FitsModelRangeTests(ITestOutputHelper output)
     if (Directory.Exists(artifacts))
       Directory.Delete(artifacts, recursive: true);
     var saveDir = Path.Combine(artifacts, "review_67p_2021-12");
-    ReviewerMailTests.CopyDir(Path.Combine(AppSession.RepoRoot(), "test_assets", "saves", "review_67p_2021-12"), saveDir);
+    ReviewerMailTests.CopyDir(ReviewSave.FixtureDir, saveDir);
     var imageEpoch = DateTime.ParseExact(FitsComparisonSteps.DateMidUtc, "yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture);
     double periodH = 360.0 * 24.0 / RateDegDay;
 
@@ -87,7 +87,7 @@ public sealed class FitsModelRangeTests(ITestOutputHelper output)
     if (Directory.Exists(artifacts))
       Directory.Delete(artifacts, recursive: true);
     var saveDir = Path.Combine(artifacts, "review_67p_2021-12");
-    ReviewerMailTests.CopyDir(Path.Combine(AppSession.RepoRoot(), "test_assets", "saves", "review_67p_2021-12"), saveDir);
+    ReviewerMailTests.CopyDir(ReviewSave.FixtureDir, saveDir);
     var imageEpoch = DateTime.ParseExact(FitsComparisonSteps.DateMidUtc, "yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture);
     double periodH = 360.0 * 24.0 / RateDegDay;
 

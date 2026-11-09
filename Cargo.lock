@@ -38,11 +38,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "aethervk-cfitsio-rlib"
+version = "0.1.0"
+dependencies = [
+ "aethervk-cfitsio-sys",
+ "aethervk-test-assets",
+ "spin 0.10.0",
+]
+
+[[package]]
+name = "aethervk-cfitsio-sys"
+version = "0.1.0"
+
+[[package]]
 name = "aethervk-core-cdylib"
 version = "0.1.0"
 dependencies = [
  "aethervk-core-rlib",
  "aethervk-oshal-rlib",
+ "aethervk-test-assets",
  "anise",
  "anyhow",
  "approx",
@@ -71,7 +85,9 @@ name = "aethervk-core-rlib"
 version = "0.1.0"
 dependencies = [
  "ab_glyph",
+ "aethervk-cfitsio-rlib",
  "aethervk-oshal-rlib",
+ "aethervk-test-assets",
  "ahash 0.8.12",
  "anise",
  "approx",
@@ -140,6 +156,13 @@ dependencies = [
  "wchar",
  "windows",
  "windows-strings",
+]
+
+[[package]]
+name = "aethervk-test-assets"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
 ]
 
 [[package]]

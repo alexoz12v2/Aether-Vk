@@ -56,6 +56,12 @@ This bash script builds for a specified architecture (defaults to `osx-arm64`) a
 ```
 **Output:** `bin/publish/AetherVk_linux-x64.tar.gz` and `bin/publish/AetherVk_1.0.0_amd64.deb`
 
+### Native engine flags and licences
+
+Each script builds the engine (`cargo build -p aethervk-core-cdylib --target <triple>`) before `dotnet publish`, which then only copies the library. `AETHERVK_CARGO_FLAGS` (empty by default) adds flags to that build: `AETHERVK_CARGO_FLAGS=--no-default-features` packages a target without CFITSIO (pure-Rust FITS reader) when vcpkg cannot build it there. The release workflow sets it per target through the matrix field `cargo_flags`.
+
+Every package carries `LICENSE` and `THIRD_PARTY_LICENSES.md` (CFITSIO and zlib, copied from `aethervk.cfitsio/sys/THIRD_PARTY_LICENSES.md`, the single source): next to the executable on Windows and Linux (and so in the MSIX and `.deb`), in `Contents/Resources/` on macOS.
+
 ## Validation
 
 After packaging, you can ensure that the native structure (Vulkan layers on macOS, core native libraries across all OSes) are safely enclosed within the generated formats using the validation scripts:

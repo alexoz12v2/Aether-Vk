@@ -417,6 +417,27 @@ pub fn start_logic_thread(
               let now_s = now_scaled_us as f64 * 1e-6;
               utils::update_dust_trajectories(&scene_arc.read(), now_s);
 
+              // a system that cannot build because its comet is not in the cartesian cache (a
+              // snapshot restore emptied it; only the fixed update, that is Play, or a seek fill
+              // it): its emission pass found no jet state and marked the jet unavailable, for
+              // ever while paused. Fill the cache at the paused epoch first, as a seek does, and
+              // let the build below try again (the stall marker belongs to the attempt without
+              // the comet). Nothing happens when every comet with a jet is cached
+              {
+                let epoch =
+                  unsafe { scenes.time_managers.get(&scene_id).unwrap_unchecked() }.current_epoch();
+                let g = scene_arc.read();
+                if utils::cache_uncached_dust_comets(
+                  &g,
+                  *scene_id,
+                  &scenes.cartesian_state_cache,
+                  &context.logic_state.read().almanac_data,
+                  epoch,
+                ) {
+                  pc.paused_dust_build_stalled_at = None;
+                }
+              }
+
               // a particle system added (or asked to re-emit) while paused has no dust history
               // until the fixed update runs, that is Play, or a seek: build it here, as a seek
               // does (`apply_seek` → `fill_dust_history`), at the paused time. Only once the
@@ -1343,13 +1364,28 @@ fn process_command_internal(
               utils::repose_earth_observer(scene_write, v);
             }
 
-            // 4 empty the cartesian cache
-            let mut keys = alloc::vec::Vec::with_capacity(128);
-            scenes.cartesian_state_cache.iter().for_each(|kv_ref| keys.push(*kv_ref.key()));
-            for key in keys {
-              if key.scene_id == scene_id {
-                scenes.cartesian_state_cache.remove(&key);
-              }
+            // 4 back at the snapshot's instant the way a seek gets there (Reset and a save open
+            //   do the same): the cartesian cache of this scene emptied and rebuilt at that
+            //   epoch, the dust history filled there. Emptying the cache alone left the comet
+            //   out of it until Play (only the fixed update and a seek fill it), so a re-emit
+            //   requested while paused found no jet state and marked the jet unavailable: no
+            //   dust until Play, a seek or a reopen
+            let seek = scenes
+              .time_managers
+              .get(&scene_id)
+              .map(|tm| (tm.current_epoch(), tm.start_epoch, tm.state.read().scaled_time));
+            if let Some((epoch, start_epoch, scaled_us)) = seek {
+              let logic_state = ctx.logic_state.read();
+              utils::apply_seek(
+                vulkan_device,
+                scene_write,
+                scene_id,
+                &scenes.cartesian_state_cache,
+                &logic_state.almanac_data,
+                epoch,
+                start_epoch,
+                scaled_us,
+              );
             }
 
             // 5 mark as changed all transform, camera, highres transform components
@@ -3752,14 +3788,17 @@ pub(crate) mod utils {
         // that cannot progress must never turn the loop into `max_passes` empty submissions
         // per tick (the 2026-10-10 runaway)
         let stalled = n == 0 && building();
-        if stalled {
-          static STALL_LOGGED: core::sync::atomic::AtomicBool =
-            core::sync::atomic::AtomicBool::new(false);
-          if !STALL_LOGGED.swap(true, core::sync::atomic::Ordering::Relaxed) {
-            oshal::log!(
-              "[Dust] emission: a pass recorded nothing while a system is still building"
-            );
-          }
+        // said once per stall episode: a pass that recorded something, or a tick with nothing
+        // left to build, ends the episode and arms the message again (once per process, a
+        // later stall went unreported)
+        static STALL_LOGGED: core::sync::atomic::AtomicBool =
+          core::sync::atomic::AtomicBool::new(false);
+        if !stalled {
+          STALL_LOGGED.store(false, core::sync::atomic::Ordering::Relaxed);
+        } else if !STALL_LOGGED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+          oshal::log!(
+            "[Dust] emission: a pass recorded nothing while a system is still building"
+          );
         }
         if passes >= max_passes
           || !building()
@@ -4575,6 +4614,75 @@ pub(crate) mod utils {
         insert_into_cache(e_id, *t, None, *ap)
       },
     );
+  }
+
+  /// The paused logic loop's guard for a dust system that cannot build: the almanac-driven comet
+  /// of a particle system is not in the cartesian cache (a snapshot restore emptied it, and only
+  /// the fixed update, that is Play, or a seek fills it), so its emission pass finds no jet
+  /// state and marks the jet unavailable ([`crate::scene::dust::DustHostState::jet_unavailable`]),
+  /// for ever while paused. Fills the cache of `scene_id` at `epoch` the way [`apply_seek`] does
+  /// (insert, SPICE step, commit) and clears the unavailable flags of the systems whose comet is
+  /// cached again, so their due windows count as building ([`DustSystemState::building`]) and
+  /// the paused build tries again. Nothing happens when every such comet is cached (the normal
+  /// path writes neither the cache nor a flag). Only systems building or marked unavailable
+  /// count: a complete system's comet is left to Play and the seeks. True when a comet was
+  /// cached by this call.
+  ///
+  /// [`DustSystemState::building`]: crate::scene::dust::DustSystemState::building
+  pub fn cache_uncached_dust_comets(
+    scene: &SceneContext,
+    scene_id: u64,
+    cache: &dashmap::DashMap<crate::simulation_api::structs::SceneEntityId, CartesianState>,
+    almanac: &AlmanacPackedData,
+    epoch: anise::time::Epoch,
+  ) -> bool {
+    use crate::{scene::particles::ParticleSystemComponent, simulation_api::structs::SceneEntityId};
+    let cached = |body: EntityId| {
+      cache
+        .get(&SceneEntityId::new(scene_id, body))
+        .is_some_and(|c| c.comet_state.is_some())
+    };
+    // (system, its comet body) of the systems that wait for a comet the cache lacks
+    let mut waiting: alloc::vec::Vec<(EntityId, EntityId)> = alloc::vec::Vec::new();
+    scene.scene.query1(|ps_id, ps: &ParticleSystemComponent| {
+      let Some(body) = scene.scene.get_parent(ps_id) else {
+        return;
+      };
+      // only an almanac-driven comet is ever cached: a jet on anything else stays unavailable
+      if scene.scene.with_component(body, |_: &AlmanacPlanet| ()).is_none() || cached(body) {
+        return;
+      }
+      let stuck = {
+        let sys = ps.dust.lock();
+        sys.building() || sys.tiers.iter().any(|t| t.jet_unavailable)
+      };
+      if stuck {
+        waiting.push((ps_id, body));
+      }
+    });
+    if waiting.is_empty() {
+      return false;
+    }
+    insert_almanac_bodies_into_cache(scene, scene_id, cache);
+    step_cartesian_cache(cache, scene_id, epoch, almanac);
+    commit_cartesian_cache(scene, scene_id, cache);
+    // a comet the insertion did not take (no comet marker) stays out: its systems keep their
+    // flags, so the paused loop does not retry them every tick
+    let mut filled = false;
+    for (ps_id, body) in waiting {
+      if cached(body) {
+        filled = true;
+        let _ = scene.scene.with_component(ps_id, |ps: &ParticleSystemComponent| {
+          ps.dust.lock().clear_jet_unavailable()
+        });
+      }
+    }
+    if filled {
+      oshal::log!(
+        "[Dust] paused build: the comet was not in the cartesian cache, cached it at {epoch}"
+      );
+    }
+    filled
   }
 
   /// the smallest seek (simulated seconds) that restarts the views' dust feedback ([`apply_seek`])

@@ -44,7 +44,9 @@ public partial class ViewModeBarViewModel : ObservableObject, IDisposable
   public bool IsNucleusActive => CurrentMode == CameraMode.CometOrbiting;
   public bool IsModelActive => CurrentMode == CameraMode.EarthPosition;
 
-  /// <summary>One line after Model: the comparison's outcome, or the no-FITS hint.</summary>
+  /// <summary>One line after Model: the comparison's outcome, the no-FITS hint or the
+  /// FITS-without-a-date hint. Cleared when the FITS rows change, the camera leaves the Model view
+  /// or the language changes.</summary>
   [ObservableProperty]
   [NotifyPropertyChangedFor(nameof(HasHint))]
   private string _hint = string.Empty;
@@ -79,7 +81,11 @@ public partial class ViewModeBarViewModel : ObservableObject, IDisposable
     RefreshStrings();
     _translationService.CultureChanged.Skip(1)
       .ObserveOn(schedulerProvider.MainThread)
-      .Subscribe(_ => RefreshStrings())
+      .Subscribe(_ =>
+      {
+        RefreshStrings();
+        Hint = string.Empty; // written in the previous language
+      })
       .AddDisposableTo(_disposables);
 
     // a viewport opened or closed: follow the camera that is now the active one
@@ -125,10 +131,18 @@ public partial class ViewModeBarViewModel : ObservableObject, IDisposable
       if (e.PropertyName == nameof(DesktopBillboardsViewModel.ViewportDesktopRect) && ReferenceEquals(_billboards, billboards))
         ViewportDesktopRect = billboards.ViewportDesktopRect;
     }
+    // a FITS row came, went or learned its metadata: the hint about it is stale
+    void OnFitsRows()
+    {
+      if (ReferenceEquals(_billboards, billboards))
+        Hint = string.Empty;
+    }
     billboards.PropertyChanged += Follow;
+    billboards.FitsRowsChanged += OnFitsRows;
     return Disposable.Create(() =>
     {
       billboards.PropertyChanged -= Follow;
+      billboards.FitsRowsChanged -= OnFitsRows;
       if (ReferenceEquals(_billboards, billboards))
       {
         _billboards = null;
@@ -161,6 +175,14 @@ public partial class ViewModeBarViewModel : ObservableObject, IDisposable
 
   private bool CanSelect() => !IsBusy;
 
+  // the hint is about the Model view (the mode notification of Model's own switch arrives after
+  // the hint is set, so only leaving it clears)
+  partial void OnCurrentModeChanged(CameraMode value)
+  {
+    if (value != CameraMode.EarthPosition)
+      Hint = string.Empty;
+  }
+
   /// <summary>Orbit: the ecliptic seen from above (what the overlay's Orbit button does).</summary>
   [RelayCommand(CanExecute = nameof(CanSelect))]
   private void SelectOrbit() => Camera?.SetCameraMode(CameraMode.UpZenith);
@@ -183,7 +205,10 @@ public partial class ViewModeBarViewModel : ObservableObject, IDisposable
     if (fits?.ObservationUtc is not { } utc)
     {
       camera.EnterModelView();
-      Hint = StrNoFitsHint;
+      Hint = fits is null
+        ? StrNoFitsHint
+        : ObservationImageText.FormatWithoutDate(
+          _translationService.GetString("ModeBar_FitsWithoutDateHint"), fits, _translationService.GetString);
       RefreshRangeLock();
       return;
     }

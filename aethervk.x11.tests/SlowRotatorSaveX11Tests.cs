@@ -68,6 +68,8 @@ public sealed class SlowRotatorSaveX11Tests : IDisposable
     "2020 F2",    // ATLAS, perihelion 2022 at 8.8 AU
   ];
 
+  /// Where <c>AETHERVK_WRITE_FIXTURE=1</c> writes the archive: the checkout's test_assets/ (repack
+  /// the saves group with scripts/pack_test_assets.sh afterwards); readers go through ASSETS.tsv.
   public static string FixturePath() =>
     Path.Combine(AppRig.RepoRoot(), "test_assets", "saves", "review_slow_rotator_2026-11.avk");
 
@@ -379,8 +381,7 @@ public sealed class SlowRotatorSaveX11Tests : IDisposable
   [SkippableFact]
   public void SlowRotatorFixture_OpensAndRestoresItsScene()
   {
-    var fixture = FixturePath();
-    Skip.If(!File.Exists(fixture), $"fixture missing: {fixture}");
+    var fixture = AetherVk.TestAssets.TestAssets.Require("saves/review_slow_rotator_2026-11.avk");
     using var rig = new AppRig();
     // a copy: opening touches the archive's timestamps and the fixture stays as committed
     var avk = Path.Combine(rig.SavesDir, Path.GetFileName(fixture));

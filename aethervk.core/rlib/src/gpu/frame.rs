@@ -2034,6 +2034,10 @@ pub struct RenderScene {
   pub mesh_shading: u32,
   /// linear factor on the sunlight that lights meshes (`CameraExposureComponent`, 1 = none)
   pub mesh_exposure: f32,
+  /// this frame is drawn without the engine's UI and text batches (the Comet / Sun labels, leader
+  /// lines, trajectory indicators): a viewport capture with the labels hidden
+  /// (`ViewportCaptureRequest::hide_labels`). The scene is not touched: the next frame draws them.
+  pub hide_ui_labels: bool,
 }
 
 impl RenderScene {
@@ -2072,6 +2076,7 @@ impl RenderScene {
       layer_ref_dist: [0.0; 8],
       mesh_shading: 0,
       mesh_exposure: 1.0,
+      hide_ui_labels: false,
     }
   }
 
@@ -2772,6 +2777,11 @@ pub fn render_frame(
   }
 
   // ── UI / Text (always drawn last, in the composite subpass) ────────────
+  // A capture with the labels hidden skips both batches for this frame only.
+  if render_scene.hide_ui_labels {
+    device.debug_label_end(cmd_buffer);
+    return Ok(());
+  }
   if let Some(draw_call) = &render_scene.ui_call {
     do_draw_ui_batch(
       device,

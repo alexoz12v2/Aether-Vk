@@ -246,6 +246,22 @@ internal sealed class AppRig : IDisposable
     }
   }
 
+  /// <summary>
+  /// A copy of the save folder <paramref name="fixtureDir"/> (from test_assets/ASSETS.tsv, a shared
+  /// cache that opening a save would rewrite) in <see cref="SavesDir"/> under the same name; its index.
+  /// </summary>
+  public string CopyOfSave(string fixtureDir)
+  {
+    var to = Path.Combine(SavesDir, Path.GetFileName(fixtureDir.TrimEnd(Path.DirectorySeparatorChar)));
+    foreach (var f in Directory.GetFiles(fixtureDir, "*", SearchOption.AllDirectories))
+    {
+      var target = Path.Combine(to, Path.GetRelativePath(fixtureDir, f));
+      Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+      File.Copy(f, target);
+    }
+    return Path.Combine(to, SaveIndex.FileName);
+  }
+
   /// <summary>The checkout root (the folder holding AetherVk.sln).</summary>
   public static string RepoRoot()
   {

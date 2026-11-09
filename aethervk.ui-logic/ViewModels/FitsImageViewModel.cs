@@ -38,7 +38,131 @@ public partial class FitsImageViewModel : ObservableObject, IObservationImage
 
   public FitsMetadata Metadata { get; }
 
-  public FitsFacts FactsData => Metadata.Facts;
+  private FitsFacts? _effectiveFacts;
+
+  /// <summary>The header facts as the row reads them: the engine's, with the dates moved to the
+  /// chosen century for a two-digit-year card (<see cref="TwoDigitYearCentury"/>). Everything that
+  /// uses the observation date (the facts rows, Seek, Model range, the mode bar's Model) reads this.</summary>
+  public FitsFacts FactsData =>
+    _effectiveFacts ??= FitsDateCentury.Apply(Metadata.Facts, TwoDigitYearCentury, _row.Owner?.TimeScale);
+
+  // ── two-digit year ──
+
+  /// <summary>One choice of <see cref="TwoDigitYearCenturyOptions"/> (the label is what the combo shows).</summary>
+  public sealed record CenturyOption(FitsTwoDigitYearCentury Value, string Label)
+  {
+    public override string ToString() => Label;
+  }
+
+  /// <summary>The date card wrote its year with two digits: the century selector is shown.</summary>
+  public bool HasTwoDigitYear => Metadata.Facts.DateTwoDigitYear == true;
+
+  /// <summary>
+  /// The century a two-digit year is read in: 20yy (the engine's reading, the default) or the FITS
+  /// standard's 19yy, which moves the observation date back 100 years everywhere. Stored on the
+  /// billboard (<see cref="DesktopBillboard.FitsTwoDigitYearCentury"/>) and saved with it.
+  /// </summary>
+  [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(FactsData), nameof(ObservationUtc), nameof(DateCardText), nameof(TwoDigitYearCenturyOption))]
+  private FitsTwoDigitYearCentury _twoDigitYearCentury;
+
+  private bool _syncingCentury;
+
+  public IReadOnlyList<CenturyOption> TwoDigitYearCenturyOptions { get; }
+
+  /// <summary>The selected option (the combo's item); setting it sets <see cref="TwoDigitYearCentury"/>.</summary>
+  public CenturyOption? TwoDigitYearCenturyOption
+  {
+    get => TwoDigitYearCenturyOptions.FirstOrDefault(o => o.Value == TwoDigitYearCentury);
+    set
+    {
+      if (value is not null)
+        TwoDigitYearCentury = value.Value;
+    }
+  }
+
+  /// <summary>"Two-digit year" (the selector's label and its help header).</summary>
+  public string TwoDigitYearLabel { get; }
+
+  /// <summary>Why the choice exists and what it moves (the help flyout).</summary>
+  public string TwoDigitYearHelp { get; }
+
+  // ── cube plane ──
+
+  /// <summary>The image is a cube with more than one plane: the plane selector is shown.</summary>
+  public bool HasPlanes => Metadata.Planes > 1;
+
+  /// <summary>Planes of the cube (1 for a plain image).</summary>
+  public long PlaneCount => Math.Max(1, Metadata.Planes);
+
+  /// <summary><see cref="PlaneCount"/> as the NumericUpDown's maximum.</summary>
+  public decimal PlaneMaximum => PlaneCount;
+
+  /// <summary>
+  /// The plane shown, 1-based for the user (1..<see cref="PlaneCount"/>; the engine's flat index is
+  /// one less, NAXIS3 fastest). Stored on the billboard (<see cref="DesktopBillboard.FitsPlane"/>),
+  /// saved with it and re-applied after a load. <c>decimal?</c>: the NumericUpDown's value type.
+  /// </summary>
+  [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(PlaneOfText), nameof(PlaneAxesText))]
+  private decimal? _planeValue = 1;
+
+  private bool _syncingPlane;
+
+  /// <summary>"Plane" (the selector's label and its help header).</summary>
+  public string PlaneLabel { get; }
+
+  /// <summary>What the selector does (the help flyout).</summary>
+  public string PlaneHelp { get; }
+
+  /// <summary>"of N" after the selector.</summary>
+  public string PlaneOfText => S("Billboard_FitsPlane_Of", ("N", PlaneCount.ToString(Ci)));
+
+  /// <summary>The 0-based flat plane index the selector asks for.</summary>
+  public int PlaneIndex => ToIndex(PlaneValue);
+
+  /// <summary>The per-axis indices of the chosen plane (1-based), "NAXIS3 = 2, NAXIS4 = 1"; empty
+  /// unless the cube has two or more extra axes (<see cref="FitsMetadata.PlaneAxes"/>).</summary>
+  public string PlaneAxesText => FormatPlaneAxes(Metadata.PlaneAxes, PlaneIndex);
+
+  [ObservableProperty]
+  private bool _isApplyingPlane;
+
+  /// <summary>"NAXIS3 = i3, NAXIS4 = i4, …" (1-based) of flat index <paramref name="plane"/>
+  /// (NAXIS3 fastest); empty for fewer than two axes.</summary>
+  internal static string FormatPlaneAxes(IReadOnlyList<long> axes, long plane)
+  {
+    if (axes.Count < 2)
+      return string.Empty;
+    var parts = new List<string>(axes.Count);
+    long rest = Math.Max(0, plane);
+    for (int a = 0; a < axes.Count; a++)
+    {
+      long n = Math.Max(1, axes[a]);
+      parts.Add(string.Format(Ci, "NAXIS{0} = {1}", a + 3, rest % n + 1));
+      rest /= n;
+    }
+    return string.Join(", ", parts);
+  }
+
+  private int ToIndex(decimal? value)
+  {
+    long v = value is { } d ? (long)Math.Round(d) : 1;
+    return (int)Math.Min(Math.Max(v, 1), Math.Min(PlaneCount, int.MaxValue)) - 1;
+  }
+
+  private string S(string key, params (string Name, string Value)[] args)
+  {
+    var t = _row.Owner?.Strings;
+    if (t is null)
+      return key;
+    if (args.Length == 0)
+      return t.GetString(key);
+    var d = new Dictionary<string, string>();
+    foreach (var (n, v) in args)
+      d[n] = v;
+    return t.GetFormattedString(key, d);
+  }
 
   /// <summary>Every header card, in file order.</summary>
   public IReadOnlyList<FitsCard> Cards => Metadata.Cards;
@@ -143,6 +267,21 @@ public partial class FitsImageViewModel : ObservableObject, IObservationImage
     Metadata = metadata;
     AssetId = assetId;
     TextureKey = row.TextureKey;
+    var strings = row.Owner?.Strings;
+    string S(string key) => strings?.GetString(key) ?? key;
+    TwoDigitYearLabel = S("Billboard_FitsCentury_Label");
+    TwoDigitYearHelp = S("Billboard_FitsCentury_Help");
+    TwoDigitYearCenturyOptions =
+    [
+      new CenturyOption(FitsTwoDigitYearCentury.TwoThousands, S("Billboard_FitsCentury_TwoThousands")),
+      new CenturyOption(FitsTwoDigitYearCentury.NineteenHundreds, S("Billboard_FitsCentury_NineteenHundreds")),
+    ];
+    // the billboard's saved century (older saves: 20yy)
+    _twoDigitYearCentury = row.Current.FitsTwoDigitYearCentury;
+    PlaneLabel = S("Billboard_FitsPlane_Label");
+    PlaneHelp = S("Billboard_FitsPlane_Help");
+    // the billboard's saved plane (older saves: the first); the service re-applies it after a load
+    _planeValue = Math.Min(Math.Max(row.Current.FitsPlane, 0), PlaneCount - 1) + 1;
     if (metadata.StretchPoints is { } pts)
       ShowPoints(pts);
     // the billboard's saved stretch wins over what the texture renders right now
@@ -279,6 +418,82 @@ public partial class FitsImageViewModel : ObservableObject, IObservationImage
 
   partial void OnFlipSiteLonChanged(bool value) => Facts = BuildFacts();
 
+  partial void OnTwoDigitYearCenturyChanged(FitsTwoDigitYearCentury value)
+  {
+    _effectiveFacts = null;
+    Facts = BuildFacts();
+    SeekToObservationCommand.NotifyCanExecuteChanged();
+    RequestModelRangeCommand.NotifyCanExecuteChanged();
+    // the service's own state, not the row's snapshot (it refreshes only when the change comes back)
+    if (!_syncingCentury && (_row.Service.Find(_row.Id) ?? _row.Current).FitsTwoDigitYearCentury != value)
+      _row.Service.Update(_row.Id, b => b with { FitsTwoDigitYearCentury = value });
+  }
+
+  /// <summary>The service's state reached the row (a savefile load, an edit from elsewhere): the
+  /// selector follows without writing back.</summary>
+  internal void SyncFromBillboard(DesktopBillboard b)
+  {
+    if (b.FitsPlane != PlaneIndex && b.FitsPlane >= 0 && b.FitsPlane < PlaneCount)
+    {
+      _syncingPlane = true;
+      try
+      {
+        PlaneValue = b.FitsPlane + 1;
+      }
+      finally
+      {
+        _syncingPlane = false;
+      }
+    }
+    if (b.FitsTwoDigitYearCentury == TwoDigitYearCentury)
+      return;
+    _syncingCentury = true;
+    try
+    {
+      TwoDigitYearCentury = b.FitsTwoDigitYearCentury;
+    }
+    finally
+    {
+      _syncingCentury = false;
+    }
+  }
+
+  partial void OnPlaneValueChanged(decimal? value)
+  {
+    int plane = ToIndex(value);
+    if (value is null || (long)Math.Round(value.Value) - 1 != plane)
+    {
+      PlaneValue = plane + 1; // out of range or cleared: back to a valid plane
+      return;
+    }
+    Facts = BuildFacts();
+    // the service's own state, not the row's snapshot (it refreshes only when the change comes back)
+    if (!_syncingPlane && (_row.Service.Find(_row.Id) ?? _row.Current).FitsPlane != plane)
+      _ = ApplyPlaneAsync(plane);
+  }
+
+  /// <summary>Shows plane <paramref name="plane"/> (0-based) off the UI thread; every billboard of
+  /// the texture records it, the billboard windows then re-copy the texels (as after a re-stretch).</summary>
+  internal async Task<bool> ApplyPlaneAsync(int plane)
+  {
+    if (_row.Owner?.Fits is not { } fits)
+      return false;
+    IsApplyingPlane = true;
+    try
+    {
+      bool ok = await fits.ApplyPlaneAsync(AssetId, plane, TextureKey);
+      if (!ok)
+        StatusMessage = S("Billboard_FitsPlane_Refused");
+      else if (fits.GetMetadata(AssetId)?.StretchPoints is { } pts)
+        ShowPoints(pts); // the stretch's points on the new plane
+      return ok;
+    }
+    finally
+    {
+      IsApplyingPlane = false;
+    }
+  }
+
   partial void OnStretchModeChanged(FitsStretchMode value)
   {
     if (_settingStretch)
@@ -361,6 +576,9 @@ public partial class FitsImageViewModel : ObservableObject, IObservationImage
   // the observation chain (the Comet tab's Run at this date, the mode bar's Model)
   bool IObservationImage.CanSetUpComparison => CanSetUpComparison();
   Task IObservationImage.SetUpComparisonAsync() => SetUpComparisonCommand.ExecuteAsync(null);
+
+  /// <summary>The header's date card as written (shown when <see cref="ObservationUtc"/> is null).</summary>
+  public string? DateCardText => ObservationImageText.CardText(FactsData);
 
   private bool CanRequestModelRange() => _row.Owner?.CanRequestModelRange == true && ObservationUtc is not null;
 
@@ -501,13 +719,20 @@ public partial class FitsImageViewModel : ObservableObject, IObservationImage
     }
 
     Add("Object", f.Object);
+    Add(S("Billboard_FitsFact_Image"), ImageText(), "FitsFact_Image");
+    if (HasPlanes)
+      Add(S("Billboard_FitsFact_Planes"), PlanesText(PlaneIndex), "FitsFact_Planes");
     Add(f.DateSource ?? "DATE-OBS", f.DateObs);
     if (f.DateMidUtc is { } mid)
       Add("Mid-exposure UTC", mid + (f.DateIsMid == true ? " (the card is mid-exposure)" : "")
-        + (f.TimesysAssumed == true ? " · no TIMESYS: read as UTC" : ""), "FitsFact_DateMid");
+        + (f.TimesysAssumed == true ? " · no TIMESYS: read as UTC" : "")
+        + (f.DateTwoDigitYear == true
+          ? TwoDigitYearCentury == FitsTwoDigitYearCentury.NineteenHundreds ? " · two-digit year read as 19yy" : " · two-digit year read as 20yy"
+          : ""), "FitsFact_DateMid");
     // the engine's epoch of the same instant (TDB = UTC + 69.18 s): what Seek and Model range use
     if (f is { DateMidTdbCenturies: { } tdbC, DateMidTdbNanoseconds: { } tdbNs })
       Add("Mid-exposure TDB", TimeUtils.FormatTdbEpoch(tdbC, tdbNs, "yyyy-MM-dd'T'HH:mm:ss") + " TDB", "FitsFact_DateMidTdb");
+    Add(S("Billboard_FitsFact_DateSource"), DateSourceText(f), "FitsFact_DateSource");
     Add("Telescope", Join(" / ", f.Telescope, f.Instrument));
     Add("Filter", f.Filter);
     Add("Exposure", f.ExposureS is { } e ? string.Format(Ci, "{0:0.###} s", e) : null);
@@ -535,8 +760,115 @@ public partial class FitsImageViewModel : ObservableObject, IObservationImage
       false => "no: east left with north up (det CD < 0)",
       null => null,
     }, "FitsFact_Mirrored");
+    Add(S("Billboard_FitsFact_Projection"), ProjectionText(f.WcsProjection), "FitsFact_Projection");
+    Add(S("Billboard_FitsFact_Distortion"), DistortionText(f.WcsDistortion), "FitsFact_Distortion");
+    Add(S("Billboard_FitsFact_Frame"), FrameText(f), "FitsFact_Frame");
+    Add(S("Billboard_FitsFact_Hips"), HipsText(Metadata.Hips), "FitsFact_Hips");
     Add("WCS", f.WcsError);
     return list;
+  }
+
+  /// <summary>"1200 × 1200, BITPIX 32, HDU 1" (", compressed" for a tile-compressed image); null
+  /// when the engine reports no size.</summary>
+  internal string? ImageText()
+  {
+    var m = Metadata;
+    int w = m.Naxis1 > 0 ? m.Naxis1 : m.TextureWidth, h = m.Naxis2 > 0 ? m.Naxis2 : m.TextureHeight;
+    if (w <= 0 || h <= 0)
+      return null;
+    var text = string.Format(Ci, "{0} × {1}", w, h);
+    if (m.Bitpix != 0)
+      text += string.Format(Ci, ", BITPIX {0}", m.Bitpix);
+    if (m.Hdu is { } hdu)
+      text += string.Format(Ci, ", HDU {0}", hdu);
+    if (m.Compressed)
+      text += ", " + S("Billboard_FitsFact_Compressed");
+    return text;
+  }
+
+  /// <summary>"2 of 3" (1-based), plus the per-axis indices for a cube of several extra axes.</summary>
+  internal string PlanesText(int plane)
+  {
+    var text = S("Billboard_FitsPlane_OfN", ("P", (plane + 1).ToString(Ci)), ("N", PlaneCount.ToString(Ci)));
+    var axes = FormatPlaneAxes(Metadata.PlaneAxes, plane);
+    return axes.Length == 0 ? text : $"{text} ({axes})";
+  }
+
+  /// <summary>Which card the date came from and what kind of date it is: "DATE-OBS", "DATE-OBS ·
+  /// date only (midnight)", "DATE · file date (DATE), not the observation".</summary>
+  internal string? DateSourceText(FitsFacts f)
+  {
+    if (f.DateSource is not { Length: > 0 } src)
+      return null;
+    var parts = new List<string> { src };
+    if (f.DateIsFileDate == true)
+      parts.Add(S("Billboard_FitsDate_FileDate"));
+    if (f.DateOnly == true)
+      parts.Add(S("Billboard_FitsDate_DateOnly"));
+    return string.Join(" · ", parts);
+  }
+
+  /// <summary>"TAN (gnomonic)": the code and a short name (the code alone for an unknown one).</summary>
+  internal string? ProjectionText(string? code)
+  {
+    if (string.IsNullOrEmpty(code))
+      return null;
+    string key = "Billboard_FitsProjection_" + code!.ToUpperInvariant();
+    string name = S(key);
+    return name.Length == 0 || name == key || name == $"[{key}]" ? code : $"{code} ({name})";
+  }
+
+  /// <summary>"SIP" / "TPV" as written; "none" translated.</summary>
+  internal string? DistortionText(string? distortion) =>
+    string.IsNullOrEmpty(distortion) ? null
+    : string.Equals(distortion, "none", StringComparison.OrdinalIgnoreCase) ? S("Billboard_FitsDistortion_None")
+    : distortion;
+
+  /// <summary>"ICRS", "FK5 J2000", "FK4 B1950", "Galactic", "Ecliptic J2000", plus " (assumed)"
+  /// when no card named the frame.</summary>
+  internal string? FrameText(FitsFacts f)
+  {
+    if (string.IsNullOrEmpty(f.WcsFrame))
+      return null;
+    string frame = f.WcsFrame!;
+    // the standard's defaults when no EQUINOX card: J2000 (FK5, ecliptic), B1950 (FK4)
+    string Eq(string prefix, double fallback) => string.Format(Ci, " {0}{1:0.###}", prefix, f.WcsEquinox ?? fallback);
+    string text = frame.ToUpperInvariant() switch
+    {
+      "GALACTIC" => S("Billboard_FitsFrame_Galactic"),
+      "ECLIPTIC" => S("Billboard_FitsFrame_Ecliptic") + Eq("J", 2000),
+      "FK4" or "FK4-NO-E" => frame + Eq("B", 1950),
+      "FK5" => frame + Eq("J", 2000),
+      _ => frame,
+    };
+    if (f.WcsFrameAssumed == true)
+      text += " " + S("Billboard_FitsFrame_Assumed");
+    return text;
+  }
+
+  /// <summary>"order 3, tile 5 · Equatorial · survey title" or "order 3, Allsky · …".</summary>
+  internal string? HipsText(FitsHipsFacts? h)
+  {
+    if (h is null)
+      return null;
+    var parts = new List<string>
+    {
+      h.Allsky || h.Npix is null
+        ? S("Billboard_FitsHips_Allsky", ("K", h.Order.ToString(Ci)))
+        : S("Billboard_FitsHips_Tile", ("K", h.Order.ToString(Ci)), ("N", h.Npix.Value.ToString(Ci))),
+    };
+    string? frame = h.Frame?.ToLowerInvariant() switch
+    {
+      "equatorial" => S("Billboard_FitsFrame_Equatorial"),
+      "galactic" => S("Billboard_FitsFrame_Galactic"),
+      "ecliptic" => S("Billboard_FitsFrame_Ecliptic"),
+      _ => h.Frame,
+    };
+    if (!string.IsNullOrEmpty(frame))
+      parts.Add(frame! + (h.FrameSource == "assumed" ? " " + S("Billboard_FitsFrame_Assumed") : ""));
+    if (!string.IsNullOrEmpty(h.SurveyTitle))
+      parts.Add(h.SurveyTitle!);
+    return string.Join(" · ", parts);
   }
 
   /// <summary>"RA 09:02:15.22 (135.56340°) · Dec +28:09:24.8 (28.15690°)".</summary>

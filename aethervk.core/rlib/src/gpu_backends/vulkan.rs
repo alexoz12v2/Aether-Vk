@@ -45,6 +45,14 @@ pub mod mock_scene_data;
 #[cfg(test)]
 pub mod trajectory_tests;
 
+#[cfg(test)]
+pub mod test_profile_gate;
+#[cfg(test)]
+pub mod test_device_slots;
+
+#[cfg(test)]
+pub mod test_gpu_watch;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SyncMode {
   /// CPU uploads data. Needs Transfer Write -> Vertex Read barrier.
@@ -72,6 +80,10 @@ pub(super) struct VulkanCore {
   instance: alloc::sync::Arc<instance::Instance>,
   live_devices:
     FnvIndexMap<RenderDeviceHandle, core::mem::MaybeUninit<device::Device>, MAX_DEVICES>,
+  /// tests: the device slot this core's device holds (`test_device_slots`); dropped after the
+  /// device, so the slot frees once the device is destroyed
+  #[cfg(test)]
+  device_slot: Option<alloc::sync::Arc<test_device_slots::DeviceSlot>>,
 }
 
 unsafe impl Sync for VulkanCore {}
@@ -99,6 +111,8 @@ impl VulkanCore {
     Ok(Self {
       instance,
       live_devices,
+      #[cfg(test)]
+      device_slot: None,
     })
   }
 }
@@ -216,6 +230,17 @@ impl RenderContext for VulkanRenderContext {
     // an app relaunch) can fail transiently while the driver still tears the old one down
     // (`vkCreateDevice` → VK_ERROR_INITIALIZATION_FAILED / DEVICE_LOST in the NVIDIA ICD). That is
     // back-pressure, not a configuration error: back off exponentially (with jitter) and retry.
+    // tests: the device-creating thread carries its test's name (test_gpu_watch)
+    #[cfg(test)]
+    test_gpu_watch::name_gpu_test_thread();
+    // tests, in this order (test_device_slots): a live-device slot of the test, then no device
+    // while a dust profiler session is open (test_profile_gate), then one creation at a time
+    #[cfg(test)]
+    let mut device_slot = Some(test_device_slots::acquire());
+    #[cfg(test)]
+    let _profile_gate = test_profile_gate::plain_device_guard();
+    #[cfg(test)]
+    let _creating = test_device_slots::creation_guard();
     let attempts = device_init_attempts();
     let mut attempt = 0u32;
     loop {
@@ -235,7 +260,14 @@ impl RenderContext for VulkanRenderContext {
           );
           attempt += 1;
         }
-        other => return other,
+        other => {
+          // tests: the core keeps the slot for as long as its device lives
+          #[cfg(test)]
+          if let (Ok(_), Some(slot)) = (&other, device_slot.take()) {
+            self.core.write().device_slot.get_or_insert(slot);
+          }
+          return other;
+        }
       }
     }
   }

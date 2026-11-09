@@ -1,4 +1,4 @@
-//! Headless reproductions of the reviewer's 67P save (`test_assets/saves/review_67p_2021-12`, the
+//! Headless reproductions of the reviewer's 67P save (`saves/review_67p_2021-12` of the test assets, the
 //! reviewer's mail of 2026-10-29): the SPK coverage, the four jets (the −67° one never reached the
 //! simulation), the sunlight of each jet site and the dust age at the committed start.
 //!
@@ -28,10 +28,18 @@ use aethervk_oshal_rlib::math::{
 use anise::prelude::NAIFSummaryRecord;
 use hifitime::{Duration, Epoch, TimeScale};
 
+/// test asset paths (`aethervk_test_assets`)
 const SPK_COMMITTED: &str =
-  "../../test_assets/saves/review_67p_2021-12/spk/spk_67P_90000703_2021-12-12_2021-12-28.bsp";
+  "saves/review_67p_2021-12/spk/spk_67P_90000703_2021-12-12_2021-12-28.bsp";
 const SPK_M30: &str =
-  "../../test_assets/saves/review_67p_2021-12/spk/spk_m30_90000703_2021-12-15_2025-11-11.bsp";
+  "saves/review_67p_2021-12/spk/spk_m30_90000703_2021-12-15_2025-11-11.bsp";
+
+/// The committed SPK's path (downloaded on demand), or skip the calling test.
+macro_rules! spk_committed {
+  () => {
+    aethervk_test_assets::test_asset!(SPK_COMMITTED).to_str().unwrap().to_string()
+  };
+}
 const NAIF_67P: i32 = 1000012;
 /// `avkSimulationContext_addParticleSystem`'s `JET_TTL_US` (30 d)
 const JET_TTL_US: i64 = 30 * 86_400 * 1_000_000i64;
@@ -173,17 +181,18 @@ fn fmt_epoch(e: Epoch) -> String {
 fn review_67p_spk_segment_bounds() {
   // the −30 d SPK came with the reviewer's archive and is not a tracked fixture: without it the
   // question cannot be asked, so the test skips (the committed SPK is tracked and required)
-  if !std::path::Path::new(SPK_M30).exists() {
+  let Some(m30) = aethervk_test_assets::local(SPK_M30) else {
     println!("skipped: {SPK_M30} is not in test_assets (it is not a tracked fixture)");
     return;
-  }
+  };
+  let committed = spk_committed!();
   let (start, end) = (committed_start(), committed_end());
   let before = start - Duration::from_days(30.0);
   println!("committed start {}", fmt_epoch(start));
   println!("committed end   {}", fmt_epoch(end));
   println!("start − 30 d    {}", fmt_epoch(before));
   let mut domains = Vec::new();
-  for path in [SPK_COMMITTED, SPK_M30] {
+  for path in [committed.as_str(), m30.to_str().unwrap()] {
     let bytes = bytes::Bytes::from(std::fs::read(path).expect(path));
     let mut almanac = anise::almanac::Almanac::default();
     almanac.load_from_bytes_mut(bytes, path).expect(path);
@@ -225,13 +234,13 @@ fn review_67p_spk_segment_bounds() {
 // shared GPU scene recipe
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn load_almanac_files(ctx: &SimulationContext) {
+fn load_almanac_files(ctx: &SimulationContext, spk: &str) {
   let mut logic_state = ctx.logic_state.write();
   for f in [
     "../../assets/planets/pck00011.pca",
     "../../assets/planets/gm_de431.pca",
     "../../assets/planets/de442.bsp",
-    SPK_COMMITTED,
+    spk,
   ] {
     logic_state.almanac_data.load_almanac(f).expect(f);
   }
@@ -428,12 +437,13 @@ fn window_s(t: &DustTierStats) -> f64 {
 /// `ParticleSystemComponent::new` must succeed (the −67° one never reached the simulation).
 #[test]
 fn review_67p_four_jets_all_create() {
+  let spk = spk_committed!();
   let ctx = SimulationContext::startup(None).expect("Failed to create SimulationContext");
   if ctx.render_frontend().is_none() {
     println!("Skipping: no GPU");
     return;
   }
-  load_almanac_files(&ctx);
+  load_almanac_files(&ctx, &spk);
   let (scene_id, _comet_body) = committed_scene(&ctx);
   let mut jets = Vec::new();
   let mut errors = Vec::new();
@@ -536,12 +546,13 @@ fn jet_state(
 /// `ŝ·n` at each sample and the tier-0 emission windows (TTL / 256) that would emit nothing.
 #[test]
 fn review_67p_jet_sites_lit_fraction() {
+  let spk = spk_committed!();
   let mut almanac = AlmanacPackedData::default();
   for f in [
     "../../assets/planets/pck00011.pca",
     "../../assets/planets/gm_de431.pca",
     "../../assets/planets/de442.bsp",
-    SPK_COMMITTED,
+    spk.as_str(),
   ] {
     almanac.load_almanac(f).expect(f);
   }
@@ -667,12 +678,13 @@ fn mirror_lit_fraction(
 /// −90° + 1.5·δ_max is (mirrored when the subsolar point stays south).
 #[test]
 fn review_67p_jet_lit_fraction_query() {
+  let spk = spk_committed!();
   let mut almanac = AlmanacPackedData::default();
   for f in [
     "../../assets/planets/pck00011.pca",
     "../../assets/planets/gm_de431.pca",
     "../../assets/planets/de442.bsp",
-    SPK_COMMITTED,
+    spk.as_str(),
   ] {
     almanac.load_almanac(f).expect(f);
   }
@@ -742,12 +754,13 @@ fn review_67p_jet_lit_fraction_query() {
 /// save's four jets the mirror's fraction over the committed range.
 #[test]
 fn review_67p_jet_lit_fraction_query_through_context() {
+  let spk = spk_committed!();
   let ctx = SimulationContext::startup(None).expect("Failed to create SimulationContext");
   if ctx.render_frontend().is_none() {
     println!("Skipping: no GPU");
     return;
   }
-  load_almanac_files(&ctx);
+  load_almanac_files(&ctx, &spk);
   let (scene_id, comet_body) = committed_scene(&ctx);
   let mut jets = Vec::new();
   for jet in SAVE_JETS.iter() {
@@ -760,7 +773,7 @@ fn review_67p_jet_lit_fraction_query_through_context() {
     "../../assets/planets/pck00011.pca",
     "../../assets/planets/gm_de431.pca",
     "../../assets/planets/de442.bsp",
-    SPK_COMMITTED,
+    spk.as_str(),
   ] {
     almanac.load_almanac(f).expect(f);
   }
@@ -830,12 +843,13 @@ fn dust_at_committed_start(
 /// SPK of the save covers it (`review_67p_spk_segment_bounds`).
 #[test]
 fn review_67p_dust_age_at_committed_start() {
+  let spk = spk_committed!();
   let ctx = SimulationContext::startup(None).expect("Failed to create SimulationContext");
   if ctx.render_frontend().is_none() {
     println!("Skipping: no GPU");
     return;
   }
-  load_almanac_files(&ctx);
+  load_almanac_files(&ctx, &spk);
   let start = committed_start();
 
   // what the app does: EMISSION_START_NOW resolved while the clock is at the committed start

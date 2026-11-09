@@ -1,0 +1,16 @@
+[package]
+name = "aethervk-cfitsio-sys"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+links = "cfitsio"
+build = "build.rs"
+description = "Static CFITSIO 4.7.0 (built by vcpkg) with committed bindgen bindings"
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+
+[build-dependencies]

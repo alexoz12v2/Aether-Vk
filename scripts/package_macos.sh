@@ -26,19 +26,48 @@ echo "=========================================="
 echo " Packaging Aether-Vk for macOS ($ARCH) - $MODE ($CONFIG)"
 echo "=========================================="
 
-echo "[1/4] Publishing project..."
-# ui-logic skips the native build by default, and (being netstandard) does not receive -r:
-# force the cargo build and pass the target RID explicitly
-dotnet publish aethervk.ui-app/aethervk.ui-app.csproj -c "$CONFIG" -r "$ARCH" --self-contained true -p:SkipNativeBuild=false -p:ResolvedRID="$ARCH"
+case "$ARCH" in
+    osx-arm64) CARGO_TARGET="aarch64-apple-darwin" ;;
+    osx-x64) CARGO_TARGET="x86_64-apple-darwin" ;;
+    *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
+esac
+if [ "$CONFIG" = "Release" ]; then
+    CARGO_PROFILE_ARGS=(--profile release)
+    CARGO_PROFILE_DIR="release"
+else
+    CARGO_PROFILE_ARGS=()
+    CARGO_PROFILE_DIR="debug"
+fi
 
-echo "[2/4] Creating App Bundle structure..."
+# Extra cargo flags for the native engine, empty by default. AETHERVK_CARGO_FLAGS=--no-default-features
+# builds without CFITSIO (pure-Rust FITS reader) when vcpkg cannot build it for a target.
+read -r -a EXTRA_CARGO_FLAGS <<< "${AETHERVK_CARGO_FLAGS:-}"
+
+echo "[1/5] Building the native engine ($CARGO_TARGET) ${AETHERVK_CARGO_FLAGS:-}..."
+cargo build --locked -p aethervk-core-cdylib ${CARGO_PROFILE_ARGS[@]+"${CARGO_PROFILE_ARGS[@]}"} --target "$CARGO_TARGET" ${EXTRA_CARGO_FLAGS[@]+"${EXTRA_CARGO_FLAGS[@]}"}
+if [ ! -f "target/$CARGO_TARGET/$CARGO_PROFILE_DIR/libaethervk_core_cdylib.dylib" ]; then
+    echo "Native library missing: target/$CARGO_TARGET/$CARGO_PROFILE_DIR/libaethervk_core_cdylib.dylib"
+    exit 1
+fi
+
+echo "[2/5] Publishing project..."
+# the engine is built above (with AETHERVK_CARGO_FLAGS), so ui-logic only copies it: a cargo build of
+# its own would use the default features. ui-logic (being netstandard) does not receive -r: pass the
+# target RID explicitly
+dotnet publish aethervk.ui-app/aethervk.ui-app.csproj -c "$CONFIG" -r "$ARCH" --self-contained true -p:SkipNativeBuild=true -p:ResolvedRID="$ARCH"
+
+echo "[3/5] Creating App Bundle structure..."
 mkdir -p "$BUNDLE_DIR/Contents/MacOS"
 mkdir -p "$BUNDLE_DIR/Contents/Resources"
 
-echo "[3/4] Copying published files to Contents/MacOS..."
+echo "[4/5] Copying published files to Contents/MacOS..."
 cp -R "$PUBLISH_DIR/"* "$BUNDLE_DIR/Contents/MacOS/"
 
-echo "[4/4] Generating Info.plist..."
+# licence texts: the project's, and those of the static CFITSIO + zlib linked into the engine
+cp LICENSE "$BUNDLE_DIR/Contents/Resources/LICENSE"
+cp aethervk.cfitsio/sys/THIRD_PARTY_LICENSES.md "$BUNDLE_DIR/Contents/Resources/THIRD_PARTY_LICENSES.md"
+
+echo "[5/5] Generating Info.plist..."
 cat > "$BUNDLE_DIR/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

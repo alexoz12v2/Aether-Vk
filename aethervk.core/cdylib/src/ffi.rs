@@ -2977,6 +2977,55 @@ pub unsafe extern "C" fn avkSimulationContext_downloadImage(
   unsafe { ctx_ref.download_image(task_id, buffer_ptr, buffer_size) }
 }
 
+/// Image export: copies the next presented frame of the windowed viewport `viewport_id`
+/// (drawn without the engine labels when `hide_labels`) into a host buffer and returns the task
+/// id it is read under, or 0 when the viewport is windowless, has no size, or rendered no frame
+/// within `timeout_ms` (minimised). `out_width`, `out_height` (pixels) and `out_format`
+/// (`0` = BGRA8, `1` = RGBA8, `| 0x100` when the swapchain is sRGB; the bytes are display-encoded
+/// either way) are written on success. Then poll `avkSimulationContext_getTaskStatus` until it is
+/// not 0 (pending) and read `width * height * 4` bytes with `avkSimulationContext_downloadImage`.
+///
+/// Waits for the render thread: not from the UI thread.
+///
+/// # Safety
+/// FFI Contract: `out_*` are null or valid for a write.
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_captureViewport(
+  ctx: *mut SimulationContext,
+  viewport_id: u64,
+  hide_labels: bool,
+  timeout_ms: u32,
+  out_width: *mut u32,
+  out_height: *mut u32,
+  out_format: *mut u32,
+) -> u64 {
+  oshal::prof_zone!("ffi: captureViewport");
+  if ctx.is_null() || viewport_id == 0 {
+    return 0;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let Some(capture) = ctx_ref.capture_viewport(
+    aethervk_core_rlib::gpu::PresentationEngineHandle(viewport_id),
+    hide_labels,
+    timeout_ms as u64,
+  ) else {
+    return 0;
+  };
+  unsafe {
+    if !out_width.is_null() {
+      *out_width = capture.width;
+    }
+    if !out_height.is_null() {
+      *out_height = capture.height;
+    }
+    if !out_format.is_null() {
+      *out_format = capture.format;
+    }
+  }
+  capture.task_id
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct FfiScreenSpaceBillboardDTO {
@@ -4033,6 +4082,9 @@ mod tests {
   fn set_dust_exposure_ev_status_and_clamp() {
     extern crate std;
     assert_eq!(unsafe { avkSimulationContext_setDustExposureEv(core::ptr::null_mut(), 1, 1.0) }, -1);
+    // startup loads the UI sounds from the asset path: set it here, a test process may run this alone
+    let assets = alloc::format!("{}/../../assets", env!("CARGO_MANIFEST_DIR"));
+    SimulationContext::set_asset_path(&assets);
     let Ok(ctx) = SimulationContext::startup(None) else {
       std::println!("Skipping: no Vulkan device");
       return;

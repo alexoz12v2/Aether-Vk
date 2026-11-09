@@ -69,7 +69,7 @@ public sealed class SaveArchiveRobustnessTests : IDisposable
   /// A 512 MiB scene state (pseudo-random, so it does not compress) in a copy of the reviewer's
   /// save packs and extracts within <see cref="LargeStateBound"/>, and comes back bit for bit.
   /// </summary>
-  [Fact]
+  [SkippableFact]
   public void AHalfGigabyteState_PacksAndExtracts_InTime_AndIntact()
   {
     var folder = Path.Combine(_root, "large");
@@ -147,7 +147,7 @@ public sealed class SaveArchiveRobustnessTests : IDisposable
     return avk;
   }
 
-  [Theory]
+  [SkippableTheory]
   [InlineData("empty")]
   [InlineData("truncated")]
   [InlineData("text")]
@@ -160,7 +160,7 @@ public sealed class SaveArchiveRobustnessTests : IDisposable
     Assert.Empty(Directory.GetFileSystemEntries(WorkRoot));
   }
 
-  [Theory]
+  [SkippableTheory]
   [InlineData("empty")]
   [InlineData("truncated")]
   [InlineData("text")]

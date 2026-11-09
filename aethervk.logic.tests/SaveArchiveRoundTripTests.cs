@@ -68,7 +68,7 @@ public sealed class SaveArchiveRoundTripTests : IDisposable
       .Returns(new GetClock((out short c, out ulong ns) => { c = 0; ns = clockNs; return true; }));
   }
 
-  [Fact]
+  [SkippableFact]
   public async Task TheReviewSave_SavedAsAvk_ReopensFromItsState_WithTheSameJetsAndDustView()
   {
     // the fixture is opened from a copy: opening expires stale states and rewrites the index

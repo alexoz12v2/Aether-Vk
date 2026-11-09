@@ -12,6 +12,16 @@ use crate::{
 };
 use aethervk_oshal_rlib::{self as oshal};
 
+/// A captured viewport frame ([`SimulationContext::capture_viewport`]): the task id its bytes are
+/// read under, its size and its `gpu::CAPTURE_FORMAT_*` code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ViewportCapture {
+  pub task_id: u64,
+  pub width: u32,
+  pub height: u32,
+  pub format: u32,
+}
+
 impl SimulationContext {
   pub fn set_logger_callback(cb: Option<extern "C" fn(*const core::ffi::c_char)>) {
     let ptr = match cb {
@@ -131,6 +141,73 @@ impl SimulationContext {
         }
         false
       }
+    }
+  }
+
+  /// Image export: asks the windowed viewport `presentation_engine` to copy its next presented
+  /// frame (drawn without the engine labels when `hide_labels`) and waits up to `timeout_ms` for
+  /// that frame to be submitted. Returns the frame's task id with the image's width, height and
+  /// `gpu::CAPTURE_FORMAT_*` code: poll [`Self::get_task_status`] until it is not `Pending`, then
+  /// read `width * height * 4` bytes with [`Self::download_image`]. `None` when the engine is
+  /// windowless, has no size, or rendered no frame within the timeout (minimised): the request
+  /// is then withdrawn, so no orphan copy is left behind.
+  ///
+  /// Not on the render thread (it waits for it).
+  pub fn capture_viewport(
+    &self,
+    presentation_engine: PresentationEngineHandle,
+    hide_labels: bool,
+    timeout_ms: u64,
+  ) -> Option<ViewportCapture> {
+    let request = match self.with_device(|device| {
+      device.request_viewport_capture(presentation_engine, hide_labels)
+    }) {
+      Ok(r) => r,
+      Err(e) => {
+        oshal::log!("capture_viewport: {:?}", e);
+        return None;
+      }
+    };
+    let poll = core::time::Duration::from_millis(2);
+    let mut waited_ms = 0u64;
+    loop {
+      let task_id = request.task_id.load(core::sync::atomic::Ordering::Acquire);
+      if task_id == u64::MAX {
+        oshal::log!("capture_viewport: the frame could not be captured");
+        return None;
+      }
+      if task_id != 0 {
+        return Some(ViewportCapture {
+          task_id,
+          width: request.width.load(core::sync::atomic::Ordering::Acquire),
+          height: request.height.load(core::sync::atomic::Ordering::Acquire),
+          format: request.format.load(core::sync::atomic::Ordering::Acquire),
+        });
+      }
+      if waited_ms >= timeout_ms {
+        // withdraw it (unless a frame took it meanwhile: then it completes and is read later)
+        let _ = self.with_device(|device| {
+          device.cancel_viewport_capture(presentation_engine);
+          Ok(())
+        });
+        let task_id = request.task_id.load(core::sync::atomic::Ordering::Acquire);
+        if task_id != 0 && task_id != u64::MAX {
+          return Some(ViewportCapture {
+            task_id,
+            width: request.width.load(core::sync::atomic::Ordering::Acquire),
+            height: request.height.load(core::sync::atomic::Ordering::Acquire),
+            format: request.format.load(core::sync::atomic::Ordering::Acquire),
+          });
+        }
+        oshal::log!(
+          "capture_viewport: no frame of PE {:?} within {} ms (viewport hidden or minimised?)",
+          presentation_engine,
+          timeout_ms
+        );
+        return None;
+      }
+      oshal::os::native::this_thread::sleep_for(poll);
+      waited_ms += 2;
     }
   }
 

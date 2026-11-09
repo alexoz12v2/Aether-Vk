@@ -12,7 +12,11 @@ crate-type = ["rlib"]
 # Avalonia is X11 backed with XLib. There is some work for Avalonia 12 to have wayland though.
 default = []
 collisions = []
-std = []
+# `std` of the engine; forwarded to the optional cfitsio wrapper
+std = ["aethervk-cfitsio-rlib?/std"]
+# FITS files are read by CFITSIO 4.7.0 (image extensions, tile-compressed `.fz`); off: the
+# pure-Rust primary-HDU parser
+cfitsio = ["dep:aethervk-cfitsio-rlib"]
 physical_mesh_debug_normals = []
 cursor_debug = []
 test_dedicated_alloc = []
@@ -38,6 +42,10 @@ objc2-quartz-core = "0.3.2"
 objc2-foundation = "0.3.2"
 
 [dev-dependencies]
+# resolves test_assets/ files, downloading the asset groups of test_assets/ASSETS.tsv on demand
+aethervk-test-assets = { path = "../../aethervk.test-assets" }
+# the in-memory FITS writer builds the extension / compressed test images (both modes)
+aethervk-cfitsio-rlib = { path = "../../aethervk.cfitsio/rlib", default-features = false, features = ["test-writer"] }
 aethervk-oshal-rlib = { path = "../../aethervk.oshal/rlib", default-features = false, features = ["console_log", "debug_gpu"] }
 image = "0.25.10"
 ntest = "0.9.5"
@@ -82,6 +90,7 @@ spirv-reflect = { path = "../../external/spirv-reflect", default-features = fals
 # anise library for almanac about SPK files and planet motion data
 anise = { path = "../../external/anise/anise", default-features = false }
 hifitime = { version = "4.2.6", default-features = false }
+aethervk-cfitsio-rlib = { path = "../../aethervk.cfitsio/rlib", optional = true, default-features = false }
 
 bytes = { version = "1", default-features = false }
 thingbuf = "0.1.6"

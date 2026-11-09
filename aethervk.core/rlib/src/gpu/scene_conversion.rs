@@ -336,6 +336,7 @@ impl SceneConversionExt2 for Scene {
       layer_ref_dist: core::array::from_fn(|i| layer_ref_dists.get(&(i as u32)).copied().unwrap_or(0.0)),
       mesh_shading: camera_flags,
       mesh_exposure: camera_exposure,
+      hide_ui_labels: false,
     };
 
     // ------ 3. Zero-Copy GPU Upload Abstraction Macro -------------------------------------

@@ -24,7 +24,7 @@ public sealed class ReviewerPlayTests(ITestOutputHelper output)
     if (Directory.Exists(artifacts))
       Directory.Delete(artifacts, recursive: true);
     var saveDir = Path.Combine(artifacts, "review_67p_2021-12");
-    ReviewerMailTests.CopyDir(Path.Combine(AppSession.RepoRoot(), "test_assets", "saves", "review_67p_2021-12"), saveDir);
+    ReviewerMailTests.CopyDir(ReviewSave.FixtureDir, saveDir);
 
     // the quality slider writes the preferences: put them back afterwards
     var prefs = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".aethervk", "preferences.json");

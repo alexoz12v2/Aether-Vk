@@ -93,7 +93,7 @@ public sealed partial class ReviewV16Tests(ITestOutputHelper output)
       Directory.Delete(_artifacts, recursive: true);
     Directory.CreateDirectory(_artifacts);
     var avk = Path.Combine(_artifacts, save);
-    File.Copy(Path.Combine(root, "test_assets", "saves", save), avk);
+    File.Copy(AetherVk.TestAssets.TestAssets.Require("saves/" + save), avk);
     var log = Path.Combine(_artifacts, "app.log");
 
     var s = AppSession.Launch(log, diagnosticPanels: false);

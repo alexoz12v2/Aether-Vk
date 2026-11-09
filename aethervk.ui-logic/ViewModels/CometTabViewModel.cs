@@ -550,19 +550,16 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
         or nameof(RotRateDegDay)
         or nameof(BodyFixedOrientationIndex);
 
-    bool isStateChangingProp = isRotProp
-      || e.PropertyName is nameof(SelectedComet) or nameof(SelectedSpkRecord) or nameof(ManualNucleusRadiusKm);
-
-    // restored values are what the native runtime already has: no snapshot restore, no push
+    // restored values are what the native runtime already has: no push
     if (_restoringFromSession)
-      isRotProp = isStateChangingProp = false;
+      isRotProp = false;
 
-    if (isStateChangingProp && !_timeline.IsSimulationRunningValue && _snapshotExists)
-    {
-        _timeline.SnapshotRestore();
-        _snapshotExists = false;
-    }
-
+    // A rotation, comet, SPK or radius edit is applied at the current date, playing or paused
+    // (the rotation push below re-emits the dust of the comet's jets in the engine). An edit
+    // after Play used to restore the scene snapshot taken at Play first, which rewound the clock
+    // and left the engine without the comet's state until Play: the model did not show again
+    // until a seek or a reopen. The snapshot flag is kept for Decommit only (a Reset after a
+    // Play, see `DecommitComet`).
 
     if (isRotProp && IsAlmanacCommitted)
     {

@@ -3,9 +3,9 @@ use std::fs;
 
 #[test]
 fn test_texture_cache_lifecycle() {
+  let png_data = fs::read(aethervk_test_assets::test_asset!("rain.png")).unwrap();
   let mut cache = TextureCache::new("test_aethervk_tex_cache_1");
-  let png_data = fs::read("../../test_assets/rain.png").unwrap();
-  let id = cache.decode_and_insert("../../test_assets/rain.png", &png_data).unwrap();
+  let id = cache.decode_and_insert("rain.png", &png_data).unwrap();
 
   let (w, h, fmt, bytes) = cache.get(id).unwrap();
   assert!(w > 0);
@@ -22,14 +22,14 @@ fn test_texture_cache_lifecycle() {
 
 #[test]
 fn test_texture_cache_multiple_inserts_and_defragment() {
+  let rain_data = fs::read(aethervk_test_assets::test_asset!("rain.png")).unwrap();
+  let cloud_data = fs::read(aethervk_test_assets::test_asset!("cloud.png")).unwrap();
+  let sun_data = fs::read(aethervk_test_assets::test_asset!("sun.png")).unwrap();
   let mut cache = TextureCache::new("test_aethervk_tex_cache_2");
-  let rain_data = fs::read("../../test_assets/rain.png").unwrap();
-  let cloud_data = fs::read("../../test_assets/cloud.png").unwrap();
-  let sun_data = fs::read("../../test_assets/sun.png").unwrap();
 
-  let id1 = cache.decode_and_insert("../../test_assets/rain.png", &rain_data).unwrap();
-  let id2 = cache.decode_and_insert("../../test_assets/cloud.png", &cloud_data).unwrap();
-  let id3 = cache.decode_and_insert("../../test_assets/sun.png", &sun_data).unwrap();
+  let id1 = cache.decode_and_insert("rain.png", &rain_data).unwrap();
+  let id2 = cache.decode_and_insert("cloud.png", &cloud_data).unwrap();
+  let id3 = cache.decode_and_insert("sun.png", &sun_data).unwrap();
 
   assert!(cache.get(id1).is_some());
   assert!(cache.get(id2).is_some());
@@ -51,12 +51,12 @@ fn test_texture_cache_multiple_inserts_and_defragment() {
 
 #[test]
 fn test_texture_cache_reopen() {
+  let sun_data = fs::read(aethervk_test_assets::test_asset!("sun.png")).unwrap();
   let path_str;
   let id;
   {
     let mut cache = TextureCache::new("test_aethervk_tex_cache_3");
-    let sun_data = fs::read("../../test_assets/sun.png").unwrap();
-    id = cache.decode_and_insert("../../test_assets/sun.png", &sun_data).unwrap();
+    id = cache.decode_and_insert("sun.png", &sun_data).unwrap();
     path_str = cache.path_str.clone();
   }
 

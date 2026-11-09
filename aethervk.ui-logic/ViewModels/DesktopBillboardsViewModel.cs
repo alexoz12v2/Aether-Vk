@@ -234,6 +234,15 @@ public partial class DesktopBillboardsViewModel : ObservableObject, IDisposable
       .OrderByDescending(f => f!.ObservationUtc is not null)
       .FirstOrDefault();
 
+  /// <summary>A row came or went, or a row's FITS part appeared, changed or went (main thread):
+  /// what <see cref="ObservationImage"/> returns may have changed.</summary>
+  public event Action? FitsRowsChanged;
+
+  internal void RaiseFitsRowsChanged() => FitsRowsChanged?.Invoke();
+
+  /// <summary>The scheduler the rows retry a busy FITS metadata read on (null: design time).</summary>
+  internal ISchedulerProvider? Schedulers => _schedulerProvider;
+
   [ObservableProperty]
   [NotifyCanExecuteChangedFor(nameof(CreateCommand))]
   private ImportedAsset? _selectedTexture;
@@ -249,9 +258,11 @@ public partial class DesktopBillboardsViewModel : ObservableObject, IDisposable
     FitsImageService? fits = null,
     Func<short, ulong, Task<bool>>? seekTdb = null,
     Action<DateTimeOffset>? requestModelRange = null,
-    ITranslationService? translation = null)
+    ITranslationService? translation = null,
+    ITimeScaleConverter? timeScale = null)
   {
     Translation = translation;
+    TimeScale = timeScale;
     _service = service;
     _screens = screens;
     _schedulerProvider = schedulerProvider;
@@ -295,6 +306,10 @@ public partial class DesktopBillboardsViewModel : ObservableObject, IDisposable
 
   /// <summary>FITS metadata and stretches (null: no FITS rows, e.g. design time).</summary>
   public FitsImageService? Fits { get; }
+
+  /// <summary>The app's UTC → TDB converter, for a FITS date the user reads in another century
+  /// (<see cref="FitsDateCentury"/>); null (design time, tests without one): the plain difference.</summary>
+  internal ITimeScaleConverter? TimeScale { get; }
 
   /// <summary>The viewport the rows pilot (null until one is attached).</summary>
   internal IBillboardViewportProbe? Viewport => _probe;
@@ -539,11 +554,13 @@ public partial class DesktopBillboardsViewModel : ObservableObject, IDisposable
 
   private void Sync(ImmutableArray<DesktopBillboard> billboards)
   {
+    bool rowsChanged = false;
     for (int i = Items.Count - 1; i >= 0; i--)
       if (!billboards.Any(b => b.Id == Items[i].Id))
       {
         Items[i].Dispose();
         Items.RemoveAt(i);
+        rowsChanged = true;
       }
     foreach (var b in billboards)
     {
@@ -552,10 +569,13 @@ public partial class DesktopBillboardsViewModel : ObservableObject, IDisposable
       {
         item = new DesktopBillboardItemViewModel(b, _service, _screens, this);
         Items.Add(item);
+        rowsChanged = true;
       }
       item.Apply(b);
       item.SetTexture(Lookup(b.TextureKey));
     }
+    if (rowsChanged)
+      RaiseFitsRowsChanged();
   }
 
   public void Dispose()
@@ -617,6 +637,12 @@ public partial class DesktopBillboardItemViewModel : ObservableObject, IDisposab
   private FitsImageViewModel? _fits;
 
   public bool IsFits => Fits is not null;
+
+  partial void OnFitsChanged(FitsImageViewModel? value) => _owner?.RaiseFitsRowsChanged();
+
+  // a FITS metadata read that found the library busy, retried (disposed on a texture change)
+  private readonly System.Reactive.Disposables.SerialDisposable _fitsRetry = new();
+  private ulong _fitsRetryAssetId;
 
   /// <summary>The billboard as the service last reported it.</summary>
   internal DesktopBillboard Current => _current;
@@ -714,6 +740,7 @@ public partial class DesktopBillboardItemViewModel : ObservableObject, IDisposab
       var (display, local) = DesktopBillboardGeometry.ToDisplayLocal(_screens.Screens, new PointD(b.CenterX, b.CenterY));
       DisplayLabel = display < 0 ? "off screen" : $"Display {display + 1} · {local.X:F0}, {local.Y:F0}";
       IsPhysicalSizeBound = b.PhysicalSizeBound;
+      Fits?.SyncFromBillboard(b);
       NucleusX = b.ImageNucleusPx?.X;
       NucleusY = b.ImageNucleusPx?.Y;
       GeometryLabel = FormatGeometry(b);
@@ -865,26 +892,53 @@ public partial class DesktopBillboardItemViewModel : ObservableObject, IDisposab
     UpdateFits(texture);
   }
 
-  /// <summary>Reads the FITS metadata once per asset id (a busy library keeps what is shown).</summary>
+  /// <summary>Reads the FITS metadata once per asset id (a busy library keeps what is shown; a
+  /// FITS file's read is retried while the library is busy).</summary>
   private void UpdateFits(ImportedAsset? texture)
   {
     if (_owner?.Fits is not { } fits)
       return; // design time: ShowFits decides
     if (texture is null)
     {
+      CancelFitsRetry();
       Fits = null;
       return;
     }
     if (Fits?.AssetId == texture.Id)
+    {
+      CancelFitsRetry();
       return;
+    }
     var meta = fits.GetMetadata(texture.Id);
     if (meta is null)
     {
       if (Fits is not null && Fits.TextureKey != texture.Key)
         Fits = null;
+      // "busy" and "not FITS" look alike: a FITS file name is asked again a few times
+      if (_fitsRetryAssetId == texture.Id)
+        return; // already being asked again
+      CancelFitsRetry(); // another texture's attempts
+      if (FitsImageService.LooksLikeFits(texture) && _owner?.Schedulers?.MainThread is { } main)
+      {
+        _fitsRetryAssetId = texture.Id;
+        ulong id = texture.Id;
+        _fitsRetry.Disposable = fits.RetryMetadata(id, main, found =>
+        {
+          _fitsRetryAssetId = 0;
+          if (Fits?.AssetId != id && _owner?.Fits is not null)
+            ShowFits(found, id);
+        });
+      }
       return;
     }
+    CancelFitsRetry();
     ShowFits(meta, texture.Id);
+  }
+
+  private void CancelFitsRetry()
+  {
+    _fitsRetryAssetId = 0;
+    _fitsRetry.Disposable = null;
   }
 
   /// <summary>
@@ -947,7 +1001,5 @@ public partial class DesktopBillboardItemViewModel : ObservableObject, IDisposab
     _service.Update(Id, edit);
   }
 
-  public void Dispose()
-  {
-  }
+  public void Dispose() => _fitsRetry.Dispose();
 }

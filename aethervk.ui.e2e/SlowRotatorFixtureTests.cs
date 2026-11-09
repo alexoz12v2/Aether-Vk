@@ -22,7 +22,7 @@ public sealed class SlowRotatorFixtureTests(ITestOutputHelper output)
       Directory.Delete(artifacts, recursive: true);
     Directory.CreateDirectory(artifacts);
     var avk = Path.Combine(artifacts, "review_slow_rotator_2026-11.avk");
-    File.Copy(Path.Combine(root, "test_assets", "saves", "review_slow_rotator_2026-11.avk"), avk);
+    File.Copy(AetherVk.TestAssets.TestAssets.Require("saves/review_slow_rotator_2026-11.avk"), avk);
     var log = Path.Combine(artifacts, "app.log");
 
     var s = AppSession.Launch(log, diagnosticPanels: false);

@@ -75,7 +75,8 @@ public class ViewModeBarTests
     public readonly Mock<INativeRuntimeService> Runtime = new();
 
     /// <param name="immediate">Main-thread work delivered at once (the Model chain awaits the Comet tab's answer).</param>
-    public CameraRig(bool immediate = false)
+    /// <param name="translation">The bar's strings (default: each key returns itself).</param>
+    public CameraRig(bool immediate = false, ITranslationService? translation = null)
     {
       var runtime = Runtime;
       runtime.Setup(r => r.EarthEntityId).Returns(42UL);
@@ -94,7 +95,7 @@ public class ViewModeBarTests
       Sessions.Setup(s => s.ActiveSessionIds).Returns(new List<SessionId> { id });
       Sessions.Setup(s => s.GetSession(id)).Returns(Session);
 
-      Bar = new ViewModeBarViewModel(Translation(), schedulers, Registry, Timeline, Sessions.Object, pollRangeLock: false);
+      Bar = new ViewModeBarViewModel(translation ?? Translation(), schedulers, Registry, Timeline, Sessions.Object, pollRangeLock: false);
     }
 
     /// <summary>Delivers the camera's mode notifications (they observe on the main-thread scheduler).</summary>
@@ -191,6 +192,134 @@ public class ViewModeBarTests
     attached.Dispose();
     await rig.Bar.SelectModelCommand.ExecuteAsync(null); // detached: the no-FITS path again
     Assert.Equal("ModeBar_NoFitsHint", rig.Bar.Hint);
+  }
+
+  /// <summary>The English AppStrings.resx, as the app shows it.</summary>
+  private static ITranslationService English() => new TranslationService(
+    new System.Resources.ResourceManager("AetherVk.Logic.Resources.AppStrings", typeof(ITranslationService).Assembly),
+    new System.Globalization.CultureInfo("en"));
+
+  /// <summary>A FITS image whose date the app cannot read is not "no FITS": the hint says so and
+  /// shows the raw date card.</summary>
+  [Fact]
+  public async Task Model_WithAFitsImageWithoutADate_ShowsTheRawDateCard()
+  {
+    var rig = new CameraRig(translation: English());
+    var fits = new FitsBillboardTests.Rig();
+    fits.Fake.Runtime.Setup(r => r.GetFitsMetadataJson(FitsBillboardTests.FitsId)).Returns(FitsBillboardTests.UndatedJson);
+    var row = fits.Create("/data/lt_67p.fits");
+    Assert.NotNull(row.Fits);
+    Assert.Null(row.Fits!.ObservationUtc);
+    using var attached = rig.Bar.AttachBillboards(fits.Vm);
+
+    await rig.Bar.SelectModelCommand.ExecuteAsync(null);
+
+    Assert.Equal(CameraMode.EarthPosition, rig.Camera.CurrentMode); // still the Earth observer
+    Assert.Equal("The FITS image has no observation date the app can read (DATE-OBS= '27/12/21')", rig.Bar.Hint);
+    Assert.DoesNotContain("Import a FITS image", rig.Bar.Hint);
+  }
+
+  /// <summary>Without the engine's raw card and without a date value, the keywords tried are named.</summary>
+  [Fact]
+  public async Task Model_WithAFitsImageWithoutAnyDateCard_NamesTheKeywordsTried()
+  {
+    var rig = new CameraRig(translation: English());
+    var fits = new FitsBillboardTests.Rig();
+    var json = FitsBillboardTests.UndatedJson.Replace(", \"dateCardRaw\": \"DATE-OBS= '27/12/21'\"", "");
+    fits.Fake.Runtime.Setup(r => r.GetFitsMetadataJson(FitsBillboardTests.FitsId)).Returns(json);
+    fits.Create("/data/lt_67p.fits");
+    using var attached = rig.Bar.AttachBillboards(fits.Vm);
+
+    await rig.Bar.SelectModelCommand.ExecuteAsync(null);
+
+    Assert.Equal("The FITS image has no observation date the app can read (DATE-OBS / MJD-OBS / JD not found)", rig.Bar.Hint);
+  }
+
+  /// <summary>The no-FITS hint goes once a FITS row is added (it no longer applies).</summary>
+  [Fact]
+  public async Task Hint_IsClearedWhenTheFitsRowsChange()
+  {
+    var rig = new CameraRig();
+    var fits = new FitsBillboardTests.Rig();
+    using var attached = rig.Bar.AttachBillboards(fits.Vm);
+    await rig.Bar.SelectModelCommand.ExecuteAsync(null);
+    Assert.Equal("ModeBar_NoFitsHint", rig.Bar.Hint);
+
+    var row = fits.Create("/data/lt_67p.fits");
+
+    Assert.NotNull(row.Fits);
+    Assert.Equal(string.Empty, rig.Bar.Hint);
+    Assert.False(rig.Bar.HasHint);
+
+    // a row removed clears it too
+    rig.Bar.Hint = "stale";
+    row.DeleteCommand.Execute(null);
+    fits.Fake.Drain();
+    Assert.Equal(string.Empty, rig.Bar.Hint);
+  }
+
+  /// <summary>A FITS row whose metadata read found the library busy: once the retry finds it, the
+  /// stale no-FITS hint goes and Model takes the image.</summary>
+  [Fact]
+  public async Task Hint_IsClearedWhenABusyMetadataReadSucceeds()
+  {
+    var rig = new CameraRig();
+    var fits = new FitsBillboardTests.Rig();
+    bool busy = true;
+    fits.Fake.Runtime.Setup(r => r.GetFitsMetadataJson(FitsBillboardTests.FitsId))
+      .Returns(() => busy ? null : FitsBillboardTests.LtJson);
+    using var attached = rig.Bar.AttachBillboards(fits.Vm);
+    // the row is created while the library is busy (the main thread is not drained yet)
+    fits.Vm.SelectedTexture = fits.Vm.TextureOptions.Single(t => t.Key == "/data/lt_67p.fits");
+    fits.Vm.CreateCommand.Execute(null);
+    fits.Fake.Schedulers.Background.Start();
+    fits.Fake.Schedulers.MainThread.AdvanceBy(1); // the row arrives, its first read is busy
+    var row = fits.Vm.Items.Single();
+    Assert.Null(row.Fits);
+    await rig.Bar.SelectModelCommand.ExecuteAsync(null);
+    Assert.Equal("ModeBar_NoFitsHint", rig.Bar.Hint);
+
+    busy = false;
+    fits.Fake.Drain(); // the delayed attempts
+
+    Assert.NotNull(row.Fits);
+    Assert.Equal(string.Empty, rig.Bar.Hint);
+    Assert.Same(row.Fits, fits.Vm.ObservationImage());
+  }
+
+  /// <summary>Leaving the Model view drops its hint.</summary>
+  [Fact]
+  public async Task Hint_IsClearedWhenTheCameraLeavesTheModelView()
+  {
+    var rig = new CameraRig();
+    await rig.Bar.SelectModelCommand.ExecuteAsync(null);
+    rig.Pump(); // Model's own mode change arrives after the hint: it stays
+    Assert.Equal("ModeBar_NoFitsHint", rig.Bar.Hint);
+
+    rig.Bar.SelectOrbitCommand.Execute(null);
+    rig.Pump();
+
+    Assert.True(rig.Bar.IsOrbitActive);
+    Assert.Equal(string.Empty, rig.Bar.Hint);
+  }
+
+  /// <summary>A language change drops the hint (it was written in the previous language).</summary>
+  [Fact]
+  public async Task Hint_IsClearedWhenTheLanguageChanges()
+  {
+    var cultures = new BehaviorSubject<System.Globalization.CultureInfo>(new System.Globalization.CultureInfo("en"));
+    var t = new Mock<ITranslationService>();
+    t.Setup(x => x.CultureChanged).Returns(cultures);
+    t.Setup(x => x.GetString(It.IsAny<string>())).Returns<string>(k => k);
+    var rig = new CameraRig(translation: t.Object);
+    await rig.Bar.SelectModelCommand.ExecuteAsync(null);
+    rig.Pump();
+    Assert.Equal("ModeBar_NoFitsHint", rig.Bar.Hint);
+
+    cultures.OnNext(new System.Globalization.CultureInfo("it"));
+    rig.Pump();
+
+    Assert.Equal(string.Empty, rig.Bar.Hint);
   }
 
   [Fact]

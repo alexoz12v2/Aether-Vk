@@ -339,6 +339,10 @@ fn process_command(
         let pe_handle = render_frame.presentation_engine_handle;
         let task_id_feedback_err = alloc::sync::Arc::clone(&render_frame.task_id);
         let task_id_feedback_err_clone = alloc::sync::Arc::clone(&task_id_feedback_err);
+        // an image export waiting for this viewport's next frame: taken here (one frame), drawn
+        // without the labels when asked, copied after the render pass, completed after the submit
+        let viewport_capture = render_device.take_viewport_capture(pe_handle);
+        let viewport_capture_in_frame = viewport_capture.clone();
 
         // Compute the sky parallax offset for this PE using the current scene's delta time.
         // We read it here (outside the closure) so we can mutate sky_parallax_map without
@@ -543,6 +547,8 @@ fn process_command(
               render_scene.dust_view_flags = dust_view_flags;
               render_scene.dust_exposure_ev = dust_exposure_ev;
               render_scene.dust_flow = dust_flow;
+              render_scene.hide_ui_labels =
+                viewport_capture_in_frame.as_ref().is_some_and(|c| c.hide_labels);
 
               // Dust v3: evaluate clusters before the render pass; the draw must wait for the
               // compute submit that emitted the newest drawn clusters
@@ -700,6 +706,22 @@ fn process_command(
                 }
               }
 
+              // image export: copy the swapchain image of this frame (before its present) into a
+              // host buffer under this frame's task id; the request is completed after the submit
+              let mut capture_geometry = None;
+              if !is_windowless && let Some(capture) = viewport_capture_in_frame.as_ref() {
+                match render_device.record_viewport_capture(cmd_buffer, task_id) {
+                  Ok(geometry) => capture_geometry = Some(geometry),
+                  Err(e) => {
+                    aethervk_oshal_rlib::log!(
+                      "[render tasklet] record_viewport_capture failed: {:?}",
+                      e
+                    );
+                    capture.fail();
+                  }
+                }
+              }
+
               {
                 oshal::prof_zone!("render: submit");
                 cmd_scope.submit().map_err(|e| {
@@ -713,6 +735,12 @@ fn process_command(
 
               let task_id_feedback = alloc::sync::Arc::clone(&render_frame.task_id);
               task_id_feedback.store(task_id, core::sync::atomic::Ordering::Release);
+              // the submit went through: the capture's bytes land when this task completes
+              if let (Some(capture), Some((w, h, format))) =
+                (viewport_capture_in_frame.as_ref(), capture_geometry)
+              {
+                capture.complete(task_id, w, h, format);
+              }
 
               Ok((cmd_buffer, is_windowless, is_first_render))
             });
@@ -723,6 +751,10 @@ fn process_command(
                 e
               );
               task_id_feedback_err_clone.store(u64::MAX, core::sync::atomic::Ordering::Release);
+              // a frame that never got submitted cannot deliver its capture
+              if let Some(capture) = viewport_capture.as_ref() {
+                capture.fail();
+              }
             }
             result
           };

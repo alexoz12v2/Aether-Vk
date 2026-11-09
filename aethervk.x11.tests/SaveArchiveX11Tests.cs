@@ -48,9 +48,6 @@ public sealed class SaveArchiveX11Tests : IDisposable
   {
   }
 
-  private static string FixtureIndex() =>
-    Path.Combine(AppRig.RepoRoot(), "test_assets", "saves", "review_67p_2021-12", SaveIndex.FileName);
-
   private static int JetCount(string avk)
   {
     using var zip = ZipFile.OpenRead(avk);
@@ -69,13 +66,13 @@ public sealed class SaveArchiveX11Tests : IDisposable
   [SkippableFact]
   public void SaveAsThenSaveThenRefuseTruncatedArchive()
   {
-    Skip.IfNot(File.Exists(FixtureIndex()), $"fixture missing: {FixtureIndex()}");
+    var fixture = AetherVk.TestAssets.TestAssets.Require("saves/review_67p_2021-12");
     using var rig = new AppRig();
     var avk = Path.Combine(rig.SavesDir, "x.avk");
 
     // ── 1. open the fixture folder, Save As x.avk ───────────────────────────────────────────
     Step("1: open the fixture folder");
-    rig.Dialogs.Answer(FixtureIndex());
+    rig.Dialogs.Answer(rig.CopyOfSave(fixture));
     rig.Menu("File", "Open...");
     Assert.True(WaitFor(() => rig.XTitle.Contains("review_67p_2021-12", StringComparison.Ordinal), 90_000),
       $"fixture open, title: {rig.XTitle}");

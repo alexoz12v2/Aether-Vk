@@ -43,6 +43,19 @@ public sealed record FitsStretch(FitsStretchMode Mode, FitsTransfer Transfer, do
 /// <summary>Black / white points (data units) a stretch used.</summary>
 public sealed record FitsStretchResult(double Black, double White);
 
+/// <summary>
+/// The century a FITS date written with a two-digit year (<c>DATE-OBS = '27/12/21'</c>) is read
+/// in. The engine reads 20yy (the app's users image comets now); the FITS standard's 19yy is the
+/// user's choice per billboard, saved with it (absent in older saves: <see cref="TwoThousands"/>).
+/// </summary>
+public enum FitsTwoDigitYearCentury
+{
+  /// <summary>20yy, the default.</summary>
+  TwoThousands = 0,
+  /// <summary>19yy, the FITS standard's reading: the date 100 years earlier.</summary>
+  NineteenHundreds = 1,
+}
+
 /// <summary>One header card: strings unquoted, HIERARCH keys without the prefix.</summary>
 public sealed record FitsCard(string Key, string Value, string Comment);
 
@@ -76,6 +89,28 @@ public sealed record FitsFacts
   /// <summary>No TIMESYS card: the date was read as UTC.</summary>
   public bool? TimesysAssumed { get; init; }
 
+  /// <summary>The date card exactly as written in the header (e.g. <c>DATE-OBS = '2021-12-27'</c>),
+  /// also when it could not be read as a date; null when the engine does not report it.</summary>
+  public string? DateCardRaw { get; init; }
+
+  /// <summary>The card carries a calendar date without a time of day.</summary>
+  public bool? DateOnly { get; init; }
+
+  /// <summary>The date is the file's write date (a DATE card), not the observation's.</summary>
+  public bool? DateIsFileDate { get; init; }
+
+  /// <summary>Start of the exposure, ISO UTC.</summary>
+  public string? DateStartUtc { get; init; }
+
+  /// <summary>Start of the exposure, TDB microseconds since J2000.</summary>
+  public long? DateStartTdbUs { get; init; }
+
+  /// <summary>The date card wrote its year with two digits (<c>dd/mm/yy</c>), read as 20yy by the
+  /// engine (the FITS standard says 19yy); the billboard panel lets the user choose 19yy
+  /// (<see cref="FitsTwoDigitYearCentury"/>, <see cref="Services.FitsDateCentury"/>). Null when the
+  /// engine does not report it (older builds).</summary>
+  public bool? DateTwoDigitYear { get; init; }
+
   public double? PixelScaleArcsec { get; init; }
   public string? PixelScaleSource { get; init; }
   public double? FovWidthArcmin { get; init; }
@@ -91,8 +126,25 @@ public sealed record FitsFacts
   public double? PointingDecDeg { get; init; }
   public string? Radesys { get; init; }
 
-  /// <summary>Why the TAN WCS was refused (non-TAN, FK4, …).</summary>
+  /// <summary>Why the WCS was refused.</summary>
   public string? WcsError { get; init; }
+
+  /// <summary>Projection code of the celestial WCS (<c>TAN</c>, <c>SIN</c>, …); null without a WCS
+  /// (or from an older engine).</summary>
+  public string? WcsProjection { get; init; }
+
+  /// <summary>Distortion the WCS applies: <c>none</c>, <c>SIP</c>, <c>TPV</c>, …</summary>
+  public string? WcsDistortion { get; init; }
+
+  /// <summary>Celestial frame of the WCS: <c>ICRS</c>, <c>FK5</c>, <c>FK4</c>, <c>FK4-NO-E</c>,
+  /// <c>galactic</c>, <c>ecliptic</c>.</summary>
+  public string? WcsFrame { get; init; }
+
+  /// <summary>Equinox of the WCS frame (Julian years; Besselian for FK4); null for ICRS / galactic.</summary>
+  public double? WcsEquinox { get; init; }
+
+  /// <summary>No RADESYS / EQUINOX card named the frame: ICRS was assumed.</summary>
+  public bool? WcsFrameAssumed { get; init; }
 
   /// <summary>Position angle of image +Y (texture up), degrees east of north, (−180, 180].</summary>
   public double? RotationDeg { get; init; }
@@ -125,6 +177,30 @@ public sealed record FitsFacts
     : null;
 }
 
+/// <summary>HiPS facts of a FITS tile / Allsky (the JSON's <c>hips</c> object).</summary>
+public sealed record FitsHipsFacts
+{
+  /// <summary>An <c>Allsky.fits</c> (no single tile).</summary>
+  public bool Allsky { get; init; }
+  public int Order { get; init; }
+
+  /// <summary>Tile index; null for an Allsky.</summary>
+  public ulong? Npix { get; init; }
+
+  public int TileWidth { get; init; }
+
+  /// <summary><c>equatorial</c>, <c>galactic</c>, <c>ecliptic</c>.</summary>
+  public string? Frame { get; init; }
+
+  /// <summary><c>properties</c>, <c>header</c>, <c>assumed</c>.</summary>
+  public string? FrameSource { get; init; }
+
+  public string? SurveyTitle { get; init; }
+  public double? CenterRaDeg { get; init; }
+  public double? CenterDecDeg { get; init; }
+  public double? PixelScaleArcsec { get; init; }
+}
+
 /// <summary>
 /// Metadata of a FITS texture asset (<c>avkSimulationContext_getFitsMetadataJson</c>): every header
 /// card, the facts read from them and the stretch currently rendered.
@@ -139,6 +215,29 @@ public sealed record FitsMetadata(
   IReadOnlyList<FitsCard> Cards,
   FitsFacts Facts)
 {
+  /// <summary>NAXIS1 / NAXIS2 / BITPIX of the image (0 when the engine does not report them).</summary>
+  public int Naxis1 { get; init; }
+  public int Naxis2 { get; init; }
+  public int Bitpix { get; init; }
+
+  /// <summary>1-based HDU the image was read from (1 = primary; null from an older engine).</summary>
+  public int? Hdu { get; init; }
+
+  /// <summary>The image was tile-compressed (<c>.fz</c>).</summary>
+  public bool Compressed { get; init; }
+
+  /// <summary>2-D planes of the image (1 for a plain image; a cube's extra axes multiplied).</summary>
+  public long Planes { get; init; } = 1;
+
+  /// <summary>The plane shown: flat 0-based index over the extra axes, NAXIS3 fastest.</summary>
+  public long Plane { get; init; }
+
+  /// <summary>The extra axes (NAXIS3, NAXIS4, …) when there are at least two; empty otherwise.</summary>
+  public IReadOnlyList<long> PlaneAxes { get; init; } = [];
+
+  /// <summary>HiPS facts when the image is a HiPS tile / Allsky; null otherwise.</summary>
+  public FitsHipsFacts? Hips { get; init; }
+
   /// <summary>
   /// Parses the native JSON (<see cref="JsonDocument"/>: no reflection, AOT safe). Null when it
   /// is not valid JSON.
@@ -191,7 +290,18 @@ public sealed record FitsMetadata(
         stretch,
         points,
         cards,
-        facts);
+        facts)
+      {
+        Naxis1 = (int)(Num(root, "naxis1") ?? 0),
+        Naxis2 = (int)(Num(root, "naxis2") ?? 0),
+        Bitpix = (int)(Num(root, "bitpix") ?? 0),
+        Hdu = Num(root, "hdu") is { } hdu ? (int)hdu : null,
+        Compressed = Bool(root, "compressed") ?? false,
+        Planes = Num(root, "planes") is { } np && np >= 1 ? (long)np : 1,
+        Plane = Num(root, "plane") is { } pl && pl >= 0 ? (long)pl : 0,
+        PlaneAxes = PlaneAxesOf(root),
+        Hips = Obj(root, "hips") is { } h ? ParseHips(h) : null,
+      };
     }
     catch (JsonException)
     {
@@ -215,6 +325,14 @@ public sealed record FitsMetadata(
     DateMidTdbNanoseconds = f.TryGetProperty("dateMidTdbNanoseconds", out var ns)
       && ns.ValueKind == JsonValueKind.Number && ns.TryGetUInt64(out ulong n) ? n : null,
     TimesysAssumed = Bool(f, "timesysAssumed"),
+    DateCardRaw = Str(f, "dateCardRaw"),
+    DateOnly = Bool(f, "dateOnly"),
+    DateIsFileDate = Bool(f, "dateIsFileDate"),
+    DateStartUtc = Str(f, "dateStartUtc"),
+    // i64: read it exactly (not through a double)
+    DateStartTdbUs = f.TryGetProperty("dateStartTdbUs", out var us)
+      && us.ValueKind == JsonValueKind.Number && us.TryGetInt64(out long u) ? u : null,
+    DateTwoDigitYear = Bool(f, "dateTwoDigitYear"),
     PixelScaleArcsec = Num(f, "pixelScaleArcsec"),
     PixelScaleSource = Str(f, "pixelScaleSource"),
     FovWidthArcmin = Num(f, "fovWidthArcmin"),
@@ -227,6 +345,11 @@ public sealed record FitsMetadata(
     PointingDecDeg = Num(f, "pointingDecDeg"),
     Radesys = Str(f, "radesys"),
     WcsError = Str(f, "wcsError"),
+    WcsProjection = Str(f, "wcsProjection"),
+    WcsDistortion = Str(f, "wcsDistortion"),
+    WcsFrame = Str(f, "wcsFrame"),
+    WcsEquinox = Num(f, "wcsEquinox"),
+    WcsFrameAssumed = Bool(f, "wcsFrameAssumed"),
     RotationDeg = Num(f, "rotationDeg"),
     Mirrored = Bool(f, "mirrored"),
     SiteLatDeg = Num(f, "siteLatDeg"),
@@ -236,6 +359,31 @@ public sealed record FitsMetadata(
     SiteLonWestConvention = Bool(f, "siteLonWestConvention"),
     SiteLonRawDeg = Num(f, "siteLonRawDeg"),
     SiteLonFromLst = Bool(f, "siteLonFromLst"),
+  };
+
+  private static IReadOnlyList<long> PlaneAxesOf(JsonElement root)
+  {
+    if (!root.TryGetProperty("planeAxes", out var a) || a.ValueKind != JsonValueKind.Array)
+      return [];
+    var axes = new List<long>();
+    foreach (var v in a.EnumerateArray())
+      if (v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out long n) && n >= 1)
+        axes.Add(n);
+    return axes;
+  }
+
+  private static FitsHipsFacts ParseHips(JsonElement h) => new()
+  {
+    Allsky = Bool(h, "allsky") ?? false,
+    Order = (int)(Num(h, "order") ?? 0),
+    Npix = h.TryGetProperty("npix", out var np) && np.ValueKind == JsonValueKind.Number && np.TryGetUInt64(out ulong n) ? n : null,
+    TileWidth = (int)(Num(h, "tile_width") ?? 0),
+    Frame = Str(h, "frame"),
+    FrameSource = Str(h, "frame_source"),
+    SurveyTitle = Str(h, "survey_title"),
+    CenterRaDeg = Num(h, "center_ra_deg"),
+    CenterDecDeg = Num(h, "center_dec_deg"),
+    PixelScaleArcsec = Num(h, "pixel_scale_arcsec"),
   };
 
   private static JsonElement? Obj(JsonElement e, string name) =>

@@ -349,6 +349,14 @@ public sealed class BillboardDto
   public bool PhysicalSizeBound { get; set; }
   /// <summary>FITS texture stretch (absent / null: the import's zscale, linear).</summary>
   public FitsStretchDto? FitsStretch { get; set; }
+  /// <summary>The century a two-digit FITS year is read in: <c>nineteen_hundreds</c> when the user
+  /// chose 19yy; absent / null (every older save): 20yy, the engine's reading.</summary>
+  [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+  public string? FitsTwoDigitYearCentury { get; set; }
+  /// <summary>The plane of a FITS cube shown (0-based flat index, NAXIS3 fastest); absent / null
+  /// (every older save, and the first plane): plane 0.</summary>
+  [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+  public int? FitsPlane { get; set; }
   /// <summary>The nucleus pixel, image px (x right, y down, pixel centres at whole numbers);
   /// absent / null in either: the image centre (older saves).</summary>
   public double? ImageNucleusX { get; set; }

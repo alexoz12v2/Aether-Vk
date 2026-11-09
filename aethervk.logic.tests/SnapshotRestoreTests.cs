@@ -60,8 +60,12 @@ public class SnapshotRestoreTests
         _dispatcherMock.Setup(d => d.Dispatch(It.IsAny<Action>())).Callback<Action>(a => a());
     }
 
+    /// A paused edit after Play stays at the current date: the Comet tab's rotation edits no
+    /// longer restore the scene snapshot taken at Play (the restore rewound the clock and left
+    /// the engine without the comet's state, so the model did not show again until a seek or a
+    /// reopen; the engine re-emits the dust of a changed rotation on its own).
     [Fact]
-    public void ChangingCometSettings_WhilePaused_TriggersSnapshotRestore()
+    public void ChangingCometSettings_WhilePaused_DoesNotRestoreSnapshot()
     {
         var vm = new CometTabViewModel(
             _translationServiceMock.Object,
@@ -82,31 +86,28 @@ public class SnapshotRestoreTests
         _runtimeServiceMock.Setup(r => r.SnapshotSceneSync()).Returns(true);
         _timelineService.Play(1);
         _schedulerProvider.MainThread.Start();
-        
+        _runtimeServiceMock.Verify(r => r.SnapshotSceneSync(), Times.Once); // Play still snapshots
+
         // Simulate Pause
         _runtimeServiceMock.Setup(r => r.PauseSimulationSync()).Returns(true);
         _timelineService.Pause();
         _schedulerProvider.MainThread.Start();
-        
-        // At this point, _snapshotExists = true, IsSimulationRunning = false.
-        
+        Assert.False(vm.IsSimulationRunning);
+
         _runtimeServiceMock.Setup(r => r.RestoreSnapshotSync()).Returns(true);
-        
-        // Trigger a setting change
+
+        // Paused edits after a Play: no restore, the clock stays where it is
         vm.PoleRaDeg = 45;
-        
-        // Assert
-        _runtimeServiceMock.Verify(r => r.RestoreSnapshotSync(), Times.Once);
-        
-        // Changing it again shouldn't trigger another restore because _snapshotExists is false now
+        _runtimeServiceMock.Verify(r => r.RestoreSnapshotSync(), Times.Never);
         vm.PoleDecDeg = 20;
-        _runtimeServiceMock.Verify(r => r.RestoreSnapshotSync(), Times.Once); // Still 1
+        _runtimeServiceMock.Verify(r => r.RestoreSnapshotSync(), Times.Never);
+        _runtimeServiceMock.Verify(r => r.ResetSimulationSync(), Times.Never);
     }
-    
-    /// The nucleus radius moved to the Comet tab (feedback item 10b): an edit after Play still
-    /// restores the snapshot, once.
+
+    /// The nucleus radius (Comet tab, feedback item 10b) edited after Play while paused: no
+    /// restore either.
     [Fact]
-    public void ChangingNucleusRadius_InCometTab_WhilePaused_TriggersSnapshotRestore()
+    public void ChangingNucleusRadius_InCometTab_WhilePaused_DoesNotRestoreSnapshot()
     {
         var vm = new CometTabViewModel(
             _translationServiceMock.Object,
@@ -135,20 +136,17 @@ public class SnapshotRestoreTests
 
         _runtimeServiceMock.Setup(r => r.RestoreSnapshotSync()).Returns(true);
 
-        // Trigger a setting change
         vm.ManualNucleusRadiusKm = 15f;
-
-        // Assert
-        _runtimeServiceMock.Verify(r => r.RestoreSnapshotSync(), Times.Once);
+        _runtimeServiceMock.Verify(r => r.RestoreSnapshotSync(), Times.Never);
         vm.ManualNucleusRadiusKm = 16f;
-        _runtimeServiceMock.Verify(r => r.RestoreSnapshotSync(), Times.Once);
+        _runtimeServiceMock.Verify(r => r.RestoreSnapshotSync(), Times.Never);
     }
 
-    /// Recolouring a jet while paused (snapshot present) must reach the native runtime but must
-    /// NOT restore the snapshot: the restored scene's dust ring only re-emits on ticks, so the
-    /// tail disappeared. A physical jet edit still restores.
+    /// A jet edited while paused after a Play (visual or physical) reaches the native runtime
+    /// through `ModifyParticleSystem` and never restores the snapshot: the engine re-emits the
+    /// changed jet's dust at the paused date.
     [Fact]
-    public void ChangingJetStreamColor_WhilePaused_DoesNotRestoreSnapshot()
+    public void JetEdits_WhilePaused_ReachTheRuntime_WithoutRestoringTheSnapshot()
     {
         var vm = new ModelTabViewModel(
             _translationServiceMock.Object,
@@ -179,7 +177,7 @@ public class SnapshotRestoreTests
         var jet = Assert.Single(vm.Jets!);
         Assert.Equal(psId, jet.NativePsId);
 
-        // Play, then Pause: a snapshot exists
+        // Play, then Pause: a snapshot exists in the engine
         _runtimeServiceMock.Setup(r => r.StartSimulation(It.IsAny<int>())).Returns(true);
         _runtimeServiceMock.Setup(r => r.SnapshotSceneSync()).Returns(true);
         _timelineService.Play(1);
@@ -190,6 +188,7 @@ public class SnapshotRestoreTests
         _runtimeServiceMock.Setup(r => r.RestoreSnapshotSync()).Returns(true);
         _runtimeServiceMock.Invocations.Clear();
 
+        // a visual edit
         jet.StreamColor = new System.Numerics.Vector4(1f, 0f, 0f, 1f);
         _schedulerProvider.Background.AdvanceBy(TimeSpan.FromMilliseconds(300).Ticks);
 
@@ -200,9 +199,15 @@ public class SnapshotRestoreTests
                 out It.Ref<ParticleSystemComputedProperties>.IsAny),
             Times.Once);
 
-        // a physical edit still restores
+        // a physical edit: forwarded too, still no restore
         jet.LatitudeDeg = 12f;
-        _runtimeServiceMock.Verify(r => r.RestoreSnapshotSync(), Times.Once);
+        _schedulerProvider.Background.AdvanceBy(TimeSpan.FromMilliseconds(300).Ticks);
+        _runtimeServiceMock.Verify(r => r.RestoreSnapshotSync(), Times.Never);
+        _runtimeServiceMock.Verify(
+            r => r.ModifyParticleSystem(psId, It.IsAny<ParticleSystemModel>(), It.IsAny<ParticleSystemJet>(),
+                out It.Ref<ParticleSystemComputedProperties>.IsAny),
+            Times.Exactly(2));
+        Assert.False(_timelineService.IsSimulationRunningValue);
     }
 
     /// "show reference-position error" reaches the native runtime and is kept in the session,

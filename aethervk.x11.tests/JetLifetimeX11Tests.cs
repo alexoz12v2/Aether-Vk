@@ -43,9 +43,6 @@ public sealed class JetLifetimeX11Tests : IDisposable
 
   private const double DaySeconds = 86_400.0;
 
-  private static string FixtureIndex() =>
-    Path.Combine(AppRig.RepoRoot(), "test_assets", "saves", "review_67p_2021-12", SaveIndex.FileName);
-
   private void Step(string s)
   {
     _output.WriteLine($"── {s}");
@@ -218,14 +215,14 @@ public sealed class JetLifetimeX11Tests : IDisposable
   [SkippableFact]
   public void LifetimeBox_SetsTheEmissionStepsTheEngineUses()
   {
-    Skip.IfNot(File.Exists(FixtureIndex()), $"fixture missing: {FixtureIndex()}");
+    var fixture = AetherVk.TestAssets.TestAssets.Require("saves/review_67p_2021-12");
     using var rig = new AppRig();
     var model = rig.Tab<ModelTabViewModel>();
     var runtime = rig.Host.Services.GetRequiredService<INativeRuntimeService>();
 
     // ── 1. the fixture, one jet ─────────────────────────────────────────────────────────────
     Step("1: open the fixture folder");
-    rig.Dialogs.Answer(FixtureIndex());
+    rig.Dialogs.Answer(rig.CopyOfSave(fixture));
     rig.Menu("File", "Open...");
     Assert.True(WaitFor(() => rig.XTitle.Contains("review_67p_2021-12", StringComparison.Ordinal), 90_000),
       $"fixture open, title: {rig.XTitle}");

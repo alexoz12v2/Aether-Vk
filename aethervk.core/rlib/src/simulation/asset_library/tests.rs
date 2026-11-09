@@ -815,15 +815,11 @@ fn two_glbs_sharing_geometry_and_texture_produce_no_duplicates() {
   assert_eq!(lib.assets().len(), 2);
 }
 
-fn repo_test_asset(name: &str) -> PathBuf {
-  PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../test_assets").join(name)
-}
-
-/// Khronos `BoxTextured.glb` (CC-BY-4.0, committed in `test_assets/`): palette PNG base colour,
+/// Khronos `BoxTextured.glb` (CC-BY-4.0, the `models` test asset group): palette PNG base colour,
 /// no TANGENT attribute.
 #[test]
 fn khronos_box_textured_glb() {
-  let path = repo_test_asset("BoxTextured.glb");
+  let path = aethervk_test_assets::test_asset!("BoxTextured.glb");
   assert!(path.is_file(), "missing fixture {}", path.display());
   let s = Scratch::new("box_textured");
   let mut lib = s.library();

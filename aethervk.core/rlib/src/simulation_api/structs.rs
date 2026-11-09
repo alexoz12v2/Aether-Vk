@@ -665,6 +665,9 @@ impl SimulationThreads {
   fn new_idle_with_skip_present(
     skip_present: Arc<core::sync::atomic::AtomicBool>,
   ) -> EngineResult<Self> {
+    // tests: the runtime's threads inherit the test's thread name (test_gpu_watch)
+    #[cfg(test)]
+    crate::gpu_backends::vulkan::test_gpu_watch::name_gpu_test_thread();
     let thread_pool = Arc::new(os::pool::ThreadPool::new(4).map_err(|e| {
       oshal::log!("Failed to create thread pool: {:?}", e);
       EngineError::InvalidOperation("core_api:startup | failed to create thread pool")

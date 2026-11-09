@@ -16,6 +16,9 @@ on:
 # runner's tools: see aethervk.core/rlib/build.rs
 env:
   AETHERVK_PREBUILT_SHADERS: "1"
+  # CFITSIO is built by vcpkg from aethervk.cfitsio/sys/build.rs: keep its source downloads in one
+  # cacheable folder (the binary cache is <repo>/.vcpkg-bincache)
+  VCPKG_DOWNLOADS: ${{ github.workspace }}/.vcpkg/downloads
 
 jobs:
   compile:
@@ -51,8 +54,9 @@ jobs:
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
-        sudo apt-get install -y libvulkan-dev mesa-vulkan-drivers libfontconfig1 libx11-6 libx11-xcb1 libxcb-dri3-0 libwayland-client0 xvfb xz-utils
+        sudo apt-get install -y libvulkan-dev mesa-vulkan-drivers libfontconfig1 libx11-6 libx11-xcb1 libxcb-dri3-0 libwayland-client0 xvfb xz-utils curl zip unzip tar pkg-config cmake ninja-build
 
+    # vcpkg's arm64-linux triplet cross-compiles CFITSIO with aarch64-linux-gnu-gcc from this package
     - name: Install cross-compiler (Linux aarch64)
       if: matrix.target == 'aarch64-unknown-linux-gnu' && runner.os == 'Linux'
       run: |
@@ -75,8 +79,31 @@ jobs:
       with:
         vulkan_version: ${{ steps.vksdk.outputs.version }}
 
+    # CFITSIO (aethervk.cfitsio/sys): vcpkg's binary cache and the downloads (vcpkg tarball, sources)
+    - name: Cache vcpkg (CFITSIO)
+      uses: actions/cache@v4
+      with:
+        path: |
+          .vcpkg-bincache
+          .vcpkg/downloads
+          .vcpkg/vcpkg-*.tar.gz
+        key: vcpkg-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('aethervk.cfitsio/sys/build.rs') }}
+        restore-keys: vcpkg-${{ runner.os }}-${{ matrix.target }}-
+
+    - name: Create vcpkg folders
+      shell: bash
+      run: mkdir -p .vcpkg/downloads .vcpkg-bincache
+
     - name: Cargo Check
       run: cargo check --locked --all-targets --target ${{ matrix.target }}
+      env:
+        CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+        CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
+
+    # the pure-Rust FITS fallback (no CFITSIO) must keep compiling: it is the per-target release fallback
+    - name: Cargo Check (without CFITSIO)
+      run: cargo check --locked -p aethervk-core-cdylib --no-default-features --target ${{ matrix.target }}
       env:
         CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
@@ -98,7 +125,7 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libvulkan-dev mesa-vulkan-drivers vulkan-validationlayers libfontconfig1 libx11-6 libx11-xcb1 libxcb-dri3-0 libwayland-client0 xvfb xz-utils cmake ninja-build python3 build-essential pkg-config git
+        sudo apt-get install -y libvulkan-dev mesa-vulkan-drivers vulkan-validationlayers libfontconfig1 libx11-6 libx11-xcb1 libxcb-dri3-0 libwayland-client0 xvfb xz-utils cmake ninja-build python3 build-essential pkg-config git curl zip unzip tar
     - name: Install Vulkan-ExtensionLayer
       run: |
         sudo mkdir -p /usr/share/vulkan/explicit_layer.d
@@ -128,6 +155,29 @@ jobs:
       with:
         vulkan_version: ${{ steps.vksdk.outputs.version }}
 
+    # CFITSIO (aethervk.cfitsio/sys): vcpkg's binary cache and the downloads (vcpkg tarball, sources)
+    - name: Cache vcpkg (CFITSIO)
+      uses: actions/cache@v4
+      with:
+        path: |
+          .vcpkg-bincache
+          .vcpkg/downloads
+          .vcpkg/vcpkg-*.tar.gz
+        key: vcpkg-${{ runner.os }}-x86_64-unknown-linux-gnu-${{ hashFiles('aethervk.cfitsio/sys/build.rs') }}
+        restore-keys: vcpkg-${{ runner.os }}-x86_64-unknown-linux-gnu-
+
+    - name: Create vcpkg folders
+      shell: bash
+      run: mkdir -p .vcpkg/downloads .vcpkg-bincache
+
+    # test assets (test_assets/ASSETS.tsv): the tarballs of the test-assets release, downloaded
+    # by the tests themselves into target/test-assets on a cache miss
+    - name: Cache test assets
+      uses: actions/cache@v4
+      with:
+        path: target/test-assets
+        key: test-assets-${{ hashFiles('test_assets/ASSETS.tsv') }}
+
     - name: Install cargo-llvm-cov
       uses: taiki-e/install-action@v2
       with:
@@ -149,6 +199,8 @@ jobs:
       env:
         # .config/nextest.toml: no fail-fast, skip tests that need real GPU throughput
         NEXTEST_PROFILE: ci
+        # a test whose asset cannot be downloaded fails here instead of skipping
+        AETHERVK_TEST_ASSETS_REQUIRED: "1"
         # Force Vulkan to use lavapipe for headless environments
         VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.json
         # TODO: We will remove this when we figure out why it acts out

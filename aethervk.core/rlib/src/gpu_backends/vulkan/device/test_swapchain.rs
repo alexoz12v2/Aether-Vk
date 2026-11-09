@@ -1277,3 +1277,279 @@ mod tests {
     test_rapid_resize_stress_internal(true);
   }
 }
+
+/// Image export of a windowed viewport (`SimulationContext::capture_viewport`): a full engine on
+/// a headless-surface windowed presentation engine, a static scene (a green emissive sphere with a
+/// leader-line label, the Sun hidden). The capture with the labels differs from the capture
+/// without them inside a bounded region only, and two captures without labels are identical.
+#[cfg(test)]
+mod viewport_capture_tests {
+  extern crate std;
+  use crate::simulation_api::{
+    SimulationContext,
+    components_api::CameraParams,
+    structs::{LogicCommand, TaskStatusCode},
+  };
+  use aethervk_oshal_rlib::math::quaternion::Quaternion;
+  use aethervk_oshal_rlib::math::vector::{Vector3, vec3::Vec3f32, vec3f64::Vec3f64, vec4::Quat};
+  use alloc::format;
+  use std::println;
+
+  fn panic_error_callback(msg: &str) {
+    println!("Vulkan Validation Error in test: {}", msg);
+    panic!("Vulkan Error: {}", msg);
+  }
+
+  struct PauseCtxGuard {
+    ctx: *mut SimulationContext,
+    scene_id: u64,
+  }
+  impl Drop for PauseCtxGuard {
+    fn drop(&mut self) {
+      unsafe {
+        let _ = (*self.ctx)
+          .threads
+          .logic_thread
+          .tx()
+          .try_send(LogicCommand::PauseScene { scene_id: self.scene_id });
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let _ = alloc::boxed::Box::from_raw(self.ctx);
+      }
+    }
+  }
+
+  /// One capture, waited for and downloaded: `(bytes, width, height, format)`.
+  fn capture(
+    ctx: &SimulationContext,
+    pe: crate::gpu::PresentationEngineHandle,
+    hide_labels: bool,
+  ) -> (alloc::vec::Vec<u8>, u32, u32, u32) {
+    let c = ctx
+      .capture_viewport(pe, hide_labels, 15_000)
+      .expect("no frame captured within 15 s");
+    for _ in 0..1500 {
+      if !matches!(ctx.get_task_status(c.task_id), TaskStatusCode::Pending) {
+        break;
+      }
+      std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let mut bytes = alloc::vec![0u8; (c.width * c.height * 4) as usize];
+    assert!(
+      unsafe { ctx.download_image(c.task_id, bytes.as_mut_ptr(), bytes.len()) },
+      "download of capture task {} failed",
+      c.task_id
+    );
+    (bytes, c.width, c.height, c.format)
+  }
+
+  #[test]
+  fn test_viewport_capture_windowed_labels_and_stability() {
+    let _render_lock = crate::simulation_api::lock_render_callback_tests();
+    let asset_dir = format!("{}/../../assets", env!("CARGO_MANIFEST_DIR"));
+    SimulationContext::set_asset_path(&asset_dir);
+    let Ok(boxed) = SimulationContext::startup(Some(panic_error_callback)) else {
+      println!("Skipping test: Vulkan backend could not be initialized");
+      return;
+    };
+    let font_path = format!("{}/fonts/JetBrainsMono-Regular.ttf", asset_dir);
+    let Ok(atlas) = crate::scene::text::FontAtlas::from_path(&font_path, 64.0) else {
+      println!("Skipping test: label font not found at {}", font_path);
+      return;
+    };
+    let atlas = alloc::sync::Arc::new(atlas);
+    let font_hash = atlas.hash_metadata();
+
+    let ctx_ptr = alloc::boxed::Box::into_raw(boxed);
+    let mut guard = PauseCtxGuard {
+      ctx: ctx_ptr,
+      scene_id: 0,
+    };
+
+    unsafe {
+      let ctx = &mut *ctx_ptr;
+      let scene_id = ctx
+        .create_empty_scene(
+          true,
+          hifitime::Epoch::from_gregorian_at_midnight(2020, 12, 25, hifitime::TimeScale::UTC),
+          hifitime::Epoch::from_gregorian_at_midnight(2020, 12, 26, hifitime::TimeScale::UTC),
+        )
+        .unwrap();
+      guard.scene_id = scene_id;
+
+      const W: u32 = 512;
+      const H: u32 = 512;
+      const AU_TO_KM: f64 = 149_597_870.7;
+      const CAM_AU: f64 = 1.0;
+      const CAM_Y_AU: f64 = 1.0;
+      const SPHERE_KM: f32 = 300.0;
+      const SPHERE_FWD_KM: f64 = 2000.0;
+      let fov = core::f32::consts::FRAC_PI_3;
+
+      // ── micro frame (layer 1) at the camera, a green sphere 2000 km ahead ──
+      let frame_id = ctx.spawn_entity(scene_id, "capture_frame").unwrap();
+      ctx
+        .add_transform_component(
+          scene_id,
+          frame_id,
+          Vec3f32::from_components(CAM_AU as f32, CAM_Y_AU as f32, 0.0),
+          Quat::identity(),
+          Vec3f32::from_components(1.0, 1.0, 1.0),
+        )
+        .unwrap();
+      let sphere_id = ctx.spawn_entity(scene_id, "capture_sphere").unwrap();
+      ctx
+        .add_transform_component(
+          scene_id,
+          sphere_id,
+          Vec3f32::from_components(0.0, -SPHERE_FWD_KM as f32, 0.0),
+          Quat::identity(),
+          Vec3f32::from_components(1.0, 1.0, 1.0),
+        )
+        .unwrap();
+      {
+        let scene_ctx = ctx.get_scene(scene_id).unwrap();
+        let mut g = scene_ctx.write();
+        let root = g.root_entity;
+        let frame: crate::scene::EntityId = slotmap::KeyData::from_ffi(frame_id).into();
+        let sphere: crate::scene::EntityId = slotmap::KeyData::from_ffi(sphere_id).into();
+        g.scene.set_parent(frame, Some(root));
+        let _ = g.scene.add_component(
+          frame,
+          crate::scene::ReferenceFrameComponent {
+            frame_type: crate::scene::ReferenceFrameType::Micro,
+            scale: (1.0 / AU_TO_KM) as f32,
+            soi_radius: 0.0001,
+            depth_layer: 1,
+          },
+        );
+        g.scene.set_parent(sphere, Some(frame));
+        let _ = g.scene.add_component(
+          sphere,
+          crate::scene::StaticMeshComponent {
+            asset_path: "capture_sphere".into(),
+            mesh: alloc::sync::Arc::new(crate::simulation::comet::generate_uv_sphere(
+              SPHERE_KM, 32, 32, 1.0, false,
+            )),
+            emissive_color: [0.0, 1.0, 0.0, 10.0],
+            is_visible: true,
+          },
+        );
+        // the Sun paints the whole micro layer near-white in this scene: hidden
+        let mut suns = alloc::vec::Vec::new();
+        g.scene.query1(|id, _s: &crate::scene::SunComponent| suns.push(id));
+        for id in suns {
+          let _ = g.scene.add_component(id, crate::scene::HiddenComponent {});
+        }
+        // the label: a leader line and text next to the sphere (the UI and text batches)
+        let label = g.scene.spawn_entity("capture_label");
+        g.scene.set_parent(label, Some(root));
+        let _ = g.scene.add_component(label, crate::scene::TransformComponent::default());
+        let _ = g.scene.add_component(
+          label,
+          crate::scene::IndicatorComponent {
+            global_position_km: Vec3f64::from_array([
+              CAM_AU * AU_TO_KM,
+              CAM_Y_AU * AU_TO_KM - SPHERE_FWD_KM,
+              0.0,
+            ]),
+            label: alloc::string::String::from("Capture"),
+            text_color: [1.0, 1.0, 1.0, 1.0],
+            desired_label_distance_km: 400.0,
+            font_atlas: alloc::sync::Arc::clone(&atlas),
+            font_hash,
+          },
+        );
+      }
+
+      // ── camera: identity rotation (forward -Y) ──
+      let cam_id = ctx.spawn_entity(scene_id, "capture_cam").unwrap();
+      ctx
+        .add_transform_component(
+          scene_id,
+          cam_id,
+          Vec3f32::from_components(CAM_AU as f32, CAM_Y_AU as f32, 0.0),
+          Quat::identity(),
+          Vec3f32::from_components(1.0, 1.0, 1.0),
+        )
+        .unwrap();
+      ctx
+        .add_camera_component(
+          scene_id,
+          cam_id,
+          CameraParams::new_perspective(fov, W as f32 / H as f32, 1e-6, 1000.0),
+        )
+        .unwrap();
+
+      // a windowed presentation engine on the headless surface (null handles under cfg(test))
+      let window_info = crate::gpu::OpaqueNativeHandleInfo {
+        ptr0: core::ptr::null_mut(),
+        ptr1: core::ptr::null_mut(),
+        handle_type: crate::gpu::NativeHandleType::Unknown,
+      };
+      let pe = match ctx.create_presentation_engine_windowed(scene_id, W, H, window_info) {
+        Ok(pe) => pe,
+        Err(e) => {
+          println!("Skipping test: no headless windowed presentation on this device: {:?}", e);
+          return;
+        }
+      };
+      ctx.set_camera_for_presentation_engine(scene_id, pe, cam_id).unwrap();
+      let _ = ctx.threads.logic_thread.tx().try_send(LogicCommand::PlayScene {
+        scene_id,
+        speed: aethervk_oshal_rlib::os::time::v2::SimSpeed::Realtime,
+      });
+
+      let (with_labels, w, h, format) = capture(ctx, pe, false);
+      assert_eq!((w, h), (W, H), "capture size");
+      let channel_order = format & !crate::gpu::CAPTURE_FORMAT_SRGB_BIT;
+      assert!(
+        channel_order == crate::gpu::CAPTURE_FORMAT_BGRA8
+          || channel_order == crate::gpu::CAPTURE_FORMAT_RGBA8,
+        "capture format code {format}"
+      );
+      let (hidden_a, wa, ha, fa) = capture(ctx, pe, true);
+      let (hidden_b, wb, hb, fb) = capture(ctx, pe, true);
+      assert_eq!((wa, ha, fa), (W, H, format));
+      assert_eq!((wb, hb, fb), (W, H, format));
+
+      // not black, and the sphere is drawn (green in either channel order)
+      let (r_i, b_i) = if channel_order == crate::gpu::CAPTURE_FORMAT_BGRA8 {
+        (2usize, 0usize)
+      } else {
+        (0usize, 2usize)
+      };
+      let green = |px: &[u8]| px[1] > 128 && px[r_i] < 100 && px[b_i] < 100;
+      let n_green = with_labels.chunks_exact(4).filter(|px| green(px)).count();
+      assert!(n_green > 100, "green sphere not rendered ({n_green} px)");
+      let n_lit = hidden_a.chunks_exact(4).filter(|px| px[0] > 20 || px[1] > 20 || px[2] > 20).count();
+      assert!(n_lit > 100, "capture without labels is black");
+
+      // the label is the only difference, and it is a bounded region
+      let (mut n_diff, mut min_x, mut min_y, mut max_x, mut max_y) = (0u32, W, H, 0u32, 0u32);
+      for y in 0..H {
+        for x in 0..W {
+          let k = ((y * W + x) * 4) as usize;
+          if with_labels[k..k + 3] != hidden_a[k..k + 3] {
+            n_diff += 1;
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+          }
+        }
+      }
+      println!(
+        "[viewport_capture] label pixels {n_diff}, box ({min_x},{min_y})-({max_x},{max_y}), green {n_green}"
+      );
+      assert!(n_diff > 0, "hiding the labels changed nothing: no label drawn");
+      let box_area = (max_x - min_x + 1) as u64 * (max_y - min_y + 1) as u64;
+      assert!(
+        box_area * 4 < (W as u64) * (H as u64),
+        "the label difference spans ({min_x},{min_y})-({max_x},{max_y}): not a label"
+      );
+
+      // a static frame captures identically twice
+      assert!(hidden_a == hidden_b, "two captures of the static scene differ");
+    }
+  }
+}

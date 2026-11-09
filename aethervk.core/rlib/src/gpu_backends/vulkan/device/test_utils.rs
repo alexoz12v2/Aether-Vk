@@ -41,10 +41,16 @@ pub fn setup_render_frontend_for_tests(
 
   use std::sync::mpsc;
   let (tx, rx) = mpsc::channel();
+  // a dust profiler session on the calling thread covers the device created below
+  // (`test_profile_gate`): the creating thread inherits the mark and skips the shared lock
+  let in_profile_session = crate::gpu_backends::vulkan::test_profile_gate::holds_session();
+  // the test's thread name, inherited by the device thread spawned below (test_gpu_watch)
+  crate::gpu_backends::vulkan::test_gpu_watch::name_gpu_test_thread();
 
   let th = aethervk_oshal_rlib::os::thread::Builder::new()
     .stack_size(8 * 1024 * 1024)
     .spawn(move || {
+      crate::gpu_backends::vulkan::test_profile_gate::adopt_session(in_profile_session);
       let pool = aethervk_oshal_rlib::os::pool::ThreadPool::new(1).unwrap();
       let pool_arc = Arc::new(pool);
 

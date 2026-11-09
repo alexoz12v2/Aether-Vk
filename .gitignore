@@ -926,3 +926,7 @@ aethervk.ui-app/Generated/net10.0/*
 !aethervk.ui-logic/Generated/netstandard2.0/win-x64/
 !aethervk.ui-logic/Generated/net10.0/win-x64/
 !aethervk.ui-app/Generated/net10.0/win-x64/
+
+# vcpkg checkout and binary cache created by aethervk.cfitsio/sys/build.rs
+.vcpkg/
+.vcpkg-bincache/

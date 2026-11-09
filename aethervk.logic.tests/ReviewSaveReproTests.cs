@@ -17,17 +17,10 @@ namespace AetherVk.Logic.Tests;
 /// </summary>
 public class ReviewSaveReproTests
 {
-  internal static string FixtureDir()
-  {
-    for (var d = new DirectoryInfo(AppContext.BaseDirectory); d is not null; d = d.Parent)
-    {
-      var p = Path.Combine(d.FullName, "test_assets", "saves", "review_67p_2021-12");
-      if (Directory.Exists(p)) return p;
-    }
-    throw new DirectoryNotFoundException("test_assets/saves/review_67p_2021-12");
-  }
+  /// <summary>The save folder (test_assets/ASSETS.tsv, the shared cache: read it, or work on a copy).</summary>
+  internal static string FixtureDir() => TestAssets.TestAssets.Require("saves/review_67p_2021-12");
 
-  [Fact]
+  [SkippableFact]
   public async Task Open_ShowsTheCommittedRange_NotTheLaterProposal()
   {
     var (index, error) = SaveIndexIo.Read(FixtureDir());

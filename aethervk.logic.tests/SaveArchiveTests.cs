@@ -33,13 +33,7 @@ public sealed class SaveArchiveTests : IDisposable
     public DateTimeOffset UtcNow { get; set; } = new(2026, 10, 29, 12, 0, 0, TimeSpan.Zero);
   }
 
-  private static string FixtureDir()
-  {
-    var dir = AppContext.BaseDirectory;
-    while (dir is not null && !Directory.Exists(Path.Combine(dir, "test_assets", "saves", "review_67p_2021-12")))
-      dir = Path.GetDirectoryName(dir);
-    return Path.Combine(dir ?? throw new DirectoryNotFoundException("test_assets"), "test_assets", "saves", "review_67p_2021-12");
-  }
+  private static string FixtureDir() => ReviewSaveReproTests.FixtureDir();
 
   internal static string[] Tree(string dir) =>
     Directory.GetFiles(dir, "*", SearchOption.AllDirectories)
@@ -50,7 +44,7 @@ public sealed class SaveArchiveTests : IDisposable
   private static long FolderBytes(string dir) =>
     Directory.GetFiles(dir, "*", SearchOption.AllDirectories).Sum(f => new FileInfo(f).Length);
 
-  [Fact]
+  [SkippableFact]
   public void PackThenExtract_GivesTheSameFiles_IndexFirst()
   {
     var avk = Path.Combine(_root, "review.avk");
@@ -64,7 +58,7 @@ public sealed class SaveArchiveTests : IDisposable
     Assert.Equal(SaveIndexError.None, SaveIndexIo.Read(dir).Error);
   }
 
-  [Fact]
+  [SkippableFact]
   public void TheReviewSave_IsOneFile_SmallerThanItsFolder()
   {
     var avk = Path.Combine(_root, "review.avk");
@@ -107,7 +101,7 @@ public sealed class SaveArchiveTests : IDisposable
     Assert.Empty(Directory.GetDirectories(WorkRoot));
   }
 
-  [Fact]
+  [SkippableFact]
   public void AFailedPack_LeavesThePreviousArchive_AndNoTemporaryFile()
   {
     var avk = Path.Combine(_root, "keep.avk");

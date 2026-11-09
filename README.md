@@ -46,6 +46,31 @@ cargo build --release
 cd ..
 ```
 
+#### CFITSIO (FITS reader)
+FITS images are read with [CFITSIO](https://heasarc.gsfc.nasa.gov/fitsio/) 4.7.0 (image extensions,
+tile-compressed `.fz`), linked statically into the engine. The `aethervk.cfitsio/sys` build script
+fetches it through vcpkg on the first build, with no setup:
+- it downloads the vcpkg 2026.10.16 source tarball with `curl`, checks its pinned SHA-256, unpacks it
+  into `<repo>/.vcpkg/`, bootstraps vcpkg (`-disableMetrics`) and runs `vcpkg install cfitsio:<triplet>`
+  (CFITSIO + zlib, static; vcpkg downloads its own CMake when needed);
+- built packages go to the binary cache `<repo>/.vcpkg-bincache` (`VCPKG_DEFAULT_BINARY_CACHE` moves
+  it), so later clean builds restore them in seconds, offline;
+- `.vcpkg/` grows to about 300 MB; both folders are in `.gitignore`.
+
+Tools: `curl`, `tar` and a C compiler everywhere; on Linux also what vcpkg's bootstrap needs
+(`sudo apt-get install curl zip unzip tar pkg-config cmake ninja-build`), plus
+`gcc-aarch64-linux-gnu` when cross-compiling for `aarch64-unknown-linux-gnu`.
+
+Fallbacks, when the vcpkg build is not possible:
+- `AETHERVK_CFITSIO_DIR=<prefix>`: a prebuilt static CFITSIO (`<prefix>/lib`, `<prefix>/include/fitsio.h`);
+- `AETHERVK_CFITSIO_SYSTEM=1`: the distribution's CFITSIO through `pkg-config` (Linux);
+- `AETHERVK_VCPKG_ROOT` / `VCPKG_ROOT`: an existing vcpkg checkout, used only when its `cfitsio` port is 4.7.0;
+- `cargo build -p aethervk-core-cdylib --no-default-features`: no CFITSIO at all, the pure-Rust
+  FITS reader (primary HDU only). The packaging scripts take it as `AETHERVK_CARGO_FLAGS=--no-default-features`.
+
+The licences of CFITSIO and zlib are in `aethervk.cfitsio/sys/THIRD_PARTY_LICENSES.md`; every package
+ships that file as `THIRD_PARTY_LICENSES.md` next to `LICENSE`.
+
 ### 3. Run Tests
 The repository includes both Rust and C# tests, with an automated script to run them sequentially and generate coverage reports.
 - **macOS / Linux**: `./execute_tests.sh`

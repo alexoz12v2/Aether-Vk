@@ -1,0 +1,13 @@
+[package]
+name = "aethervk-test-assets"
+version = "0.1.0"
+edition = "2024"
+description = "Test-only: resolves test_assets/ files, downloading the asset groups of test_assets/ASSETS.tsv on demand"
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+# the same version and features as aethervk-core-rlib's dev-dependency, so the lockfile does not grow
+reqwest = { version = "0.11", default-features = false, features = ["blocking", "rustls-tls"] }

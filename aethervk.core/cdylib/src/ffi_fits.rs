@@ -1,4 +1,5 @@
-//! FFI for FITS texture assets (asset library): header metadata as JSON and the display stretch.
+//! FFI for FITS texture assets (asset library): header metadata as JSON, the display stretch and
+//! the plane of a cube.
 //! Contract: `docs/fits_ffi_contract.md`.
 
 use aethervk_core_rlib::{
@@ -31,6 +32,13 @@ pub fn fits_metadata_json(library: &AssetLibrary, asset_id: u64) -> Option<Strin
     json_f64(Some(f.white))
   ));
   j.push_str(&meta[1..]);
+  // HiPS facts (additive key, only for a HiPS tile / Allsky)
+  if let Some(h) = &f.hips {
+    j.pop();
+    j.push_str(",\"hips\":");
+    j.push_str(&h.to_json());
+    j.push('}');
+  }
   Some(j)
 }
 
@@ -126,6 +134,33 @@ pub unsafe extern "C" fn avkSimulationContext_setFitsStretch(
     }
     Err(_) => false,
   }
+}
+
+/// Shows plane `plane` of the cube FITS texture `asset_id` (0-based flat index over the axes after
+/// the second, `NAXIS3` fastest; the JSON's `planes` counts them and `planeAxes` gives the axes
+/// when there are two or more): the source file is read again for that plane, the texels and the
+/// raster are replaced, the stretch is kept (black / white recomputed on the plane). A later
+/// `getFitsMetadataJson` says `"plane": plane`, `copyAssetTexels` / `copyFitsRaster` return the
+/// plane. `false` for an unknown or non-FITS asset, a plane past the last (`planes - 1`), a
+/// source file that is gone or unreadable, or a cache write failure (the asset is unchanged
+/// then). Waits for the library's write lock: call it off the UI thread.
+///
+/// # Safety
+/// FFI contract: `ctx` valid.
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setFitsPlane(
+  ctx: *mut SimulationContext,
+  asset_id: u64,
+  plane: u64,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  let ctx_ref = unsafe { &*ctx };
+  let library = alloc::sync::Arc::clone(&ctx_ref.scenes.read().asset_library);
+  let mut library = library.write();
+  library.set_fits_plane(asset_id, plane).is_ok()
 }
 
 /// The physical f32 raster of FITS texture `asset_id` (`BZERO + BSCALE · raw`, blank = NaN), in
@@ -238,6 +273,8 @@ mod tests {
     assert!(j.contains("\"object\":\"Test \\\"q\\\"\""));
     assert!(j.contains("\"stretch\":{\"mode\":0,\"transfer\":0"));
     assert!(j.ends_with("}}"));
+    assert!(!j.contains("\"hips\":"), "not a HiPS tile");
+    assert!(j.contains("\"wcsProjection\":null,"));
     assert!(fits_metadata_json(&lib, id + 99).is_none());
 
     // the physical raster, texture row order: FITS row 0 (0, 100, 200, 300) is the bottom row
@@ -262,6 +299,64 @@ mod tests {
     let _ = std::fs::remove_dir_all(&dir);
   }
 
+  /// The committed 4 × 3 × 3 cube: the JSON reports its planes, `set_fits_plane` changes the
+  /// plane the JSON and the raster copy report (plane p = the ramp + 1000 p), out of range fails.
+  #[test]
+  fn fits_ffi_cube_plane_selection() {
+    extern crate std;
+    let src = aethervk_test_assets::test_asset!("fits_cube_4x3x3.fits");
+    let dir = std::env::temp_dir().join(format!("avk_ffi_fits_cube_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut lib = AssetLibrary::new();
+    lib.set_cache_dir(dir.join("cache").to_str().unwrap()).unwrap();
+    let id = lib.import_file(src.to_str().unwrap()).unwrap().textures[0];
+    let j = fits_metadata_json(&lib, id).unwrap();
+    assert!(j.contains("\"hdu\":1,\"compressed\":false,\"planes\":3,\"plane\":0,\"cards\":["), "{j}");
+    use crate::ffi_assets::TexelsStatus;
+    let (mut w, mut h) = (0u32, 0u32);
+    let mut px = [0f32; 12];
+    assert_eq!(copy_fits_raster(&lib, id, px.as_mut_ptr(), 12, &mut w, &mut h), TexelsStatus::Ok);
+    assert_eq!(&px[8..], &[100.0, 200.0, 300.0, 400.0], "plane 0, FITS row 0 last");
+    lib.set_fits_plane(id, 2).unwrap();
+    assert_eq!(copy_fits_raster(&lib, id, px.as_mut_ptr(), 12, &mut w, &mut h), TexelsStatus::Ok);
+    assert_eq!((w, h), (4, 3));
+    assert_eq!(&px[8..], &[2100.0, 2200.0, 2300.0, 2400.0], "plane 2");
+    let j = fits_metadata_json(&lib, id).unwrap();
+    assert!(j.contains("\"planes\":3,\"plane\":2,\"cards\":["), "{j}");
+    assert!(lib.set_fits_plane(id, 3).is_err());
+    assert!(fits_metadata_json(&lib, id).unwrap().contains("\"plane\":2,"));
+    lib.clear();
+    let _ = std::fs::remove_dir_all(&dir);
+  }
+
+  /// A tile in a HiPS directory layout: the JSON ends with the `hips` facts object.
+  #[test]
+  fn fits_ffi_json_hips_tile() {
+    extern crate std;
+    let dir = std::env::temp_dir().join(format!("avk_ffi_fits_hips_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("Norder3/Dir0")).unwrap();
+    let mut h = alloc::vec::Vec::new();
+    for c in ["SIMPLE  =                    T", "BITPIX  =                   16", "NAXIS   =                    2", "NAXIS1  =                    4", "NAXIS2  =                    4", "END"] {
+      let mut card = [b' '; 80];
+      card[..c.len()].copy_from_slice(c.as_bytes());
+      h.extend_from_slice(&card);
+    }
+    h.resize(2880, b' ');
+    h.resize(2880 * 2, 0);
+    let p = dir.join("Norder3/Dir0/Npix5.fits");
+    std::fs::write(&p, &h).unwrap();
+    let mut lib = AssetLibrary::new();
+    lib.set_cache_dir(dir.join("cache").to_str().unwrap()).unwrap();
+    let id = lib.import_file(p.to_str().unwrap()).unwrap().textures[0];
+    let j = fits_metadata_json(&lib, id).unwrap();
+    assert!(j.contains(",\"hips\":{\"hips\":true,\"allsky\":false,\"order\":3,\"npix\":5,\"tile_width\":4,"), "{j}");
+    assert!(j.ends_with("}}"), "{j}");
+    lib.clear();
+    let _ = std::fs::remove_dir_all(&dir);
+  }
+
   #[test]
   fn fits_ffi_null_context() {
     let (mut b, mut w) = (0.0, 0.0);
@@ -274,6 +369,7 @@ mod tests {
         core::ptr::null_mut()
       ));
       assert!(!avkSimulationContext_setFitsStretch(core::ptr::null_mut(), 1, 0, 0, 0.0, 0.0, &mut b, &mut w));
+      assert!(!avkSimulationContext_setFitsPlane(core::ptr::null_mut(), 1, 0));
       let (mut rw, mut rh) = (0u32, 0u32);
       assert_eq!(
         avkSimulationContext_copyFitsRaster(core::ptr::null_mut(), 1, core::ptr::null_mut(), 0, &mut rw, &mut rh),

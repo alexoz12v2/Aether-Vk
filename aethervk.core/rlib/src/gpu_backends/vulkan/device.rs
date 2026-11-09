@@ -503,6 +503,10 @@ pub struct DeviceResources {
   billboard_resources: DebugTrackedRwLock<Vec<Option<Image>>>,
 
   pending_downloads: DebugTrackedRwLock<hashbrown::HashMap<u64, PendingDownload>>,
+  /// "copy the next presented frame" requests of windowed engines (image export), one per engine,
+  /// taken by the render thread when it records that engine's frame
+  pending_viewport_captures:
+    dashmap::DashMap<PresentationEngineHandle, Arc<crate::gpu::ViewportCaptureRequest>>,
 
   frame_staging_arena: DebugTrackedRwLock<Option<memory::FrameStagingArena>>,
 
@@ -869,6 +873,7 @@ impl DeviceResources {
       sky_image: DebugTrackedRwLock::new(None),
       next_cmd_id: Arc::new(AtomicU64::new(1)),
       pending_downloads: DebugTrackedRwLock::new(hashbrown::HashMap::new()),
+      pending_viewport_captures: dashmap::DashMap::new(),
       frame_staging_arena: DebugTrackedRwLock::new(Some(frame_staging_arena)),
       sun_render_archetype_arena: None,
       physical_mesh2_render_archetype_arena: None,
@@ -1212,7 +1217,36 @@ pub struct Device {
   /// Lives on `Device` (not inside `DeviceResources`) so the logic thread can
   /// enqueue without acquiring the `DeviceResources` read lock.
   pub(crate) pending_mesh_updates: locks::DebugTrackedMutex<alloc::vec::Vec<PendingMeshUpdate>>,
+
+  /// Resources retired while a graphics command buffer was recording: their destroy value is
+  /// fixed only when every one of those command buffers has been submitted (`retire_items`,
+  /// `settle_deferred_discards`).
+  deferred_discards: locks::DebugTrackedMutex<alloc::vec::Vec<DeferredDiscard>>,
 }
+
+/// A discard whose timeline value is not known yet: the resource may be referenced by command
+/// buffers that were recording when it was retired, and those get their timeline values only
+/// at submission.
+struct DeferredDiscard {
+  item: resources::DiscardItem,
+  /// graphics command buffers still recording when the resource was retired
+  waiting_on: alloc::vec::Vec<CommandBufferHandle>,
+  /// the destroy value so far: the next submit value at retirement (every submission already
+  /// made is below it), raised to each waited-on submission's value as it is submitted
+  retire_at: u64,
+}
+
+/// Mesh draws skipped because their resource was retired after the draw list was built
+/// (`draw_physical_mesh2`).
+#[cfg(test)]
+pub(crate) static SKIPPED_MESH_DRAWS: AtomicU64 = AtomicU64::new(0);
+
+/// Test switch: the mesh lifetime handling before the deferred retire path (resources freed at
+/// the next submit value whatever is recording, a retired draw failing its frame), so the
+/// regression test can show what it detects.
+#[cfg(test)]
+pub(crate) static LEGACY_MESH_RETIRE: core::sync::atomic::AtomicBool =
+  core::sync::atomic::AtomicBool::new(false);
 
 /// Produced by the logic thread (UpdateCometNucleusRadius), consumed once per
 /// frame by `flush_pending_mesh_updates` on the main graphics command buffer.
@@ -1379,6 +1413,10 @@ impl Device {
   /// timeline has reached `timeline`, never here.
   fn release_presentation_engine_resources(&self, handle: PresentationEngineHandle, timeline: u64) {
     let res = DebugTrackedRwLock::read(&self.res);
+    // a capture waiting on this engine never gets its frame
+    if let Some((_, request)) = res.pending_viewport_captures.remove(&handle) {
+      request.fail();
+    }
     let allocator = res.allocator.allocator.as_allocator_view();
     let mut pending_downloads = DebugTrackedRwLock::write(&res.pending_downloads);
     let to_remove: Vec<u64> = pending_downloads
@@ -1777,8 +1815,19 @@ impl Device {
         },
       )
       .commit_read(|state, execute_result| {
+        if is_graphics && execute_result.is_err() {
+          // never submitted: it references nothing on the GPU
+          self.settle_deferred_discards(&state.discard_pool, cmd_buffer, None);
+        }
         let (mut data, pe_handle_opt, is_resize_required, next_timeline_value, cmd_pools) =
           execute_result?;
+        if is_graphics {
+          self.settle_deferred_discards(
+            &state.discard_pool,
+            cmd_buffer,
+            Some(next_timeline_value),
+          );
+        }
 
         if is_graphics && pe_handle_opt.is_some() {
           // SAFETY: graphics queue submissions through this function are always rendering commands,
@@ -2428,6 +2477,7 @@ impl Device {
       micro_color_format,
       recording_command_buffers: dashmap::DashMap::with_capacity(32),
       pending_mesh_updates: locks::DebugTrackedMutex::new(alloc::vec::Vec::new()),
+      deferred_discards: locks::DebugTrackedMutex::new(alloc::vec::Vec::new()),
     };
     // needs the queues and the transient command path of the finished device
     #[cfg(feature = "profile-tracy")]
@@ -2442,6 +2492,114 @@ impl Device {
   pub(super) fn physical_device(&self) -> vk::PhysicalDevice {
     self.query_result.physical_device
   }
+}
+
+impl Device {
+  /// Queues `items` for destruction once every submission that can reference them has retired.
+  ///
+  /// Lifetime rule: a resource is referenced by submissions already made (all below the next
+  /// submit value) and possibly by the graphics command buffers recording right now (a draw
+  /// list built before the retirement, a staging copy into the resource recorded this frame).
+  /// Those get their timeline values only when they are submitted, so the items wait for them
+  /// (`settle_deferred_discards`); with nothing recording they go straight to the pool at the
+  /// next submit value. The snapshot of recording command buffers and the queueing happen
+  /// under the submission lock, which every graphics submission takes to allocate its value:
+  /// a command buffer either shows up in the snapshot and settles the item later, or has
+  /// already left the recording map and gets a value at or above the floor.
+  pub(super) fn retire_items(
+    &self,
+    state: &DeviceResources,
+    items: alloc::vec::Vec<resources::DiscardItem>,
+  ) {
+    if items.is_empty() {
+      return;
+    }
+    let _guard = self.device.submission_lock.lock();
+    let floor = state.timeline_manager.get_next_submit_value();
+    let recording: alloc::vec::Vec<CommandBufferHandle> = self
+      .recording_command_buffers
+      .iter()
+      .filter(|kv| kv.key().1 == QueueRole::Graphics)
+      .map(|kv| kv.key().0)
+      .collect();
+    #[cfg(test)]
+    let recording = if LEGACY_MESH_RETIRE.load(Ordering::Relaxed) { alloc::vec::Vec::new() } else { recording };
+    if recording.is_empty() {
+      for item in items {
+        state.discard_pool.discard_item(floor, item);
+      }
+      return;
+    }
+    let mut deferred = locks::DebugTrackedMutex::lock(&self.deferred_discards);
+    for item in items {
+      deferred.push(DeferredDiscard {
+        item,
+        waiting_on: recording.clone(),
+        retire_at: floor,
+      });
+    }
+  }
+
+  /// A graphics command buffer left the recording map: submitted with `submitted_at`, or
+  /// abandoned (`None`, it never executes). Items waiting on nothing else go to the pool.
+  fn settle_deferred_discards(
+    &self,
+    discard_pool: &resources::DiscardPool,
+    cmd_buffer: CommandBufferHandle,
+    submitted_at: Option<u64>,
+  ) {
+    let mut deferred = locks::DebugTrackedMutex::lock(&self.deferred_discards);
+    if deferred.is_empty() {
+      return;
+    }
+    let mut i = 0;
+    while i < deferred.len() {
+      let entry = &mut deferred[i];
+      if let Some(pos) = entry.waiting_on.iter().position(|c| *c == cmd_buffer) {
+        entry.waiting_on.swap_remove(pos);
+        if let Some(value) = submitted_at {
+          entry.retire_at = entry.retire_at.max(value);
+        }
+      }
+      if entry.waiting_on.is_empty() {
+        let entry = deferred.swap_remove(i);
+        discard_pool.discard_item(entry.retire_at, entry.item);
+      } else {
+        i += 1;
+      }
+    }
+  }
+
+  /// Teardown (device idle): everything still deferred can be destroyed.
+  fn flush_deferred_discards_for_teardown(&self) {
+    let entries: alloc::vec::Vec<DeferredDiscard> =
+      core::mem::take(&mut *locks::DebugTrackedMutex::lock(&self.deferred_discards));
+    if entries.is_empty() {
+      return;
+    }
+    let res = DebugTrackedRwLock::read(&self.res);
+    for entry in entries {
+      res.discard_pool.discard_item(u64::MAX, entry.item);
+    }
+  }
+
+  /// A mesh draw skipped because its resource is gone or not ready: logged (the first few,
+  /// then every 1000th) and counted for the tests.
+  fn note_skipped_mesh_draw(id: RenderableInstanceId, why: &str) {
+    static COUNT: AtomicU64 = AtomicU64::new(0);
+    let n = COUNT.fetch_add(1, Ordering::Relaxed);
+    if n < 4 || n % 1000 == 999 {
+      aethervk_oshal_rlib::log!(
+        "[draw_physical_mesh2] mesh {} skipped this frame: resource {} ({} skips so far)",
+        id.0,
+        why,
+        n + 1
+      );
+    }
+    #[cfg(test)]
+    SKIPPED_MESH_DRAWS.fetch_add(1, Ordering::Relaxed);
+  }
+
 }
 
 impl Drop for Device {
@@ -2484,6 +2642,7 @@ impl Drop for Device {
         arena.destroy(self.res.read().allocator.allocator.as_allocator_view());
       }
 
+      self.flush_deferred_discards_for_teardown();
       DebugTrackedRwLock::write(&self.res).cleanup(&self.device);
 
       // Drain the main-thread cleanup queue. DeviceResources::cleanup() above
@@ -3254,7 +3413,6 @@ impl RenderDevice for Device {
       crate::gpu_err!("flush_pending_mesh_updates: staging arena not initialised")
     })?;
     let allocator = res_guard.allocator.allocator.as_allocator_view();
-    let next_timeline = res_guard.timeline_manager.get_next_submit_value();
 
     for update in updates {
       let byte_size =
@@ -3275,13 +3433,28 @@ impl RenderDevice for Device {
       )?;
       // Note: create_buffer_with_staging already inserts the TRANSFER→VERTEX_INPUT barrier.
 
-      // 3. Swap the handle inside the existing ForwardMesh2RenderResource.
-      //    The old buffer is deferred for VMA destruction at next_timeline + 2.
-      if let Some(mut entry) = res_guard.physical_mesh2_resources.get_mut(&update.mesh_id) {
+      // 3. Swap the handle inside the existing ForwardMesh2RenderResource. The old buffer is
+      //    read by the frames submitted so far and, when two updates land in one frame, by
+      //    nothing in this one; it is retired behind every submission that can still name it.
+      let mut new_buf = Some(new_buf);
+      let old = res_guard.physical_mesh2_resources.get_mut(&update.mesh_id).and_then(|mut entry| {
         if let resources::ResourceState::Ready(ref mut fwd) = *entry {
-          fwd.swap_position_buffer(new_buf, &res_guard.discard_pool, next_timeline);
+          let old = fwd.replace_position_buffer(new_buf.take().unwrap());
+          Some(fwd.discard_item_for(old))
+        } else {
+          None
         }
-      }
+      });
+      let item = match (old, new_buf) {
+        (Some(item), _) => item,
+        // the resource was retired while this update waited: the copy still executes, into a
+        // buffer nothing else names, freed behind this frame
+        (None, Some(unused)) => {
+          resources::DiscardItem::Buffer(resources::BufferDiscard::new(allocator, unused))
+        }
+        (None, None) => continue,
+      };
+      self.retire_items(&res_guard, alloc::vec![item]);
     }
 
     Ok(())
@@ -4220,8 +4393,8 @@ impl RenderDevice for Device {
             .insert(physical_mesh_id, resources::ResourceState::Ready(resource));
 
           if let Some(resources::ResourceState::Ready(mut old)) = old_resource {
-            let timeline = state.timeline_manager.get_next_submit_value();
-            old.discard(&state.discard_pool, timeline);
+            let items = resources::DiscardPool::collect(|pool| old.discard(pool, 0));
+            self.retire_items(state, items);
           }
 
           Ok(Some(ResourceUploadResult {
@@ -4270,14 +4443,27 @@ impl RenderDevice for Device {
 
     utils::VulkanTransaction::new(&*self.res, &self.device)
       .prepare_read((), |state, _| {
-        // 1. Fetch Mesh Resource
+        // 1. Fetch Mesh Resource. The draw list named it when it was built; a scene restore on
+        // the logic thread may have retired it since (`cleanup_stale_scene_resources`). That
+        // draw is skipped for this frame: failing the frame would submit it half recorded.
         let read_resources = &state.physical_mesh2_resources;
-        let resource_ref = read_resources
-          .get(&physical_mesh_id)
-          .ok_or(gpu_err!("Physical mesh 2 resource missing"))?;
+        let resource_ref = match read_resources.get(&physical_mesh_id) {
+          Some(r) => r,
+          None => {
+            #[cfg(test)]
+            if LEGACY_MESH_RETIRE.load(Ordering::Relaxed) {
+              return Err(gpu_err!("Physical mesh 2 resource missing"));
+            }
+            Self::note_skipped_mesh_draw(physical_mesh_id, "retired");
+            return Ok(None);
+          }
+        };
         let resource = match resource_ref.value() {
           resources::ResourceState::Ready(r) => r,
-          _ => return Err(gpu_err!("Physical mesh 2 resource not ready")),
+          _ => {
+            Self::note_skipped_mesh_draw(physical_mesh_id, "not ready");
+            return Ok(None);
+          }
         };
 
         let pos_buf = resource.position_vertex_buffer.buffer.get();
@@ -4320,7 +4506,7 @@ impl RenderDevice for Device {
         };
         fault::register_address_range("FrameStagingArena", base_addr, arena.capacity as u64);
 
-        Ok::<_, GpuError>((
+        Ok::<_, GpuError>(Some((
           pos_buf,
           attr_buf,
           idx_buf,
@@ -4333,24 +4519,27 @@ impl RenderDevice for Device {
           object_offset,
           object_ptr,
           base_addr,
-        ))
+        )))
       })?
-      .execute(
-        |(
-          pos_buf,
-          attr_buf,
-          idx_buf,
-          desc_set,
-          pipeline_layout,
-          scene_offset,
-          scene_ptr,
-          material_offset,
-          material_ptr,
-          object_offset,
-          object_ptr,
-          base_addr,
-        ),
-         _rollback| {
+      .execute(|prep, _rollback| {
+          // a retired resource: nothing to draw this frame
+          let Some((
+            pos_buf,
+            attr_buf,
+            idx_buf,
+            desc_set,
+            pipeline_layout,
+            scene_offset,
+            scene_ptr,
+            material_offset,
+            material_ptr,
+            object_offset,
+            object_ptr,
+            base_addr,
+          )) = prep
+          else {
+            return Ok(());
+          };
           // 4. Construct Data lock-free
           // Bug fix: use the full V×P matrix (not just P) so that outWorldPos
           // and lighting normals are in world/RTE space, not view space. This is
@@ -4458,8 +4647,7 @@ impl RenderDevice for Device {
           }
 
           Ok(())
-        },
-      )
+        })
       .commit_read(|_state, execute_result| execute_result)?;
 
     Ok(())
@@ -7605,6 +7793,215 @@ impl RenderDevice for Device {
   }
 
   #[named]
+  fn request_viewport_capture(
+    &self,
+    handle: PresentationEngineHandle,
+    hide_labels: bool,
+  ) -> GpuResult<Arc<crate::gpu::ViewportCaptureRequest>> {
+    let res_guard = self.res.read();
+    {
+      let pe = wait_for_pe!(res_guard, handle)?;
+      if pe.is_windowless() {
+        return Err(gpu_invalid_arg!(
+          "viewport capture: presentation engine {:?} is windowless (download its frames instead)",
+          handle
+        ));
+      }
+      let (w, h) = pe.extent();
+      if w == 0 || h == 0 {
+        return Err(gpu_invalid_arg!(
+          "viewport capture: presentation engine {:?} has no size (minimised?)",
+          handle
+        ));
+      }
+    }
+    let request = Arc::new(crate::gpu::ViewportCaptureRequest::new(hide_labels));
+    if let Some(previous) = res_guard.pending_viewport_captures.insert(handle, Arc::clone(&request))
+    {
+      previous.fail();
+    }
+    Ok(request)
+  }
+
+  #[named]
+  fn cancel_viewport_capture(&self, handle: PresentationEngineHandle) {
+    if let Some((_, request)) = self.res.read().pending_viewport_captures.remove(&handle) {
+      request.fail();
+    }
+  }
+
+  #[named]
+  fn take_viewport_capture(
+    &self,
+    handle: PresentationEngineHandle,
+  ) -> Option<Arc<crate::gpu::ViewportCaptureRequest>> {
+    self.res.read().pending_viewport_captures.remove(&handle).map(|(_, request)| request)
+  }
+
+  /// The windowed twin of [`Self::record_windowless_download`]: the acquired swapchain image
+  /// (left in `PRESENT_SRC_KHR` by the compositing render pass) is moved to `TRANSFER_SRC_OPTIMAL`,
+  /// copied into a fresh host-visible buffer and moved back to `PRESENT_SRC_KHR` for the present
+  /// of this same frame. The copy and the present are ordered by the frame's single submit (the
+  /// present waits on its signal semaphore); the buffer is a dedicated allocation (not the staging
+  /// ring) owned by `pending_downloads` until read or until the engine is released.
+  #[named]
+  fn record_viewport_capture(
+    &self,
+    cmd_buffer: crate::gpu::CommandBufferHandle,
+    task_id: u64,
+  ) -> GpuResult<(u32, u32, u32)> {
+    let (cmd, handle) = self.get_cmd_and_pe(cmd_buffer)?;
+    let acquire_result = {
+      let cmd_buffers = &self.recording_command_buffers;
+      let data = cmd_buffers
+        .get(&(cmd_buffer, QueueRole::Graphics))
+        .ok_or(gpu_err_invalid_cmd!())?;
+      data.presentation.ok_or(gpu_err_cmd_no_pe!())?.acquire_result
+    };
+
+    crate::gpu_backends::vulkan::utils::VulkanTransaction::new(&*self.res, &self.device)
+      .prepare_read((), |state, _| {
+        let engine_lock = &state.live_presentation_engines;
+        let pe = wait_for_pe_direct!(engine_lock, handle)?;
+        if pe.is_windowless() {
+          return Err(gpu_err!("viewport capture: presentation engine is windowless"));
+        }
+        let (img, _, _) = unsafe { pe.get_image_resources(acquire_result.image_index as usize) };
+        let (width, height) = pe.extent();
+        if width == 0 || height == 0 {
+          return Err(gpu_err!("viewport capture: zero-size swapchain"));
+        }
+        let format_code = match pe.format() {
+          vk::Format::B8G8R8A8_SRGB => {
+            crate::gpu::CAPTURE_FORMAT_BGRA8 | crate::gpu::CAPTURE_FORMAT_SRGB_BIT
+          }
+          vk::Format::B8G8R8A8_UNORM => crate::gpu::CAPTURE_FORMAT_BGRA8,
+          vk::Format::R8G8B8A8_SRGB | vk::Format::A8B8G8R8_SRGB_PACK32 => {
+            crate::gpu::CAPTURE_FORMAT_RGBA8 | crate::gpu::CAPTURE_FORMAT_SRGB_BIT
+          }
+          vk::Format::R8G8B8A8_UNORM | vk::Format::A8B8G8R8_UNORM_PACK32 => {
+            crate::gpu::CAPTURE_FORMAT_RGBA8
+          }
+          other => {
+            return Err(gpu_err!(
+              "viewport capture: swapchain format {:?} is not an 8-bit RGBA/BGRA format",
+              other
+            ));
+          }
+        };
+        let vma = state.allocator.allocator.as_allocator_view();
+        Ok::<_, GpuError>((img.get(), width, height, format_code, vma))
+      })?
+      .execute(|(image, width, height, format_code, vma), rollback| {
+        let allocator = vma;
+        let buffer_size = (width as vk::DeviceSize) * (height as vk::DeviceSize) * 4;
+
+        let buffer_info = vk::BufferCreateInfo::default()
+          .size(buffer_size)
+          .usage(vk::BufferUsageFlags::TRANSFER_DST);
+
+        let mut alloc_info = vk_mem::AllocationCreateInfo::default();
+        alloc_info.usage = vk_mem::MemoryUsage::AutoPreferHost;
+        alloc_info.flags =
+          vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM | vk_mem::AllocationCreateFlags::MAPPED;
+        crate::apply_test_dedicated_alloc!(alloc_info);
+
+        let (staging_buffer, alloc) =
+          unsafe { allocator.create_buffer(&buffer_info, &alloc_info) }?;
+
+        let mut alloc_mut = alloc;
+        rollback.defer(move |_dev| unsafe {
+          allocator.destroy_buffer(staging_buffer, &mut alloc_mut);
+        });
+
+        let subresource_range = vk::ImageSubresourceRange::default()
+          .aspect_mask(vk::ImageAspectFlags::COLOR)
+          .base_mip_level(0)
+          .level_count(1)
+          .base_array_layer(0)
+          .layer_count(1);
+
+        unsafe {
+          // the render pass left the image in PRESENT_SRC_KHR (its final layout): make the colour
+          // writes visible to the copy
+          let to_transfer = vk::ImageMemoryBarrier2::default()
+            .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+            .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+            .dst_stage_mask(vk::PipelineStageFlags2::COPY)
+            .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
+            .old_layout(vk::ImageLayout::PRESENT_SRC_KHR)
+            .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+            .image(image)
+            .subresource_range(subresource_range);
+          let dep_info = vk::DependencyInfo::default()
+            .image_memory_barriers(core::slice::from_ref(&to_transfer));
+          self.device.synchronization2.cmd_pipeline_barrier2(cmd, &dep_info);
+
+          let region = vk::BufferImageCopy::default()
+            .image_subresource(
+              vk::ImageSubresourceLayers::default()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .mip_level(0)
+                .base_array_layer(0)
+                .layer_count(1),
+            )
+            .image_extent(vk::Extent3D {
+              width,
+              height,
+              depth: 1,
+            });
+          self.device.cmd_copy_image_to_buffer(
+            cmd,
+            image,
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            staging_buffer,
+            &[region],
+          );
+
+          // back to the presentable layout (the present engine needs no access mask), and the
+          // buffer visible to the host once the frame's timeline value is reached
+          let to_present = vk::ImageMemoryBarrier2::default()
+            .src_stage_mask(vk::PipelineStageFlags2::COPY)
+            .src_access_mask(vk::AccessFlags2::TRANSFER_READ)
+            .dst_stage_mask(vk::PipelineStageFlags2::BOTTOM_OF_PIPE)
+            .dst_access_mask(vk::AccessFlags2::empty())
+            .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+            .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
+            .image(image)
+            .subresource_range(subresource_range);
+          let buffer_barrier = vk::BufferMemoryBarrier2::default()
+            .src_stage_mask(vk::PipelineStageFlags2::COPY)
+            .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+            .dst_stage_mask(vk::PipelineStageFlags2::HOST)
+            .dst_access_mask(vk::AccessFlags2::HOST_READ)
+            .buffer(staging_buffer)
+            .size(buffer_size)
+            .offset(0);
+          let back_dep_info = vk::DependencyInfo::default()
+            .buffer_memory_barriers(core::slice::from_ref(&buffer_barrier))
+            .image_memory_barriers(core::slice::from_ref(&to_present));
+          self.device.synchronization2.cmd_pipeline_barrier2(cmd, &back_dep_info);
+        }
+
+        Ok((staging_buffer, alloc, buffer_size as usize, width, height, format_code))
+      })
+      .commit_read(|state, execute_result| {
+        let (staging_buffer, allocation, size, width, height, format_code) = execute_result?;
+        let mut pending_lock = locks::DebugTrackedRwLock::write(&state.pending_downloads);
+        pending_lock.insert(
+          task_id,
+          PendingDownload {
+            staging_buffer,
+            allocation,
+            size,
+            presentation_engine: Some(handle),
+          },
+        );
+        Ok((width, height, format_code))
+      })
+  }
+
+  #[named]
   fn is_task_completed(&self, task_id: u64) -> GpuResult<bool> {
     self.res.read().timeline_manager.is_task_completed(task_id)
   }
@@ -7773,9 +8170,10 @@ impl Device {
     let res = self.res.read();
 
     // ── 1. Evict stale ForwardMesh2RenderResource entries ──────────────────
-    // Use the next graphics timeline value so cleanup happens after the GPU finishes
-    // the last submitted frame.
-    let gfx_timeline = res.timeline_manager.get_next_submit_value();
+    // The render thread may be recording a frame whose draw list named these resources
+    // (the removal makes that draw skip, see `draw_physical_mesh2`) or that copies into
+    // them (`flush_pending_mesh_updates`): their buffers are freed only once every such
+    // submission has retired (`retire_items`).
 
     let stale_mesh_keys: alloc::vec::Vec<gpu::RenderableInstanceId> = res
       .physical_mesh2_resources
@@ -7795,7 +8193,8 @@ impl Device {
           // Enqueues: position/attributes/index/material/object buffers +
           // albedo/normal/roughness/ao/emissive_paint images.
           // Descriptor sets are intentionally NOT freed (pre-existing design).
-          resource.discard(&res.discard_pool, gfx_timeline);
+          let items = resources::DiscardPool::collect(|pool| resource.discard(pool, 0));
+          self.retire_items(&res, items);
         }
       }
     }
@@ -7825,12 +8224,11 @@ impl Device {
     for key in stale_sun_keys {
       if let Some((_, state)) = res.sun_resources.remove(&key) {
         if let resources::ResourceState::Ready(mut resource) = state {
-          resource.discard(
-            &self.device,
-            res.allocator.allocator.as_allocator_view(),
-            &res.discard_pool,
-            gfx_timeline,
-          );
+          let allocator = res.allocator.allocator.as_allocator_view();
+          let items = resources::DiscardPool::collect(|pool| {
+            resource.discard(&self.device, allocator, pool, 0)
+          });
+          self.retire_items(&res, items);
         }
       }
     }

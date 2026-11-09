@@ -1,0 +1,25 @@
+[package]
+name = "aethervk-cfitsio-rlib"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+description = "Safe no_std wrapper over CFITSIO: read-only in-memory FITS sessions"
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[features]
+default = []
+std = []
+# The in-memory FITS writer (`MemFitsWriter`): fixtures for the read path of dependants' tests.
+# Never enabled by a library build.
+test-writer = []
+
+[dependencies]
+aethervk-cfitsio-sys = { path = "../sys" }
+spin = { version = "0.10", default-features = false, features = ["mutex", "spin_mutex"] }
+
+[dev-dependencies]
+# resolves test_assets/ files, downloading the asset groups of test_assets/ASSETS.tsv on demand
+aethervk-test-assets = { path = "../../aethervk.test-assets" }

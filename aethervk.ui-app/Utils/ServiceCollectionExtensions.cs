@@ -71,6 +71,9 @@ public static class ServiceCollectionExtensions
     // Asset library mirror (Imports tab, Settings > Comet Appearance)
     collection.AddSingleton<AssetLibraryService>();
     collection.AddSingleton<DesktopBillboardService>();
+    // File › Export image: the viewport capture written as PNGs, the visible billboards composited
+    collection.AddSingleton<Logic.Services.ImageExport.IBillboardSnapshotProvider, Logic.Services.ImageExport.DesktopBillboardSnapshotProvider>();
+    collection.AddSingleton<Logic.Services.ImageExport.ImageExportService>();
     // FITS metadata / re-stretch; resolved with the billboard windows so saved stretches re-apply
     collection.AddSingleton<FitsImageService>();
     collection.AddSingleton<Logic.ViewModels.IScreenInfoProvider, UI.AvaloniaScreenInfoProvider>();

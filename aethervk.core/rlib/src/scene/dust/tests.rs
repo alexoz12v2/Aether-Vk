@@ -324,6 +324,124 @@ fn emission_times_and_beta_are_in_range() {
   assert!(norm(sub(c.r0().to_f64(), r_expect)) < 0.05);
 }
 
+/// Early dust drift relative to the nucleus: after removing the ejection velocity's own `v·a`,
+/// a grain's displacement from the comet is the radiation-pressure term ½·β·g☉·a² along the
+/// anti-solar radial direction, starting from zero. There is no push along the orbit normal:
+/// on an eccentric orbit, away from perihelion, the radial and the in-plane normal differ, and
+/// the drift must follow the radial. Checked on a 67P-like orbit at 1.3 AU outbound (radial
+/// and normal ≈ 10.7° apart) against an RK4 integration of the same two-body problem.
+#[test]
+fn early_dust_drift_is_anti_solar_and_quadratic() {
+  // 67P-like orbit (q 1.2432 AU, e 0.641) in its own plane, at r = 1.3 AU outbound
+  let (q, e) = (1.2432 * AU_M, 0.641);
+  let p = q * (1.0 + e);
+  let r_now = 1.3 * AU_M;
+  let nu = (((p / r_now) - 1.0) / e).acos();
+  let rc = [r_now * nu.cos(), r_now * nu.sin(), 0.0];
+  let vk = (SUN_MU_M3_S2 / p).sqrt();
+  let vc = [-vk * nu.sin(), vk * (e + nu.cos()), 0.0];
+  let r_hat = scale(rc, 1.0 / norm(rc));
+  let h_hat = {
+    let h = cross64(rc, vc);
+    scale(h, 1.0 / norm(h))
+  };
+  let n_hat = cross64(scale(vc, 1.0 / norm(vc)), h_hat); // in-plane outward orbit normal
+  let t_hat = cross64(h_hat, r_hat); // along-track, ⟂ radial
+  let sep = dot(r_hat, n_hat).clamp(-1.0, 1.0).acos().to_degrees();
+  assert!(sep > 5.0, "the test orbit point must separate radial and normal: {sep}°");
+  let g = SUN_MU_M3_S2 / (r_now * r_now);
+
+  // the jet sunward and off-plane, so the ejection term is not along r̂ alone
+  let dir = {
+    let d = add(scale(r_hat, -0.8), add(scale(t_hat, 0.5), scale(h_hat, 0.33)));
+    scale(d, 1.0 / norm(d))
+  };
+  for beta in [1.0e-3, 1.0e-2, 0.2] {
+    // ≤ 5 m/s: the tidal term on the ejection, 2·(μ/r³)·v·a³/6 radially, stays < 0.3 % of
+    // ½βga² at 1 d for β = 1e-3 (at 20 m/s it would reach ~1 %, the tolerance)
+    for v_ej in [1.0, 5.0] {
+      let ej = scale(dir, v_ej);
+      let v0 = add(vc, ej);
+      let mu = SUN_MU_M3_S2 * (1.0 - beta);
+      // birth: no offset at age 0 and 1 s beyond v·a (a few mm of df64 noise)
+      for a in [0.0, 1.0] {
+        let (rg, _) = prop_df(rc, v0, mu, a);
+        let (rn, _) = prop_df(rc, vc, SUN_MU_M3_S2, a);
+        let d = sub(sub(rg, rn), scale(ej, a));
+        assert!(norm(d) < 0.01, "β {beta} v {v_ej}: offset {} m at age {a} s", norm(d));
+      }
+      for a in [3600.0, 21_600.0, 86_400.0] {
+        let (rg, _) = prop_df(rc, v0, mu, a);
+        let (rn, _) = prop_df(rc, vc, SUN_MU_M3_S2, a);
+        let d = sub(sub(rg, rn), scale(ej, a));
+        // the same displacement from a direct integration
+        let (rg4, _) = rk4(rc, v0, mu, a, 30.0);
+        let (rn4, _) = rk4(rc, vc, SUN_MU_M3_S2, a, 30.0);
+        let d4 = sub(sub(rg4, rn4), scale(ej, a));
+        assert!(
+          norm(sub(d, d4)) < 0.05,
+          "β {beta} v {v_ej} age {a}: Kepler vs RK4 differ by {} m",
+          norm(sub(d, d4))
+        );
+        // anti-solar radial, ½·β·g·a²
+        let expect = 0.5 * beta * g * a * a;
+        let (dr, dt, dh, dn) = (dot(d, r_hat), dot(d, t_hat), dot(d, h_hat), dot(d, n_hat));
+        assert!(
+          ((dr - expect) / expect).abs() < 0.01,
+          "β {beta} v {v_ej} age {a}: radial {dr} m vs ½βga² {expect} m"
+        );
+        assert!(
+          dt.abs() < 0.03 * dr && dh.abs() < 0.03 * dr,
+          "β {beta} v {v_ej} age {a}: along-track {dt} m / out-of-plane {dh} m vs radial {dr} m"
+        );
+        // the normal component is the radial one's projection, not a push of its own
+        assert!(
+          (dn - dr * dot(r_hat, n_hat)).abs() < 0.03 * dr,
+          "β {beta} v {v_ej} age {a}: normal {dn} m vs radial projection {}",
+          dr * dot(r_hat, n_hat)
+        );
+      }
+    }
+  }
+}
+
+/// The same drift law on emitted clusters: each cluster's own (r0, v0, β) propagated with the
+/// engine's μ(1−β), minus the comet's free fall and the cluster's ejection velocity, is ½·β·g·a²
+/// along the anti-solar radial at the cluster's birth point.
+#[test]
+fn emitted_clusters_drift_anti_solar_from_their_birth_point() {
+  let b = test_batch(64, 1800.0);
+  let (rc, vc) = comet_state();
+  for j in [0u32, 17, 40, 63] {
+    let c = emit_cluster(&b, j);
+    let t0 = c.t0().to_f64();
+    let (rn0, vn0) = kepler::propagate_f64(rc, vc, SUN_MU_M3_S2, t0 - T_START);
+    let r0 = c.r0().to_f64();
+    let v0 = c.v0().to_f64();
+    let ej = sub(v0, vn0);
+    let beta = c.beta() as f64;
+    let r_hat = scale(r0, 1.0 / norm(r0));
+    let g = SUN_MU_M3_S2 / dot(r0, r0);
+    let mu = consts::SUN_MU.mul(two_sum_one_minus(c.beta())).to_f64();
+    for a in [21_600.0, 86_400.0, 4.0 * 86_400.0] {
+      let (rg, _) = prop_df(r0, v0, mu, a);
+      let (rn, _) = prop_df(rn0, vn0, SUN_MU_M3_S2, a);
+      let d = sub(sub(sub(rg, rn), sub(r0, rn0)), scale(ej, a));
+      let expect = 0.5 * beta * g * a * a;
+      let dr = dot(d, r_hat);
+      assert!(
+        ((dr - expect) / expect).abs() < 0.01,
+        "cluster {j} (β {beta}) age {a}: radial {dr} m vs ½βga² {expect} m"
+      );
+      let side = norm(sub(d, scale(r_hat, dr)));
+      assert!(
+        side < 0.03 * dr,
+        "cluster {j} (β {beta}) age {a}: {side} m off the radial (radial {dr} m)"
+      );
+    }
+  }
+}
+
 /// Per-jet grains: two jets with different grain parameters fill their batches from their own
 /// emission config, and each emitted cluster carries its own jet's reference radius and β (no
 /// model-wide grain anywhere between the jet's parameters and the cluster).

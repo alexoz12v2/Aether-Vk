@@ -17,19 +17,23 @@
 //! `u = (p1 − 0.5) / nx`, `v = (p2 − 0.5) / ny`.
 //!
 //! ## WCS
-//! TAN (gnomonic) only: `CTYPE1/2 = RA---TAN / DEC--TAN` (`-SIP` accepted, the SIP polynomial is
-//! **ignored**: flagged in [`SKY_FLAG_SIP_IGNORED`]), `CRVAL`, `CRPIX`, the linear part from `CDi_j`,
-//! else `CDELTi · PCi_j`, else `CDELTi` + `CROTA2`. `LONPOLE` must be absent or 180°. Frames:
-//! `RADESYS = ICRS`, or `FK5` at `EQUINOX = 2000` (FK5 J2000 is ICRS within ~20 mas, below the
-//! registration budget); nothing → ICRS assumed ([`SKY_FLAG_FRAME_ASSUMED`]); FK4 / B1950 refused.
+//! Any celestial WCS of Papers I–III ([`wcs`]): the linear part (`CDi_j`, `CDELTi · PCi_j`, or
+//! `CDELTi` + `CROTA2`, `CUNITi`), every Paper II projection (zenithal, cylindrical,
+//! pseudo-cylindrical, conic, polyconic, quad-cube) and the HEALPix `HPX` / `XPH`, their `PVi_m`
+//! parameters, `LONPOLE` / `LATPOLE`, the SIP and TPV distortions (applied: flagged in
+//! [`SKY_FLAG_DISTORTION_APPLIED`]), the frames ICRS / FK5 / FK4 / FK4-NO-E / galactic / ecliptic
+//! (all converted to ICRS; nothing → ICRS assumed, [`SKY_FLAG_FRAME_ASSUMED`]), celestial axes
+//! in either order and at any axis number. Numerically wcslib / astropy
+//! (`test_assets/fits_corpus/wcs_reference`). HiPS tiles without a WCS are registered by their
+//! HEALPix layout ([`hips`]).
 //!
-//! The projection is written in vector form: with `ŝ0` the unit vector at `CRVAL` and `ê`, `n̂` the
-//! local east / north unit vectors, the pixel's intermediate coordinates `(ξ, η)` (radians, `CD ·
-//! (p − CRPIX)`) give the direction `ŝ0 + ξ ê + η n̂` (Calabretta & Greisen 2002 with
-//! `LONPOLE = 180°`). The map pixel → point of the tangent plane is affine, so a mesh whose
-//! vertices are tangent-plane points (not normalised directions) and whose texture coordinates are
-//! the pixel coordinates is registered **exactly** under any pinhole projection: perspective
-//! correct interpolation interpolates linearly on the plane (see [`grid_vertices`]).
+//! The registration mesh ([`grid_vertices`]): for a plain TAN (no distortion, default rotation)
+//! the vertices are points of the tangent plane, `ŝ0 + ξ ê + η n̂` with `(ξ, η)` the intermediate
+//! coordinates in radians — the map pixel → plane is affine, so a mesh whose texture coordinates
+//! are the pixel coordinates is registered **exactly** under any pinhole projection
+//! (perspective-correct interpolation is linear on the plane). Any other WCS gets unit
+//! directions on a finer grid (cell ≤ 0.75° of sky, 32–256 vertices per side); cells with a
+//! corner outside the projection are dropped.
 //!
 //! ## Registration
 //! Equatorial J2000 (ICRS) → ecliptic J2000 (the engine's world axes, `SUN_ECLIPJ2000`) by the
@@ -51,13 +55,19 @@ use alloc::{
 };
 use core::sync::atomic::{AtomicU64, Ordering};
 
+pub use wcs::{SkyMapping, Wcs, WcsFacts};
+
 #[cfg(test)]
 mod tests;
 
 pub mod fits_metadata;
 pub mod fits_stretch;
+pub mod hips;
+pub mod wcs;
 #[cfg(test)]
 pub(crate) mod fits_tests;
+#[cfg(test)]
+mod fits_corpus_tests;
 
 /// J2000 equator → ecliptic J2000 rotation angle about +X (ANISE / SPICE `ECLIPJ2000`, IAU 1976
 /// 84381.448″): the engine's one obliquity, `simulation_api::astrometry::OBLIQUITY_J2000_RAD`.
@@ -72,7 +82,7 @@ pub const SKY_IMAGE_BLACK_PERCENTILE: f64 = 1.0;
 pub const SKY_IMAGE_WHITE_PERCENTILE: f64 = 99.5;
 
 // ── CSkyImageInfo.flags bits (present / derived header facts) ────────────────
-/// `date_obs_us` is valid (`DATE-OBS`, or `MJD-OBS`)
+/// `date_obs_us` is valid (any keyword of the `fits_metadata` date chain: `DATE-AVG` … `DATE`)
 pub const SKY_FLAG_DATE_OBS: u32 = 1 << 0;
 /// `exptime_s` is valid (`EXPTIME`, or `EXPOSURE`)
 pub const SKY_FLAG_EXPTIME: u32 = 1 << 1;
@@ -82,8 +92,11 @@ pub const SKY_FLAG_SITE_LAT: u32 = 1 << 2;
 pub const SKY_FLAG_SITE_LON: u32 = 1 << 3;
 /// `site_elev_m` is valid
 pub const SKY_FLAG_SITE_ELEV: u32 = 1 << 4;
-/// SIP distortion terms present and ignored
-pub const SKY_FLAG_SIP_IGNORED: u32 = 1 << 5;
+/// a distortion polynomial (SIP / TPV) is present and applied (before 2026-11 the bit meant
+/// "SIP present and ignored"; the value is kept for the FFI / C# side)
+pub const SKY_FLAG_DISTORTION_APPLIED: u32 = 1 << 5;
+/// former name of [`SKY_FLAG_DISTORTION_APPLIED`] (same bit)
+pub const SKY_FLAG_SIP_IGNORED: u32 = SKY_FLAG_DISTORTION_APPLIED;
 /// PNG / JPEG source (already display-stretched: a linear stretch is the natural default)
 pub const SKY_FLAG_RASTER: u32 = 1 << 6;
 /// the WCS came from a sidecar
@@ -99,14 +112,14 @@ const DEG: f64 = core::f64::consts::PI / 180.0;
 
 type V3 = [f64; 3];
 
-fn dot(a: V3, b: V3) -> f64 {
+
+#[allow(dead_code)]
+pub(crate) fn dot(a: V3, b: V3) -> f64 {
   a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
-fn norm(a: V3) -> f64 {
-  dot(a, a).sqrt()
-}
-fn normalize(a: V3) -> V3 {
-  let l = norm(a);
+#[allow(dead_code)]
+pub(crate) fn normalize(a: V3) -> V3 {
+  let l = dot(a, a).sqrt();
   [a[0] / l, a[1] / l, a[2] / l]
 }
 
@@ -141,7 +154,7 @@ pub fn ecliptic_to_equatorial_j2000(v: V3) -> V3 {
 
 /// Keyword → value text of a FITS header (strings unquoted, comments stripped). The first
 /// occurrence of a keyword wins.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct FitsHeader {
   pub cards: Vec<(String, String)>,
 }
@@ -223,6 +236,19 @@ impl FitsHeader {
     h
   }
 
+  /// The header of 80-column card records (the cards of one HDU before `END`), parsed exactly
+  /// like [`Self::parse_blocks`] parses the same bytes.
+  #[cfg(feature = "cfitsio")]
+  pub fn from_records(records: &[[u8; 80]]) -> Self {
+    let mut h = Self::default();
+    for card in records {
+      if let Some((k, v)) = parse_card(card) {
+        h.push(k, v);
+      }
+    }
+    h
+  }
+
   fn push(&mut self, k: String, v: String) {
     if self.get(&k).is_none() {
       self.cards.push((k, v));
@@ -282,172 +308,7 @@ pub fn parse_sexagesimal(s: &str) -> Option<f64> {
   Some(if neg { -v } else { v })
 }
 
-// ─── WCS (TAN) ───────────────────────────────────────────────────────────────
-
-/// A TAN world coordinate system (FITS 1-based pixel coordinates, degrees).
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Wcs {
-  pub crval_deg: [f64; 2],
-  pub crpix: [f64; 2],
-  /// `[[CD1_1, CD1_2], [CD2_1, CD2_2]]`, degrees per pixel
-  pub cd_deg: [[f64; 2]; 2],
-  /// SIP terms present (ignored)
-  pub sip_ignored: bool,
-  /// no frame keywords: ICRS assumed
-  pub frame_assumed: bool,
-}
-
-impl Wcs {
-  /// `Ok(None)` without celestial `CTYPE`s; `Err` for a WCS this loader cannot honour.
-  pub fn from_header(h: &FitsHeader) -> Result<Option<Wcs>, String> {
-    let (Some(c1), Some(c2)) = (h.get("CTYPE1"), h.get("CTYPE2")) else {
-      return Ok(None);
-    };
-    let (c1, c2) = (c1.trim(), c2.trim());
-    let sip = c1.ends_with("-SIP") || c2.ends_with("-SIP");
-    let strip = |c: &'static str, s: &str| s.starts_with(c);
-    let proj = |s: &str| {
-      let s = s.strip_suffix("-SIP").unwrap_or(s);
-      s.get(4..).unwrap_or("").to_string()
-    };
-    if !(strip("RA--", c1) && strip("DEC-", c2)) {
-      return Err(alloc::format!(
-        "unsupported CTYPE {c1} / {c2} (RA---TAN / DEC--TAN expected)"
-      ));
-    }
-    if proj(c1) != "-TAN" || proj(c2) != "-TAN" {
-      return Err(alloc::format!(
-        "unsupported projection {c1} / {c2} (TAN only)"
-      ));
-    }
-    if let Some(lp) = h.get_f64("LONPOLE")
-      && (lp - 180.0).abs() > 1e-9
-    {
-      return Err(alloc::format!("unsupported LONPOLE {lp} (180 expected)"));
-    }
-    // frame
-    let radesys = h
-      .get("RADESYS")
-      .or_else(|| h.get("RADECSYS"))
-      .map(|s| s.trim().to_ascii_uppercase());
-    let equinox = h.get_f64("EQUINOX").or_else(|| h.get_f64("EPOCH"));
-    let mut frame_assumed = false;
-    match (radesys.as_deref(), equinox) {
-      (Some("ICRS"), _) => {}
-      (Some("FK5"), None) => {}
-      (Some("FK5"), Some(e)) | (None, Some(e)) if (e - 2000.0).abs() < 1e-6 => {}
-      (None, None) => frame_assumed = true,
-      (r, e) => {
-        return Err(alloc::format!(
-          "unsupported frame RADESYS {r:?} EQUINOX {e:?} (ICRS or FK5 J2000 expected)"
-        ));
-      }
-    }
-    let (Some(ra0), Some(dec0)) = (h.get_f64("CRVAL1"), h.get_f64("CRVAL2")) else {
-      return Err("CRVAL1 / CRVAL2 missing".to_string());
-    };
-    let (Some(px0), Some(py0)) = (h.get_f64("CRPIX1"), h.get_f64("CRPIX2")) else {
-      return Err("CRPIX1 / CRPIX2 missing".to_string());
-    };
-    let has_cd = ["CD1_1", "CD1_2", "CD2_1", "CD2_2"].iter().any(|k| h.get(k).is_some());
-    let has_pc = ["PC1_1", "PC1_2", "PC2_1", "PC2_2"].iter().any(|k| h.get(k).is_some());
-    let cd = if has_cd {
-      let g = |k: &str| h.get_f64(k).unwrap_or(0.0);
-      [[g("CD1_1"), g("CD1_2")], [g("CD2_1"), g("CD2_2")]]
-    } else {
-      let (Some(d1), Some(d2)) = (h.get_f64("CDELT1"), h.get_f64("CDELT2")) else {
-        return Err("no CD matrix and no CDELT1 / CDELT2".to_string());
-      };
-      if has_pc {
-        let g = |k: &str, d: f64| h.get_f64(k).unwrap_or(d);
-        [
-          [d1 * g("PC1_1", 1.0), d1 * g("PC1_2", 0.0)],
-          [d2 * g("PC2_1", 0.0), d2 * g("PC2_2", 1.0)],
-        ]
-      } else {
-        let rho = h.get_f64("CROTA2").unwrap_or(0.0) * DEG;
-        let (s, c) = (rho.sin(), rho.cos());
-        [[d1 * c, -d2 * s], [d1 * s, d2 * c]]
-      }
-    };
-    let det = cd[0][0] * cd[1][1] - cd[0][1] * cd[1][0];
-    if !(det.abs() > 0.0) || !det.is_finite() {
-      return Err("singular CD matrix".to_string());
-    }
-    Ok(Some(Wcs {
-      crval_deg: [ra0, dec0],
-      crpix: [px0, py0],
-      cd_deg: cd,
-      sip_ignored: sip,
-      frame_assumed,
-    }))
-  }
-
-  /// `(ŝ0, ê, n̂)`: the unit vector at `CRVAL` and the local east / north unit vectors (equatorial).
-  pub fn tangent_basis(&self) -> (V3, V3, V3) {
-    let (ra, dec) = (self.crval_deg[0] * DEG, self.crval_deg[1] * DEG);
-    let s0 = [dec.cos() * ra.cos(), dec.cos() * ra.sin(), dec.sin()];
-    let e = [-ra.sin(), ra.cos(), 0.0];
-    let n = [-dec.sin() * ra.cos(), -dec.sin() * ra.sin(), dec.cos()];
-    (s0, e, n)
-  }
-
-  /// Standard coordinates `(ξ, η)` (radians) of a pixel.
-  pub fn pixel_to_standard(&self, p1: f64, p2: f64) -> (f64, f64) {
-    let (dx, dy) = (p1 - self.crpix[0], p2 - self.crpix[1]);
-    let x = self.cd_deg[0][0] * dx + self.cd_deg[0][1] * dy;
-    let y = self.cd_deg[1][0] * dx + self.cd_deg[1][1] * dy;
-    (x * DEG, y * DEG)
-  }
-
-  /// Pixel of standard coordinates `(ξ, η)` (radians).
-  pub fn standard_to_pixel(&self, xi: f64, eta: f64) -> (f64, f64) {
-    let (x, y) = (xi / DEG, eta / DEG);
-    let [[a, b], [c, d]] = self.cd_deg;
-    let det = a * d - b * c;
-    (
-      self.crpix[0] + (d * x - b * y) / det,
-      self.crpix[1] + (-c * x + a * y) / det,
-    )
-  }
-
-  /// Point of the tangent plane (`|ŝ0| = 1` from the origin) of a pixel, equatorial: the
-  /// direction of the pixel, not normalised (see the module doc).
-  pub fn pixel_to_tangent_point(&self, p1: f64, p2: f64) -> V3 {
-    let (xi, eta) = self.pixel_to_standard(p1, p2);
-    let (s0, e, n) = self.tangent_basis();
-    [
-      s0[0] + xi * e[0] + eta * n[0],
-      s0[1] + xi * e[1] + eta * n[1],
-      s0[2] + xi * e[2] + eta * n[2],
-    ]
-  }
-
-  /// Unit equatorial direction of a pixel.
-  pub fn pixel_to_equatorial(&self, p1: f64, p2: f64) -> V3 {
-    normalize(self.pixel_to_tangent_point(p1, p2))
-  }
-
-  /// RA / Dec (degrees) of a pixel.
-  pub fn pixel_to_radec_deg(&self, p1: f64, p2: f64) -> (f64, f64) {
-    ra_dec_of(self.pixel_to_tangent_point(p1, p2))
-  }
-
-  /// Pixel of an equatorial direction; `None` on the far hemisphere (behind the tangent plane).
-  pub fn equatorial_to_pixel(&self, d: V3) -> Option<(f64, f64)> {
-    let (s0, e, n) = self.tangent_basis();
-    let w = dot(d, s0);
-    if !(w > 0.0) {
-      return None;
-    }
-    Some(self.standard_to_pixel(dot(d, e) / w, dot(d, n) / w))
-  }
-
-  /// Pixel of RA / Dec (degrees).
-  pub fn radec_to_pixel(&self, ra_deg: f64, dec_deg: f64) -> Option<(f64, f64)> {
-    self.equatorial_to_pixel(dir_of_ra_dec(ra_deg, dec_deg))
-  }
-}
+// The WCS itself: `wcs` (re-exported `Wcs`, `SkyMapping`, `WcsFacts`).
 
 // ─── observation metadata ────────────────────────────────────────────────────
 
@@ -466,71 +327,18 @@ pub struct SkyImageMeta {
   pub timesys_assumed: bool,
 }
 
-fn parse_iso_datetime(s: &str) -> Option<(i32, u8, u8, u8, u8, u8, u32)> {
-  let s = s.trim().trim_end_matches('Z');
-  let (date, time) = match s.split_once('T') {
-    Some((d, t)) => (d, Some(t)),
-    None => (s, None),
-  };
-  let mut d = date.split('-');
-  let y = d.next()?.parse::<i32>().ok()?;
-  let m = d.next()?.parse::<u8>().ok()?;
-  let day = d.next()?.parse::<u8>().ok()?;
-  if d.next().is_some() {
-    return None;
-  }
-  let (mut hh, mut mm, mut ss, mut ns) = (0u8, 0u8, 0u8, 0u32);
-  if let Some(t) = time {
-    let mut t = t.split(':');
-    hh = t.next()?.parse().ok()?;
-    mm = t.next().map(|v| v.parse()).transpose().ok()?.unwrap_or(0);
-    if let Some(sec) = t.next() {
-      let (whole, frac) = sec.split_once('.').unwrap_or((sec, ""));
-      ss = whole.parse().ok()?;
-      if !frac.is_empty() {
-        let digits: String = frac.chars().take(9).collect();
-        let scale = 10u32.pow(9 - digits.len() as u32);
-        ns = digits.parse::<u32>().ok()? * scale;
-      }
-    }
-  }
-  Some((y, m, day, hh, mm, ss, ns))
-}
-
 impl SkyImageMeta {
-  pub fn from_header(h: &FitsHeader) -> Self {
-    use hifitime::{Epoch, TimeScale};
-    let timesys = h.get("TIMESYS").map(|s| s.trim().to_ascii_uppercase());
-    let scale = match timesys.as_deref() {
-      Some("TT") | Some("TDT") => TimeScale::TT,
-      Some("TAI") | Some("IAT") => TimeScale::TAI,
-      Some("TDB") => TimeScale::TDB,
-      Some("GPS") => TimeScale::GPST,
-      _ => TimeScale::UTC,
-    };
-    let mut date = h.get("DATE-OBS").and_then(|v| {
-      let mut v = v.trim().to_string();
-      // date only, the time in TIME-OBS / UT / UTSTART
-      if !v.contains('T') {
-        if let Some(t) = h.get("TIME-OBS").or_else(|| h.get("UTSTART")).or_else(|| h.get("UT")) {
-          v = alloc::format!("{v}T{}", t.trim());
-        }
-      }
-      let (y, mo, d, hh, mi, ss, ns) = parse_iso_datetime(&v)?;
-      Epoch::maybe_from_gregorian(y, mo, d, hh, mi, ss, ns, scale).ok()
-    });
-    if date.is_none() {
-      date = h.get_f64("MJD-OBS").map(|mjd| Epoch::from_mjd_in_time_scale(mjd, scale));
-    }
-    let date_obs_tdb_us = date.map(|e| (e.to_tdb_duration().total_nanoseconds() / 1000) as i64);
-    let pick = |keys: &[&str]| keys.iter().find_map(|k| h.get_degrees(k));
+  /// From the header facts (`fits_metadata::facts_of_header` / `FitsMetadata::facts`): the one
+  /// date path of the engine. The date is the start of the exposure (`date_start_tdb_us`); the
+  /// longitude is east positive after the facts' west-convention and LST rules.
+  pub fn from_facts(f: &fits_metadata::FitsFacts) -> Self {
     Self {
-      date_obs_tdb_us,
-      exptime_s: h.get_f64("EXPTIME").or_else(|| h.get_f64("EXPOSURE")),
-      site_lat_deg: pick(&["SITELAT", "LAT-OBS", "OBSGEO-B"]),
-      site_lon_deg: pick(&["SITELONG", "LONG-OBS", "OBSGEO-L"]),
-      site_elev_m: ["SITEELEV", "ALT-OBS", "OBSGEO-H"].iter().find_map(|k| h.get_f64(k)),
-      timesys_assumed: date.is_some() && timesys.is_none(),
+      date_obs_tdb_us: f.date_start_tdb_us,
+      exptime_s: f.exposure_s,
+      site_lat_deg: f.site_lat_deg,
+      site_lon_deg: f.site_lon_deg,
+      site_elev_m: f.site_elev_m,
+      timesys_assumed: f.timesys_assumed,
     }
   }
 }
@@ -548,6 +356,9 @@ pub struct SkyImage {
   pub wcs: Option<Wcs>,
   /// why a WCS present in the header was refused
   pub wcs_error: Option<String>,
+  /// a HiPS tile / Allsky recognised without a WCS (`hips::load_mapping`)
+  pub hips: Option<hips::HipsImage>,
+  pub hips_facts: Option<hips::HipsFacts>,
   pub meta: SkyImageMeta,
   /// `SKY_FLAG_*` facts about the source
   pub flags: u32,
@@ -556,8 +367,20 @@ pub struct SkyImage {
   pub white: f32,
 }
 
-/// Parses the primary HDU of a FITS file into `(nx, ny, values, header)`.
+/// Decodes the first image HDU of a FITS file into `(nx, ny, values, header)`: a thin wrapper
+/// over [`fits_metadata::read_fits`] (CFITSIO with the `cfitsio` feature, else the pure-Rust
+/// primary-HDU parser [`parse_fits_legacy`]).
 pub fn parse_fits(bytes: &[u8]) -> Result<(u32, u32, Vec<f32>, FitsHeader), String> {
+  let (img, _) = fits_metadata::read_fits(bytes)?;
+  Ok((img.nx, img.ny, img.data, img.header))
+}
+
+/// The pure-Rust parser of the primary HDU of a FITS file into `(nx, ny, values, header)`: every
+/// BITPIX, BZERO / BSCALE applied, BLANK → NaN; extensions and tile compression are not read. The
+/// `read_fits` path without the `cfitsio` feature, and the oracle the CFITSIO path is tested
+/// against.
+#[cfg(any(test, not(feature = "cfitsio")))]
+pub(crate) fn parse_fits_legacy(bytes: &[u8]) -> Result<(u32, u32, Vec<f32>, FitsHeader), String> {
   if !bytes.starts_with(b"SIMPLE  =") {
     return Err("not a FITS file (SIMPLE missing)".to_string());
   }
@@ -671,13 +494,27 @@ fn read_file(path: &str) -> Result<Vec<u8>, String> {
 }
 
 impl SkyImage {
-  /// Assembles an image from decoded values and its header (`wcs_header` overrides the WCS and
-  /// metadata keywords: a sidecar).
+  /// Assembles an image from decoded values and its header (`sidecar` overrides the WCS and
+  /// metadata keywords); the card comments are not known.
   pub fn from_parts(
     nx: u32,
     ny: u32,
     data: Vec<f32>,
     header: FitsHeader,
+    sidecar: Option<FitsHeader>,
+    raster: bool,
+  ) -> Self {
+    Self::from_parts_cards(nx, ny, data, header, None, sidecar, raster)
+  }
+
+  /// [`Self::from_parts`] with the file's cards (`fits_metadata::read_fits`), whose comments the
+  /// facts read (an "averaged" `DATE-OBS`, a west-longitude wording).
+  pub fn from_parts_cards(
+    nx: u32,
+    ny: u32,
+    data: Vec<f32>,
+    header: FitsHeader,
+    cards: Option<&[fits_metadata::FitsCard]>,
     sidecar: Option<FitsHeader>,
     raster: bool,
   ) -> Self {
@@ -696,14 +533,21 @@ impl SkyImage {
       Err(e) => (None, Some(e)),
     };
     if let Some(w) = &wcs {
-      if w.sip_ignored {
-        flags |= SKY_FLAG_SIP_IGNORED;
+      if w.has_distortion() {
+        flags |= SKY_FLAG_DISTORTION_APPLIED;
       }
       if w.frame_assumed {
         flags |= SKY_FLAG_FRAME_ASSUMED;
       }
     }
-    let meta = SkyImageMeta::from_header(&header);
+    let (hips, hips_facts) = match wcs {
+      None => match hips::load_mapping(None, &header, nx, ny) {
+        Ok(Some((h, f))) => (Some(h), Some(f)),
+        _ => (None, None),
+      },
+      Some(_) => (None, None),
+    };
+    let meta = SkyImageMeta::from_facts(&fits_metadata::facts_of_header(&header, cards, nx, ny));
     for (present, bit) in [
       (meta.date_obs_tdb_us.is_some(), SKY_FLAG_DATE_OBS),
       (meta.exptime_s.is_some(), SKY_FLAG_EXPTIME),
@@ -728,6 +572,8 @@ impl SkyImage {
       header,
       wcs,
       wcs_error,
+      hips,
+      hips_facts,
       meta,
       flags,
       black,
@@ -740,9 +586,9 @@ impl SkyImage {
   pub fn from_bytes(ext: &str, bytes: &[u8], sidecar: Option<&[u8]>) -> Result<Self, String> {
     let sidecar = sidecar.map(FitsHeader::parse_text);
     match ext {
-      "fits" | "fit" | "fts" => {
-        let (nx, ny, data, h) = parse_fits(bytes)?;
-        Ok(Self::from_parts(nx, ny, data, h, sidecar, false))
+      "fits" | "fit" | "fts" | "fz" => {
+        let (img, meta) = fits_metadata::read_fits(bytes)?;
+        Ok(Self::from_parts_cards(img.nx, img.ny, img.data, img.header, Some(&meta.cards), sidecar, false))
       }
       _ => {
         let (nx, ny, data) = decode_raster(ext, bytes)?;
@@ -765,13 +611,21 @@ impl SkyImage {
     let bytes = read_file(path)?;
     let side = match sidecar {
       Some(s) if !s.is_empty() => Some(read_file(s)?),
-      _ if !matches!(ext.as_str(), "fits" | "fit" | "fts") => {
+      _ if !matches!(ext.as_str(), "fits" | "fit" | "fts" | "fz") => {
         let stem = path.rsplit_once('.').map(|(s, _)| s).unwrap_or(path);
         read_file(&alloc::format!("{stem}.wcs")).ok()
       }
       _ => None,
     };
-    Self::from_bytes(&ext, &bytes, side.as_deref())
+    let mut img = Self::from_bytes(&ext, &bytes, side.as_deref())?;
+    if img.wcs.is_none()
+      && img.hips.is_none()
+      && let Ok(Some((h, f))) = hips::load_mapping(Some(path), &img.header, img.nx, img.ny)
+    {
+      img.hips = Some(h);
+      img.hips_facts = Some(f);
+    }
+    Ok(img)
   }
 }
 
@@ -834,31 +688,61 @@ pub struct SkyImageGpuData {
   pub vertices: Vec<SkyImageVertex>,
 }
 
-/// Triangle list of the `n × n` vertex mesh over the image (edges at pixel coordinates 0.5 and
+/// Triangle list of the registration mesh over the image (edges at pixel coordinates 0.5 and
 /// `n + 0.5`). `span` = the image size in pixels the texture's `[0, 1]` covers (the image size,
-/// or the box-averaged texture's size in source pixels).
+/// or the box-averaged texture's size in source pixels). A plain TAN gets the exact `n × n`
+/// tangent-plane mesh; any other WCS a mesh of unit directions with at least `n` vertices per
+/// side and cells of at most [`SKY_IMAGE_MAX_CELL_DEG`] of sky (at most [`SKY_IMAGE_GRID_MAX`]
+/// per side), cells touching the outside of the projection dropped.
 pub fn grid_vertices(wcs: &Wcs, nx: u32, ny: u32, span: [f64; 2], n: usize) -> Vec<SkyImageVertex> {
   let n = n.max(2);
-  let mut grid = Vec::with_capacity(n * n);
+  if wcs.is_plain_tan() {
+    let f = |p1: f64, p2: f64| Some(wcs.pixel_to_tangent_point(p1, p2));
+    return mesh_of(f, nx, ny, span, n);
+  }
+  let extent = wcs.angular_extent_deg(nx, ny, 9).unwrap_or(0.0);
+  let n = ((extent / SKY_IMAGE_MAX_CELL_DEG).ceil() as usize + 1).clamp(n, SKY_IMAGE_GRID_MAX);
+  mesh_of(|p1, p2| wcs.pixel_to_icrs(p1, p2), nx, ny, span, n)
+}
+
+/// Largest sky cell of a non-TAN registration mesh (degrees).
+pub const SKY_IMAGE_MAX_CELL_DEG: f64 = 0.75;
+/// Most vertices per side of a registration mesh.
+pub const SKY_IMAGE_GRID_MAX: usize = 256;
+
+/// The mesh of any pixel → ICRS direction function (`None` = outside the image's sky): vertices
+/// converted to ecliptic J2000, cells with an undefined corner dropped.
+pub fn mesh_of(
+  dir: impl Fn(f64, f64) -> Option<V3>,
+  nx: u32,
+  ny: u32,
+  span: [f64; 2],
+  n: usize,
+) -> Vec<SkyImageVertex> {
+  let n = n.max(2);
+  let mut grid: Vec<Option<SkyImageVertex>> = Vec::with_capacity(n * n);
   for j in 0..n {
     for i in 0..n {
       let p1 = 0.5 + nx as f64 * i as f64 / (n - 1) as f64;
       let p2 = 0.5 + ny as f64 * j as f64 / (n - 1) as f64;
-      let d = equatorial_to_ecliptic_j2000(wcs.pixel_to_tangent_point(p1, p2));
-      grid.push(SkyImageVertex {
-        pos: [d[0] as f32, d[1] as f32, d[2] as f32],
-        uv: [((p1 - 0.5) / span[0]) as f32, ((p2 - 0.5) / span[1]) as f32],
+      let v = dir(p1, p2).filter(|d| d.iter().all(|c| c.is_finite())).map(|d| {
+        let d = equatorial_to_ecliptic_j2000(d);
+        SkyImageVertex {
+          pos: [d[0] as f32, d[1] as f32, d[2] as f32],
+          uv: [((p1 - 0.5) / span[0]) as f32, ((p2 - 0.5) / span[1]) as f32],
+        }
       });
+      grid.push(v);
     }
   }
   let mut tris = Vec::with_capacity((n - 1) * (n - 1) * 6);
   for j in 0..n - 1 {
     for i in 0..n - 1 {
-      let a = grid[j * n + i];
-      let b = grid[j * n + i + 1];
-      let c = grid[(j + 1) * n + i];
-      let d = grid[(j + 1) * n + i + 1];
-      tris.extend_from_slice(&[a, b, d, a, d, c]);
+      if let (Some(a), Some(b), Some(c), Some(d)) =
+        (grid[j * n + i], grid[j * n + i + 1], grid[(j + 1) * n + i], grid[(j + 1) * n + i + 1])
+      {
+        tris.extend_from_slice(&[a, b, d, a, d, c]);
+      }
     }
   }
   tris
@@ -872,7 +756,9 @@ impl SkyImage {
 
   /// The upload form; `None` without a WCS (nothing to register).
   pub fn gpu_data(&self) -> Option<SkyImageGpuData> {
-    let wcs = self.wcs.as_ref()?;
+    if self.wcs.is_none() && self.hips.is_none() {
+      return None;
+    }
     let f = self.texture_factor();
     let (tw, th) = (self.nx.div_ceil(f), self.ny.div_ceil(f));
     let scale = 1.0 / (self.white - self.black);
@@ -904,17 +790,25 @@ impl SkyImage {
       tex_width: tw,
       tex_height: th,
       texels,
-      vertices: grid_vertices(wcs, self.nx, self.ny, span, SKY_IMAGE_GRID),
+      vertices: match (&self.wcs, &self.hips) {
+        (Some(wcs), _) => grid_vertices(wcs, self.nx, self.ny, span, SKY_IMAGE_GRID),
+        (None, Some(h)) => h.mesh_vertices(span, SKY_IMAGE_GRID),
+        (None, None) => Vec::new(),
+      },
     })
   }
 
   /// Ecliptic J2000 unit direction of `CRVAL` (the "lock to image" aim).
   pub fn crval_direction_ecliptic(&self) -> Option<[f64; 3]> {
-    let w = self.wcs.as_ref()?;
-    Some(equatorial_to_ecliptic_j2000(dir_of_ra_dec(
-      w.crval_deg[0],
-      w.crval_deg[1],
-    )))
+    if let Some(w) = self.wcs.as_ref() {
+      return Some(equatorial_to_ecliptic_j2000(dir_of_ra_dec(w.crval_deg[0], w.crval_deg[1])));
+    }
+    self.hips.as_ref().map(|h| h.center_direction_ecliptic())
+  }
+
+  /// The header facts of the WCS (`None` without one).
+  pub fn wcs_facts(&self) -> Option<WcsFacts> {
+    self.wcs.as_ref().map(|w| w.facts())
   }
 }
 

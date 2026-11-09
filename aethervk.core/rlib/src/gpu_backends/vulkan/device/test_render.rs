@@ -1970,7 +1970,8 @@ fn test_render_weather_ui() {
         .unwrap();
 
       // Load icons
-      fn load_texture(path: &str, id: u64) -> Option<(u64, Texture)> {
+      fn load_texture(rel: &str, id: u64) -> Option<(u64, Texture)> {
+        let path = aethervk_test_assets::path(rel).ok()?;
         if let Ok(img) = image::open(path) {
           let img = img.into_rgba8();
           let tex = crate::simulation::comet::Texture {
@@ -1986,8 +1987,8 @@ fn test_render_weather_ui() {
         }
       };
 
-      let mut sun_tex = load_texture("../../test_assets/sun.png", 1);
-      let mut cloud_tex = load_texture("../../test_assets/cloud.png", 2);
+      let mut sun_tex = load_texture("sun.png", 1);
+      let mut cloud_tex = load_texture("cloud.png", 2);
 
       let sun_e = scene.spawn_entity("sun_icon");
       scene.set_parent(sun_e, Some(root_e));

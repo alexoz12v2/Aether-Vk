@@ -18,13 +18,9 @@ namespace AetherVk.Logic.Tests;
 /// </summary>
 public class ReviewFeedbackVerificationTests
 {
-  /// <summary>The repository root, found from the review fixture the other tests already locate.</summary>
-  private static string RepoRoot()
-  {
-    // test_assets/saves/review_67p_2021-12 → test_assets/saves → test_assets → root
-    var fixture = new DirectoryInfo(ReviewSaveReproTests.FixtureDir());
-    return fixture.Parent!.Parent!.Parent!.FullName;
-  }
+  /// <summary>The repository root (the folder holding test_assets/ASSETS.tsv).</summary>
+  private static string RepoRoot() =>
+    TestAssets.TestAssets.RepoRoot() ?? throw new DirectoryNotFoundException("test_assets/ASSETS.tsv not found above the test output");
 
   private static string ReadRepoFile(params string[] parts)
   {

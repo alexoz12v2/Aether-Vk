@@ -614,6 +614,18 @@
   <data name="ModeBar_NoFitsHint" xml:space="preserve">
     <value>Importa un'immagine FITS per ricavarne le date del modello</value>
   </data>
+  <data name="ModeBar_FitsWithoutDateHint" xml:space="preserve">
+    <value>L'immagine FITS non ha una data di osservazione leggibile ({Date})</value>
+  </data>
+  <data name="Observation_NoImage" xml:space="preserve">
+    <value>Nessuna immagine del telescopio caricata (Impostazioni › Billboard, un file FITS).</value>
+  </data>
+  <data name="Observation_FitsWithoutDate" xml:space="preserve">
+    <value>L'immagine FITS caricata non ha una data di osservazione leggibile ({Date}).</value>
+  </data>
+  <data name="Observation_DateKeywordsNotFound" xml:space="preserve">
+    <value>DATE-OBS / MJD-OBS / JD non trovati</value>
+  </data>
   <data name="ModeBar_Recommit" xml:space="preserve">
     <value>Ricommetti con questo intervallo</value>
   </data>
@@ -1410,5 +1422,182 @@ Scrivi un'epoca dentro l'intervallo confermato e premi Invio, o Vai, per saltarc
   </data>
   <data name="Tabs_Model_HelpJetSizeQTable" xml:space="preserve">
     <value>Fino a 8 righe di (giorni dal perielio, q), q da 0 a 6. La q di una finestra di emissione è interpolata linearmente tra le righe e tenuta ai valori estremi fuori da esse; una riga è una q costante; nessuna riga significa la q di questo getto.&#10;&#10;I giorni negativi sono prima del perielio.</value>
+  </data>
+  <data name="Export_DialogTitle" xml:space="preserve">
+    <value>Esporta immagine</value>
+  </data>
+  <data name="Export_NoViewport" xml:space="preserve">
+    <value>Nessuna vista 3D da esportare.</value>
+  </data>
+  <data name="Export_Failed" xml:space="preserve">
+    <value>Esportazione fallita: impossibile catturare la vista.</value>
+  </data>
+  <data name="Export_Written" xml:space="preserve">
+    <value>Scritti {model} e {fits}</value>
+  </data>
+  <data name="Export_ModelOnly" xml:space="preserve">
+    <value>Nessuna immagine FITS visibile: solo il modello. Scritto {model}</value>
+  </data>
+  <data name="Billboard_FitsCentury_Label" xml:space="preserve">
+    <value>Anno a due cifre</value>
+  </data>
+  <data name="Billboard_FitsCentury_Help" xml:space="preserve">
+    <value>La scheda data di questo header scrive l'anno con due cifre (gg/mm/aa). Lo standard FITS la legge come 19aa, ma le immagini di comete riprese oggi intendono 20aa, quindi 20xx è il valore predefinito. Scegliendo 19xx la data di osservazione di questa immagine arretra esattamente di 100 anni ovunque sia usata: i dati, Vai all'osservazione, Intervallo modello e il pulsante Modello. Salvato con il billboard.</value>
+  </data>
+  <data name="Billboard_FitsCentury_TwoThousands" xml:space="preserve">
+    <value>20xx (predefinito)</value>
+  </data>
+  <data name="Billboard_FitsCentury_NineteenHundreds" xml:space="preserve">
+    <value>19xx (standard FITS)</value>
+  </data>
+  <data name="Billboard_FitsPlane_Label" xml:space="preserve">
+    <value>Piano</value>
+  </data>
+  <data name="Billboard_FitsPlane_Of" xml:space="preserve">
+    <value>di {N}</value>
+  </data>
+  <data name="Billboard_FitsPlane_OfN" xml:space="preserve">
+    <value>{P} di {N}</value>
+  </data>
+  <data name="Billboard_FitsPlane_Help" xml:space="preserve">
+    <value>Questa immagine FITS è un cubo: contiene più piani 2-D (NAXIS3, NAXIS4, … ne danno il numero). Scegli il piano che il billboard mostra; il piano 1 è il primo. Il tipo di stretch resta e viene ricalcolato sul nuovo piano. La scelta vale per ogni billboard di questa immagine ed è salvata con essi.</value>
+  </data>
+  <data name="Billboard_FitsPlane_Refused" xml:space="preserve">
+    <value>Piano rifiutato: il file sorgente non è leggibile o la libreria è occupata</value>
+  </data>
+  <data name="Billboard_FitsFact_Image" xml:space="preserve">
+    <value>Immagine</value>
+  </data>
+  <data name="Billboard_FitsFact_Compressed" xml:space="preserve">
+    <value>compressa</value>
+  </data>
+  <data name="Billboard_FitsFact_Planes" xml:space="preserve">
+    <value>Piani</value>
+  </data>
+  <data name="Billboard_FitsFact_DateSource" xml:space="preserve">
+    <value>Origine della data</value>
+  </data>
+  <data name="Billboard_FitsDate_DateOnly" xml:space="preserve">
+    <value>solo data (mezzanotte)</value>
+  </data>
+  <data name="Billboard_FitsDate_FileDate" xml:space="preserve">
+    <value>data del file (DATE), non dell'osservazione</value>
+  </data>
+  <data name="Billboard_FitsFact_Projection" xml:space="preserve">
+    <value>Proiezione</value>
+  </data>
+  <data name="Billboard_FitsFact_Distortion" xml:space="preserve">
+    <value>Distorsione</value>
+  </data>
+  <data name="Billboard_FitsDistortion_None" xml:space="preserve">
+    <value>nessuna</value>
+  </data>
+  <data name="Billboard_FitsFact_Frame" xml:space="preserve">
+    <value>Sistema</value>
+  </data>
+  <data name="Billboard_FitsFrame_Galactic" xml:space="preserve">
+    <value>Galattico</value>
+  </data>
+  <data name="Billboard_FitsFrame_Ecliptic" xml:space="preserve">
+    <value>Eclittico</value>
+  </data>
+  <data name="Billboard_FitsFrame_Equatorial" xml:space="preserve">
+    <value>Equatoriale</value>
+  </data>
+  <data name="Billboard_FitsFrame_Assumed" xml:space="preserve">
+    <value>(presunto)</value>
+  </data>
+  <data name="Billboard_FitsFact_Hips" xml:space="preserve">
+    <value>HiPS</value>
+  </data>
+  <data name="Billboard_FitsHips_Tile" xml:space="preserve">
+    <value>ordine {K}, tassello {N}</value>
+  </data>
+  <data name="Billboard_FitsHips_Allsky" xml:space="preserve">
+    <value>ordine {K}, Allsky</value>
+  </data>
+  <data name="Billboard_FitsProjection_AZP" xml:space="preserve">
+    <value>prospettica zenitale</value>
+  </data>
+  <data name="Billboard_FitsProjection_SZP" xml:space="preserve">
+    <value>prospettica zenitale obliqua</value>
+  </data>
+  <data name="Billboard_FitsProjection_TAN" xml:space="preserve">
+    <value>gnomonica</value>
+  </data>
+  <data name="Billboard_FitsProjection_STG" xml:space="preserve">
+    <value>stereografica</value>
+  </data>
+  <data name="Billboard_FitsProjection_SIN" xml:space="preserve">
+    <value>ortografica</value>
+  </data>
+  <data name="Billboard_FitsProjection_ARC" xml:space="preserve">
+    <value>zenitale equidistante</value>
+  </data>
+  <data name="Billboard_FitsProjection_ZPN" xml:space="preserve">
+    <value>zenitale polinomiale</value>
+  </data>
+  <data name="Billboard_FitsProjection_ZEA" xml:space="preserve">
+    <value>zenitale equivalente</value>
+  </data>
+  <data name="Billboard_FitsProjection_AIR" xml:space="preserve">
+    <value>di Airy</value>
+  </data>
+  <data name="Billboard_FitsProjection_CYP" xml:space="preserve">
+    <value>cilindrica prospettica</value>
+  </data>
+  <data name="Billboard_FitsProjection_CEA" xml:space="preserve">
+    <value>cilindrica equivalente</value>
+  </data>
+  <data name="Billboard_FitsProjection_CAR" xml:space="preserve">
+    <value>plate carrée</value>
+  </data>
+  <data name="Billboard_FitsProjection_MER" xml:space="preserve">
+    <value>di Mercatore</value>
+  </data>
+  <data name="Billboard_FitsProjection_SFL" xml:space="preserve">
+    <value>di Sanson-Flamsteed</value>
+  </data>
+  <data name="Billboard_FitsProjection_PAR" xml:space="preserve">
+    <value>parabolica</value>
+  </data>
+  <data name="Billboard_FitsProjection_MOL" xml:space="preserve">
+    <value>di Mollweide</value>
+  </data>
+  <data name="Billboard_FitsProjection_AIT" xml:space="preserve">
+    <value>di Hammer-Aitoff</value>
+  </data>
+  <data name="Billboard_FitsProjection_COP" xml:space="preserve">
+    <value>conica prospettica</value>
+  </data>
+  <data name="Billboard_FitsProjection_COE" xml:space="preserve">
+    <value>conica equivalente</value>
+  </data>
+  <data name="Billboard_FitsProjection_COD" xml:space="preserve">
+    <value>conica equidistante</value>
+  </data>
+  <data name="Billboard_FitsProjection_COO" xml:space="preserve">
+    <value>conica conforme</value>
+  </data>
+  <data name="Billboard_FitsProjection_BON" xml:space="preserve">
+    <value>di Bonne</value>
+  </data>
+  <data name="Billboard_FitsProjection_PCO" xml:space="preserve">
+    <value>policonica</value>
+  </data>
+  <data name="Billboard_FitsProjection_TSC" xml:space="preserve">
+    <value>cubo sferico tangenziale</value>
+  </data>
+  <data name="Billboard_FitsProjection_CSC" xml:space="preserve">
+    <value>cubo sferico quadrilateralizzato COBE</value>
+  </data>
+  <data name="Billboard_FitsProjection_QSC" xml:space="preserve">
+    <value>cubo sferico quadrilateralizzato</value>
+  </data>
+  <data name="Billboard_FitsProjection_HPX" xml:space="preserve">
+    <value>HEALPix</value>
+  </data>
+  <data name="Billboard_FitsProjection_XPH" xml:space="preserve">
+    <value>HEALPix polare (a farfalla)</value>
   </data>
 </root>

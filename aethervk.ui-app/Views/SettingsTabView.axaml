@@ -546,6 +546,31 @@
                                                                HelpHeader="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpHeaderFlipLon}"
                                                                HelpContent="{Binding $parent[UserControl].((vm:ISettingsTabViewModel)DataContext).StrHelpFlipLon}" />
                                 </StackPanel>
+                                <!-- a date card with a two-digit year (dd/mm/yy): read as 20yy, or the FITS standard's 19yy -->
+                                <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding HasTwoDigitYear}">
+                                  <TextBlock Text="{Binding TwoDigitYearLabel}" VerticalAlignment="Center" Opacity="0.85" />
+                                  <ComboBox AutomationProperties.AutomationId="FitsTwoDigitYearCentury" MinWidth="140"
+                                            ItemsSource="{Binding TwoDigitYearCenturyOptions}" SelectedItem="{Binding TwoDigitYearCenturyOption}" />
+                                  <controls:PropertyHelpButton AutomationProperties.AutomationId="FitsTwoDigitYearCenturyHelp"
+                                                               HelpHeader="{Binding TwoDigitYearLabel}"
+                                                               HelpContent="{Binding TwoDigitYearHelp}" FlyoutMaxWidth="320" />
+                                </StackPanel>
+                                <!-- a cube: the plane shown (1-based), and the per-axis indices for several extra axes -->
+                                <StackPanel Spacing="2" IsVisible="{Binding HasPlanes}">
+                                  <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <TextBlock Text="{Binding PlaneLabel}" VerticalAlignment="Center" Opacity="0.85" />
+                                    <NumericUpDown AutomationProperties.AutomationId="FitsPlane" MinWidth="120"
+                                                   Minimum="1" Maximum="{Binding PlaneMaximum}" Increment="1" FormatString="0"
+                                                   ParsingNumberStyle="Integer" Value="{Binding PlaneValue}" />
+                                    <TextBlock AutomationProperties.AutomationId="FitsPlaneOf" Text="{Binding PlaneOfText}" VerticalAlignment="Center" />
+                                    <controls:PropertyHelpButton AutomationProperties.AutomationId="FitsPlaneHelp"
+                                                                 HelpHeader="{Binding PlaneLabel}"
+                                                                 HelpContent="{Binding PlaneHelp}" FlyoutMaxWidth="320" />
+                                  </StackPanel>
+                                  <TextBlock AutomationProperties.AutomationId="FitsPlaneAxes" Text="{Binding PlaneAxesText}" Opacity="0.8"
+                                             IsVisible="{Binding PlaneAxesText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                  <ProgressBar IsIndeterminate="True" Height="4" IsVisible="{Binding IsApplyingPlane}" />
+                                </StackPanel>
 
                                 <TextBlock Text="Header" FontWeight="SemiBold" />
                                 <DataGrid x:Name="FitsHeaderGrid" ItemsSource="{Binding Cards}"

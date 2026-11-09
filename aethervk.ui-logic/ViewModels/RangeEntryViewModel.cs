@@ -292,18 +292,34 @@ public partial class RangeEntryViewModel : ObservableObject, IDisposable
   [RelayCommand]
   private void FromImage()
   {
-    if (ImageObservationUtc() is { } utc)
+    var image = _timeline?.ObservationImage();
+    if (image?.ObservationUtc is { } utc)
     {
       ObservationEpoch = FormatUtc(utc);
       RunStatus = string.Empty;
     }
     else
     {
-      RunStatus = NoImageText;
+      RunStatus = image is null ? NoImageText : FitsWithoutDateText(image);
     }
   }
 
-  public const string NoImageText = "No telescope image with an observation date is loaded (Settings › Billboards, a FITS file).";
+  /// <summary>No telescope image is loaded (AppStrings, the UI culture).</summary>
+  public static string NoImageText => GetString(ObservationImageText.NoImageKey);
+
+  /// <summary>A FITS image is loaded without a readable date: the text names its date card, else
+  /// the keywords tried (AppStrings, the UI culture).</summary>
+  public static string FitsWithoutDateText(IObservationImage image) =>
+    ObservationImageText.FormatWithoutDate(GetString(ObservationImageText.FitsWithoutDateKey), image, GetString);
+
+  private static System.Resources.ResourceManager? _strings;
+
+  // the app's TranslationService sets CurrentUICulture on every language change
+  private static string GetString(string key)
+  {
+    _strings ??= new System.Resources.ResourceManager("AetherVk.Logic.Resources.AppStrings", typeof(ITranslationService).Assembly);
+    return _strings.GetString(key, System.Globalization.CultureInfo.CurrentUICulture) ?? string.Concat("[", key, "]");
+  }
 
   // ── Run at this date: propose → recommit → seek → compare ──────────────────
 

@@ -71,6 +71,21 @@ public sealed record DesktopBillboard(
   public FitsStretch? FitsStretch { get; init; }
 
   /// <summary>
+  /// FITS texture whose date card wrote its year with two digits: the century the user reads it
+  /// in (<see cref="FitsTwoDigitYearCentury.TwoThousands"/> unless chosen otherwise; the panel shows
+  /// the choice only for such a header). Saved with the billboard; older saves read 20yy.
+  /// </summary>
+  public FitsTwoDigitYearCentury FitsTwoDigitYearCentury { get; init; }
+
+  /// <summary>
+  /// FITS cube: the plane shown (0-based flat index over the extra axes, NAXIS3 fastest; 0 for a
+  /// plain image or the first plane). The engine does not persist it, so it is re-applied after a
+  /// savefile load or a re-import. Like the stretch it belongs to the texture: choosing it on one
+  /// billboard sets it on every billboard of that texture.
+  /// </summary>
+  public int FitsPlane { get; init; }
+
+  /// <summary>
   /// Where the comet's nucleus is in the image, in image pixel coordinates: x right, y down from
   /// the top of the displayed image, the centre of pixel (column i, row j) at (i, j), so the
   /// image's centre is ((W − 1) / 2, (H − 1) / 2) (<see cref="Utils.NucleusDetector"/>). Null:

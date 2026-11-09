@@ -404,6 +404,10 @@ public static class SaveIndexMapping
     FitsStretch = b.FitsStretch is { } s && !s.SameAs(FitsStretch.Default)
       ? new FitsStretchDto { Mode = Snake(s.Mode), Transfer = Snake(s.Transfer), P0 = s.P0, P1 = s.P1 }
       : null,
+    FitsTwoDigitYearCentury = b.FitsTwoDigitYearCentury == FitsTwoDigitYearCentury.TwoThousands
+      ? null
+      : Snake(b.FitsTwoDigitYearCentury),
+    FitsPlane = b.FitsPlane > 0 ? b.FitsPlane : null,
     ImageNucleusX = b.ImageNucleusPx?.X,
     ImageNucleusY = b.ImageNucleusPx?.Y,
     ViewportOffsetX = viewportOffset?.X,
@@ -430,6 +434,8 @@ public static class SaveIndexMapping
         ? new FitsStretch(
           ParseSnake(s.Mode, FitsStretchMode.ZScale), ParseSnake(s.Transfer, FitsTransfer.Linear), s.P0, s.P1)
         : null,
+      FitsTwoDigitYearCentury = ParseSnake(d.FitsTwoDigitYearCentury, FitsTwoDigitYearCentury.TwoThousands),
+      FitsPlane = d.FitsPlane is { } plane && plane > 0 ? plane : 0,
       ImageNucleusPx = d.ImageNucleusX is { } nx && d.ImageNucleusY is { } ny ? new Utils.PointD(nx, ny) : null,
     };
 

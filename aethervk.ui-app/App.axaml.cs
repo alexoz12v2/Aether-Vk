@@ -372,6 +372,7 @@ public class MockNativeRuntimeService : INativeRuntimeService
   public Logic.Models.IntensityImage? CopyFitsRaster(ulong assetId) => null;
   public string? GetFitsMetadataJson(ulong assetId) => null;
   public Logic.Models.FitsStretchResult? SetFitsStretch(ulong assetId, uint mode, uint transfer, double p0, double p1) => null;
+  public bool SetFitsPlane(ulong assetId, ulong plane) => false;
   public bool DumpSceneToFile(string file) => true;
   public bool RestoreSceneFromFile(string file) => true;
   public string? GetCompatibilityJson() => "{}";
@@ -404,6 +405,9 @@ public class MockNativeRuntimeService : INativeRuntimeService
   public void RemoveViewport(ulong presentationEngineId) { }
 
   public void ResizeViewport(ulong presentationEngineId, uint width, uint height) { }
+
+  public Task<Logic.Models.CapturedImage?> CaptureViewportAsync(ulong presentationEngineId, bool hideLabels) =>
+    Task.FromResult<Logic.Models.CapturedImage?>(null);
 
   public bool TryInitComet(
     int spkId,

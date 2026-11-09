@@ -613,6 +613,18 @@
   <data name="ModeBar_NoFitsHint" xml:space="preserve">
     <value>Import a FITS image to set the model's dates from it</value>
   </data>
+  <data name="ModeBar_FitsWithoutDateHint" xml:space="preserve">
+    <value>The FITS image has no observation date the app can read ({Date})</value>
+  </data>
+  <data name="Observation_NoImage" xml:space="preserve">
+    <value>No telescope image is loaded (Settings › Billboards, a FITS file).</value>
+  </data>
+  <data name="Observation_FitsWithoutDate" xml:space="preserve">
+    <value>The loaded FITS image has no observation date the app can read ({Date}).</value>
+  </data>
+  <data name="Observation_DateKeywordsNotFound" xml:space="preserve">
+    <value>DATE-OBS / MJD-OBS / JD not found</value>
+  </data>
   <data name="ModeBar_Recommit" xml:space="preserve">
     <value>Recommit with this range</value>
   </data>
@@ -1408,5 +1420,182 @@ Type an epoch inside the committed range and press Enter, or Go, to jump there; 
   </data>
   <data name="Tabs_Model_HelpJetSizeQTable" xml:space="preserve">
     <value>Up to 8 rows of (days from perihelion, q), q from 0 to 6. The q of an emission window is interpolated linearly between the rows and held at the end values outside them; one row is a constant q; no row means this jet's own q.&#10;&#10;Negative days are before perihelion.</value>
+  </data>
+  <data name="Export_DialogTitle" xml:space="preserve">
+    <value>Export image</value>
+  </data>
+  <data name="Export_NoViewport" xml:space="preserve">
+    <value>No 3D viewport to export.</value>
+  </data>
+  <data name="Export_Failed" xml:space="preserve">
+    <value>Export failed: the viewport could not be captured.</value>
+  </data>
+  <data name="Export_Written" xml:space="preserve">
+    <value>Written {model} and {fits}</value>
+  </data>
+  <data name="Export_ModelOnly" xml:space="preserve">
+    <value>No FITS billboard visible: model only. Written {model}</value>
+  </data>
+  <data name="Billboard_FitsCentury_Label" xml:space="preserve">
+    <value>Two-digit year</value>
+  </data>
+  <data name="Billboard_FitsCentury_Help" xml:space="preserve">
+    <value>This header's date card writes its year with two digits (dd/mm/yy). The FITS standard reads it as 19yy, but comet images taken today mean 20yy, so 20xx is the default. Choosing 19xx moves this image's observation date back exactly 100 years everywhere it is used: the facts, Seek to observation, Model range and the Model button. Saved with the billboard.</value>
+  </data>
+  <data name="Billboard_FitsCentury_TwoThousands" xml:space="preserve">
+    <value>20xx (default)</value>
+  </data>
+  <data name="Billboard_FitsCentury_NineteenHundreds" xml:space="preserve">
+    <value>19xx (FITS standard)</value>
+  </data>
+  <data name="Billboard_FitsPlane_Label" xml:space="preserve">
+    <value>Plane</value>
+  </data>
+  <data name="Billboard_FitsPlane_Of" xml:space="preserve">
+    <value>of {N}</value>
+  </data>
+  <data name="Billboard_FitsPlane_OfN" xml:space="preserve">
+    <value>{P} of {N}</value>
+  </data>
+  <data name="Billboard_FitsPlane_Help" xml:space="preserve">
+    <value>This FITS image is a cube: it holds several 2-D planes (NAXIS3, NAXIS4, … give their count). Choose the plane the billboard shows; plane 1 is the first. The stretch mode is kept and recomputed on the new plane. The choice applies to every billboard of this image and is saved with it.</value>
+  </data>
+  <data name="Billboard_FitsPlane_Refused" xml:space="preserve">
+    <value>Plane refused: the source file is unreadable or the library is busy</value>
+  </data>
+  <data name="Billboard_FitsFact_Image" xml:space="preserve">
+    <value>Image</value>
+  </data>
+  <data name="Billboard_FitsFact_Compressed" xml:space="preserve">
+    <value>compressed</value>
+  </data>
+  <data name="Billboard_FitsFact_Planes" xml:space="preserve">
+    <value>Planes</value>
+  </data>
+  <data name="Billboard_FitsFact_DateSource" xml:space="preserve">
+    <value>Date source</value>
+  </data>
+  <data name="Billboard_FitsDate_DateOnly" xml:space="preserve">
+    <value>date only (midnight)</value>
+  </data>
+  <data name="Billboard_FitsDate_FileDate" xml:space="preserve">
+    <value>file date (DATE), not the observation</value>
+  </data>
+  <data name="Billboard_FitsFact_Projection" xml:space="preserve">
+    <value>Projection</value>
+  </data>
+  <data name="Billboard_FitsFact_Distortion" xml:space="preserve">
+    <value>Distortion</value>
+  </data>
+  <data name="Billboard_FitsDistortion_None" xml:space="preserve">
+    <value>none</value>
+  </data>
+  <data name="Billboard_FitsFact_Frame" xml:space="preserve">
+    <value>Frame</value>
+  </data>
+  <data name="Billboard_FitsFrame_Galactic" xml:space="preserve">
+    <value>Galactic</value>
+  </data>
+  <data name="Billboard_FitsFrame_Ecliptic" xml:space="preserve">
+    <value>Ecliptic</value>
+  </data>
+  <data name="Billboard_FitsFrame_Equatorial" xml:space="preserve">
+    <value>Equatorial</value>
+  </data>
+  <data name="Billboard_FitsFrame_Assumed" xml:space="preserve">
+    <value>(assumed)</value>
+  </data>
+  <data name="Billboard_FitsFact_Hips" xml:space="preserve">
+    <value>HiPS</value>
+  </data>
+  <data name="Billboard_FitsHips_Tile" xml:space="preserve">
+    <value>order {K}, tile {N}</value>
+  </data>
+  <data name="Billboard_FitsHips_Allsky" xml:space="preserve">
+    <value>order {K}, Allsky</value>
+  </data>
+  <data name="Billboard_FitsProjection_AZP" xml:space="preserve">
+    <value>zenithal perspective</value>
+  </data>
+  <data name="Billboard_FitsProjection_SZP" xml:space="preserve">
+    <value>slant zenithal perspective</value>
+  </data>
+  <data name="Billboard_FitsProjection_TAN" xml:space="preserve">
+    <value>gnomonic</value>
+  </data>
+  <data name="Billboard_FitsProjection_STG" xml:space="preserve">
+    <value>stereographic</value>
+  </data>
+  <data name="Billboard_FitsProjection_SIN" xml:space="preserve">
+    <value>orthographic</value>
+  </data>
+  <data name="Billboard_FitsProjection_ARC" xml:space="preserve">
+    <value>zenithal equidistant</value>
+  </data>
+  <data name="Billboard_FitsProjection_ZPN" xml:space="preserve">
+    <value>zenithal polynomial</value>
+  </data>
+  <data name="Billboard_FitsProjection_ZEA" xml:space="preserve">
+    <value>zenithal equal-area</value>
+  </data>
+  <data name="Billboard_FitsProjection_AIR" xml:space="preserve">
+    <value>Airy</value>
+  </data>
+  <data name="Billboard_FitsProjection_CYP" xml:space="preserve">
+    <value>cylindrical perspective</value>
+  </data>
+  <data name="Billboard_FitsProjection_CEA" xml:space="preserve">
+    <value>cylindrical equal-area</value>
+  </data>
+  <data name="Billboard_FitsProjection_CAR" xml:space="preserve">
+    <value>plate carrée</value>
+  </data>
+  <data name="Billboard_FitsProjection_MER" xml:space="preserve">
+    <value>Mercator</value>
+  </data>
+  <data name="Billboard_FitsProjection_SFL" xml:space="preserve">
+    <value>Sanson-Flamsteed</value>
+  </data>
+  <data name="Billboard_FitsProjection_PAR" xml:space="preserve">
+    <value>parabolic</value>
+  </data>
+  <data name="Billboard_FitsProjection_MOL" xml:space="preserve">
+    <value>Mollweide</value>
+  </data>
+  <data name="Billboard_FitsProjection_AIT" xml:space="preserve">
+    <value>Hammer-Aitoff</value>
+  </data>
+  <data name="Billboard_FitsProjection_COP" xml:space="preserve">
+    <value>conic perspective</value>
+  </data>
+  <data name="Billboard_FitsProjection_COE" xml:space="preserve">
+    <value>conic equal-area</value>
+  </data>
+  <data name="Billboard_FitsProjection_COD" xml:space="preserve">
+    <value>conic equidistant</value>
+  </data>
+  <data name="Billboard_FitsProjection_COO" xml:space="preserve">
+    <value>conic orthomorphic</value>
+  </data>
+  <data name="Billboard_FitsProjection_BON" xml:space="preserve">
+    <value>Bonne</value>
+  </data>
+  <data name="Billboard_FitsProjection_PCO" xml:space="preserve">
+    <value>polyconic</value>
+  </data>
+  <data name="Billboard_FitsProjection_TSC" xml:space="preserve">
+    <value>tangential spherical cube</value>
+  </data>
+  <data name="Billboard_FitsProjection_CSC" xml:space="preserve">
+    <value>COBE quadrilateralized spherical cube</value>
+  </data>
+  <data name="Billboard_FitsProjection_QSC" xml:space="preserve">
+    <value>quadrilateralized spherical cube</value>
+  </data>
+  <data name="Billboard_FitsProjection_HPX" xml:space="preserve">
+    <value>HEALPix</value>
+  </data>
+  <data name="Billboard_FitsProjection_XPH" xml:space="preserve">
+    <value>polar HEALPix (butterfly)</value>
   </data>
 </root>

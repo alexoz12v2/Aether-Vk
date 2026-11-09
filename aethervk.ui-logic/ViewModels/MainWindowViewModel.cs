@@ -3,6 +3,7 @@ using System.Collections.ObjectModel;
 using System.Threading.Tasks;
 using AetherVk.Logic.SaveFile;
 using AetherVk.Logic.Services;
+using AetherVk.Logic.Services.ImageExport;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 namespace AetherVk.Logic.ViewModels;
@@ -24,6 +25,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
   private readonly SaveFileService? _saveFiles;
   private readonly PreferencesService? _preferences;
   private readonly IUnsavedChangesPrompt? _unsavedPrompt;
+  private readonly ImageExportService? _imageExport;
+  private readonly ITranslationService? _translation;
   private readonly IDisposable? _titleTimer;
 
   public const string AppName = "AetherVk";
@@ -87,10 +90,14 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     SaveFileService? saveFiles = null,
     PreferencesService? preferences = null,
     IUnsavedChangesPrompt? unsavedPrompt = null,
-    ViewModeBarViewModel? modeBar = null
+    ViewModeBarViewModel? modeBar = null,
+    ImageExportService? imageExport = null,
+    ITranslationService? translation = null
   )
   {
     ModeBar = modeBar;
+    _imageExport = imageExport;
+    _translation = translation;
     _saveFiles = saveFiles;
     _preferences = preferences;
     _unsavedPrompt = unsavedPrompt;
@@ -234,6 +241,63 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     return await _saveFiles.SaveAsync(path!);
   }
 
+  /// <summary>The last export's outcome, for the status line and tests.</summary>
+  [ObservableProperty]
+  private string? _exportStatus;
+
+  /// <summary>
+  /// File › Export image...: asks for a .png name and writes <c>name_model.png</c> (the 3D viewport
+  /// as the engine draws it, labels hidden) and, when a FITS billboard is visible,
+  /// <c>name_with_fits.png</c> (the same image with the billboard composited at its on-screen
+  /// geometry). The outcome goes to the status line.
+  /// </summary>
+  [RelayCommand]
+  private async Task ExportImageAsync()
+  {
+    ulong pe = ActiveViewport?.PresentationEngineId ?? _runtimeService.PresentationEngineId ?? 0;
+    if (_imageExport is null || pe == 0)
+    {
+      ReportExport(T("Export_NoViewport", "No 3D viewport to export."), 3);
+      return;
+    }
+    var path = await _fileDialogService.ShowSaveFileDialogAsync(T("Export_DialogTitle", "Export image"), "png", ["png"]);
+    if (string.IsNullOrEmpty(path)) return;
+    ImageExportResult? result;
+    try
+    {
+      result = await _imageExport.ExportAsync(pe, path!, ActiveViewport?.CameraService?.ViewportDesktopFrame);
+    }
+    catch (Exception e)
+    {
+      Console.WriteLine($"[MainWindowViewModel] export image failed: {e}");
+      result = null;
+    }
+    if (result is null)
+    {
+      ReportExport(T("Export_Failed", "Export failed: the viewport could not be captured."), 3);
+      return;
+    }
+    var (modelName, fitsName) = ImageExportService.FileNames(path!);
+    string msg = result.FitsComposited
+      ? T("Export_Written", "Written {model} and {fits}").Replace("{model}", System.IO.Path.GetFileName(modelName)).Replace("{fits}", System.IO.Path.GetFileName(fitsName))
+      : T("Export_ModelOnly", "No FITS billboard visible: model only. Written {model}").Replace("{model}", System.IO.Path.GetFileName(modelName));
+    ReportExport(msg, 2);
+  }
+
+  private void ReportExport(string message, int status)
+  {
+    ExportStatus = message;
+    _ = _breadcrumbService.ShowMessageAsync(T("Export_DialogTitle", "Export image"), message, default, status);
+  }
+
+  /// <summary>A UI string by resx key, <paramref name="fallback"/> without a translation service or
+  /// when the key is missing.</summary>
+  private string T(string key, string fallback)
+  {
+    var s = _translation?.GetString(key);
+    return string.IsNullOrEmpty(s) || s == $"[{key}]" ? fallback : s!;
+  }
+
   /// <summary>Save As Folder: the folder layout (docs/savefile.md), for inspecting a save.</summary>
   private async Task<bool> SaveAsFolderCoreAsync()
   {
@@ -273,6 +337,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
       fileMenu.Items.Add(new MenuItemViewModel { Header = "Save", Gesture = "Ctrl+S", Command = SaveCommand });
       fileMenu.Items.Add(new MenuItemViewModel { Header = "Save As...", Gesture = "Ctrl+Shift+S", Command = SaveAsCommand });
       fileMenu.Items.Add(new MenuItemViewModel { Header = "Save As Folder...", Command = SaveAsFolderCommand });
+      fileMenu.Items.Add(new MenuItemViewModel { IsSeparator = true });
+      fileMenu.Items.Add(new MenuItemViewModel { Header = "Export image...", Command = ExportImageCommand });
       MainMenu.Add(fileMenu);
     }
 

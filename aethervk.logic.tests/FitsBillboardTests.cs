@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using AetherVk.Logic.Models;
 using AetherVk.Logic.SaveFile;
 using AetherVk.Logic.Services;
+using AetherVk.Logic.Tests.Mocks;
 using AetherVk.Logic.Utils;
 using AetherVk.Logic.ViewModels;
 using Moq;
@@ -19,11 +20,11 @@ namespace AetherVk.Logic.Tests;
 /// </summary>
 public class FitsBillboardTests
 {
-  private const ulong FitsId = 7;
+  internal const ulong FitsId = 7;
 
   /// The Liverpool Telescope 67P frame (test_assets/fits_lt_67p_header_4x3.fits) as the engine
   /// describes it, abridged; the nanoseconds exceed 2^53 on purpose.
-  private const string LtJson = """
+  internal const string LtJson = """
     {
       "assetId": 7, "textureWidth": 1200, "textureHeight": 1200, "rowOrder": "topDown", "flipped": true,
       "stretch": { "mode": 0, "transfer": 0, "black": -1004.76, "white": 1020.78 },
@@ -135,12 +136,15 @@ public class FitsBillboardTests
 
     /// <param name="withModelRange">Wire the Timeline's "Model range" request (logged as "range").</param>
     /// <param name="onModelRange">Also forwards each request (e.g. to <c>TimelineService.RequestModelRange</c>, as the app does); implies <paramref name="withModelRange"/>.</param>
-    public Rig(bool withModelRange = false, Action<DateTimeOffset>? onModelRange = null)
+    /// <param name="fitsJson">The engine's metadata JSON for the FITS texture (<see cref="LtJson"/>).</param>
+    /// <param name="timeScale">The UTC → TDB converter the rows use for a date read in another century.</param>
+    public Rig(bool withModelRange = false, Action<DateTimeOffset>? onModelRange = null, string? fitsJson = null,
+      ITimeScaleConverter? timeScale = null)
     {
       withModelRange |= onModelRange is not null;
       Fake.NativeAssets.Add(Tex(FitsId, "/data/lt_67p.fits"));
       Fake.NativeAssets.Add(Tex(8, "/data/tail.png"));
-      Fake.Runtime.Setup(r => r.GetFitsMetadataJson(FitsId)).Returns(LtJson);
+      Fake.Runtime.Setup(r => r.GetFitsMetadataJson(FitsId)).Returns(fitsJson ?? LtJson);
       Fake.Runtime
         .Setup(r => r.SetFitsStretch(It.IsAny<ulong>(), It.IsAny<uint>(), It.IsAny<uint>(), It.IsAny<double>(), It.IsAny<double>()))
         .Returns(new FitsStretchResult(-12.5, 340.25));
@@ -163,7 +167,8 @@ public class FitsBillboardTests
             ModelRanges.Add(end);
             onModelRange?.Invoke(end);
           }
-          : null);
+          : null,
+        timeScale: timeScale);
       Fake.Drain();
       Vm.AttachViewport(Probe, poll: false); // a polling interval never drains
     }
@@ -227,6 +232,96 @@ public class FitsBillboardTests
     Assert.Null(FitsMetadata.Parse(null));
   }
 
+  /// The same frame with a date card the engine could not read (its raw text reported).
+  internal static readonly string UndatedJson = LtJson
+    .Replace("\"dateObs\": \"2021-12-27T00:14:37.345\"", "\"dateObs\": null, \"dateCardRaw\": \"DATE-OBS= '27/12/21'\"")
+    .Replace("\"dateMidUtc\": \"2021-12-27T00:14:47.345Z\"", "\"dateMidUtc\": null");
+
+  [Fact]
+  public void Metadata_ParsesTheOptionalDateFields_AndToleratesTheirAbsence()
+  {
+    var without = FitsMetadata.Parse(LtJson)!.Facts;
+    Assert.Null(without.DateCardRaw);
+    Assert.Null(without.DateOnly);
+    Assert.Null(without.DateIsFileDate);
+    Assert.Null(without.DateStartUtc);
+    Assert.Null(without.DateStartTdbUs);
+    Assert.Null(without.DateTwoDigitYear);
+
+    var with = FitsMetadata.Parse(LtJson.Replace("\"timesysAssumed\": true,",
+      "\"timesysAssumed\": true, \"dateCardRaw\": \"DATE-OBS= '2021-12-27'\", \"dateOnly\": true, "
+      + "\"dateIsFileDate\": false, \"dateStartUtc\": \"2021-12-27T00:14:37.345Z\", \"dateStartTdbUs\": 693749746529000,"))!.Facts;
+    Assert.Equal("DATE-OBS= '2021-12-27'", with.DateCardRaw);
+    Assert.True(with.DateOnly);
+    Assert.False(with.DateIsFileDate);
+    Assert.Equal("2021-12-27T00:14:37.345Z", with.DateStartUtc);
+    Assert.Equal(693749746529000L, with.DateStartTdbUs);
+    Assert.True(FitsMetadata.Parse(TwoDigitYearJson)!.Facts.DateTwoDigitYear);
+
+    var undated = FitsMetadata.Parse(UndatedJson)!.Facts;
+    Assert.Null(undated.DateObs);
+    Assert.Null(undated.DateMidUtc);
+    Assert.Equal("DATE-OBS= '27/12/21'", undated.DateCardRaw);
+  }
+
+  /// The same frame with <c>DATE-OBS = '27/12/21'</c>: the engine reads 2021 and flags the two-digit year.
+  internal static readonly string TwoDigitYearJson = LtJson
+    .Replace("\"dateObs\": \"2021-12-27T00:14:37.345\"", "\"dateObs\": \"27/12/21\"")
+    .Replace("\"timesysAssumed\": true", "\"timesysAssumed\": true, \"dateCardRaw\": \"DATE-OBS= '27/12/21'\", "
+      + "\"dateTwoDigitYear\": true, \"dateStartUtc\": \"2021-12-27T00:14:37.345Z\", \"dateStartTdbUs\": 693749746529000");
+
+  /// <summary>Calls of the native metadata read for <paramref name="assetId"/> so far.</summary>
+  private static int MetadataReads(Rig rig, ulong assetId) =>
+    rig.Fake.Runtime.Invocations.Count(i =>
+      i.Method.Name == nameof(INativeRuntimeService.GetFitsMetadataJson) && (ulong)i.Arguments[0] == assetId);
+
+  /// The native read answers "busy" like "not FITS" (the asset library write-locked by an import or a
+  /// re-stretch): a FITS file's row asks again until the library is free.
+  [Fact]
+  public void MetadataRead_BusyThenFree_FindsTheFitsAfterARetry()
+  {
+    var rig = new Rig();
+    int calls = 0;
+    rig.Fake.Runtime.Setup(r => r.GetFitsMetadataJson(FitsId)).Returns(() => ++calls <= 2 ? null : LtJson);
+
+    var row = rig.Create("/data/lt_67p.fits"); // the drain runs the delayed attempts
+
+    Assert.NotNull(row.Fits);
+    Assert.True(calls >= 3, $"read {calls} times");
+    Assert.Same(row.Fits, rig.Vm.ObservationImage());
+    Assert.NotNull(row.Fits!.ObservationUtc);
+  }
+
+  [Fact]
+  public void MetadataRead_StillBusy_GivesUpAfterTheBoundedAttempts()
+  {
+    var rig = new Rig();
+    rig.Fake.Runtime.Setup(r => r.GetFitsMetadataJson(FitsId)).Returns((string?)null);
+    var row = rig.Create("/data/lt_67p.fits");
+    int afterCreate = MetadataReads(rig, FitsId);
+    Assert.Null(row.Fits);
+    Assert.True(afterCreate <= 1 + FitsImageService.MetadataRetryAttempts + 1, $"read {afterCreate} times");
+    rig.Fake.Schedulers.MainThread.AdvanceBy(TimeSpan.FromSeconds(30).Ticks);
+    Assert.Equal(afterCreate, MetadataReads(rig, FitsId)); // no attempt left
+  }
+
+  [Fact]
+  public void MetadataRead_OfANonFitsFile_IsNotRetried()
+  {
+    var rig = new Rig();
+    var row = rig.Create("/data/tail.png");
+    int afterCreate = MetadataReads(rig, 8);
+    rig.Fake.Schedulers.MainThread.AdvanceBy(TimeSpan.FromSeconds(30).Ticks);
+    Assert.Null(row.Fits);
+    Assert.Equal(afterCreate, MetadataReads(rig, 8));
+    Assert.True(FitsImageService.HasFitsExtension("/x/a.FITS"));
+    Assert.True(FitsImageService.HasFitsExtension("b.fits.fz"));
+    Assert.True(FitsImageService.HasFitsExtension("c.fts"));
+    Assert.True(FitsImageService.HasFitsExtension("d.fit"));
+    Assert.False(FitsImageService.HasFitsExtension("e.png"));
+    Assert.False(FitsImageService.HasFitsExtension(null));
+  }
+
   // ── the row ──
 
   /// Only a FITS texture gets the FITS part; it summarises the facts, lists every card and, once,
@@ -264,6 +359,7 @@ public class FitsBillboardTests
     {
       ["FitsFact_DateMid"] = "Mid-exposure UTC", ["FitsFact_DateMidTdb"] = "Mid-exposure TDB", ["FitsFact_Scale"] = "Plate scale",
       ["FitsFact_Rotation"] = "Rotation", ["FitsFact_Mirrored"] = "Mirrored",
+      ["FitsFact_Image"] = "Image", ["FitsFact_DateSource"] = "Date source",
     }, ids);
 
     // the plate scale came from the header; the PNG has none
@@ -428,6 +524,138 @@ public class FitsBillboardTests
       fits.Facts.Single(x => x.Label == "Site").Value);
     fits.UseObservatorySiteCommand.Execute(null);
     Assert.Equal((28.7624, 17.8792, (double?)null), rig.Probe.Site);
+  }
+
+  // ── two-digit year ──
+
+  /// A four-digit year: no century selector. A dd/mm/yy card: the selector, 20xx by default, and
+  /// the facts say so.
+  [Fact]
+  public void TwoDigitYear_SelectorOnlyForATwoDigitCard_DefaultsToTwentyHundreds()
+  {
+    var four = new Rig().Create("/data/lt_67p.fits").Fits!;
+    Assert.False(four.HasTwoDigitYear);
+    Assert.Equal(FitsTwoDigitYearCentury.TwoThousands, four.TwoDigitYearCentury);
+    Assert.DoesNotContain("two-digit year", four.Facts.Single(x => x.Label == "Mid-exposure UTC").Value);
+
+    var rig = new Rig(fitsJson: TwoDigitYearJson);
+    var fits = rig.Create("/data/lt_67p.fits").Fits!;
+    Assert.True(fits.HasTwoDigitYear);
+    Assert.Equal(FitsTwoDigitYearCentury.TwoThousands, fits.TwoDigitYearCentury);
+    Assert.Equal(FitsTwoDigitYearCentury.TwoThousands, fits.TwoDigitYearCenturyOption!.Value);
+    Assert.Equal(new[] { "20xx (default)", "19xx (FITS standard)" }, fits.TwoDigitYearCenturyOptions.Select(o => o.ToString()).ToArray());
+    Assert.Equal("Two-digit year", fits.TwoDigitYearLabel);
+    Assert.Contains("19xx", fits.TwoDigitYearHelp);
+    Assert.StartsWith("2021-12-27T00:14:47.345Z", fits.Facts.Single(x => x.Label == "Mid-exposure UTC").Value);
+    Assert.EndsWith("two-digit year read as 20yy", fits.Facts.Single(x => x.Label == "Mid-exposure UTC").Value);
+    Assert.Equal("27/12/21", fits.Facts.Single(x => x.Label == "DATE-OBS").Value);
+    Assert.Equal(2021, fits.ObservationUtc!.Value.Year);
+    // the default reads the engine's epoch untouched
+    fits.SeekToObservationCommand.Execute(null);
+    Assert.Equal([((short)0, 693749756529000001UL)], rig.Seeks);
+  }
+
+  /// 19xx: the mid-exposure and start move back exactly 100 calendar years, the TDB epoch is
+  /// recomputed from the shifted UTC through the converter (not a constant), Seek and Model range
+  /// use it, the raw card stays as written, the billboard records the choice; 20xx restores the
+  /// engine's exact parts.
+  [Fact]
+  public void TwoDigitYear_NineteenHundreds_MovesTheDateBackACentury_Everywhere()
+  {
+    var converter = new FakeTimeScaleConverter();
+    var rig = new Rig(withModelRange: true, fitsJson: TwoDigitYearJson, timeScale: converter);
+    var row = rig.Create("/data/lt_67p.fits");
+    var fits = row.Fits!;
+    int before = converter.UtcToTdbCalls;
+
+    fits.TwoDigitYearCenturyOption = fits.TwoDigitYearCenturyOptions.Single(o => o.Value == FitsTwoDigitYearCentury.NineteenHundreds);
+    Assert.Equal(FitsTwoDigitYearCentury.NineteenHundreds, fits.TwoDigitYearCentury);
+    Assert.True(converter.UtcToTdbCalls > before, "the TDB epoch is recomputed through the converter");
+
+    var mid = new DateTimeOffset(1921, 12, 27, 0, 14, 47, 345, TimeSpan.Zero);
+    var start = new DateTimeOffset(1921, 12, 27, 0, 14, 37, 345, TimeSpan.Zero);
+    Assert.Equal(mid, fits.ObservationUtc);
+    Assert.Equal("1921-12-27T00:14:47.345Z", fits.FactsData.DateMidUtc);
+    Assert.Equal("1921-12-27T00:14:37.345Z", fits.FactsData.DateStartUtc);
+    var (c, ns) = FakeTimeScaleConverter.Parts(mid);
+    Assert.Equal((c, ns), (fits.FactsData.DateMidTdbCenturies!.Value, fits.FactsData.DateMidTdbNanoseconds!.Value));
+    var (sc, sns) = FakeTimeScaleConverter.Parts(start);
+    Assert.Equal(FitsDateCentury.Microseconds(sc, sns), fits.FactsData.DateStartTdbUs);
+    // the card itself is untouched; the facts rows follow
+    Assert.Equal("27/12/21", fits.FactsData.DateObs);
+    Assert.Equal("DATE-OBS= '27/12/21'", fits.DateCardText);
+    var facts = fits.Facts.ToDictionary(x => x.Label, x => x.Value);
+    Assert.StartsWith("1921-12-27T00:14:47.345Z", facts["Mid-exposure UTC"]);
+    Assert.EndsWith("two-digit year read as 19yy", facts["Mid-exposure UTC"]);
+    Assert.StartsWith("1921-12-27T00:15:56", facts["Mid-exposure TDB"]); // + 69.184 s
+    // Seek and Model range use the shifted epoch
+    fits.SeekToObservationCommand.Execute(null);
+    Assert.Equal([(c, ns)], rig.Seeks);
+    fits.RequestModelRangeCommand.Execute(null);
+    Assert.Equal([mid], rig.ModelRanges);
+    // the billboard records the choice
+    Assert.Equal(FitsTwoDigitYearCentury.NineteenHundreds, rig.Svc.Find(row.Id)!.FitsTwoDigitYearCentury);
+
+    // back to 20xx: the engine's exact parts again
+    fits.TwoDigitYearCentury = FitsTwoDigitYearCentury.TwoThousands;
+    Assert.Equal(2021, fits.ObservationUtc!.Value.Year);
+    fits.SeekToObservationCommand.Execute(null);
+    Assert.Equal((short)0, rig.Seeks[^1].C);
+    Assert.Equal(693749756529000001UL, rig.Seeks[^1].Ns);
+    Assert.Equal(FitsTwoDigitYearCentury.TwoThousands, rig.Svc.Find(row.Id)!.FitsTwoDigitYearCentury);
+  }
+
+  /// Without a converter (design time) the shift still happens; a four-digit header is never shifted.
+  [Fact]
+  public void FitsDateCentury_ShiftsOnlyATwoDigitHeader()
+  {
+    var two = FitsMetadata.Parse(TwoDigitYearJson)!.Facts;
+    var shifted = FitsDateCentury.Apply(two, FitsTwoDigitYearCentury.NineteenHundreds, null);
+    Assert.Equal("1921-12-27T00:14:47.345Z", shifted.DateMidUtc);
+    Assert.Equal(TimeUtils.ToTdbParts(new DateTimeOffset(1921, 12, 27, 0, 14, 47, 345, TimeSpan.Zero)),
+      (shifted.DateMidTdbCenturies!.Value, shifted.DateMidTdbNanoseconds!.Value));
+    Assert.Same(two, FitsDateCentury.Apply(two, FitsTwoDigitYearCentury.TwoThousands, null));
+    var four = FitsMetadata.Parse(LtJson)!.Facts;
+    Assert.Same(four, FitsDateCentury.Apply(four, FitsTwoDigitYearCentury.NineteenHundreds, null));
+    // the microsecond scale of the facts' start epoch: the LT frame's own start
+    Assert.Equal(693749746529000L, FitsDateCentury.Microseconds(0, 693749746529000000UL));
+  }
+
+  /// The choice is saved with the billboard (absent for the default), an old save without the
+  /// field reads 20xx, and a restored billboard's row shows the saved century with the shifted date.
+  [Fact]
+  public void TwoDigitYearCentury_RoundTripsThroughTheSaveIndex_AndOldSavesReadTwentyHundreds()
+  {
+    var b = new DesktopBillboard(Guid.NewGuid(), "/a.fits", 1, 2, 300, 300)
+    { FitsTwoDigitYearCentury = FitsTwoDigitYearCentury.NineteenHundreds };
+    var json = SaveIndexIo.ToJson(new SaveIndex { Billboards = [SaveIndexMapping.ToDto(b)] });
+    Assert.Contains("\"fits_two_digit_year_century\": \"nineteen_hundreds\"", json);
+    var back = System.Text.Json.JsonSerializer.Deserialize(json, SaveIndexJsonContext.Default.SaveIndex)!;
+    Assert.Equal(b, SaveIndexMapping.FromDto(back.Billboards[0]));
+
+    // the default is not written; an older save has no field
+    var plain = b with { FitsTwoDigitYearCentury = FitsTwoDigitYearCentury.TwoThousands };
+    Assert.Null(SaveIndexMapping.ToDto(plain).FitsTwoDigitYearCentury);
+    Assert.DoesNotContain("fits_two_digit_year_century", SaveIndexIo.ToJson(new SaveIndex { Billboards = [SaveIndexMapping.ToDto(plain)] }));
+    Assert.Equal(FitsTwoDigitYearCentury.TwoThousands,
+      SaveIndexMapping.FromDto(new BillboardDto { Id = b.Id, TextureKey = "/a.fits" }).FitsTwoDigitYearCentury);
+    Assert.Equal(FitsTwoDigitYearCentury.TwoThousands,
+      SaveIndexMapping.FromDto(new BillboardDto { Id = b.Id, TextureKey = "/a.fits", FitsTwoDigitYearCentury = "not_a_century" }).FitsTwoDigitYearCentury);
+
+    // a load: the row shows the saved century and the shifted date
+    var rig = new Rig(fitsJson: TwoDigitYearJson, timeScale: new FakeTimeScaleConverter());
+    var saved = new DesktopBillboard(Guid.NewGuid(), "/data/lt_67p.fits", 1, 2, 300, 300)
+    { FitsTwoDigitYearCentury = FitsTwoDigitYearCentury.NineteenHundreds };
+    rig.Svc.Restore([SaveIndexMapping.FromDto(SaveIndexMapping.ToDto(saved))]);
+    rig.Fake.Drain();
+    var fits = rig.Vm.Items.Single().Fits!;
+    Assert.Equal(FitsTwoDigitYearCentury.NineteenHundreds, fits.TwoDigitYearCentury);
+    Assert.Equal(1921, fits.ObservationUtc!.Value.Year);
+    // the service's state changing under the row: the selector follows without an echo
+    rig.Svc.Update(saved.Id, x => x with { FitsTwoDigitYearCentury = FitsTwoDigitYearCentury.TwoThousands });
+    rig.Fake.Drain();
+    Assert.Equal(FitsTwoDigitYearCentury.TwoThousands, fits.TwoDigitYearCentury);
+    Assert.Equal(2021, fits.ObservationUtc!.Value.Year);
   }
 
   /// Apply stretch: the FFI runs on the background scheduler with the mode / transfer codes, the

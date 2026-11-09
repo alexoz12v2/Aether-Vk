@@ -9,8 +9,10 @@ name = "aethervk_core_cdylib"
 crate-type = ["cdylib"]
 
 [features]
-default = []
+default = ["cfitsio"]
 std = []
+# FITS through CFITSIO (`--no-default-features`: the pure-Rust fallback parser)
+cfitsio = ["aethervk-core-rlib/cfitsio"]
 # Tracy instrumentation of the engine the .NET app loads (see docs/windows_debugging.md)
 profile-tracy = ["aethervk-core-rlib/profile-tracy", "aethervk-oshal-rlib/profile-tracy"]
 
@@ -63,5 +65,7 @@ panic = "abort"
 panic = "abort"
 
 [dev-dependencies]
+# resolves test_assets/ files, downloading the asset groups of test_assets/ASSETS.tsv on demand
+aethervk-test-assets = { path = "../../aethervk.test-assets" }
 ntest = "0.9.5"
 approx = "0.5"

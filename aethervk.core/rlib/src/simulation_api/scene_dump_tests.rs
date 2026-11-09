@@ -616,8 +616,7 @@ mod scene_dump_tests {
 
   /// The `states/<hash>/scene.bin` member of a committed `.avk` save (a zip): located through the
   /// central directory (sizes are always there), stored or deflated.
-  fn avk_scene_bin(avk: &str) -> std::vec::Vec<u8> {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(avk);
+  fn avk_scene_bin(path: &std::path::Path) -> std::vec::Vec<u8> {
     let zip = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let u16_at = |i: usize| u16::from_le_bytes([zip[i], zip[i + 1]]) as usize;
     let u32_at = |i: usize| u32::from_le_bytes([zip[i], zip[i + 1], zip[i + 2], zip[i + 3]]) as usize;
@@ -639,7 +638,7 @@ mod scene_dump_tests {
       }
       at += 46 + nlen + elen + clen;
     }
-    panic!("{avk}: no states/*/scene.bin");
+    panic!("{}: no states/*/scene.bin", path.display());
   }
 
   /// Saves of v1.0.1-15 (dump v9) restore in full: [`SceneDump::decode`] reads the committed v9
@@ -655,8 +654,8 @@ mod scene_dump_tests {
       scene_dump::jets_compatibility_json_for_version,
       structs::{SerializedComponent, legacy_v9},
     };
-    for avk in ["test_assets/saves/review_slow_rotator_2026-11.avk", "test_assets/saves/review_67p_2021-12.avk"] {
-      let bytes = avk_scene_bin(avk);
+    for avk in ["saves/review_slow_rotator_2026-11.avk", "saves/review_67p_2021-12.avk"] {
+      let bytes = avk_scene_bin(&aethervk_test_assets::test_asset!(avk));
       let (raw, read): (legacy_v9::SceneDump, usize) =
         bincode::serde::decode_from_slice(&bytes, bincode::config::standard()).expect(avk);
       assert_eq!(raw.version, 9, "{avk}");
@@ -701,7 +700,7 @@ mod scene_dump_tests {
       assert_eq!(jets_compatibility_json_for_version([jets[0]], 8), None);
     }
     // a version older than the oldest restorable one is refused with a message
-    let mut old = avk_scene_bin("test_assets/saves/review_slow_rotator_2026-11.avk");
+    let mut old = avk_scene_bin(&aethervk_test_assets::test_asset!("saves/review_slow_rotator_2026-11.avk"));
     old[0] = 8;
     assert!(SceneDump::decode(&old).unwrap_err().contains("not readable"));
   }

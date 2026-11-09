@@ -37,6 +37,9 @@ static HOST_CAPTURED: core::sync::atomic::AtomicBool = core::sync::atomic::Atomi
 /// `%LOCALAPPDATA%\Aether-Vk\logs\gpu_lost_<pid>.txt` with a minidump beside it, the TDR events
 /// and `nvidia-smi -q`.
 pub fn capture_host_diagnostics(origin: &str, engine_state: &str) {
+  // tests: name the thread and test, and freeze under AETHERVK_GPU_LOST_FREEZE=1 (test_gpu_watch)
+  #[cfg(test)]
+  crate::gpu_backends::vulkan::test_gpu_watch::on_device_lost(origin);
   #[cfg(target_os = "windows")]
   {
     use aethervk_oshal_rlib::os::debug::crash_dump::{

@@ -37,7 +37,7 @@ public sealed class BillboardMonitorTests(ITestOutputHelper output)
     if (Directory.Exists(artifacts))
       Directory.Delete(artifacts, recursive: true);
     var saveDir = Path.Combine(artifacts, "review_67p_2021-12");
-    ReviewerMailTests.CopyDir(Path.Combine(AppSession.RepoRoot(), "test_assets", "saves", "review_67p_2021-12"), saveDir);
+    ReviewerMailTests.CopyDir(ReviewSave.FixtureDir, saveDir);
     var avk = Path.Combine(artifacts, "review_67p_second_monitor.avk");
 
     using var s = AppSession.Launch(Path.Combine(artifacts, "app.log"), diagnosticPanels: false);
@@ -91,7 +91,7 @@ public sealed class BillboardMonitorTests(ITestOutputHelper output)
     if (Directory.Exists(artifacts))
       Directory.Delete(artifacts, recursive: true);
     var saveDir = Path.Combine(artifacts, "review_67p_2021-12");
-    ReviewerMailTests.CopyDir(Path.Combine(AppSession.RepoRoot(), "test_assets", "saves", "review_67p_2021-12"), saveDir);
+    ReviewerMailTests.CopyDir(ReviewSave.FixtureDir, saveDir);
     var png = Path.Combine(artifacts, "free_square.png");
     TestPng.Write(png);
     var avk = Path.Combine(artifacts, "review_67p_same_view.avk");
@@ -192,7 +192,7 @@ public sealed class BillboardMonitorTests(ITestOutputHelper output)
     if (Directory.Exists(artifacts))
       Directory.Delete(artifacts, recursive: true);
     var saveDir = Path.Combine(artifacts, "review_67p_2021-12");
-    ReviewerMailTests.CopyDir(Path.Combine(AppSession.RepoRoot(), "test_assets", "saves", "review_67p_2021-12"), saveDir);
+    ReviewerMailTests.CopyDir(ReviewSave.FixtureDir, saveDir);
     var png = Path.Combine(artifacts, "free_square.png");
     TestPng.Write(png);
 

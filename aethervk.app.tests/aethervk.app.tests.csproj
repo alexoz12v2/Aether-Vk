@@ -20,6 +20,7 @@
     <PackageReference Include="Moq" Version="4.20.72" />
     <PackageReference Include="xunit" Version="2.5.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
+    <PackageReference Include="Xunit.SkippableFact" Version="1.5.85" />
     <PackageReference Include="coverlet.collector" Version="6.0.0" />
   </ItemGroup>
 
@@ -30,5 +31,9 @@
     <Content Include="xunit.runner.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+  </ItemGroup>
+  <ItemGroup>
+    <!-- test_assets/ASSETS.tsv: assets fetched on demand -->
+    <Compile Include="..\tests-shared\TestAssets.cs" Link="TestAssets.cs" />
   </ItemGroup>
 </Project>

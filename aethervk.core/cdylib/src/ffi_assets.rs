@@ -626,12 +626,12 @@ pub unsafe extern "C" fn avkSimulationContext_getCometAppearance(
 /// Facts of a loaded sky image (`avkSimulationContext_loadSkyImage`). `flags` holds a bit per
 /// header fact (`aethervk_core_rlib::scene::sky_image::SKY_FLAG_*`): a field whose bit is clear is
 /// zero and must not be offered (DATE-OBS bit 0, EXPTIME 1, SITELAT 2, SITELONG 3, SITEELEV 4,
-/// SIP ignored 5, PNG / JPEG source 6, WCS from a sidecar 7, frame assumed ICRS 8, TIMESYS assumed
-/// UTC 9).
+/// distortion (SIP / TPV) applied 5 — formerly "SIP ignored", PNG / JPEG source 6, WCS from a
+/// sidecar 7, frame assumed ICRS 8, TIMESYS assumed UTC 9).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct CSkyImageInfo {
-  /// `1` = a TAN WCS was read: the image is registered and drawn
+  /// `1` = a celestial WCS was read (any projection / frame): the image is registered and drawn
   pub has_wcs: u32,
   pub nx: u32,
   pub ny: u32,
@@ -643,7 +643,7 @@ pub struct CSkyImageInfo {
   /// east positive
   pub site_lon_deg: f64,
   pub site_elev_m: f64,
-  /// `CRVAL1/2` (ICRS / FK5 J2000), the "lock to image" aim
+  /// the reference point `CRVAL` converted to ICRS, the "lock to image" aim
   pub crval_ra_deg: f64,
   pub crval_dec_deg: f64,
   pub flags: u32,

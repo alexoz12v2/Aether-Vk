@@ -282,6 +282,14 @@
    "label": "Flip longitude sign",
    "text": "Uses the opposite sign for the longitude of the observing site, for headers that give west as a positive value."
   },
+  "FitsTwoDigitYearCentury": {
+   "label": "Two-digit year",
+   "text": "Shown only when the header's date card writes its year with two digits (dd/mm/yy): the century the date is read in, 20xx by default or the FITS standard's 19xx, which moves the observation date back 100 years everywhere it is used. Saved with the billboard."
+  },
+  "FitsPlane": {
+   "label": "Plane",
+   "text": "Shown only for a FITS cube (more than one 2-D plane): the plane the billboard shows, 1 to N, with \"of N\" beside it and, for a cube with several extra axes, the index on each axis (NAXIS3, NAXIS4, ...). The stretch mode is kept and recomputed on the new plane. Saved with the billboard and re-applied when the save is opened."
+  },
   "BillboardFitsHeader": {
    "label": "Header",
    "text": "Table of the FITS header cards with their key, value and comment."

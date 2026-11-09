@@ -52,7 +52,7 @@ public sealed class FileMenuTests : IDisposable
   [Fact]
   public void FileMenu_HasTheEntries_AndShortcuts()
   {
-    Assert.Equal(["New", "Open...", "Open Recent", null, "Save", "Save As...", "Save As Folder..."], File.Items.Select(i => i.Header));
+    Assert.Equal(["New", "Open...", "Open Recent", null, "Save", "Save As...", "Save As Folder...", null, "Export image..."], File.Items.Select(i => i.Header));
     Assert.Equal("Ctrl+S", Item("Save").Gesture);
     Assert.Equal("Ctrl+Shift+S", Item("Save As...").Gesture);
     Assert.Equal("AetherVk — Untitled", _vm.WindowTitle);

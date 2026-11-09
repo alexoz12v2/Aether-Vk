@@ -21,6 +21,44 @@ public interface IObservationImage
 
   /// <summary>The last step's outcome.</summary>
   string StatusMessage { get; }
+
+  /// <summary>The header's date card as written (<c>DATE-OBS = '…'</c>), shown when
+  /// <see cref="ObservationUtc"/> is null so the user sees why; null when no date card was found.</summary>
+  string? DateCardText { get; }
+}
+
+/// <summary>The "no image" / "an image without a readable date" texts the observation chain shows.</summary>
+public static class ObservationImageText
+{
+  /// <summary>Resource key: no telescope image is loaded.</summary>
+  public const string NoImageKey = "Observation_NoImage";
+
+  /// <summary>Resource key: a FITS image is loaded but its date cannot be read (<c>{Date}</c>: <see cref="DateDetail"/>).</summary>
+  public const string FitsWithoutDateKey = "Observation_FitsWithoutDate";
+
+  /// <summary>Resource key: the date keywords tried, none found.</summary>
+  public const string DateKeywordsNotFoundKey = "Observation_DateKeywordsNotFound";
+
+  /// <summary>What the image's header says about its date: the raw card, else the keywords tried
+  /// (<paramref name="getString"/> resolves the resource keys).</summary>
+  public static string DateDetail(IObservationImage image, Func<string, string> getString) =>
+    image.DateCardText is { Length: > 0 } card ? card : getString(DateKeywordsNotFoundKey);
+
+  /// <summary>Fills <paramref name="template"/>'s <c>{Date}</c> with <see cref="DateDetail"/>.</summary>
+  public static string FormatWithoutDate(string template, IObservationImage image, Func<string, string> getString) =>
+    AetherVk.Logic.Utils.NamedFormatter.Format(template,
+      new System.Collections.Generic.Dictionary<string, string> { ["Date"] = DateDetail(image, getString) });
+
+  /// <summary>The date card from header facts: the engine's raw card when it reports one, else the
+  /// card the date came from with its value (a value the app could not parse), else null.</summary>
+  public static string? CardText(AetherVk.Logic.Models.FitsFacts facts)
+  {
+    if (facts.DateCardRaw is { Length: > 0 } raw)
+      return raw.IndexOf('=') >= 0 ? raw : string.Concat(facts.DateSource ?? "DATE-OBS", " = '", raw, "'");
+    if (facts.DateObs is { Length: > 0 } value)
+      return string.Concat(facts.DateSource ?? "DATE-OBS", " = '", value, "'");
+    return null;
+  }
 }
 
 /// <summary>

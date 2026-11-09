@@ -45,6 +45,11 @@
     </Content>
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- test_assets/ASSETS.tsv: assets fetched on demand -->
+    <Compile Include="..\tests-shared\TestAssets.cs" Link="TestAssets.cs" />
+  </ItemGroup>
+
   <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
   <!-- Without the flag Build / Test do nothing (imported last, so they replace the SDK targets) -->
   <Import Project="E2ESkip.targets" Condition="'$(BuildE2E)' != 'true'" />

@@ -88,4 +88,45 @@ public class AppStringsParityTests
     }
     Assert.True(bad.Count == 0, $"unresolved: {string.Join(", ", bad)}");
   }
+
+  /// <summary>The observation hints split "no FITS image" from "a FITS image without a readable
+  /// date"; both texts exist in English and Italian, the date ones with their {Date} slot.</summary>
+  [Theory]
+  [InlineData("ModeBar_FitsWithoutDateHint", true)]
+  [InlineData("Observation_NoImage", false)]
+  [InlineData("Observation_FitsWithoutDate", true)]
+  [InlineData("Observation_DateKeywordsNotFound", false)]
+  public void ObservationDateHints_ExistInEnglishAndItalian(string key, bool hasDateSlot)
+  {
+    var rm = new ResourceManager("AetherVk.Logic.Resources.AppStrings", typeof(ITranslationService).Assembly);
+    var en = rm.GetString(key, new CultureInfo("en"));
+    var it = rm.GetResourceSet(new CultureInfo("it"), createIfNotExists: true, tryParents: false)?.GetString(key);
+    Assert.False(string.IsNullOrWhiteSpace(en), $"{key} (en)");
+    Assert.False(string.IsNullOrWhiteSpace(it), $"{key} (it)");
+    Assert.NotEqual(en, it);
+    Assert.Equal(hasDateSlot, en!.Contains("{Date}"));
+    Assert.Equal(hasDateSlot, it!.Contains("{Date}"));
+  }
+
+  /// <summary>The two-digit-year century selector of the FITS billboard panel: its label, help and
+  /// both options exist in English and Italian (the texts translated, the century digits kept).</summary>
+  [Theory]
+  [InlineData("Billboard_FitsCentury_Label", null)]
+  [InlineData("Billboard_FitsCentury_Help", "19")]
+  [InlineData("Billboard_FitsCentury_TwoThousands", "20xx")]
+  [InlineData("Billboard_FitsCentury_NineteenHundreds", "19xx")]
+  public void FitsCenturyStrings_ExistInEnglishAndItalian(string key, string? digits)
+  {
+    var rm = new ResourceManager("AetherVk.Logic.Resources.AppStrings", typeof(ITranslationService).Assembly);
+    var en = rm.GetString(key, new CultureInfo("en"));
+    var it = rm.GetResourceSet(new CultureInfo("it"), createIfNotExists: true, tryParents: false)?.GetString(key);
+    Assert.False(string.IsNullOrWhiteSpace(en), $"{key} (en)");
+    Assert.False(string.IsNullOrWhiteSpace(it), $"{key} (it)");
+    Assert.NotEqual(en, it);
+    if (digits is not null)
+    {
+      Assert.Contains(digits, en);
+      Assert.Contains(digits, it);
+    }
+  }
 }

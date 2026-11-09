@@ -44,7 +44,8 @@ public static partial class ReviewSave
   /// </summary>
   public static readonly TimeSpan EpochTolerance = TimeSpan.FromSeconds(70);
 
-  public static string FixtureDir => Path.Combine(AppSession.RepoRoot(), "test_assets", "saves", FixtureName);
+  /// <summary>The save folder (test_assets/ASSETS.tsv, a shared cache: tests open a copy).</summary>
+  public static string FixtureDir => AetherVk.TestAssets.TestAssets.Require("saves/" + FixtureName);
 
   /// <summary>A fresh <c>TestResults/e2e/&lt;name&gt;</c> holding a copy of the save.</summary>
   public static (string Artifacts, string SaveDir) Prepare(string artifactsName)

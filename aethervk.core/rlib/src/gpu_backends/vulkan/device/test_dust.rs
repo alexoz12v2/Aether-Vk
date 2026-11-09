@@ -1626,7 +1626,7 @@ fn splat_parity_in(
       render: 0,
       pyramid: 0,
       live_count: batch.count,
-      flags: dust::DUST_VIEW_FLOW | PARITY_EXTRA_FLAGS.load(core::sync::atomic::Ordering::SeqCst),
+      flags: dust::DUST_VIEW_FLOW | PARITY_EXTRA_FLAGS.with(|v| v.load(core::sync::atomic::Ordering::SeqCst)),
       exposure,
       inv_unit: 0.0,
       color: dust::pack_color([1.0, 0.6, 0.2, 1.0]),
@@ -1873,8 +1873,8 @@ fn splat_parity_in(
           small_paths[0],
           small_paths[1]
         );
-        PARITY_SMALL_PATHS_COMPARED.store(true, core::sync::atomic::Ordering::SeqCst);
-        PARITY_SMALL_DEMOTED.fetch_add(small_margins[0], core::sync::atomic::Ordering::SeqCst);
+        PARITY_SMALL_PATHS_COMPARED.with(|v| v.store(true, core::sync::atomic::Ordering::SeqCst));
+        PARITY_SMALL_DEMOTED.with(|v| v.fetch_add(small_margins[0], core::sync::atomic::Ordering::SeqCst));
       }
     }
     let gpu_split_adds = device.dust_volume_split_adds(pe).unwrap_or(u32::MAX);
@@ -1895,9 +1895,9 @@ fn splat_parity_in(
         "case {id}: demoted gpu {edge_demoted} cpu {}, margin {margin}",
         small_margins[0]
       );
-      PARITY_SMALL_DEMOTED_GPU.fetch_add(edge_demoted as u64, core::sync::atomic::Ordering::SeqCst);
+      PARITY_SMALL_DEMOTED_GPU.with(|v| v.fetch_add(edge_demoted as u64, core::sync::atomic::Ordering::SeqCst));
     }
-    PARITY_VOLUME_CLASSES.lock().unwrap_or_else(|e| e.into_inner()).push((id, classes));
+    PARITY_VOLUME_CLASSES.with(|v| v.borrow_mut().push((id, classes)));
     std::println!(
       "[dust gpu] splat parity: volumetric pieces drawn (centre, small, sub-rays, lines) {classes:?}; small by one projection a slice {}, by 4 sigma points {}; volume deposits split above the per-add cap: cpu {split_adds}, gpu {gpu_split_adds}",
       small_paths[0],
@@ -2068,7 +2068,7 @@ fn splat_parity_in(
       "3×3 τ sums differ by more than 5 % + 6 on {box_violations} of {box_compared} neighbourhoods"
     );
 
-    let min_nonzero = PARITY_MIN_NONZERO.load(core::sync::atomic::Ordering::SeqCst);
+    let min_nonzero = PARITY_MIN_NONZERO.with(|v| v.load(core::sync::atomic::Ordering::SeqCst));
     assert!(nonzero > min_nonzero, "{nonzero} texels (want > {min_nonzero})");
     assert!(
       (sg as f64 / sc as f64 - 1.0).abs() < 1e-3,
@@ -2370,22 +2370,30 @@ std::thread_local! {
   /// the deep-chord bit [`splat_parity`] sets on its view (`Device::dust_set_deep_chord`)
   static PARITY_DEEP_CHORD: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
 }
-/// a fixed volumetric level bias [`splat_parity`] sets on its view (`Device::dust_set_volume_bias`;
-/// `u32::MAX`: none). Process-wide, not thread-local: the device closure of `with_dust_device`
-/// may run on the render frontend's thread
-static PARITY_VOLUME_BIAS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(u32::MAX);
-/// extra flag bits of the next [`splat_parity`]'s push constants (the haze detail's)
-static PARITY_EXTRA_FLAGS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
-/// the volumetric pieces the reference drew per class in the last [`splat_parity`] of a case id
-/// (centre, small, sub-rays, lines: `dust::take_volume_class_counts`, counted on the closure's thread)
-static PARITY_VOLUME_CLASSES: std::sync::Mutex<alloc::vec::Vec<(u64, [u64; 4])>> = std::sync::Mutex::new(alloc::vec::Vec::new());
+std::thread_local! {
+  /// a fixed volumetric level bias [`splat_parity`] sets on its view (`Device::dust_set_volume_bias`;
+  /// `u32::MAX`: none). Thread-local, like every parity setting here: `RenderFrontend::with_device`
+  /// runs the device closure synchronously on the calling (test) thread, and process-wide values
+  /// leaked between parity tests running in parallel (a case saw another test's bias)
+  static PARITY_VOLUME_BIAS: core::sync::atomic::AtomicU32 = const { core::sync::atomic::AtomicU32::new(u32::MAX) };
+}
+std::thread_local! {
+  /// extra flag bits of the next [`splat_parity`]'s push constants (the haze detail's)
+  static PARITY_EXTRA_FLAGS: core::sync::atomic::AtomicU32 = const { core::sync::atomic::AtomicU32::new(0) };
+}
+std::thread_local! {
+  /// the volumetric pieces the reference drew per class in the last [`splat_parity`] of a case id
+  /// (centre, small, sub-rays, lines: `dust::take_volume_class_counts`, counted on the closure's thread;
+  /// per test thread: parallel tests may share a case id)
+  static PARITY_VOLUME_CLASSES: core::cell::RefCell<alloc::vec::Vec<(u64, [u64; 4])>> = const { core::cell::RefCell::new(alloc::vec::Vec::new()) };
+}
 /// the latest [`splat_parity`] references: their input bytes (header, push constants, moments, render
 /// records), the splatted pyramid and the reference's counters (classes, small paths, small
 /// margins, split adds)
 type ParityReference = (alloc::vec::Vec<u8>, alloc::vec::Vec<u32>, ([u64; 4], [u64; 2], [u64; 3], u64));
 static PARITY_REFERENCE: std::sync::Mutex<alloc::vec::Vec<ParityReference>> = std::sync::Mutex::new(alloc::vec::Vec::new());
 fn parity_volume_bias() -> Option<u32> {
-  let b = PARITY_VOLUME_BIAS.load(core::sync::atomic::Ordering::SeqCst);
+  let b = PARITY_VOLUME_BIAS.with(|v| v.load(core::sync::atomic::Ordering::SeqCst));
   (b != u32::MAX).then_some(b)
 }
 
@@ -2546,23 +2554,18 @@ fn volume_parity_at(
   mvp: [f32; 16],
   eye: [f32; 3],
 ) -> [u64; 4] {
-  PARITY_VOLUME_BIAS.store(bias, core::sync::atomic::Ordering::SeqCst);
+  PARITY_VOLUME_BIAS.with(|v| v.store(bias, core::sync::atomic::Ordering::SeqCst));
   // (reset even when the parity panics: the next case must not inherit the bias)
   struct Reset;
   impl Drop for Reset {
     fn drop(&mut self) {
-      PARITY_VOLUME_BIAS.store(u32::MAX, core::sync::atomic::Ordering::SeqCst);
+      PARITY_VOLUME_BIAS.with(|v| v.store(u32::MAX, core::sync::atomic::Ordering::SeqCst));
     }
   }
   let _reset = Reset;
   splat_parity(id, batch_of, frame, 2.0e7, 1.0, false, 0.04, Some((mvp, eye)), None, false, None);
   PARITY_VOLUME_CLASSES
-    .lock()
-    .unwrap_or_else(|e| e.into_inner())
-    .iter()
-    .rev()
-    .find(|(i, _)| *i == id)
-    .map(|(_, c)| *c)
+    .with(|v| v.borrow().iter().rev().find(|(i, _)| *i == id).map(|(_, c)| *c))
     .expect("the parity recorded its class counts")
 }
 
@@ -2598,15 +2601,15 @@ fn gpu_dust_splat_matches_reference_haze() {
   struct Reset;
   impl Drop for Reset {
     fn drop(&mut self) {
-      PARITY_EXTRA_FLAGS.store(0, SeqCst);
-      PARITY_MIN_NONZERO.store(300, SeqCst);
+      PARITY_EXTRA_FLAGS.with(|v| v.store(0, SeqCst));
+      PARITY_MIN_NONZERO.with(|v| v.store(300, SeqCst));
     }
   }
   let _reset = Reset;
   // (at the top bias the pyramid is its 1 × 1 last level: one texel, the Σ-count compare)
-  PARITY_MIN_NONZERO.store(0, SeqCst);
+  PARITY_MIN_NONZERO.with(|v| v.store(0, SeqCst));
   for (id, detail) in [(9061u64, 1u32), (9062, 4)] {
-    PARITY_EXTRA_FLAGS.store(dust::haze_detail_flag_bits(detail), SeqCst);
+    PARITY_EXTRA_FLAGS.with(|v| v.store(dust::haze_detail_flag_bits(detail), SeqCst));
     let classes = volume_texel_integral_parity(id, 15, 200.0);
     std::println!("[dust gpu] haze detail {detail} at the top bias: classes (centre, small, sub-rays, lines) {classes:?}");
   }
@@ -2861,18 +2864,26 @@ fn gpu_dust_haze_feedback_settles_on_the_top_level() {
   });
 }
 
-/// whether a [`splat_parity`] compared the small pieces' path counts (the profiler's words)
-static PARITY_SMALL_PATHS_COMPARED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
-/// the pieces the reference demoted in the [`splat_parity`] frames whose path counts were compared
-static PARITY_SMALL_DEMOTED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-/// the pieces the GPU's edge pass demoted in the [`splat_parity`] frames (its
-/// `DUST_VEDGE_DEMOTED` words, compared with the reference's count in each frame)
-static PARITY_SMALL_DEMOTED_GPU: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-/// the fewest non-zero texels a [`splat_parity`] frame must draw (against a vacuous comparison):
-/// 300; the tail poses of [`gpu_dust_small_demotion_matches_reference`] lower it to 100 for their
-/// frames (737 small pieces on 102 texels at 200 d / 3°), whose comparison is kept from being
-/// vacuous by the demoted count instead (≥ 200 pieces, GPU = CPU)
-static PARITY_MIN_NONZERO: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(300);
+std::thread_local! {
+  /// whether a [`splat_parity`] compared the small pieces' path counts (the profiler's words)
+  static PARITY_SMALL_PATHS_COMPARED: core::sync::atomic::AtomicBool = const { core::sync::atomic::AtomicBool::new(false) };
+}
+std::thread_local! {
+  /// the pieces the reference demoted in the [`splat_parity`] frames whose path counts were compared
+  static PARITY_SMALL_DEMOTED: core::sync::atomic::AtomicU64 = const { core::sync::atomic::AtomicU64::new(0) };
+}
+std::thread_local! {
+  /// the pieces the GPU's edge pass demoted in the [`splat_parity`] frames (its
+  /// `DUST_VEDGE_DEMOTED` words, compared with the reference's count in each frame)
+  static PARITY_SMALL_DEMOTED_GPU: core::sync::atomic::AtomicU64 = const { core::sync::atomic::AtomicU64::new(0) };
+}
+std::thread_local! {
+  /// the fewest non-zero texels a [`splat_parity`] frame must draw (against a vacuous comparison):
+  /// 300; the tail poses of [`gpu_dust_small_demotion_matches_reference`] lower it to 100 for their
+  /// frames (737 small pieces on 102 texels at 200 d / 3°), whose comparison is kept from being
+  /// vacuous by the demoted count instead (≥ 200 pieces, GPU = CPU)
+  static PARITY_MIN_NONZERO: core::sync::atomic::AtomicUsize = const { core::sync::atomic::AtomicUsize::new(300) };
+}
 
 /// The small pieces' paths (one projection a slice — interior and demoted edge pieces —
 /// and 4 sigma points a slice) on both mirrors at the count level, in the 2 000 km bias-6 scene of
@@ -2882,20 +2893,13 @@ static PARITY_MIN_NONZERO: core::sync::atomic::AtomicUsize = core::sync::atomic:
 /// the reference's within the pieces at a decision's margin. Needs `VK_KHR_shader_clock`.
 #[test]
 fn gpu_dust_small_paths_match_reference() {
-  use crate::gpu_backends::vulkan::physics::DUST_PROFILE_OVERRIDE;
-  struct Reset;
-  impl Drop for Reset {
-    fn drop(&mut self) {
-      DUST_PROFILE_OVERRIDE.store(false, core::sync::atomic::Ordering::Relaxed);
-    }
-  }
-  DUST_PROFILE_OVERRIDE.store(true, core::sync::atomic::Ordering::Relaxed);
-  let _reset = Reset;
-  PARITY_SMALL_PATHS_COMPARED.store(false, core::sync::atomic::Ordering::SeqCst);
+  // the profiler request, exclusive against every other test's device creation
+  let _session = crate::gpu_backends::vulkan::test_profile_gate::DustProfileSession::begin();
+  PARITY_SMALL_PATHS_COMPARED.with(|v| v.store(false, core::sync::atomic::Ordering::SeqCst));
   let classes = volume_texel_integral_parity(9053, 6, 2.0e6);
   assert!(classes[1] > 0, "no small piece drawn: {classes:?}");
   assert!(
-    PARITY_SMALL_PATHS_COMPARED.load(core::sync::atomic::Ordering::SeqCst),
+    PARITY_SMALL_PATHS_COMPARED.with(|v| v.load(core::sync::atomic::Ordering::SeqCst)),
     "the profiler's words were empty (no VK_KHR_shader_clock, or the .prof shaders did not draw): the small paths were not compared"
   );
 }
@@ -3049,34 +3053,33 @@ fn small_demotion_tail_survey() {
 /// and, at ε > 0, that both mirrors demoted ≥ 200 in those frames. Needs `VK_KHR_shader_clock`.
 #[test]
 fn gpu_dust_small_demotion_matches_reference() {
-  use crate::gpu_backends::vulkan::physics::DUST_PROFILE_OVERRIDE;
   use core::sync::atomic::Ordering::SeqCst;
   struct Reset;
   impl Drop for Reset {
     fn drop(&mut self) {
-      DUST_PROFILE_OVERRIDE.store(false, core::sync::atomic::Ordering::Relaxed);
-      PARITY_MIN_NONZERO.store(300, core::sync::atomic::Ordering::SeqCst);
+      PARITY_MIN_NONZERO.with(|v| v.store(300, core::sync::atomic::Ordering::SeqCst));
     }
   }
-  DUST_PROFILE_OVERRIDE.store(true, core::sync::atomic::Ordering::Relaxed);
+  // the profiler request, exclusive against every other test's device creation
+  let _session = crate::gpu_backends::vulkan::test_profile_gate::DustProfileSession::begin();
   let _reset = Reset;
   let tan30 = (30.0f32).to_radians().tan();
   let (mut small, mut demoted, mut demoted_gpu) = (0u64, 0u64, 0u64);
   for (id, half) in [(9054u64, 10.0f32), (9055, 3.0)] {
-    PARITY_SMALL_PATHS_COMPARED.store(false, SeqCst);
-    PARITY_SMALL_DEMOTED.store(0, SeqCst);
-    PARITY_SMALL_DEMOTED_GPU.store(0, SeqCst);
+    PARITY_SMALL_PATHS_COMPARED.with(|v| v.store(false, SeqCst));
+    PARITY_SMALL_DEMOTED.with(|v| v.store(0, SeqCst));
+    PARITY_SMALL_DEMOTED_GPU.with(|v| v.store(0, SeqCst));
     let d = 2.0e6 * tan30 / half.to_radians().tan();
     let classes = volume_texel_integral_parity_fov(id, 6, d, half);
     assert!(
-      PARITY_SMALL_PATHS_COMPARED.load(SeqCst),
+      PARITY_SMALL_PATHS_COMPARED.with(|v| v.load(SeqCst)),
       "case {id}: the profiler's words were empty (no VK_KHR_shader_clock, or the .prof shaders did not draw): the small paths were not compared"
     );
     std::println!(
       "[dust gpu] small demotion parity case {id}: half-angle {half}°, eye at {d:.0} m: small pieces {}, demoted cpu {} gpu {} (ε {:.0e})",
       classes[1],
-      PARITY_SMALL_DEMOTED.load(SeqCst),
-      PARITY_SMALL_DEMOTED_GPU.load(SeqCst),
+      PARITY_SMALL_DEMOTED.with(|v| v.load(SeqCst)),
+      PARITY_SMALL_DEMOTED_GPU.with(|v| v.load(SeqCst)),
       dust::DUST_SMALL_DEMOTE_EPS
     );
     small += classes[1];
@@ -3089,18 +3092,18 @@ fn gpu_dust_small_demotion_matches_reference() {
   for (n, &k) in order.iter().take(2).enumerate() {
     let (days, half, _) = survey[k];
     let id = 9056 + n as u64;
-    PARITY_SMALL_PATHS_COMPARED.store(false, SeqCst);
-    PARITY_SMALL_DEMOTED.store(0, SeqCst);
-    PARITY_SMALL_DEMOTED_GPU.store(0, SeqCst);
+    PARITY_SMALL_PATHS_COMPARED.with(|v| v.store(false, SeqCst));
+    PARITY_SMALL_DEMOTED.with(|v| v.store(0, SeqCst));
+    PARITY_SMALL_DEMOTED_GPU.with(|v| v.store(0, SeqCst));
     let (batch_of, frame, a) = tail_demotion_scene(days);
-    PARITY_MIN_NONZERO.store(100, SeqCst);
+    PARITY_MIN_NONZERO.with(|v| v.store(100, SeqCst));
     let classes = volume_parity_at(id, 6, &batch_of, frame, look_from_origin(a, half, 640.0, 400.0), [0.0; 3]);
-    PARITY_MIN_NONZERO.store(300, SeqCst);
+    PARITY_MIN_NONZERO.with(|v| v.store(300, SeqCst));
     assert!(
-      PARITY_SMALL_PATHS_COMPARED.load(SeqCst),
+      PARITY_SMALL_PATHS_COMPARED.with(|v| v.load(SeqCst)),
       "case {id}: the profiler's words were empty (no VK_KHR_shader_clock, or the .prof shaders did not draw): the small paths were not compared"
     );
-    let (dc, dg) = (PARITY_SMALL_DEMOTED.load(SeqCst), PARITY_SMALL_DEMOTED_GPU.load(SeqCst));
+    let (dc, dg) = (PARITY_SMALL_DEMOTED.with(|v| v.load(SeqCst)), PARITY_SMALL_DEMOTED_GPU.with(|v| v.load(SeqCst)));
     std::println!(
       "[dust gpu] small demotion parity case {id}: the tail {days:.0} d from the nucleus, half-angle {half}°: small pieces {}, demoted cpu {dc} gpu {dg} (ε {:.0e})",
       classes[1],
@@ -4063,11 +4066,12 @@ fn gpu_dust_forced_bias_lod_repro() {
 fn gpu_dust_profile_counters_are_consistent() {
   use crate::gpu_backends::vulkan::physics::DUST_PROFILE_OVERRIDE;
   let id = 9036;
-  DUST_PROFILE_OVERRIDE.store(true, core::sync::atomic::Ordering::Relaxed);
+  // the profiler request, exclusive against every other test's device creation; dropping it
+  // clears the request on every exit (the toggles below only switch this device's dispatches)
+  let _session = crate::gpu_backends::vulkan::test_profile_gate::DustProfileSession::begin();
   with_dust_device(id, |device, capacity, _, _| {
     if device.kernels.pipelines.dust_splat_prof.is_none() {
       std::println!("[dust profile] no VK_KHR_shader_clock on this device: the profiler test is skipped");
-      DUST_PROFILE_OVERRIDE.store(false, core::sync::atomic::Ordering::Relaxed);
       return;
     }
     let batch = test_batch(1024, 3600.0, 3, capacity);
@@ -4214,7 +4218,6 @@ fn gpu_dust_profile_counters_are_consistent() {
       assert_eq!(diff, 0, "{name}: the profiled frame drew another pyramid than the production shaders");
     }
   });
-  DUST_PROFILE_OVERRIDE.store(false, core::sync::atomic::Ordering::Relaxed);
 }
 
 /// Image reuse ([`Device::cmd_dust_frame_begin_reusable`], 8 ms plan Step 2): frames with the

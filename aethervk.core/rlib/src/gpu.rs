@@ -1136,6 +1136,38 @@ pub trait RenderDevice: Send + Sync + core::any::Any {
   /// It completes the CPU memory copy instantly without touching any Vulkan Queues.
   fn read_windowless_download(&self, task_id: u64, buffer: &mut [u8]) -> GpuResult<()>;
 
+  /// Asks for the next presented frame of the windowed presentation engine `handle` to be copied
+  /// to a host-visible buffer (image export). The render thread takes the request with
+  /// [`Self::take_viewport_capture`] when it records the frame, copies the swapchain image after
+  /// the render pass with [`Self::record_viewport_capture`] and fills the request once the frame is
+  /// submitted; the bytes are then read with [`Self::read_windowless_download`] under the request's
+  /// task id. Fails for a windowless engine and for a zero-size viewport. A second request on the
+  /// same engine before the first frame replaces the first (which is failed).
+  fn request_viewport_capture(
+    &self,
+    handle: PresentationEngineHandle,
+    hide_labels: bool,
+  ) -> GpuResult<Arc<ViewportCaptureRequest>>;
+
+  /// Removes a pending request of `handle` (a caller that gave up waiting), failing it.
+  fn cancel_viewport_capture(&self, handle: PresentationEngineHandle);
+
+  /// The pending capture request of `handle`, removed (render thread, once per frame).
+  fn take_viewport_capture(
+    &self,
+    handle: PresentationEngineHandle,
+  ) -> Option<Arc<ViewportCaptureRequest>>;
+
+  /// Call this right after `end_render_pass` on a windowed engine's frame: records the copy of the
+  /// acquired swapchain image into a fresh host-visible buffer registered under `task_id` (read
+  /// back with [`Self::read_windowless_download`] once `is_task_completed(task_id)`). Returns the
+  /// image's `(width, height, format)` with `format` one of the `CAPTURE_FORMAT_*` codes.
+  fn record_viewport_capture(
+    &self,
+    cmd_buffer: CommandBufferHandle,
+    task_id: u64,
+  ) -> GpuResult<(u32, u32, u32)>;
+
   fn submit_command_buffer(
     &self,
     cmd_buffer: CommandBufferHandle,
@@ -1553,6 +1585,59 @@ where
     RenderFrontend {
       backend: Arc::new(parking_lot::RwLock::new(value)),
     }
+  }
+}
+
+/// `ViewportCaptureRequest::format`: byte order of the captured pixels, with
+/// [`CAPTURE_FORMAT_SRGB_BIT`] set when the swapchain is an sRGB format (the bytes are the
+/// display-encoded values either way: a PNG takes them as they are).
+pub const CAPTURE_FORMAT_BGRA8: u32 = 0;
+pub const CAPTURE_FORMAT_RGBA8: u32 = 1;
+pub const CAPTURE_FORMAT_SRGB_BIT: u32 = 0x100;
+
+/// One "copy the next presented frame" request of a windowed presentation engine
+/// (`RenderDevice::request_viewport_capture`). The render thread fills it once the frame holding
+/// the copy is submitted; the caller polls `task_id`.
+#[derive(Debug)]
+pub struct ViewportCaptureRequest {
+  /// Draw the frame without the engine's UI and text batches (labels, leader lines).
+  pub hide_labels: bool,
+  /// 0 while pending, `u64::MAX` when the capture failed, else the task id of the frame that
+  /// holds the copy (`RenderDevice::read_windowless_download`).
+  pub task_id: core::sync::atomic::AtomicU64,
+  pub width: core::sync::atomic::AtomicU32,
+  pub height: core::sync::atomic::AtomicU32,
+  /// `CAPTURE_FORMAT_*`
+  pub format: core::sync::atomic::AtomicU32,
+}
+
+impl ViewportCaptureRequest {
+  pub fn new(hide_labels: bool) -> Self {
+    Self {
+      hide_labels,
+      task_id: core::sync::atomic::AtomicU64::new(0),
+      width: core::sync::atomic::AtomicU32::new(0),
+      height: core::sync::atomic::AtomicU32::new(0),
+      format: core::sync::atomic::AtomicU32::new(0),
+    }
+  }
+
+  /// Marks the request failed unless a frame already completed it.
+  pub fn fail(&self) {
+    let _ = self.task_id.compare_exchange(
+      0,
+      u64::MAX,
+      core::sync::atomic::Ordering::AcqRel,
+      core::sync::atomic::Ordering::Acquire,
+    );
+  }
+
+  /// The frame `task_id` of `width` × `height` pixels in `format` holds the copy.
+  pub fn complete(&self, task_id: u64, width: u32, height: u32, format: u32) {
+    self.width.store(width, core::sync::atomic::Ordering::Release);
+    self.height.store(height, core::sync::atomic::Ordering::Release);
+    self.format.store(format, core::sync::atomic::Ordering::Release);
+    self.task_id.store(task_id, core::sync::atomic::Ordering::Release);
   }
 }
 

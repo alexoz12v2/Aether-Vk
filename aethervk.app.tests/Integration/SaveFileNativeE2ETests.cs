@@ -14,10 +14,11 @@ namespace AetherVk.AppTests.Integration;
 
 /// <summary>
 /// The savefile end to end on the real engine (docs/savefile.md, "Verification"): the 67P SPK
-/// fixture in <c>test_assets/spk/</c> (no network) is committed with a jet, the clock moved, the
-/// session saved; File › New; the save reopened restores the cached scene (same compatibility
-/// JSON, same epoch, the jet with its seed); a radius change saves a second state; 11 h later the
-/// stale one expires. Returns early (with a note) when the native runtime is mocked.
+/// fixture (<c>spk/</c> in test_assets/ASSETS.tsv; no Horizons query) is committed with a jet, the
+/// clock moved, the session saved; File › New; the save reopened restores the cached scene (same
+/// compatibility JSON, same epoch, the jet with its seed); a radius change saves a second state;
+/// 11 h later the stale one expires. Returns early (with a note) when the native runtime is mocked
+/// or the fixture cannot be had.
 /// </summary>
 public sealed class SaveFileNativeE2ETests(ITestOutputHelper output)
 {
@@ -26,15 +27,6 @@ public sealed class SaveFileNativeE2ETests(ITestOutputHelper output)
     public DateTimeOffset UtcNow { get; } = now;
   }
 
-  private static string? Fixture()
-  {
-    for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
-    {
-      var f = Path.Combine(dir.FullName, "test_assets", "spk", "spk_67P_90000703.bsp");
-      if (File.Exists(f)) return f;
-    }
-    return null;
-  }
 
   private static EpochParts Parts(string iso)
   {
@@ -56,7 +48,14 @@ public sealed class SaveFileNativeE2ETests(ITestOutputHelper output)
       output.WriteLine("Skipped: the native runtime is mocked");
       return;
     }
-    var fixture = Fixture() ?? throw new FileNotFoundException("test_assets/spk/spk_67P_90000703.bsp");
+    // test_assets/ASSETS.tsv; an Avalonia fact cannot be skipped, so a missing asset returns with a note
+    if (AetherVk.TestAssets.TestAssets.TryPath("spk/spk_67P_90000703.bsp", out var unavailable) is not { } fixture)
+    {
+      if (AetherVk.TestAssets.TestAssets.Required)
+        throw new FileNotFoundException($"spk/spk_67P_90000703.bsp: {unavailable} (AETHERVK_TEST_ASSETS_REQUIRED=1)");
+      output.WriteLine($"Skipped: test asset spk/spk_67P_90000703.bsp unavailable: {unavailable}");
+      return;
+    }
     var host = services.GetRequiredService<ISaveFileHost>();
     var cometConfig = services.GetRequiredService<CometConfigService>();
     var model = services.GetRequiredService<ITabStateService<ModelSession>>();

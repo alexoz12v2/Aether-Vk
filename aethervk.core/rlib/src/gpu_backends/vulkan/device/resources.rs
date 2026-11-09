@@ -103,6 +103,11 @@ impl<T> TimelineQueue<T> {
     self.items.insert(i, (timeline, item));
   }
 
+  #[cfg(test)]
+  pub fn iter(&self) -> impl Iterator<Item = &(u64, T)> {
+    self.items.iter()
+  }
+
   pub fn drain_ready<F>(&mut self, current: u64, mut f: F)
   where
     F: FnMut(T),
@@ -134,6 +139,17 @@ pub(crate) enum DiscardItem {
   GenericHandle(Box<dyn DeviceResource + Send + Sync + 'static>),
 }
 
+#[cfg(test)]
+impl DiscardItem {
+  /// The `vk::Buffer` a `Buffer` item destroys (tests match queued items by handle).
+  pub(crate) fn buffer_handle(&self) -> Option<vk::Buffer> {
+    match self {
+      Self::Buffer(b) => Some(b.buffer),
+      _ => None,
+    }
+  }
+}
+
 #[cfg(debug_assertions)]
 impl DiscardItem {
   fn unique_id(&self) -> (u8, u64) {
@@ -163,6 +179,16 @@ pub(crate) struct BufferDiscard {
   buffer: vk::Buffer,
   alloc: vk_mem::Allocation,
   allocator: vk_mem::AllocatorView,
+}
+
+impl BufferDiscard {
+  pub fn new(allocator: vk_mem::AllocatorView, buffer: Buffer) -> Self {
+    Self {
+      buffer: buffer.buffer.get(),
+      alloc: buffer.allocation,
+      allocator,
+    }
+  }
 }
 pub(crate) struct ImageDiscard {
   image: vk::Image,
@@ -394,6 +420,27 @@ impl DiscardPool {
       ready.push(item);
     });
     ready
+  }
+
+  /// Queues an item built elsewhere (see [`Self::collect`]) at `timeline`.
+  pub fn discard_item(&self, timeline: u64, item: DiscardItem) {
+    self.push_item(timeline, item);
+  }
+
+  /// Runs `f` against a temporary pool and returns what it queued, so a resource's own
+  /// `discard` can feed a retire path whose timeline value is not known yet
+  /// (`Device::retire_items`).
+  pub fn collect(f: impl FnOnce(&DiscardPool)) -> Vec<DiscardItem> {
+    let tmp = unsafe { DiscardPool::new(16) };
+    f(&tmp);
+    tmp.pop_ready_items(u64::MAX)
+  }
+
+  /// The timeline value a queued `Buffer` item destroys `buffer` at, if it is queued.
+  #[cfg(test)]
+  pub fn queued_timeline_of_buffer(&self, buffer: vk::Buffer) -> Option<u64> {
+    let items = crate::gpu_backends::vulkan::device::locks::DebugTrackedMutex::lock(&self.items);
+    items.iter().find(|(_, item)| item.buffer_handle() == Some(buffer)).map(|(t, _)| *t)
   }
 
   /// Executes Vulkan API destruction completely lock-free
@@ -1239,19 +1286,19 @@ impl ForwardMesh2RenderResource {
   /// via the `DiscardPool`, matching the convention used by transient staging resources
   /// (see `device.rs:4467`). This gives both in-flight frames time to finish before
   /// the allocation is freed — no polling required.
-  pub fn swap_position_buffer(
-    &mut self,
-    new_buf: Buffer,
-    discard_pool: &DiscardPool,
-    next_submit_timeline: u64,
-  ) {
-    let old = core::mem::replace(&mut self.position_vertex_buffer, new_buf);
-    discard_pool.discard_buffer(
-      self.allocator,
-      old.buffer.get(),
-      old.allocation,
-      next_submit_timeline + 2,
-    );
+  /// Installs `new_buf` as the position buffer and returns the old one; the caller retires it
+  /// once every submission that reads it has completed (`Device::retire_items`).
+  pub fn replace_position_buffer(&mut self, new_buf: Buffer) -> Buffer {
+    core::mem::replace(&mut self.position_vertex_buffer, new_buf)
+  }
+
+  /// The discard item that frees `buffer` (one of this resource's allocations).
+  pub fn discard_item_for(&self, buffer: Buffer) -> DiscardItem {
+    DiscardItem::Buffer(BufferDiscard {
+      buffer: buffer.buffer.get(),
+      alloc: buffer.allocation,
+      allocator: self.allocator,
+    })
   }
 
   pub fn frontend_texture_flags(&self) -> TextureFlags {

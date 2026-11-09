@@ -3518,6 +3518,14 @@ impl DustSystemState {
     new
   }
 
+  /// The jet can be evaluated again (its comet is back in the cartesian cache): every tier's
+  /// due windows count as building again ([`Self::building`]), from where the history stopped.
+  pub fn clear_jet_unavailable(&mut self) {
+    for t in &mut self.tiers {
+      t.jet_unavailable = false;
+    }
+  }
+
   /// The nucleus rotation or a jet parameter changed: every window was emitted with the old ones
   /// (the dust history would show the old spin until it ages out, up to the oldest tier's band).
   /// The next tick resets and refills the tiers deterministically, youngest first, like a seek.

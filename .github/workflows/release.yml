@@ -14,6 +14,9 @@ on:
 # runner's tools: see aethervk.core/rlib/build.rs
 env:
   AETHERVK_PREBUILT_SHADERS: "1"
+  # CFITSIO is built by vcpkg from aethervk.cfitsio/sys/build.rs: keep its source downloads in one
+  # cacheable folder (the binary cache is <repo>/.vcpkg-bincache)
+  VCPKG_DOWNLOADS: ${{ github.workspace }}/.vcpkg/downloads
 
 jobs:
   build-release:
@@ -22,25 +25,33 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # cargo_flags: extra flags for the engine build (AETHERVK_CARGO_FLAGS of the package scripts);
+        # "--no-default-features" ships a target without CFITSIO (pure-Rust FITS reader)
         include:
           - target: aarch64-apple-darwin
             os: macos-latest
             dotnet_arch: osx-arm64
+            cargo_flags: ""
           - target: x86_64-apple-darwin
             os: macos-latest
             dotnet_arch: osx-x64
+            cargo_flags: ""
           - target: aarch64-pc-windows-msvc
             os: windows-latest
             dotnet_arch: win-arm64
+            cargo_flags: ""
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             dotnet_arch: win-x64
+            cargo_flags: ""
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             dotnet_arch: linux-arm64
+            cargo_flags: ""
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             dotnet_arch: linux-x64
+            cargo_flags: ""
 
     steps:
     # Generated files in the repo exceed MAX_PATH on Windows; enable long paths before checkout
@@ -61,8 +72,9 @@ jobs:
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
-        sudo apt-get install -y libvulkan-dev mesa-vulkan-drivers libfontconfig1 libx11-6 libx11-xcb1 libxcb-dri3-0 libwayland-client0
+        sudo apt-get install -y libvulkan-dev mesa-vulkan-drivers libfontconfig1 libx11-6 libx11-xcb1 libxcb-dri3-0 libwayland-client0 curl zip unzip tar pkg-config cmake ninja-build
 
+    # vcpkg's arm64-linux triplet cross-compiles CFITSIO with aarch64-linux-gnu-gcc from this package
     - name: Install cross-compiler (Linux aarch64)
       if: matrix.target == 'aarch64-unknown-linux-gnu' && runner.os == 'Linux'
       run: |
@@ -95,6 +107,21 @@ jobs:
       with:
         key: ${{ matrix.target }}
 
+    # CFITSIO (aethervk.cfitsio/sys): vcpkg's binary cache and the downloads (vcpkg tarball, sources)
+    - name: Cache vcpkg (CFITSIO)
+      uses: actions/cache@v4
+      with:
+        path: |
+          .vcpkg-bincache
+          .vcpkg/downloads
+          .vcpkg/vcpkg-*.tar.gz
+        key: vcpkg-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('aethervk.cfitsio/sys/build.rs') }}
+        restore-keys: vcpkg-${{ runner.os }}-${{ matrix.target }}-
+
+    - name: Create vcpkg folders
+      shell: bash
+      run: mkdir -p .vcpkg/downloads .vcpkg-bincache
+
     - name: Cache NuGet packages
       uses: actions/cache@v4
       with:
@@ -119,6 +146,14 @@ jobs:
         curl -# -L --fail --connect-timeout 30 --retry 8 --retry-delay 15 --retry-all-errors -o assets/planets/de442.bsp https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/de442.bsp
       shell: bash
 
+    # the pure-Rust FITS fallback (no CFITSIO) must keep compiling: it is the per-target release fallback
+    - name: Cargo Check (without CFITSIO)
+      run: cargo check --locked -p aethervk-core-cdylib --no-default-features --target ${{ matrix.target }}
+      env:
+        CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+        CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
+
     - name: Determine Release Mode
       id: mode
       run: |
@@ -131,6 +166,8 @@ jobs:
 
     - name: Package Windows
       if: runner.os == 'Windows'
+      env:
+        AETHERVK_CARGO_FLAGS: ${{ matrix.cargo_flags }}
       run: |
         pwsh ./scripts/package_windows.ps1 -Arch ${{ matrix.dotnet_arch }}
         $msixArch = if ('${{ matrix.dotnet_arch }}' -eq 'win-x64') { 'x64' } else { 'arm64' }
@@ -142,6 +179,8 @@ jobs:
 
     - name: Package macOS
       if: runner.os == 'macOS'
+      env:
+        AETHERVK_CARGO_FLAGS: ${{ matrix.cargo_flags }}
       run: |
         bash ./scripts/package_macos.sh ${{ matrix.dotnet_arch }} Release $MODE
         cd bin/publish
@@ -153,6 +192,7 @@ jobs:
         bash ./scripts/package_linux.sh ${{ matrix.dotnet_arch }}
         bash ./scripts/package_linux_deb.sh ${{ matrix.dotnet_arch }} Release $MODE
       env:
+        AETHERVK_CARGO_FLAGS: ${{ matrix.cargo_flags }}
         CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
         CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
