@@ -840,7 +840,12 @@ fn khronos_box_textured_glb() {
   let tex = lib.texture(albedo).unwrap();
   assert_eq!((tex.width(), tex.height()), (256, 256));
   assert_eq!(tex.label, "BoxTextured_albedo");
-  assert!(tex.key.ends_with("BoxTextured.glb#image0"));
+  // keys are case-folded on Windows (normalize_key)
+  assert!(
+    tex.key.ends_with(&normalize_key("BoxTextured.glb#image0")),
+    "{}",
+    tex.key
+  );
 
   // tangents were synthesised (unit xyz, handedness ±1) and the cube is centred
   let comet = lib.materialize_mesh(mesh.id).unwrap();

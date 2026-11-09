@@ -114,6 +114,19 @@ partial class ViewModeBarViewModel
         }
     }
 
+    // ── formatted strings (implement the partial methods below) ─────────────
+    private string _strFitsWithoutDateHint = string.Empty;
+    public string StrFitsWithoutDateHint
+    {
+        get => _strFitsWithoutDateHint;
+        set
+        {
+            if (_strFitsWithoutDateHint == value) return;
+            _strFitsWithoutDateHint = value;
+            OnPropertyChanged(nameof(StrFitsWithoutDateHint));
+        }
+    }
+
     /// <summary>Called once on construction and on every culture change.</summary>
     private void RefreshStrings()
     {
@@ -126,5 +139,9 @@ partial class ViewModeBarViewModel
         StrNoFitsHint = _translationService.GetString("ModeBar_NoFitsHint");
         StrRecommit = _translationService.GetString("ModeBar_Recommit");
         StrModelShortTip = _translationService.GetString("ModeBar_ModelShortTip");
+        { var r = string.Empty; FormatStr_FitsWithoutDateHint(ref r); StrFitsWithoutDateHint = r; }
     }
+
+    // ── Implement these in your hand-written partial class ───────────────────
+    partial void FormatStr_FitsWithoutDateHint(ref string result);
 }

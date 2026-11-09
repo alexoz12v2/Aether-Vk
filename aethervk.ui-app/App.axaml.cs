@@ -141,6 +141,14 @@ public partial class App : Application
             var preferences = ServiceProviderServiceExtensions.GetRequiredService<PreferencesService>(Host!.Services);
             preferences.Load();
             _ = inputRegistry;
+            // the interface language chosen in Settings (English when none); AETHERVK_UI_CULTURE,
+            // when it names a supported language, wins for this run only (documentation shots); an
+            // e2e run is English unless it names one (its text lookups are English, whatever this
+            // machine's user picked)
+            var language = PreferencesService.SupportedLanguage(Environment.GetEnvironmentVariable("AETHERVK_UI_CULTURE"))
+                           ?? (Environment.GetEnvironmentVariable("AETHERVK_E2E") == "1" ? PreferencesService.Languages[0] : preferences.Language);
+            ServiceProviderServiceExtensions.GetRequiredService<ITranslationService>(Host!.Services).CurrentCulture =
+              new System.Globalization.CultureInfo(language);
             // the dust volume detail and temporal reuse tolerance (Settings › Particle rendering)
             // are preferences: the scene starts at 16 / off, the stored values go to it before the
             // first frame

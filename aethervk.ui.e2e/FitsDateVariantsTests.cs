@@ -31,6 +31,24 @@ public sealed class FitsDateVariantsTests(ITestOutputHelper output)
   /// ModeBar_FitsWithoutDateHint); the second's `{Date}` carries the raw card.</summary>
   private static readonly string[] NoImageHints = ["Import a FITS image", "no observation date"];
 
+  /// <summary>The FITS bytes with the first pixel's last (least significant, big-endian) byte
+  /// flipped in its lowest bit: the data unit starts at the 2880-byte block after the END card.</summary>
+  private static byte[] NudgeFirstPixel(byte[] fits)
+  {
+    for (int card = 0; card + 80 <= fits.Length; card += 80)
+    {
+      if (fits[card] == (byte)'E' && fits[card + 1] == (byte)'N' && fits[card + 2] == (byte)'D' && fits[card + 3] == (byte)' ')
+      {
+        int data = (card / 2880 + 1) * 2880;
+        Assert.True(data + 2 <= fits.Length, "the fixture has no data unit");
+        var copy = (byte[])fits.Clone();
+        copy[data + 1] ^= 1; // BITPIX 16: the first pixel's low byte
+        return copy;
+      }
+    }
+    throw new InvalidDataException("no END card in the fixture header");
+  }
+
   [SkippableTheory]
   [MemberData(nameof(Variants))]
   public void DateVariantFits_ShowsTheDate_AndModelUsesIt(string fixture, string expectedMidUtc, string? nineteenHundredsMidUtc)
@@ -38,8 +56,13 @@ public sealed class FitsDateVariantsTests(ITestOutputHelper output)
     var unavailable = AppSession.UnavailableReason();
     Skip.If(unavailable is not null, unavailable);
     var (artifacts, saveDir) = ReviewSave.Prepare("fits-date-variants-" + Path.GetFileNameWithoutExtension(fixture));
-    var path = FixturePath(fixture);
-    Assert.True(File.Exists(path), $"fixture missing: {path}");
+    var source = FixturePath(fixture);
+    Assert.True(File.Exists(source), $"fixture missing: {source}");
+    // the fixtures share their 4 × 3 ramp with the save's own fits_lt_67p_header_4x3.fits, and
+    // FITS imports deduplicate by the raster: an unchanged copy would merge into that texture
+    // ("Already imported") and keep its header. One pixel one count off makes it a new image.
+    var path = Path.Combine(artifacts, fixture);
+    File.WriteAllBytes(path, NudgeFirstPixel(File.ReadAllBytes(source)));
 
     using var s = AppSession.Launch(Path.Combine(artifacts, "app.log"), diagnosticPanels: false);
     try

@@ -46,7 +46,7 @@ namespace AetherVk.Logic.SaveFile
 
         private static global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[] BillboardDtoPropInit(global::System.Text.Json.JsonSerializerOptions options)
         {
-            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[20];
+            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[22];
 
             var info0 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<global::System.Guid>
             {
@@ -350,7 +350,47 @@ namespace AetherVk.Logic.SaveFile
             
             properties[14] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<global::AetherVk.Logic.SaveFile.FitsStretchDto>(options, info14);
 
-            var info15 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<double?>
+            var info15 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<string>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.BillboardDto),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.BillboardDto)obj).FitsTwoDigitYearCentury,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.BillboardDto)obj).FitsTwoDigitYearCentury = value!,
+                IgnoreCondition = global::System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "FitsTwoDigitYearCentury",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.BillboardDto).GetProperty("FitsTwoDigitYearCentury", InstanceMemberBindingFlags, null, typeof(string), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[15] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<string>(options, info15);
+
+            var info16 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<int?>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.BillboardDto),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.BillboardDto)obj).FitsPlane,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.BillboardDto)obj).FitsPlane = value!,
+                IgnoreCondition = global::System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "FitsPlane",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.BillboardDto).GetProperty("FitsPlane", InstanceMemberBindingFlags, null, typeof(int?), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[16] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<int?>(options, info16);
+
+            var info17 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<double?>
             {
                 IsProperty = true,
                 IsPublic = true,
@@ -368,9 +408,9 @@ namespace AetherVk.Logic.SaveFile
                 AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.BillboardDto).GetProperty("ImageNucleusX", InstanceMemberBindingFlags, null, typeof(double?), global::System.Array.Empty<global::System.Type>(), null),
             };
             
-            properties[15] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<double?>(options, info15);
+            properties[17] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<double?>(options, info17);
 
-            var info16 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<double?>
+            var info18 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<double?>
             {
                 IsProperty = true,
                 IsPublic = true,
@@ -388,9 +428,9 @@ namespace AetherVk.Logic.SaveFile
                 AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.BillboardDto).GetProperty("ImageNucleusY", InstanceMemberBindingFlags, null, typeof(double?), global::System.Array.Empty<global::System.Type>(), null),
             };
             
-            properties[16] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<double?>(options, info16);
+            properties[18] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<double?>(options, info18);
 
-            var info17 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<double?>
+            var info19 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<double?>
             {
                 IsProperty = true,
                 IsPublic = true,
@@ -408,9 +448,9 @@ namespace AetherVk.Logic.SaveFile
                 AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.BillboardDto).GetProperty("ViewportOffsetX", InstanceMemberBindingFlags, null, typeof(double?), global::System.Array.Empty<global::System.Type>(), null),
             };
             
-            properties[17] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<double?>(options, info17);
+            properties[19] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<double?>(options, info19);
 
-            var info18 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<double?>
+            var info20 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<double?>
             {
                 IsProperty = true,
                 IsPublic = true,
@@ -428,9 +468,9 @@ namespace AetherVk.Logic.SaveFile
                 AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.BillboardDto).GetProperty("ViewportOffsetY", InstanceMemberBindingFlags, null, typeof(double?), global::System.Array.Empty<global::System.Type>(), null),
             };
             
-            properties[18] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<double?>(options, info18);
+            properties[20] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<double?>(options, info20);
 
-            var info19 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<double?>
+            var info21 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<double?>
             {
                 IsProperty = true,
                 IsPublic = true,
@@ -448,7 +488,7 @@ namespace AetherVk.Logic.SaveFile
                 AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.BillboardDto).GetProperty("ViewportScaling", InstanceMemberBindingFlags, null, typeof(double?), global::System.Array.Empty<global::System.Type>(), null),
             };
             
-            properties[19] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<double?>(options, info19);
+            properties[21] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<double?>(options, info21);
 
             return properties;
         }
@@ -483,6 +523,17 @@ namespace AetherVk.Logic.SaveFile
             writer.WriteBoolean(PropName_physical_size_bound, ((global::AetherVk.Logic.SaveFile.BillboardDto)value).PhysicalSizeBound);
             writer.WritePropertyName(PropName_fits_stretch);
             FitsStretchDtoSerializeHandler(writer, ((global::AetherVk.Logic.SaveFile.BillboardDto)value).FitsStretch);
+            string __value_FitsTwoDigitYearCentury = ((global::AetherVk.Logic.SaveFile.BillboardDto)value).FitsTwoDigitYearCentury;
+            if (__value_FitsTwoDigitYearCentury is not null)
+            {
+                writer.WriteString(PropName_fits_two_digit_year_century, __value_FitsTwoDigitYearCentury);
+            }
+            int? __value_FitsPlane = ((global::AetherVk.Logic.SaveFile.BillboardDto)value).FitsPlane;
+            if (__value_FitsPlane is not null)
+            {
+                writer.WritePropertyName(PropName_fits_plane);
+                global::System.Text.Json.JsonSerializer.Serialize(writer, __value_FitsPlane, NullableInt32);
+            }
             writer.WritePropertyName(PropName_image_nucleus_x);
             global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.SaveFile.BillboardDto)value).ImageNucleusX, NullableDouble);
             writer.WritePropertyName(PropName_image_nucleus_y);

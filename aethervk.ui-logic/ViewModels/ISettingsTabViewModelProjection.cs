@@ -29,4 +29,7 @@ public partial interface ISettingsTabViewModel
 
   /// <summary>The time-scale help (the two scales, the offset, the leap-second table).</summary>
   string TimeScaleHelpText { get; }
+
+  /// <summary>Interface language: 0 = English, 1 = Italiano (preferences.json, kept across starts).</summary>
+  int LanguageIndex { get; set; }
 }

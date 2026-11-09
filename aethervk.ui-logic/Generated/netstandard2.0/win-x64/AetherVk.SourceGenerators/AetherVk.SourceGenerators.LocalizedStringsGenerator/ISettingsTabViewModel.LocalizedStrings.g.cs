@@ -67,6 +67,7 @@ public partial interface ISettingsTabViewModel
     string StrReuseTolerance { get; set; }
     string StrReuseToleranceHint { get; set; }
     string StrReuseToleranceOff { get; set; }
+    string StrLanguage { get; set; }
     string StrTimeScale { get; set; }
     string StrTimeScaleUtc { get; set; }
     string StrTimeScaleTdb { get; set; }

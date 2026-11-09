@@ -750,6 +750,18 @@ partial class SettingsTabViewModel
         }
     }
 
+    private string _strLanguage = string.Empty;
+    public string StrLanguage
+    {
+        get => _strLanguage;
+        set
+        {
+            if (_strLanguage == value) return;
+            _strLanguage = value;
+            OnPropertyChanged(nameof(StrLanguage));
+        }
+    }
+
     private string _strTimeScale = string.Empty;
     public string StrTimeScale
     {
@@ -2003,6 +2015,7 @@ partial class SettingsTabViewModel
         StrReuseTolerance = _translationService.GetString("Tabs_Settings_ReuseTolerance");
         StrReuseToleranceHint = _translationService.GetString("Tabs_Settings_ReuseToleranceHint");
         StrReuseToleranceOff = _translationService.GetString("Tabs_Settings_ReuseToleranceOff");
+        StrLanguage = _translationService.GetString("Tabs_Settings_Language");
         StrTimeScale = _translationService.GetString("Tabs_Settings_TimeScale");
         StrTimeScaleUtc = _translationService.GetString("Tabs_Settings_TimeScaleUtc");
         StrTimeScaleTdb = _translationService.GetString("Tabs_Settings_TimeScaleTdb");

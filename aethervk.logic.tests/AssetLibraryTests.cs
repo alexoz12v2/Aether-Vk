@@ -190,6 +190,18 @@ public class AssetLibraryServiceTests
     Assert.Empty(f.ImportRequests);
   }
 
+  /// <summary>Every extension the native importer takes is offered and accepted here (the Windows
+  /// gate for v1.0.1-17: a <c>.fz</c> was refused as "Unsupported file type" by this list alone).</summary>
+  [Theory]
+  [InlineData("/data/a.fits")]
+  [InlineData("/data/a.fit")]
+  [InlineData("/data/a.fts")]
+  [InlineData("/data/a.fz")]
+  [InlineData("/data/a.fits.fz")]
+  [InlineData("/data/A.FITS.FZ")]
+  public void Fits_extensions_the_native_importer_takes_are_supported(string path) =>
+    Assert.True(AssetLibraryService.IsSupported(path), path);
+
   [Fact]
   public async Task Queue_rejection_fails_immediately_and_clears_importing()
   {

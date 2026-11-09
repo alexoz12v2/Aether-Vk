@@ -46,7 +46,7 @@ namespace AetherVk.Logic.Services
 
         private static global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[] PreferencesFilePropInit(global::System.Text.Json.JsonSerializerOptions options)
         {
-            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[17];
+            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[18];
 
             var info0 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<int>
             {
@@ -392,6 +392,26 @@ namespace AetherVk.Logic.Services
             
             properties[16] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<bool?>(options, info16);
 
+            var info17 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<string>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.Services.PreferencesFile),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.Services.PreferencesFile)obj).Language,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.Services.PreferencesFile)obj).Language = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "Language",
+                JsonPropertyName = "language",
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.Services.PreferencesFile).GetProperty("Language", InstanceMemberBindingFlags, null, typeof(string), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[17] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<string>(options, info17);
+
             return properties;
         }
 
@@ -438,6 +458,7 @@ namespace AetherVk.Logic.Services
             global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.Services.PreferencesFile)value).StarBackground, NullableBoolean);
             writer.WritePropertyName(PropName_orbit_lines);
             global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.Services.PreferencesFile)value).OrbitLines, NullableBoolean);
+            writer.WriteString(PropName_language, ((global::AetherVk.Logic.Services.PreferencesFile)value).Language);
 
             writer.WriteEndObject();
         }

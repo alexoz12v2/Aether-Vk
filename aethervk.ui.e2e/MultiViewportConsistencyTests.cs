@@ -112,8 +112,6 @@ public sealed class MultiViewportConsistencyTests(MultiViewportFixture fixture, 
     var s = fixture.Session(output);
     MultiViewportFixture.ShowDiagnosticPanels(s);
     var vp = ViewportProbe.Discover(s)[0];
-    s.SelectTab("TimelineTab");
-    var clock = ReviewSave.Epoch(s);
     double[]? previous = null;
     var rulers = new Dictionary<Observer, string>();
     // Comet first: the save opens on the Earth observer, so Earth last proves a change back
@@ -121,6 +119,10 @@ public sealed class MultiViewportConsistencyTests(MultiViewportFixture fixture, 
     {
       Step($"{vp} -> {observer}");
       ViewportProbe.SetObserver(s, vp, observer);
+      // read after the switch: Model (the Earth observer) on a save whose FITS image has a date
+      // runs the model at that date (range and seek, ViewModeBarViewModel), so the clock moves
+      s.SelectTab("TimelineTab");
+      var clock = ReviewSave.Epoch(s);
       var r = ViewportProbe.Read(s, vp);
       output.WriteLine($"  {r}");
       s.Desktop.SaveScreenshot(Path.Combine(fixture.Artifacts, $"v0-{observer.CameraMode}.png"));

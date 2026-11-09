@@ -72,11 +72,11 @@ public partial class TranslationService(ResourceManager resourceManager, Culture
     {
       if (!Equals(_cultureSubject.Value, value))
       {
-        // Note: Set also thread local cultures if used elsewhere (shouldn't be)
-        // - Sets formatting (dates, numbers, currency)
-        CultureInfo.CurrentCulture = value;
-        // - sets localization for UI Strings (ResourceManager)
+        // the UI strings only: number and date formatting stay as Program set them (dot decimals
+        // on every OS locale, NumberCulture), so switching the language never changes how a
+        // number is typed or shown
         CultureInfo.CurrentUICulture = value;
+        CultureInfo.DefaultThreadCurrentUICulture = value;
 
         // Broadcast culture changed
         _cultureSubject.OnNext(value);

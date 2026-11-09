@@ -6,6 +6,81 @@ namespace AetherVk.Logic.ViewModels
     /// <inheritdoc/>
     partial class FitsImageViewModel
     {
+        /// <inheritdoc cref="_twoDigitYearCentury"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public global::AetherVk.Logic.Models.FitsTwoDigitYearCentury TwoDigitYearCentury
+        {
+            get => _twoDigitYearCentury;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<global::AetherVk.Logic.Models.FitsTwoDigitYearCentury>.Default.Equals(_twoDigitYearCentury, value))
+                {
+                    OnTwoDigitYearCenturyChanging(value);
+                    OnTwoDigitYearCenturyChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.TwoDigitYearCentury);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.FactsData);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.ObservationUtc);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.DateCardText);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.TwoDigitYearCenturyOption);
+                    _twoDigitYearCentury = value;
+                    OnTwoDigitYearCenturyChanged(value);
+                    OnTwoDigitYearCenturyChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.TwoDigitYearCentury);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.FactsData);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.ObservationUtc);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.DateCardText);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.TwoDigitYearCenturyOption);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_planeValue"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public decimal? PlaneValue
+        {
+            get => _planeValue;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<decimal?>.Default.Equals(_planeValue, value))
+                {
+                    OnPlaneValueChanging(value);
+                    OnPlaneValueChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.PlaneValue);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.PlaneOfText);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.PlaneAxesText);
+                    _planeValue = value;
+                    OnPlaneValueChanged(value);
+                    OnPlaneValueChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.PlaneValue);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.PlaneOfText);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.PlaneAxesText);
+                }
+            }
+        }
+
+        /// <inheritdoc cref="_isApplyingPlane"/>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+        public bool IsApplyingPlane
+        {
+            get => _isApplyingPlane;
+            set
+            {
+                if (!global::System.Collections.Generic.EqualityComparer<bool>.Default.Equals(_isApplyingPlane, value))
+                {
+                    OnIsApplyingPlaneChanging(value);
+                    OnIsApplyingPlaneChanging(default, value);
+                    OnPropertyChanging(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangingArgs.IsApplyingPlane);
+                    _isApplyingPlane = value;
+                    OnIsApplyingPlaneChanged(value);
+                    OnIsApplyingPlaneChanged(default, value);
+                    OnPropertyChanged(global::CommunityToolkit.Mvvm.ComponentModel.__Internals.__KnownINotifyPropertyChangedArgs.IsApplyingPlane);
+                }
+            }
+        }
+
         /// <inheritdoc cref="_facts"/>
         [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
         [global::System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
@@ -251,6 +326,72 @@ namespace AetherVk.Logic.ViewModels
             }
         }
 
+        /// <summary>Executes the logic for when <see cref="TwoDigitYearCentury"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="TwoDigitYearCentury"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnTwoDigitYearCenturyChanging(global::AetherVk.Logic.Models.FitsTwoDigitYearCentury value);
+        /// <summary>Executes the logic for when <see cref="TwoDigitYearCentury"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="TwoDigitYearCentury"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnTwoDigitYearCenturyChanging(global::AetherVk.Logic.Models.FitsTwoDigitYearCentury oldValue, global::AetherVk.Logic.Models.FitsTwoDigitYearCentury newValue);
+        /// <summary>Executes the logic for when <see cref="TwoDigitYearCentury"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="TwoDigitYearCentury"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnTwoDigitYearCenturyChanged(global::AetherVk.Logic.Models.FitsTwoDigitYearCentury value);
+        /// <summary>Executes the logic for when <see cref="TwoDigitYearCentury"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="TwoDigitYearCentury"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnTwoDigitYearCenturyChanged(global::AetherVk.Logic.Models.FitsTwoDigitYearCentury oldValue, global::AetherVk.Logic.Models.FitsTwoDigitYearCentury newValue);
+        /// <summary>Executes the logic for when <see cref="PlaneValue"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="PlaneValue"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnPlaneValueChanging(decimal? value);
+        /// <summary>Executes the logic for when <see cref="PlaneValue"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="PlaneValue"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnPlaneValueChanging(decimal? oldValue, decimal? newValue);
+        /// <summary>Executes the logic for when <see cref="PlaneValue"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="PlaneValue"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnPlaneValueChanged(decimal? value);
+        /// <summary>Executes the logic for when <see cref="PlaneValue"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="PlaneValue"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnPlaneValueChanged(decimal? oldValue, decimal? newValue);
+        /// <summary>Executes the logic for when <see cref="IsApplyingPlane"/> is changing.</summary>
+        /// <param name="value">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="IsApplyingPlane"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsApplyingPlaneChanging(bool value);
+        /// <summary>Executes the logic for when <see cref="IsApplyingPlane"/> is changing.</summary>
+        /// <param name="oldValue">The previous property value that is being replaced.</param>
+        /// <param name="newValue">The new property value being set.</param>
+        /// <remarks>This method is invoked right before the value of <see cref="IsApplyingPlane"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsApplyingPlaneChanging(bool oldValue, bool newValue);
+        /// <summary>Executes the logic for when <see cref="IsApplyingPlane"/> just changed.</summary>
+        /// <param name="value">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="IsApplyingPlane"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsApplyingPlaneChanged(bool value);
+        /// <summary>Executes the logic for when <see cref="IsApplyingPlane"/> just changed.</summary>
+        /// <param name="oldValue">The previous property value that was replaced.</param>
+        /// <param name="newValue">The new property value that was set.</param>
+        /// <remarks>This method is invoked right after the value of <see cref="IsApplyingPlane"/> is changed.</remarks>
+        [global::System.CodeDom.Compiler.GeneratedCode("CommunityToolkit.Mvvm.SourceGenerators.ObservablePropertyGenerator", "8.4.0.0")]
+        partial void OnIsApplyingPlaneChanged(bool oldValue, bool newValue);
         /// <summary>Executes the logic for when <see cref="Facts"/> is changing.</summary>
         /// <param name="value">The new property value being set.</param>
         /// <remarks>This method is invoked right before the value of <see cref="Facts"/> is changed.</remarks>

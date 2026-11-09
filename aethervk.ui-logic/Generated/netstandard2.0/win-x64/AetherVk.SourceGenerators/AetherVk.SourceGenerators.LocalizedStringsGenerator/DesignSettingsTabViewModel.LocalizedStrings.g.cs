@@ -72,6 +72,7 @@ public partial class DesignSettingsTabViewModel : ISettingsTabViewModel
     public string StrReuseTolerance { get; set; } = "Temporal reuse tolerance";
     public string StrReuseToleranceHint { get; set; } = "Reuses dust that moved less than this many pixels instead of drawing it again. Off draws every frame fresh; higher values are faster but can smear moving dust.";
     public string StrReuseToleranceOff { get; set; } = "Off";
+    public string StrLanguage { get; set; } = "Language";
     public string StrTimeScale { get; set; } = "Time scale for dates";
     public string StrTimeScaleUtc { get; set; } = "UTC (civil time: telescope images)";
     public string StrTimeScaleTdb { get; set; } = "TDB (dynamical time: the engine)";

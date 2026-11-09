@@ -62,6 +62,19 @@
   <ScrollViewer Classes="left-scrollbar" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
     <StackPanel Orientation="Vertical" Spacing="16" Margin="16,16,16,16">
 
+      <!-- Interface language: English by default; the choice is saved to preferences.json and the
+           next start opens in it. The language names are never translated. -->
+      <Border Classes="accordion">
+        <Expander Header="{Binding StrLanguage}" AutomationProperties.AutomationId="LanguageSection" IsExpanded="False">
+          <StackPanel Orientation="Horizontal" Spacing="8" Margin="12,8,12,12">
+            <ComboBox AutomationProperties.AutomationId="LanguagePicker" SelectedIndex="{Binding LanguageIndex}" Width="300">
+              <ComboBoxItem Content="English" />
+              <ComboBoxItem Content="Italiano" />
+            </ComboBox>
+          </StackPanel>
+        </Expander>
+      </Border>
+
       <!-- Time scale for dates (UTC ↔ TDB): how dates are typed and shown; the engine, the committed
            range and the save file always hold TDB (TDB = UTC + 69.18 s since 2017) -->
       <Border Classes="accordion">

@@ -34,6 +34,8 @@ namespace AetherVk.Logic.SaveFile
         private static readonly global::System.Text.Json.JsonEncodedText PropName_image_height_px = global::System.Text.Json.JsonEncodedText.Encode("image_height_px");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_physical_size_bound = global::System.Text.Json.JsonEncodedText.Encode("physical_size_bound");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_fits_stretch = global::System.Text.Json.JsonEncodedText.Encode("fits_stretch");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_fits_two_digit_year_century = global::System.Text.Json.JsonEncodedText.Encode("fits_two_digit_year_century");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_fits_plane = global::System.Text.Json.JsonEncodedText.Encode("fits_plane");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_image_nucleus_x = global::System.Text.Json.JsonEncodedText.Encode("image_nucleus_x");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_image_nucleus_y = global::System.Text.Json.JsonEncodedText.Encode("image_nucleus_y");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_viewport_offset_x = global::System.Text.Json.JsonEncodedText.Encode("viewport_offset_x");

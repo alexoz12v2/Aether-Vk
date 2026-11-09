@@ -64,6 +64,9 @@ public sealed class PreferencesFile
   /// <summary>Orbit lines drawn; missing = on.</summary>
   [JsonPropertyName("orbit_lines")]
   public bool? OrbitLines { get; set; }
+  /// <summary>Interface language (Settings › Language): "en" or "it"; missing or unknown = "en".</summary>
+  [JsonPropertyName("language")]
+  public string? Language { get; set; }
 }
 
 public sealed class BindingDto
@@ -181,6 +184,29 @@ public sealed class PreferencesService
   /// <summary>The scale dates are typed and shown in; UTC when the file has none (a telescope
   /// image's DATE-OBS is UTC). <see cref="TimeScaleService"/> applies it.</summary>
   public TimeScale TimeScale => TimeScaleService.Parse(_file.TimeScale, TimeScale.Utc);
+
+  /// <summary>The interface languages (the resx cultures), the default first.</summary>
+  public static readonly string[] Languages = ["en", "it"];
+
+  /// <summary>A supported language code from <paramref name="code"/> ("it", "it-IT", "IT" → "it");
+  /// null when it is none of <see cref="Languages"/>.</summary>
+  public static string? SupportedLanguage(string? code)
+  {
+    if (string.IsNullOrWhiteSpace(code))
+      return null;
+    var lang = code.Trim().Split('-', '_')[0].ToLowerInvariant();
+    return Array.IndexOf(Languages, lang) >= 0 ? lang : null;
+  }
+
+  /// <summary>The interface language: English unless another one was chosen in Settings; applied at
+  /// startup (App) and when the picker changes.</summary>
+  public string Language => SupportedLanguage(_file.Language) ?? Languages[0];
+
+  public void SetLanguage(string code)
+  {
+    _file.Language = SupportedLanguage(code) ?? Languages[0];
+    Save();
+  }
 
   /// <summary>What <see cref="Load"/> did: "defaults", "loaded", "corrupt", "newer".</summary>
   public string LoadOutcome { get; private set; } = "defaults";

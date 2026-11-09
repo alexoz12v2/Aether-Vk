@@ -695,6 +695,9 @@
   <data name="Ephemeris_ViewportRect" xml:space="preserve">
     <value>Viewport sul desktop (x, y, l, a px)</value>
   </data>
+  <data name="Tabs_Settings_Language" xml:space="preserve">
+    <value>Lingua</value>
+  </data>
   <data name="Tabs_Settings_TimeScale" xml:space="preserve">
     <value>Scala dei tempi per le date</value>
   </data>

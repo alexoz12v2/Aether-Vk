@@ -35,5 +35,6 @@ namespace AetherVk.Logic.Services
         private static readonly global::System.Text.Json.JsonEncodedText PropName_physical_lighting = global::System.Text.Json.JsonEncodedText.Encode("physical_lighting");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_star_background = global::System.Text.Json.JsonEncodedText.Encode("star_background");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_orbit_lines = global::System.Text.Json.JsonEncodedText.Encode("orbit_lines");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_language = global::System.Text.Json.JsonEncodedText.Encode("language");
     }
 }

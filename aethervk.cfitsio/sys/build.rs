@@ -2,7 +2,7 @@
 //! the link lines. Three sources, first match wins:
 //!
 //! 1. `AETHERVK_CFITSIO_DIR=<prefix>`: a prebuilt tree with `<prefix>/lib/{libcfitsio.a,libz.a}`
-//!    (`cfitsio.lib`, `zlib.lib` on Windows) and `<prefix>/include/fitsio.h` (offline / emergency).
+//!    (`cfitsio.lib`, `zs.lib` or `zlib.lib`, `bz2.lib` on Windows) and `<prefix>/include/fitsio.h` (offline / emergency).
 //! 2. `AETHERVK_CFITSIO_SYSTEM=1`: the distribution's shared `cfitsio` through `pkg-config`
 //!    (Linux developer convenience; the ABI then comes from whatever version is installed).
 //! 3. vcpkg (default): the pinned vcpkg release tarball is downloaded with `curl`, checked against
@@ -69,10 +69,16 @@ fn main() {
     .to_path_buf();
   let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
 
-  let triplet = triplet_of(&target).unwrap_or_else(|| {
+  // the CRT the Rust side links: `+crt-static` (.cargo/config.toml, Windows) needs the libraries
+  // built against the static CRT (/MT, `*-windows-static`), else every CRT import (`__imp_fopen`, …)
+  // is left unresolved; without it the `*-windows-static-md` triplets (/MD) match
+  let crt_static = env::var("CARGO_CFG_TARGET_FEATURE")
+    .map(|f| f.split(',').any(|x| x == "crt-static"))
+    .unwrap_or(false);
+  let triplet = triplet_of(&target, crt_static).unwrap_or_else(|| {
     panic!("aethervk-cfitsio-sys: no vcpkg triplet for target `{target}`; {HINT}");
   });
-  let host_triplet = triplet_of(&host).unwrap_or(triplet);
+  let host_triplet = triplet_of(&host, false).unwrap_or(triplet);
 
   let vcpkg_dir = repo_root.join(".vcpkg");
   fs::create_dir_all(&vcpkg_dir).unwrap_or_else(|e| panic!("create {}: {e}", vcpkg_dir.display()));
@@ -124,12 +130,27 @@ fn main() {
 fn link_prefix(prefix: &Path, windows: bool, origin: &str) {
   let lib = prefix.join("lib");
   let include = prefix.join("include");
-  let (cfitsio, zlib, bzip2) = if windows {
-    ("cfitsio.lib", "zlib.lib", "bz2.lib")
+  let (cfitsio, bzip2) = if windows {
+    ("cfitsio.lib", "bz2.lib")
   } else {
-    ("libcfitsio.a", "libz.a", "libbz2.a")
+    ("libcfitsio.a", "libbz2.a")
   };
-  for f in [cfitsio, zlib, bzip2] {
+  // zlib's static library: vcpkg's static triplets name it `zs.lib` on Windows; a prebuilt
+  // prefix (AETHERVK_CFITSIO_DIR) may use the upstream CMake name `zlib.lib` (or `zlibstatic.lib`)
+  let zlib_names: &[(&str, &str)] = if windows {
+    &[("zs.lib", "zs"), ("zlib.lib", "zlib"), ("zlibstatic.lib", "zlibstatic")]
+  } else {
+    &[("libz.a", "z")]
+  };
+  let zlib_link = match zlib_names.iter().find(|(f, _)| lib.join(f).is_file()) {
+    Some((_, name)) => *name,
+    None => panic!(
+      "aethervk-cfitsio-sys: no zlib static library ({}) in {} from {origin}; {HINT}",
+      zlib_names.iter().map(|(f, _)| *f).collect::<Vec<_>>().join(", "),
+      lib.display()
+    ),
+  };
+  for f in [cfitsio, bzip2] {
     let p = lib.join(f);
     if !p.is_file() {
       panic!(
@@ -146,10 +167,7 @@ fn link_prefix(prefix: &Path, windows: bool, origin: &str) {
   }
   println!("cargo:rustc-link-search=native={}", lib.display());
   println!("cargo:rustc-link-lib=static=cfitsio");
-  println!(
-    "cargo:rustc-link-lib=static={}",
-    if windows { "zlib" } else { "z" }
-  );
+  println!("cargo:rustc-link-lib=static={zlib_link}");
   // bzip2 (the cfitsio `bzip2` feature, and the wrapper's own `BZ2_bzBuffToBuffDecompress`)
   println!("cargo:rustc-link-lib=static=bz2");
   if !windows {
@@ -195,8 +213,10 @@ fn link_system() {
   );
 }
 
-fn triplet_of(rust_target: &str) -> Option<&'static str> {
+fn triplet_of(rust_target: &str, crt_static: bool) -> Option<&'static str> {
   Some(match rust_target {
+    "x86_64-pc-windows-msvc" if crt_static => "x64-windows-static",
+    "aarch64-pc-windows-msvc" if crt_static => "arm64-windows-static",
     "x86_64-pc-windows-msvc" => "x64-windows-static-md",
     "aarch64-pc-windows-msvc" => "arm64-windows-static-md",
     "x86_64-unknown-linux-gnu" => "x64-linux",

@@ -181,6 +181,10 @@ mod panic_hook_tests {
     if std::env::var(CHILD_ENV).is_err() {
       return;
     }
+    // the shipped DLL installs the hook from DllMain, which a test executable never runs (the
+    // ELF / Mach-O constructors do run in it)
+    #[cfg(windows)]
+    crate::install_panic_hook();
     crate::r#impl::simulation_api::SimulationContext::set_logger_callback(Some(to_file));
     std::thread::Builder::new()
       .name(String::from("logic"))

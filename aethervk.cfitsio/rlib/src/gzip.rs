@@ -8,6 +8,7 @@ use alloc::vec::Vec;
 use core::{
   ffi::{c_char, c_int, c_void},
   ptr,
+  sync::atomic::{AtomicUsize, Ordering},
 };
 
 use aethervk_cfitsio_sys as sys;
@@ -24,17 +25,67 @@ unsafe extern "C" {
 /// reader anyway, and a gzip bomb must not grow without bound. `MEMORY_ALLOCATION` past it.
 pub const MAX_GUNZIP_BYTES: usize = 3 << 30;
 
-/// The reallocation callback handed to the codec: `realloc` up to [`MAX_GUNZIP_BYTES`]; past
-/// the cap it frees the block and returns NULL (the codec then reports `MEMORY_ALLOCATION` and
-/// stops; it never frees the block itself).
+/// Deflate's largest expansion: one stored bit pattern per 1032 output bytes, so a valid stream
+/// of `n` bytes (gzip members included) never inflates past `n · 1032` plus a few blocks.
+const DEFLATE_MAX_RATIO: usize = 1032;
+
+/// The output cap of the codec call in progress ([`codec_cap`]); set and read only under
+/// [`SESSION`], which both codec calls hold.
+static CAP: AtomicUsize = AtomicUsize::new(MAX_GUNZIP_BYTES);
+/// The real size of the block the codec is filling: the callback grows it geometrically and
+/// serves cfitsio's linear `BUFFINCR` requests (28 800 bytes each) from it. Under [`SESSION`].
+static CAPACITY: AtomicUsize = AtomicUsize::new(0);
+
+/// The output cap for an input of `len` bytes: [`MAX_GUNZIP_BYTES`], or less when no valid
+/// deflate stream of that length can produce more. A truncated stream makes cfitsio's inflate loop
+/// ask for `BUFFINCR` more bytes on every `Z_BUF_ERROR` until the callback refuses; with the cap
+/// tied to the input that happens after a few requests instead of ~10⁵ (each a copy on Windows,
+/// whose `realloc` cannot grow in place: minutes of quadratic copying before the 3 GiB cap).
+fn codec_cap(len: usize) -> usize {
+  len
+    .saturating_mul(DEFLATE_MAX_RATIO)
+    .saturating_add(1 << 16)
+    .min(MAX_GUNZIP_BYTES)
+}
+
+/// The reallocation callback handed to the codec: grows the block to at least `newsize`, up to
+/// the call's cap ([`CAP`]), doubling its real size ([`CAPACITY`]) so the codec's linear requests
+/// cost amortised O(1) copies; past the cap it frees the block and returns NULL (the codec then
+/// reports `MEMORY_ALLOCATION` and stops; it never frees the block itself).
 unsafe extern "C" fn capped_realloc(p: *mut c_void, newsize: usize) -> *mut c_void {
-  if newsize > MAX_GUNZIP_BYTES {
+  let cap = CAP.load(Ordering::Relaxed);
+  if newsize > cap {
     // SAFETY: `p` is the block the codec was handed (malloc'ed by us or by an earlier call here).
     unsafe { free(p) };
+    CAPACITY.store(0, Ordering::Relaxed);
     return ptr::null_mut();
   }
+  let capacity = CAPACITY.load(Ordering::Relaxed);
+  if newsize <= capacity && !p.is_null() {
+    return p;
+  }
+  let grown = newsize.max(capacity.saturating_mul(2)).min(cap);
   // SAFETY: as above; realloc may move or free it, which the caller expects.
-  unsafe { realloc(p, newsize) }
+  let q = unsafe { realloc(p, grown) };
+  if q.is_null() {
+    // out of memory: the old block is still ours and the codec drops its pointer to it
+    // SAFETY: `realloc` failed, so `p` is untouched and still allocated.
+    unsafe { free(p) };
+    CAPACITY.store(0, Ordering::Relaxed);
+  } else {
+    CAPACITY.store(grown, Ordering::Relaxed);
+  }
+  q
+}
+
+/// Allocates the codec's first block of `size` bytes and arms [`capped_realloc`] with the output
+/// cap `cap`. Call under [`SESSION`].
+fn codec_start(size: usize, cap: usize) -> *mut c_char {
+  CAP.store(cap.max(size), Ordering::Relaxed);
+  // SAFETY: plain C allocation, freed by the caller on every path.
+  let p = unsafe { malloc(size) }.cast::<c_char>();
+  CAPACITY.store(if p.is_null() { 0 } else { size }, Ordering::Relaxed);
+  p
 }
 
 /// The two gzip magic bytes (`1f 8b`).
@@ -62,8 +113,7 @@ pub fn gunzip(bytes: &[u8]) -> Result<Vec<u8>, FitsError> {
   unsafe { sys::ffcmsg() };
   // the codec grows the buffer by doubling; start at a plausible FITS size
   let initial = bytes.len().saturating_mul(4).clamp(2880, 1 << 24);
-  // SAFETY: plain C allocation, freed below on every path.
-  let mut buf = unsafe { malloc(initial) }.cast::<c_char>();
+  let mut buf = codec_start(initial, codec_cap(bytes.len()));
   if buf.is_null() {
     return Err(FitsError::wrapper(sys::MEMORY_ALLOCATION as c_int, "out of memory"));
   }
@@ -107,8 +157,9 @@ pub fn gzip(bytes: &[u8]) -> Result<Vec<u8>, FitsError> {
   // SAFETY: as in `gunzip`.
   unsafe { sys::ffcmsg() };
   let initial = bytes.len().clamp(2880, 1 << 24);
-  // SAFETY: as in `gunzip`.
-  let mut buf = unsafe { malloc(initial) }.cast::<c_char>();
+  // deflate never grows its input by more than 5 bytes per 16 KiB stored block plus the framing
+  let cap = bytes.len().saturating_add(bytes.len() / 1000).saturating_add(1 << 16).min(MAX_GUNZIP_BYTES);
+  let mut buf = codec_start(initial, cap);
   if buf.is_null() {
     return Err(FitsError::wrapper(sys::MEMORY_ALLOCATION as c_int, "out of memory"));
   }

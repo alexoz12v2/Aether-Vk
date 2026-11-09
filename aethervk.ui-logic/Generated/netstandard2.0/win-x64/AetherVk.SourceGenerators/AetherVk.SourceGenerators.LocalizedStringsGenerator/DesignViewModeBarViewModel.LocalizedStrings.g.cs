@@ -17,6 +17,7 @@ public partial class DesignViewModeBarViewModel : IViewModeBarViewModel
     public string StrNucleusTip { get; set; } = "Nucleus: orientation, Sun direction, illumination and active areas";
     public string StrModelTip { get; set; } = "Model: compare with the telescope image; the end date is the image date, the start date the chosen number of rotations earlier";
     public string StrNoFitsHint { get; set; } = "Import a FITS image to set the model's dates from it";
+    public string StrFitsWithoutDateHint { get; set; } = "The FITS image has no observation date the app can read ({Date})";
     public string StrRecommit { get; set; } = "Recommit with this range";
     public string StrModelShortTip { get; set; } = "Model: compare with image";
 }

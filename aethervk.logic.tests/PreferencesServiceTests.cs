@@ -105,4 +105,74 @@ public sealed class PreferencesServiceTests : IDisposable
     Assert.Equal(3, r.Snapshot().Count(b => b.Context == "Viewport"));
     Assert.Equal("other.x", r.Resolve("Other", new InputChord(Key: "X"))?.Id); // untouched
   }
+
+  /// <summary>English by default; a language picked in Settings is what the next start opens in.</summary>
+  [Fact]
+  public void Language_DefaultsToEnglish_AndAChosenOneSurvivesARestart()
+  {
+    var p = new PreferencesService(PrefsPath, Defaults());
+    p.Load();
+    Assert.Equal("en", p.Language);
+    p.SetLanguage("it");
+
+    var p2 = new PreferencesService(PrefsPath, Defaults());
+    p2.Load();
+    Assert.Equal("loaded", p2.LoadOutcome);
+    Assert.Equal("it", p2.Language);
+    Assert.Contains("\"language\": \"it\"", File.ReadAllText(PrefsPath), StringComparison.Ordinal);
+
+    p2.SetLanguage("en");
+    var p3 = new PreferencesService(PrefsPath, Defaults());
+    p3.Load();
+    Assert.Equal("en", p3.Language);
+  }
+
+  [Fact]
+  public void Language_AnUnknownStoredValueIsEnglish()
+  {
+    Directory.CreateDirectory(_dir);
+    File.WriteAllText(PrefsPath, "{\"format_version\": 1, \"language\": \"klingon\"}");
+    var p = new PreferencesService(PrefsPath, Defaults());
+    p.Load();
+    Assert.Equal("en", p.Language);
+  }
+
+  [Theory]
+  [InlineData("it", "it")]
+  [InlineData("it-IT", "it")]
+  [InlineData("IT", "it")]
+  [InlineData("en-US", "en")]
+  [InlineData("fr-FR", null)]
+  [InlineData("", null)]
+  [InlineData(null, null)]
+  public void SupportedLanguage_TakesTheLanguagePartOfACulture(string? code, string? expected) =>
+    Assert.Equal(expected, PreferencesService.SupportedLanguage(code));
+
+  /// <summary>Switching the interface language changes the strings only: numbers keep the culture
+  /// Program set (dot decimals on every OS locale).</summary>
+  [Fact]
+  public void SwitchingTheLanguage_LeavesNumberFormattingAlone()
+  {
+    var before = System.Globalization.CultureInfo.CurrentCulture;
+    var beforeUi = System.Globalization.CultureInfo.CurrentUICulture;
+    var beforeDefaultUi = System.Globalization.CultureInfo.DefaultThreadCurrentUICulture;
+    try
+    {
+      System.Globalization.CultureInfo.CurrentCulture = System.Globalization.CultureInfo.InvariantCulture;
+      var t = new TranslationService(
+        new System.Resources.ResourceManager("AetherVk.Logic.Resources.AppStrings", typeof(ITranslationService).Assembly),
+        new System.Globalization.CultureInfo("en"));
+      Assert.Equal("Language", t.GetString("Tabs_Settings_Language"));
+      t.CurrentCulture = new System.Globalization.CultureInfo("it");
+      Assert.Equal("Lingua", t.GetString("Tabs_Settings_Language"));
+      Assert.Same(System.Globalization.CultureInfo.InvariantCulture, System.Globalization.CultureInfo.CurrentCulture);
+      Assert.Equal("0.5", 0.5.ToString(System.Globalization.CultureInfo.CurrentCulture));
+    }
+    finally
+    {
+      System.Globalization.CultureInfo.CurrentCulture = before;
+      System.Globalization.CultureInfo.CurrentUICulture = beforeUi;
+      System.Globalization.CultureInfo.DefaultThreadCurrentUICulture = beforeDefaultUi;
+    }
+  }
 }

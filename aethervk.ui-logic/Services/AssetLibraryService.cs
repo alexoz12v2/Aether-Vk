@@ -42,9 +42,10 @@ public sealed class AssetLibraryService : IDisposable
 {
   /// <summary>File extensions accepted by the native importer.</summary>
   public static readonly string[] MeshExtensions = ["obj", "ply", "gltf", "glb"];
-  /// <summary>FITS (<c>fit</c>, <c>fits</c>, <c>fts</c>) imports as an RGBA8 texture, stretched
-  /// natively (see <c>docs/fits_ffi_contract.md</c>).</summary>
-  public static readonly string[] TextureExtensions = ["png", "jpg", "jpeg", "ktx2", "fit", "fits", "fts"];
+  /// <summary>FITS (<c>fit</c>, <c>fits</c>, <c>fts</c>, and tile-compressed <c>fz</c>, also
+  /// <c>.fits.fz</c>) imports as an RGBA8 texture, stretched natively (see
+  /// <c>docs/fits_ffi_contract.md</c>). The native importer's list (<c>asset_library.rs</c>).</summary>
+  public static readonly string[] TextureExtensions = ["png", "jpg", "jpeg", "ktx2", "fit", "fits", "fts", "fz"];
   public static readonly string[] AllExtensions = [.. MeshExtensions, .. TextureExtensions];
 
   private readonly INativeRuntimeService _runtimeService;

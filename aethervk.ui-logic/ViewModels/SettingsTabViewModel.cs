@@ -46,6 +46,28 @@ public partial class SettingsTabViewModel
   /// leap-second table ("Leap seconds: naif0012.tls, last +37 s on 2017-01-01").</summary>
   public string TimeScaleHelpText => _timeScale.HelpText;
 
+  /// <summary>
+  /// Interface language: the index in <see cref="PreferencesService.Languages"/> (0 = English, the
+  /// default; 1 = Italiano). Switches the strings at once and is saved to preferences.json, so the
+  /// next start opens in it.
+  /// </summary>
+  public int LanguageIndex
+  {
+    // the language shown (AETHERVK_UI_CULTURE can override the saved one for a run)
+    get => Math.Max(0, Array.IndexOf(PreferencesService.Languages, _translationService.CurrentCulture.TwoLetterISOLanguageName));
+    set
+    {
+      if (value < 0 || value >= PreferencesService.Languages.Length)
+        return;
+      var code = PreferencesService.Languages[value];
+      if (code == _translationService.CurrentCulture.TwoLetterISOLanguageName)
+        return;
+      _preferences.SetLanguage(code);
+      _translationService.CurrentCulture = new System.Globalization.CultureInfo(code);
+      OnPropertyChanged();
+    }
+  }
+
   /// <summary>The diagnostic HUD panels over every viewport (camera coordinates, dust history,
   /// observer line, orbit debug); hidden by default, saved to preferences.json.</summary>
   public bool ShowDiagnosticPanels

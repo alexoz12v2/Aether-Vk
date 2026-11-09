@@ -12,6 +12,7 @@ public partial interface IViewModeBarViewModel
     string StrNucleusTip { get; set; }
     string StrModelTip { get; set; }
     string StrNoFitsHint { get; set; }
+    string StrFitsWithoutDateHint { get; set; }
     string StrRecommit { get; set; }
     string StrModelShortTip { get; set; }
 }

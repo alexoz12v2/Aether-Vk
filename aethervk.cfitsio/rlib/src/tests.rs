@@ -1170,3 +1170,21 @@ fn hdu_addresses_are_block_offsets() {
   assert_eq!(f.hdu_address().unwrap(), (5760, 8640, 11520));
   assert_eq!(bytes.len(), 11520);
 }
+
+/// The codec's output cap follows the input (deflate inflates at most 1032:1), so a truncated
+/// stream fails at once instead of growing towards [`crate::MAX_GUNZIP_BYTES`] (cfitsio asks for
+/// 28 800 more bytes on every `Z_BUF_ERROR`; on Windows each `realloc` copied: minutes); a
+/// maximally compressible stream still inflates whole under that cap.
+#[test]
+fn gunzip_cap_follows_the_input_and_a_truncated_stream_fails_fast() {
+  use crate::{gunzip, gzip};
+  let zeros = std::vec![0u8; 16 << 20];
+  let gz = gzip(&zeros).unwrap();
+  std::println!("16 MiB of zeros: gz {} bytes, ratio {:.0}", gz.len(), zeros.len() as f64 / gz.len() as f64);
+  assert_eq!(gunzip(&gz).unwrap().len(), zeros.len());
+  let t0 = std::time::Instant::now();
+  assert!(gunzip(&gz[..gz.len() / 2]).is_err());
+  assert!(gunzip(&gz[..gz.len() - 8]).is_err());
+  let dt = t0.elapsed();
+  assert!(dt.as_secs_f64() < 5.0, "truncated streams took {dt:?}");
+}
