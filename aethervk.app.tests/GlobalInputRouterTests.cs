@@ -4,6 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
+using Avalonia;
 using Moq;
 using Xunit;
 
@@ -245,6 +246,71 @@ public class GlobalInputRouterTests
     mock.Verify(h => h.Process(It.IsAny<AppAction>(), It.IsAny<InputState>()), Times.Once,
       "no new dispatch expected after DetachFromWindow");
 
+    router.Dispose();
+    window.Close();
+  }
+
+  // ── Keys with no focus after a click in a native viewport (macOS) ──────────
+  // On macOS the native viewport never gets keyDown: (Avalonia's window keeps the key events), so
+  // after a click in it the keys reach Avalonia with nothing focused and were dropped.
+
+  private static (GlobalInputRouter Router, Window Window, Mock<IActionHandler> Mock, Button Button) UnfocusedViewport()
+  {
+    var registry = new InputRegistry();
+    registry.Register("Viewport", new InputChord(Key: "D3"), new AppAction("viewport.switch_to_comet_orbiting"));
+    var router = new GlobalInputRouter(registry);
+    var handler = MockHandler(out var mock);
+    var button = new Button { Content = "panel", Width = 50, Height = 30 };
+    var (window, _) = BuildWindow("Viewport", handler, button);
+    window.Show();
+    router.AttachToWindow(window);
+    window.FocusManager?.ClearFocus();
+    return (router, window, mock, button);
+  }
+
+  private static void VerifyCometOrbiting(Mock<IActionHandler> mock, Times times) =>
+    mock.Verify(h => h.Process(It.Is<AppAction>(a => a.Id == "viewport.switch_to_comet_orbiting"), It.IsAny<InputState>()), times);
+
+  [AvaloniaFact]
+  public void UnfocusedKey_AfterANativeViewportClick_GoesToTheViewport_OnPressOnly()
+  {
+    var (router, window, mock, _) = UnfocusedViewport();
+    router.NativeViewportPressed();
+
+    window.KeyPressQwerty(PhysicalKey.Digit3, RawInputModifiers.None);
+    window.KeyReleaseQwerty(PhysicalKey.Digit3, RawInputModifiers.None);
+
+    mock.Verify(h => h.Process(It.Is<AppAction>(a => a.Id == "viewport.switch_to_comet_orbiting"),
+      It.Is<InputState>(st => st.IsPressed)), Times.Once);
+    VerifyCometOrbiting(mock, Times.Once());
+    router.Dispose();
+    window.Close();
+  }
+
+  [AvaloniaFact]
+  public void UnfocusedKey_WithoutANativeViewportClick_IsDropped()
+  {
+    var (router, window, mock, _) = UnfocusedViewport();
+
+    window.KeyPressQwerty(PhysicalKey.Digit3, RawInputModifiers.None);
+
+    VerifyCometOrbiting(mock, Times.Never());
+    router.Dispose();
+    window.Close();
+  }
+
+  [AvaloniaFact]
+  public void UnfocusedKey_AfterAClickOnAnAvaloniaControl_IsDropped()
+  {
+    var (router, window, mock, button) = UnfocusedViewport();
+    router.NativeViewportPressed();
+    window.MouseDown(button.TranslatePoint(new Avalonia.Point(5, 5), window)!.Value, MouseButton.Left);
+    window.MouseUp(button.TranslatePoint(new Avalonia.Point(5, 5), window)!.Value, MouseButton.Left);
+    window.FocusManager?.ClearFocus();
+
+    window.KeyPressQwerty(PhysicalKey.Digit3, RawInputModifiers.None);
+
+    VerifyCometOrbiting(mock, Times.Never());
     router.Dispose();
     window.Close();
   }

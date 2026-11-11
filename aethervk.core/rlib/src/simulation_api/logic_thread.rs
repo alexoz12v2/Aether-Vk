@@ -282,7 +282,7 @@ pub fn start_logic_thread(
 
             let items = vulkan_device.kernels.discard_pool.pop_ready_items(gpu_timeline_val);
             if !items.is_empty() {
-                vulkan::device::DiscardPool::destroy_items_lock_free(&vulkan_device.device, items);
+                vulkan::device::DiscardPool::destroy_ready_items(&vulkan_device.device, items);
             }
             Ok(())
           });

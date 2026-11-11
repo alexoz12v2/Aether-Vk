@@ -28,6 +28,19 @@ public static class MacScreen
   private static extern uint CGMainDisplayID();
 
   [DllImport(CoreGraphics)]
+  private static extern CGRect CGDisplayBounds(uint display);
+
+  /// <summary>The main display's bounds in points (global coordinates, top-left origin).</summary>
+  public static (double X, double Y, double Width, double Height) MainBoundsPoints
+  {
+    get
+    {
+      var b = CGDisplayBounds(CGMainDisplayID());
+      return (b.X, b.Y, b.Width, b.Height);
+    }
+  }
+
+  [DllImport(CoreGraphics)]
   private static extern IntPtr CGDisplayCopyDisplayMode(uint display);
 
   [DllImport(CoreGraphics)]

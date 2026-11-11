@@ -493,6 +493,21 @@ impl DiscardPool {
     Self::destroy_items_lock_free(device, items);
   }
 
+  /// Destroys ready `items` from a periodic cleanup (render and logic threads). On macOS those that
+  /// may free a device-address buffer go through [`Self::destroy_items_after_device_idle`], the rest
+  /// at once; elsewhere all at once. Destroyed lock-free there, a buffer still made resident by
+  /// MoltenVK in an in-flight command buffer lost the device (seen reopening a save in Compact).
+  pub fn destroy_ready_items(device: &super::LogicalDevice, items: Vec<DiscardItem>) {
+    #[cfg(target_os = "macos")]
+    let items = {
+      let (after_idle, now): (Vec<_>, Vec<_>) =
+        items.into_iter().partition(DiscardItem::may_free_device_address_buffer);
+      Self::destroy_items_after_device_idle(device, after_idle);
+      now
+    };
+    Self::destroy_items_lock_free(device, items);
+  }
+
   /// Executes Vulkan API destruction completely lock-free
   pub fn destroy_items_lock_free(
     device: &super::LogicalDevice,

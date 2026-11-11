@@ -43,8 +43,8 @@ public class FileMenuViewTests
     Assert.StartsWith("AetherVk — ", window.Title);
     Assert.Equal(vm.WindowTitle, window.Title);
 
-    var file = window.GetLogicalDescendants().OfType<MenuItem>().Single(m => Equals(m.Header, "File"));
-    var headers = file.Items.OfType<MenuItem>().Select(m => m.Header as string).ToList();
+    var file = MenuProbe.TopLevel(window).Single(m => m.Header == "File");
+    var headers = file.Items.Select(m => m.Header).ToList();
     Assert.Equal(["New", "Open...", "Open Recent", "Save", "Save As...", "Save As Folder...", "Export image..."], headers);
 
     // an edit marks the title, and closing asks (headless: Cancel) instead of closing

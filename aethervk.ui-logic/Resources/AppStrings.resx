@@ -1920,4 +1920,13 @@ The middle button starts and stops time. The left one goes back to the start of 
   <data name="NucleusMini_ResetToEarth" xml:space="preserve">
     <value>Back to Earth view</value>
   </data>
+  <data name="NucleusMini_Exposure" xml:space="preserve">
+    <value>Exposure</value>
+  </data>
+  <data name="NucleusMini_ExposureTip" xml:space="preserve">
+    <value>Brightness of the sunlit side, in stops (EV). At 0 the point under the Sun is white, at any distance from the Sun; each stop doubles the brightness. The night side stays black, so raising it shows clearly what is lit.</value>
+  </data>
+  <data name="NucleusMini_ExposureReset" xml:space="preserve">
+    <value>0 EV</value>
+  </data>
 </root>

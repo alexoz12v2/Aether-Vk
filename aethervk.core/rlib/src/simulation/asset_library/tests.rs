@@ -1358,6 +1358,32 @@ fn export_copies_standalone_sources_verbatim_and_reuses_them() {
 }
 
 #[test]
+fn a_reopened_save_labels_assets_by_their_original_name_and_saves_them_under_one_prefix() {
+  // a save stores `<hash>_<label>.<ext>`; reopening it imports that file in a fresh library
+  let s = Scratch::new("export_relabel");
+  let mut first = s.library();
+  let png = s.path("tail image.png");
+  write_png(&png, 6, 3, |x, y| [x as u8 * 40, y as u8 * 80, 9, 255]);
+  let id = first.import_file(png.to_str().unwrap()).unwrap().textures[0];
+  let dest = s.path("save/assets/textures");
+  let saved = first.export_asset(id, dest.to_str().unwrap()).unwrap();
+  let hash = saved.content_hash;
+
+  let s2 = Scratch::new("export_relabel_2");
+  let mut reopened = s2.library();
+  let back = reopened.import_file(dest.join(&saved.file_name).to_str().unwrap()).unwrap().textures[0];
+  let label = reopened.assets().iter().find(|a| a.id == back).unwrap().label.clone();
+  assert_eq!(label, "tail_image", "the stored copy's hash prefix is not part of the label");
+  let resaved = reopened.export_asset(back, dest.to_str().unwrap()).unwrap();
+  assert_eq!(resaved.file_name, saved.file_name, "one prefix, the same stored file");
+  assert!(resaved.reused);
+  // a save written before the fix (two prefixes) is repaired the same way
+  assert_eq!(strip_hash_prefix(&format!("{hash:016x}_{hash:016x}_name"), hash), "name");
+  assert_eq!(strip_hash_prefix(&format!("{hash:016x}_"), hash), format!("{hash:016x}_"), "never empty");
+  assert_eq!(strip_hash_prefix("0000000000000001_name", 2), "0000000000000001_name", "another hash stays");
+}
+
+#[test]
 fn export_extracts_images_embedded_in_glb() {
   let s = Scratch::new("export_glb");
   let mut lib = s.library();

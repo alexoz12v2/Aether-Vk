@@ -357,6 +357,19 @@
               <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrViewDustFlow}"
                                            HelpContent="{Binding StrViewDustFlowHelp}" FlyoutMaxWidth="320" />
             </Grid>
+            <!-- dust exposure over the automatic one (the Model tab's slider, same view model) -->
+            <Grid Classes="row" ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="8">
+              <TextBlock Grid.Column="0" Classes="row-label" Text="{Binding Model.StrDustExposure}" />
+              <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding Model.StrDustExposure}"
+                                           HelpContent="{Binding Model.StrHelpDustExposure}" FlyoutMaxWidth="320" />
+              <Slider Grid.Column="2" VerticalAlignment="Center"
+                      AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.ViewDustExposure}"
+                      Minimum="{x:Static vm:ModelTabViewModel.DustExposureEvMin}"
+                      Maximum="{x:Static vm:ModelTabViewModel.DustExposureEvMax}"
+                      SmallChange="0.25" LargeChange="1" TickFrequency="0.25" IsSnapToTickEnabled="True"
+                      Value="{Binding Model.DustExposureEv}" />
+              <TextBlock Grid.Column="3" VerticalAlignment="Center" MinWidth="64" Text="{Binding Model.DustExposureEvText}" />
+            </Grid>
           </StackPanel>
         </Border>
 

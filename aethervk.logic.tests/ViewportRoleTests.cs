@@ -153,6 +153,8 @@ public class ViewportRoleTests
     var schedulers = sp.Object;
 
     var runtime = new Mock<INativeRuntimeService>();
+    // a main viewport is attached (a mini attaches only after it: VulkanViewportControlViewModel)
+    runtime.Setup(r => r.PresentationEngineId).Returns(10UL);
     ulong outPe = pe, outCam = cam;
     runtime.Setup(r => r.AddViewport(
         It.IsAny<uint>(), It.IsAny<uint>(), It.IsAny<string>(), It.IsAny<Func<CNativeWindowHandle>?>(),

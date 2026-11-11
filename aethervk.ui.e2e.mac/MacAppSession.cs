@@ -136,11 +136,44 @@ public sealed class MacAppSession : IDisposable
     }
   }
 
+  /// <summary>Whether the server on 127.0.0.1:4723 answers <c>GET /status</c> with 200 (two
+  /// consecutive answers half a second apart, so a server shutting down is not taken).</summary>
+  public static bool IsDriverHealthy()
+  {
+    using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+    for (int i = 0; i < 2; i++)
+    {
+      try
+      {
+        if (!http.GetAsync(DriverUrl + "/status").GetAwaiter().GetResult().IsSuccessStatusCode)
+          return false;
+      }
+      catch (Exception)
+      {
+        return false;
+      }
+      if (i == 0)
+        Thread.Sleep(500);
+    }
+    return true;
+  }
+
   /// <summary>Starts <c>appium</c> on 127.0.0.1:4723 when nothing listens there (its log next to the artifacts).</summary>
   public static void EnsureAppium()
   {
-    if (IsDriverListening())
-      return;
+    // the server a previous `dotnet test` started dies with that test host (its stdout pipe
+    // closes) and may still hold the port for a few seconds: a session sent to it ends with
+    // "The response ended prematurely". Use a listener only once it answers /status; wait for a
+    // dying one to let go of the port, then start our own.
+    var settle = DateTime.UtcNow.AddSeconds(30);
+    while (IsDriverListening())
+    {
+      if (IsDriverHealthy())
+        return;
+      if (DateTime.UtcNow > settle)
+        throw new InvalidOperationException("something listens on 127.0.0.1:4723 but does not answer GET /status");
+      Thread.Sleep(500);
+    }
     var cmd = AppiumCommand() ?? throw new InvalidOperationException("appium not found");
     var log = Path.Combine(Shared.E2ESteps.RepoRoot(), "TestResults", "e2e-mac", "appium.log");
     Directory.CreateDirectory(Path.GetDirectoryName(log)!);
@@ -163,7 +196,7 @@ public sealed class MacAppSession : IDisposable
       _appiumProcess.BeginErrorReadLine();
     }
     var deadline = DateTime.UtcNow.AddSeconds(45);
-    while (!IsDriverListening())
+    while (!IsDriverListening() || !IsDriverHealthy())
     {
       if (DateTime.UtcNow > deadline)
         throw new InvalidOperationException($"appium did not start listening on 127.0.0.1:4723 (log: {log})");
@@ -313,8 +346,19 @@ public sealed class MacAppSession : IDisposable
     ((ISearchContext)driver).FindElements(By.XPath("//XCUIElementTypeWindow"))
       .FirstOrDefault(w =>
       {
-        var title = w.GetAttribute("title") ?? string.Empty;
-        return title.StartsWith("AetherVk", StringComparison.Ordinal) && !title.Contains("Starting", StringComparison.Ordinal);
+        // "AetherVk — <document>"; not the splash ("Starting") nor the other top-level windows that
+        // share the prefix, e.g. the FITS popup "AetherVk billboard" (listed before the main window)
+        string title;
+        try
+        {
+          title = w.GetAttribute("title") ?? string.Empty;
+        }
+        catch (WebDriverException)
+        {
+          return false; // gone meanwhile (a full-screen or tiling transition replaces the window element)
+        }
+        return (title == "AetherVk" || title.StartsWith("AetherVk —", StringComparison.Ordinal))
+               && !title.Contains("Starting", StringComparison.Ordinal);
       });
 
   private static void WaitForMainWindow(MacDriver driver, Process process, TimeSpan timeout)

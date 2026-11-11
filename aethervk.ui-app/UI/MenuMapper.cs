@@ -23,7 +23,9 @@ public static class MenuMapper
       {
         nativeMenu.Items.Add(CreateNativeMenuItem(item));
       }
+      nativeMenu.Items.Add(CreateMacWindowMenu(window));
       NativeMenu.SetMenu(window, nativeMenu);
+      RegisterMacWindowMenuWhenBuilt(window);
     }
     else
     {
@@ -34,6 +36,53 @@ public static class MenuMapper
       }
       normalMenuContainer.Content = menu;
     }
+  }
+
+  /// <summary>The macOS menu bar's "Window" menu (registered with AppKit, which adds the rest).</summary>
+  public const string MacWindowMenuTitle = "Window";
+
+  /// <summary>
+  /// The standard Mac "Window" menu: Minimize (Cmd+M) and Zoom. Once registered as the windows menu
+  /// (<see cref="MacWindowsMenu"/>), AppKit adds Move &amp; Resize (Fn+Ctrl+arrow tiles), Full Screen
+  /// Tile and the window list to it.
+  /// </summary>
+  private static NativeMenuItem CreateMacWindowMenu(Window window)
+  {
+    var minimize = new NativeMenuItem
+    {
+      Header = "Minimize",
+      Gesture = new KeyGesture(Key.M, KeyModifiers.Meta),
+    };
+    minimize.Click += (_, _) => window.WindowState = WindowState.Minimized;
+    var zoom = new NativeMenuItem { Header = "Zoom" };
+    zoom.Click += (_, _) =>
+      window.WindowState = window.WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+    var menu = new NativeMenu();
+    menu.Items.Add(minimize);
+    menu.Items.Add(zoom);
+    return new NativeMenuItem { Header = MacWindowMenuTitle, Menu = menu };
+  }
+
+  /// <summary>
+  /// Registers the Window menu once Avalonia has put the menu bar in place, and again whenever
+  /// Avalonia rebuilds it (a changed item can replace the NSMenu): a check every second, for the
+  /// window's lifetime.
+  /// </summary>
+  private static void RegisterMacWindowMenuWhenBuilt(Window window)
+  {
+    if (!OperatingSystem.IsMacOS())
+      return;
+    var timer = new Avalonia.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+    int registrations = 0;
+    timer.Tick += (_, _) =>
+    {
+      if (MacWindowsMenu.Register(MacWindowMenuTitle) == true)
+        Console.WriteLine($"[Menu] Window menu registered with AppKit (#{++registrations})");
+    };
+    // ApplyMenu can run after the window opened (its DataContext arrives later): started now,
+    // Register waits for the menu bar
+    timer.Start();
+    window.Closed += (_, _) => timer.Stop();
   }
 
   private static NativeMenuItemBase CreateNativeMenuItem(MenuItemViewModel vm)

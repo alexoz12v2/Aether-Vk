@@ -28,4 +28,13 @@ public interface IWindowInputRouter : IDisposable
   /// to the UI thread if the visual tree walk requires it.
   /// </remarks>
   void RouteNativeComposed(string contextId, InputChord chord, InputState state);
+
+  /// <summary>
+  /// A button went down in a native viewport (the main one or the mini-view). Until the next click
+  /// on an Avalonia control, the keys that reach Avalonia with nothing focused belong to the
+  /// viewport: on macOS the native view never gets keyDown: (Avalonia's window keeps the key
+  /// events), so they arrive there instead of through <see cref="RouteNativeComposed"/>.
+  /// </summary>
+  /// <remarks>May be called from the input thread.</remarks>
+  void NativeViewportPressed();
 }

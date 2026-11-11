@@ -117,7 +117,7 @@ pub fn start_render_thread(
                 let timeline = cached_timeline - 1;
                 res.discard_pool.pop_ready_items(timeline)
               };
-              vulkan::device::DiscardPool::destroy_items_lock_free(&vulkan_device.device, items);
+              vulkan::device::DiscardPool::destroy_ready_items(&vulkan_device.device, items);
             }
             if do_main_queue_cleanup {
               use core::sync::atomic::Ordering;

@@ -99,7 +99,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     ImageExportService? imageExport = null,
     ITranslationService? translation = null,
     UiLayoutService? uiLayout = null,
-    INativeInputHandlerFactory? inputHandlerFactory = null
+    INativeInputHandlerFactory? inputHandlerFactory = null,
+    CometPositionTrackerService? cometTracker = null
   )
   {
     _uiLayout = uiLayout;
@@ -135,7 +136,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
       },
       translation,
       preferences,
-      dispatcher);
+      dispatcher,
+      cometTracker?.CometPosition);
     CompactPanel = new CompactPanelViewModel(
       EnsureLayoutTab,
       nucleusMini,

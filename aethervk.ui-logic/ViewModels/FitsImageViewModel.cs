@@ -395,8 +395,10 @@ public partial class FitsImageViewModel : ObservableObject, IObservationImage
   {
     string F(string key, string value) =>
       t is null ? key : t.GetFormattedString(key, new Dictionary<string, string> { ["N"] = value });
-    string text = F("Billboard_PxRatio_ImageToViewport", Sig2(n));
-    if (n < 1.0 && n > 0.0)
+    string shown = Sig2(n);
+    string text = F("Billboard_PxRatio_ImageToViewport", shown);
+    // the inverse when the shown N is below 1 (not the raw N: 0.9999999999999997 prints "1.0")
+    if (n > 0.0 && double.Parse(shown, Ci) < 1.0)
       text += " · " + F("Billboard_PxRatio_ViewportToImage", Sig2(1.0 / n));
     if (atComet)
       text += " (" + (t?.GetString("Billboard_PxRatio_AtComet") ?? "Billboard_PxRatio_AtComet") + ")";

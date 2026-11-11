@@ -924,7 +924,7 @@ impl AssetLibrary {
       MeshAsset {
         id,
         key: key.to_string(),
-        label: file_stem(path),
+        label: strip_hash_prefix(&file_stem(path), hash),
         source_path: path.to_string(),
         vertex_count,
         index_count,
@@ -1264,7 +1264,7 @@ impl AssetLibrary {
       TextureAsset {
         id,
         key: key.clone(),
-        label,
+        label: strip_hash_prefix(&label, hash),
         source_path,
         channel_hint: hint,
         thumbnail,
@@ -1610,6 +1610,21 @@ fn extension_of(path: &str) -> String {
     Some(i) if i > 0 => name[i + 1..].to_ascii_lowercase(),
     _ => String::new(),
   }
+}
+
+/// `label` without the `<hash:016x>_` prefixes [`AssetLibrary::export_asset`] puts on a saved copy.
+/// Without this, a save that is reopened labels its assets by their stored file names, and each
+/// later save adds one more prefix (`<hash>_<hash>_name`).
+pub fn strip_hash_prefix(label: &str, hash: u64) -> String {
+  let prefix = format!("{hash:016x}_");
+  let mut rest = label;
+  while let Some(r) = rest.strip_prefix(prefix.as_str()) {
+    if r.is_empty() {
+      break;
+    }
+    rest = r;
+  }
+  rest.to_string()
 }
 
 /// File name without directory and extension (asset label).

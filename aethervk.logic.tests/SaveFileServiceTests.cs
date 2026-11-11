@@ -334,6 +334,47 @@ public sealed class SaveFileServiceTests : IDisposable
     Assert.Null(svc.CurrentSaveDir);
   }
 
+  /// A save opened into another viewport (the Compact layout) puts its comet-anchored billboards back
+  /// on the comet and re-sizes the bound ones: neither is a change. A window move shifts every
+  /// desktop centre but no offset from the viewport: no change either. A free billboard moved on the
+  /// viewport is one.
+  [Fact]
+  public async Task Dirty_IgnoresWhatTheSaveDerives_FromTheCometAndTheViewport()
+  {
+    var host = Populated();
+    var bound = host.Billboards[0];
+    bound.PhysicalSizeBound = true;
+    bound.ViewportOffsetX = 300;
+    bound.ViewportOffsetY = 200;
+    var free = new BillboardDto
+    {
+      Id = Guid.NewGuid(), TextureKey = bound.TextureKey, CenterX = 500, CenterY = 400, WidthPx = 64, HeightPx = 32,
+      ViewportOffsetX = 100, ViewportOffsetY = 50,
+    };
+    host.Billboards.Add(free);
+    var svc = new SaveFileService(host, new Clock());
+    await svc.SaveAsync(SaveDir);
+    Assert.False(svc.IsDirty);
+
+    // the anchor and the bound size follow the comet and the viewport
+    bound.CenterX += 40; bound.CenterY -= 63; bound.ViewportOffsetX += 40; bound.ViewportOffsetY -= 63;
+    bound.WidthPx = 49.75; bound.HeightPx = 49.75;
+    // the window moved: desktop centres change, offsets do not (but for f64 noise)
+    free.CenterX += 120; free.CenterY += 30; free.ViewportOffsetX += 1e-9;
+    Assert.False(svc.IsDirty);
+
+    bound.Alpha = 0.9;
+    Assert.True(svc.IsDirty);
+    bound.Alpha = 0.6;
+    Assert.False(svc.IsDirty);
+
+    free.ViewportOffsetX += 25;
+    Assert.True(svc.IsDirty);
+    free.ViewportOffsetX -= 25;
+    free.WidthPx = 80;
+    Assert.True(svc.IsDirty);
+  }
+
   /// The startup baseline can be taken before the first viewport exists: a fresh viewport appearing
   /// later is no change (the reopen then asked to save an untouched "Untitled").
   [Fact]

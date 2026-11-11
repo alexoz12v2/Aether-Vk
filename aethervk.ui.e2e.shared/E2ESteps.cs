@@ -79,12 +79,46 @@ public static partial class E2ESteps
     return Path.Combine(to, "aethervk_index.json");
   }
 
-  /// <summary>A copy of the FITS fixture under <paramref name="artifacts"/>.</summary>
+  /// <summary>
+  /// A copy of the FITS fixture under <paramref name="artifacts"/>, made new to the library: the
+  /// reviewer's save already holds this fixture, and the asset library skips an image whose
+  /// decoded pixels it has ("Already imported"), compared after the 8-bit stretch. The copy has its
+  /// first two pixels swapped (the fixture's differ: 100 and 200).
+  /// </summary>
   public static string CopyFits(string artifacts, string name = "import_67p.fits")
   {
     var dest = Path.Combine(artifacts, name);
-    File.Copy(AetherVk.TestAssets.TestAssets.Require(FitsAsset), dest, overwrite: true);
+    var bytes = File.ReadAllBytes(AetherVk.TestAssets.TestAssets.Require(FitsAsset));
+    File.WriteAllBytes(dest, SwapFirstTwoPixels(bytes));
     return dest;
+  }
+
+  /// <summary>
+  /// The primary HDU's first two data values swapped. The data start at the 2880-byte block after
+  /// the END card; a value is |BITPIX|/8 bytes.
+  /// </summary>
+  internal static byte[] SwapFirstTwoPixels(byte[] fits)
+  {
+    const int Card = 80, Block = 2880;
+    var copy = (byte[])fits.Clone();
+    int bitpix = 0;
+    for (int i = 0; (i + 1) * Card <= copy.Length; i++)
+    {
+      string card = System.Text.Encoding.ASCII.GetString(copy, i * Card, Card);
+      if (card.StartsWith("BITPIX  =", StringComparison.Ordinal))
+        bitpix = int.Parse(card[10..30].Trim(), System.Globalization.CultureInfo.InvariantCulture);
+      if (card.TrimEnd() != "END")
+        continue;
+      int data = ((i + 1) * Card + Block - 1) / Block * Block;
+      int size = Math.Abs(bitpix) / 8;
+      if (size == 0 || data + 2 * size > copy.Length)
+        break;
+      var first = copy[data..(data + size)];
+      Array.Copy(copy, data + size, copy, data, size);
+      first.CopyTo(copy, data + size);
+      return copy;
+    }
+    throw new InvalidOperationException("no primary image data in the FITS fixture");
   }
 
   public static void Step(Action<string> log, string text) => log($"{DateTime.Now:HH:mm:ss} {text}");
@@ -268,6 +302,28 @@ public static partial class E2ESteps
       previous = frame;
     }
     return changed;
+  }
+
+  /// <summary>
+  /// Where to click the viewport to give it the keyboard: its upper middle, unless a desktop
+  /// billboard's window covers that point (the reviewer's save shows one over the viewport), then
+  /// the middle band beside the billboards, from the centre outwards.
+  /// </summary>
+  public static (int X, int Y) ViewportClickPoint(IE2EApp app, E2ERect viewport)
+  {
+    var billboards = app.BillboardFrames();
+    int x0 = (int)viewport.CentreX, y0 = viewport.Y + viewport.Height / 4;
+    if (!billboards.Any(b => b.Contains(x0, y0)))
+      return (x0, y0);
+    int y = viewport.Y + viewport.Height / 2;
+    for (int step = 0; step <= 8; step++)
+      foreach (int sign in step == 0 ? [1] : new[] { -1, 1 })
+      {
+        int x = x0 + sign * step * viewport.Width / 20;
+        if (x > viewport.X + 4 && x < viewport.Right - 4 && !billboards.Any(b => b.Contains(x, y)))
+          return (x, y);
+      }
+    throw new InvalidOperationException($"no point of the viewport {viewport} is free of the billboards");
   }
 
   public static string Pct(double v) => v.ToString("P1", CultureInfo.InvariantCulture);

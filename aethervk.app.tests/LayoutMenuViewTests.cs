@@ -36,33 +36,37 @@ public class LayoutMenuViewTests
       window.Show();
       Dispatcher.UIThread.RunJobs();
 
-      var menu = window.GetLogicalDescendants().OfType<Menu>().Single();
-      var top = menu.Items.OfType<MenuItem>().Select(m => m.Header as string).ToList();
-      if (services.GetService<Logic.SaveFile.SaveFileService>() is not null)
-        Assert.Equal(["File", "Edit", "Layout"], top);
-      else
-        Assert.Equal(["Edit", "Layout"], top); // mocked native runtime: no File menu
+      var menu = MenuProbe.TopLevel(window);
+      var top = menu.Select(m => m.Header).ToList();
+      // the macOS menu bar ends with the standard Window menu (UI/MenuMapper, MacWindowsMenu)
+      List<string?> expected = services.GetService<Logic.SaveFile.SaveFileService>() is not null
+        ? ["File", "Edit", "Layout"]
+        : ["Edit", "Layout"]; // mocked native runtime: no File menu
+      if (OperatingSystem.IsMacOS())
+        expected.Add(UI.MenuMapper.MacWindowMenuTitle);
+      Assert.Equal(expected, top);
 
-      var layout = menu.Items.OfType<MenuItem>().Single(m => Equals(m.Header, "Layout"));
-      var items = layout.Items.OfType<MenuItem>().ToList();
-      Assert.Equal(["Classic", "Compact"], items.Select(m => m.Header as string));
-      Assert.All(items, m => Assert.Equal(MenuItemToggleType.Radio, m.ToggleType));
-      Assert.All(items, m => Assert.Equal(MainWindowViewModel.UiLayoutGroupName, m.GroupName));
-      Assert.True(items[0].IsChecked, "Classic is checked in a classic session");
-      Assert.False(items[1].IsChecked);
+      var layout = menu.Single(m => m.Header == "Layout");
+      var items = layout.Items.ToList();
+      Assert.Equal(["Classic", "Compact"], items.Select(m => m.Header));
+      Assert.All(items, m => Assert.True(m.IsRadio));
+      if (!OperatingSystem.IsMacOS()) // a native (menu bar) item has no group name
+        Assert.All(items, m => Assert.Equal(MainWindowViewModel.UiLayoutGroupName, m.GroupName));
+      Assert.True(items[0].IsChecked(), "Classic is checked in a classic session");
+      Assert.False(items[1].IsChecked());
 
       // the view model's checked state reaches the menu items
       var vmItems = vm.MainMenu.Single(m => m.Header == "Layout").Items;
       vmItems[0].IsChecked = false;
       vmItems[1].IsChecked = true;
       Dispatcher.UIThread.RunJobs();
-      Assert.False(items[0].IsChecked);
-      Assert.True(items[1].IsChecked);
+      Assert.False(items[0].IsChecked());
+      Assert.True(items[1].IsChecked());
       vmItems[1].IsChecked = false;
       vmItems[0].IsChecked = true;
       Dispatcher.UIThread.RunJobs();
-      Assert.True(items[0].IsChecked);
-      Assert.False(items[1].IsChecked);
+      Assert.True(items[0].IsChecked());
+      Assert.False(items[1].IsChecked());
 
       window.Close();
       Dispatcher.UIThread.RunJobs();

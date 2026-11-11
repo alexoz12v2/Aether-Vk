@@ -34,7 +34,9 @@ public static class LayoutToggleScenario
       SetLayout(app, compact: true);
       var compact = MainViewport(app);
       Step(log, $"compact viewport {compact}");
-      Assert.True(compact.Width < classic.Width, $"the compact viewport {compact} is not narrower than the classic one {classic}");
+      // which one is wider depends on the window: the classic layout's side panels take a fixed
+      // share, the compact panel a fixed width (at 1440 pt the compact viewport is the wider one)
+      Assert.False(compact.Near(classic, 2), $"the compact viewport {compact} is the classic one {classic}");
       app.SavePng(compact, Path.Combine(artifacts, "compact-viewport.png"));
 
       Step(log, "play at 1 h/s");

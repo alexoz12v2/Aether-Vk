@@ -41,6 +41,12 @@ public interface IE2EApp : IDisposable
   void ClickAt(int x, int y);
 
   /// <summary>
+  /// The desktop billboards' windows in screen pixels, where they take the pointer over the whole
+  /// window (macOS: the transparent margin too). Empty where clicks reach what is behind them.
+  /// </summary>
+  System.Collections.Generic.IReadOnlyList<E2ERect> BillboardFrames() => [];
+
+  /// <summary>
   /// Selects all of the element's text box (the element itself, its inner text box, or the slider's
   /// "&lt;id&gt;.Input"), types <paramref name="text"/> and, with <paramref name="enter"/>, commits with Enter / Return.
   /// </summary>

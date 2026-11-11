@@ -40,6 +40,9 @@ public sealed class NucleusMiniViewModelTests : IDisposable
     _runtime.Setup(r => r.SetCameraNoDust(Camera, true)).Returns(true);
     _runtime.Setup(r => r.SetCameraNoUiLayer(Camera, true)).Returns(true);
     _runtime.Setup(r => r.SetCameraShading(Camera, It.IsAny<uint>())).Returns(true);
+    _runtime.Setup(r => r.SetCameraExposure(Camera, It.IsAny<float>())).Returns(true);
+    // the main viewport is attached (a mini is refused before it: the attach waits, see below)
+    _runtime.SetupGet(r => r.PresentationEngineId).Returns(MainPe);
     _runtime.Setup(r => r.SetCameraParentToComet(Camera, true)).Returns(true);
     _runtime.Setup(r => r.CameraSetPerspective(Camera, It.IsAny<float>(), It.IsAny<float>(), It.IsAny<float>(), It.IsAny<float>())).Returns(true);
     _runtime.Setup(r => r.SetNucleusViewFromEarth(Camera, Earth, Comet, It.IsAny<double>())).Returns(true);
@@ -193,6 +196,57 @@ public sealed class NucleusMiniViewModelTests : IDisposable
     Assert.Equal(1, _viewportsMade);
   }
 
+  private const ulong MainPe = 0x77;
+
+  [Fact]
+  public void BeforeTheMainViewportIsAttached_TheMiniWaits_AndDoesNotFail()
+  {
+    _runtime.SetupGet(r => r.PresentationEngineId).Returns((ulong?)null);
+    using var mini = Create();
+    mini.SetCometCommitted(true);
+    mini.IsLayoutCompact = true;
+    // a Compact start with the mini open: its native window can come before the main one's
+    CreateNativeWindow(mini);
+    Assert.DoesNotContain(nameof(INativeRuntimeService.AddViewport), Calls());
+    Assert.False(mini.IsActive);
+  }
+
+  [Fact]
+  public void ExposureEv_IsSentToTheCamera_AndClamped()
+  {
+    using var mini = Create();
+    mini.SetCometCommitted(true);
+    mini.IsLayoutCompact = true;
+    CreateNativeWindow(mini);
+
+    mini.ExposureEv = 2f;
+    _runtime.Verify(r => r.SetCameraExposure(Camera, (float)(4.0 / CameraService.NucleusDarkAlbedo)), Times.Once);
+    Assert.Equal("+2.0 EV", mini.ExposureEvText);
+    mini.ExposureEv = 99f;
+    Assert.Equal(CameraService.MaxNucleusExposureEv, mini.ExposureEv);
+    Assert.True(mini.ResetExposureCommand.CanExecute(null));
+    mini.ResetExposureCommand.Execute(null);
+    Assert.Equal(0f, mini.ExposureEv);
+    Assert.False(mini.ResetExposureCommand.CanExecute(null));
+  }
+
+  [Fact]
+  public void Exposure_TakesOutTheDistanceFromTheSun()
+  {
+    using var mini = Create();
+    mini.SetCometCommitted(true);
+    mini.IsLayoutCompact = true;
+    CreateNativeWindow(mini);
+
+    // at 3 AU the sunlight is 1/9 of 1 AU's: nine times the factor keeps the sunlit point white
+    mini.SetSunDistanceAu(3.0);
+    _runtime.Verify(r => r.SetCameraExposure(Camera, (float)(9.0 / CameraService.NucleusDarkAlbedo)), Times.Once);
+    // under 1 % of change: not resent
+    mini.SetSunDistanceAu(3.01);
+    _runtime.Verify(r => r.SetCameraExposure(Camera, It.IsAny<float>()), Times.Exactly(2));
+    Assert.Equal(1f, NucleusMiniViewModel.ExposureFactor(0f, 1.0) * (float)CameraService.NucleusDarkAlbedo, 4);
+  }
+
   [Fact]
   public void NothingIsDrawn_BeforeTheFlagsAndTheViewFromEarthAreSet()
   {
@@ -211,6 +265,7 @@ public sealed class NucleusMiniViewModelTests : IDisposable
       nameof(INativeRuntimeService.SetCameraNoDust),
       nameof(INativeRuntimeService.SetCameraNoUiLayer),
       nameof(INativeRuntimeService.SetCameraShading),
+      nameof(INativeRuntimeService.SetCameraExposure),
       nameof(INativeRuntimeService.SetCameraParentToComet),
       nameof(INativeRuntimeService.CameraSetPerspective),
       nameof(INativeRuntimeService.SetNucleusViewFromEarth),
@@ -225,7 +280,10 @@ public sealed class NucleusMiniViewModelTests : IDisposable
     _runtime.Verify(r => r.SetCameraNoUiLayer(Camera, true), Times.Once);
     // 5 fps: the main view shares the render thread
     _runtime.Verify(r => r.SetViewportMinFrameInterval(Pe, NucleusMiniViewModel.FrameIntervalUs), Times.Once);
+    // the dark Lambert shading (a black night side: what is lit stands out) at EV 0, the distance
+    // from the Sun taken out (1 AU until known): the point under the Sun is white
     _runtime.Verify(r => r.SetCameraShading(Camera, CameraService.ShadingPhysical | CameraService.ShadingLambertDark), Times.Once);
+    _runtime.Verify(r => r.SetCameraExposure(Camera, (float)(1.0 / CameraService.NucleusDarkAlbedo)), Times.Once);
     // this camera's own observer: the nucleus 4 diameters over a 20° field
     _runtime.Verify(r => r.SetNucleusViewFromEarth(Camera, Earth, Comet, mini.DistanceAu), Times.Once);
     Assert.True(mini.HasNucleusView);

@@ -56,6 +56,7 @@ namespace AetherVk.Logic.Automation
     public const string ViewNucleus = "Compact.View.Nucleus";
     public const string ViewModel = "Compact.View.Model";
     public const string ViewDustFlow = "Compact.View.DustFlow";
+    public const string ViewDustExposure = "Compact.View.DustExposure";
 
     public const string PlaybackPlayPause = "Compact.Playback.PlayPause";
     public const string PlaybackSpeed = "Compact.Playback.Speed";
@@ -73,6 +74,8 @@ namespace AetherVk.Logic.Automation
     public const string NucleusMiniViewHost = "NucleusMiniViewHost";
     public const string NucleusMiniViewResetToEarth = "NucleusMiniView.ResetToEarth";
     public const string NucleusMiniViewCaption = "NucleusMiniView.Caption";
+    public const string NucleusMiniViewExposure = "NucleusMiniView.Exposure";
+    public const string NucleusMiniViewExposureReset = "NucleusMiniView.ExposureReset";
 
     /// <summary>Every id above.</summary>
     public static readonly string[] All =
@@ -117,6 +120,7 @@ namespace AetherVk.Logic.Automation
       ViewNucleus,
       ViewModel,
       ViewDustFlow,
+      ViewDustExposure,
       PlaybackPlayPause,
       PlaybackSpeed,
       PlaybackReset,
@@ -130,6 +134,8 @@ namespace AetherVk.Logic.Automation
       NucleusMiniViewHost,
       NucleusMiniViewResetToEarth,
       NucleusMiniViewCaption,
+      NucleusMiniViewExposure,
+      NucleusMiniViewExposureReset,
     };
   }
 }

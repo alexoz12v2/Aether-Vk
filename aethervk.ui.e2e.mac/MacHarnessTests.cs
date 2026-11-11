@@ -38,6 +38,7 @@ public sealed class MacHarnessTests(ITestOutputHelper output)
     catch
     {
       try { app.SaveScreenshot(Path.Combine(artifacts, $"failure-{name}.png")); } catch (Exception) { }
+      try { File.WriteAllText(Path.Combine(artifacts, $"failure-{name}.xml"), app.Session.Driver.PageSource); } catch (Exception) { }
       throw;
     }
     finally
@@ -103,7 +104,13 @@ public sealed class MacHarnessTests(ITestOutputHelper output)
         app.SaveScreenshot(Path.Combine(dir, tab + ".png"));
       }
       SetLayout(app, compact: true);
-      SetMiniExpanded(app, expanded: true);
+      // no comet is loaded here, so the mini-view shows its note instead of the native host
+      // (NucleusMiniViewModel.IsHostVisible): open the expander only, SetMiniExpanded would wait
+      // for the host; the host's id is checked by the NucleusMiniView scenarios, which open a save
+      if (app.TryFind(Ids.NucleusMiniViewCaption) is not { Displayed: true })
+        app.Toggle(Ids.NucleusMiniViewExpander);
+      E2EWait.Until(() => app.TryFind(Ids.NucleusMiniViewCaption) is { Displayed: true },
+        TimeSpan.FromSeconds(10), "the mini-view expander's content");
       var compact = app.Session.Driver.PageSource;
       File.WriteAllText(Path.Combine(dir, "compact.xml"), compact);
       app.SaveScreenshot(Path.Combine(dir, "compact.png"));
@@ -223,10 +230,14 @@ public sealed class MacHarnessTests(ITestOutputHelper output)
     {
       OpenSave(app, index);
       var main = MainViewport(app);
+      // the reviewer's save shows a desktop billboard over the viewport, and on macOS its window
+      // takes the click even in its transparent margin: click the viewport beside it
+      var (clickX, clickY) = ViewportClickPoint(app, main);
+      Log($"viewport {main} px, billboards [{string.Join("; ", app.BillboardFrames())}], click at {clickX},{clickY}");
       double[] After(char key)
       {
         app.Foreground();
-        app.ClickAt((int)main.CentreX, main.Y + main.Height / 4);
+        app.ClickAt(clickX, clickY);
         Thread.Sleep(400);
         app.PressKey(key);
         Thread.Sleep(TimeSpan.FromSeconds(6));

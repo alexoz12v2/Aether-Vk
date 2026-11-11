@@ -53,6 +53,7 @@ public partial class NucleusMiniViewModel : ObservableObject, IDisposable
   private readonly IUiThreadDispatcher? _dispatcher;
   private readonly Func<Action<double, double, bool, bool>, VulkanViewportControlViewModel> _viewportFactory;
   private readonly IDisposable? _cultureSubscription;
+  private readonly IDisposable? _positionSubscription;
 
   // the camera's flags are set (once per attached engine)
   private bool _flagsSet;
@@ -79,12 +80,15 @@ public partial class NucleusMiniViewModel : ObservableObject, IDisposable
   /// <param name="translation">UI strings (null: English)</param>
   /// <param name="preferences">remembers <see cref="IsExpanded"/> (null: not remembered)</param>
   /// <param name="dispatcher">the UI thread (null: calls run where they arrive)</param>
+  /// <param name="cometPosition">the comet's place, AU from the Sun (null: 1 AU is assumed); the
+  /// exposure takes out its sunlight's (1 AU / r)²</param>
   public NucleusMiniViewModel(
     INativeRuntimeService runtime,
     Func<Action<double, double, bool, bool>, VulkanViewportControlViewModel> viewportFactory,
     ITranslationService? translation = null,
     PreferencesService? preferences = null,
-    IUiThreadDispatcher? dispatcher = null)
+    IUiThreadDispatcher? dispatcher = null,
+    IObservable<System.Numerics.Vector3?>? cometPosition = null)
   {
     _runtime = runtime;
     _viewportFactory = viewportFactory;
@@ -94,6 +98,11 @@ public partial class NucleusMiniViewModel : ObservableObject, IDisposable
       new System.Resources.ResourceManager("AetherVk.Logic.Resources.AppStrings", typeof(ITranslationService).Assembly),
       new CultureInfo("en"));
     _isExpanded = preferences?.NucleusMiniExpanded ?? true;
+    _positionSubscription = cometPosition?.Subscribe(p =>
+    {
+      if (p is { } v && v.Length() > 1e-6f)
+        OnUi(() => SetSunDistanceAu(v.Length()));
+    });
     RefreshStrings();
     if (translation is not null)
     {
@@ -274,7 +283,98 @@ public partial class NucleusMiniViewModel : ObservableObject, IDisposable
       ApplyProjection();
   });
 
-  /// <summary>No dust, no labels, sunlight only, 5 fps: what makes this view cheap and readable.</summary>
+  private float _exposureEv;
+
+  /// <summary>The <see cref="ExposureEv"/> slider's step, stops.</summary>
+  public const double ExposureEvStep = 0.5;
+
+  /// <summary>Lowest / highest <see cref="ExposureEv"/> (the slider's range), stops.</summary>
+  public static double MinExposureEv => CameraService.MinNucleusExposureEv;
+  public static double MaxExposureEv => CameraService.MaxNucleusExposureEv;
+
+  /// <summary>
+  /// The mini-view's exposure, stops: 0 draws the point under the Sun white whatever the comet's
+  /// distance from the Sun; each stop doubles the sunlit side's brightness, the night side stays
+  /// black. Clamped to [<see cref="MinExposureEv"/>, <see cref="MaxExposureEv"/>].
+  /// </summary>
+  public float ExposureEv
+  {
+    get => _exposureEv;
+    set
+    {
+      float v = float.IsNaN(value)
+        ? 0f
+        : Math.Max(CameraService.MinNucleusExposureEv, Math.Min(CameraService.MaxNucleusExposureEv, value));
+      if (v == _exposureEv)
+        return;
+      _exposureEv = v;
+      OnPropertyChanged();
+      OnPropertyChanged(nameof(ExposureEvValue));
+      OnPropertyChanged(nameof(ExposureEvText));
+      ResetExposureCommand.NotifyCanExecuteChanged();
+      SendExposure();
+    }
+  }
+
+  /// <summary><see cref="ExposureEv"/> for a slider (double).</summary>
+  public double ExposureEvValue
+  {
+    get => _exposureEv;
+    set => ExposureEv = (float)value;
+  }
+
+  /// <summary><see cref="ExposureEv"/> as shown beside the slider ("+1.5 EV").</summary>
+  public string ExposureEvText => string.Format(CultureInfo.InvariantCulture, "{0:+0.0;−0.0;0} EV", _exposureEv);
+
+  /// <summary>Back to EV 0.</summary>
+  [RelayCommand(CanExecute = nameof(CanResetExposure))]
+  private void ResetExposure() => ExposureEv = 0f;
+
+  private bool CanResetExposure() => _exposureEv != 0f;
+
+  // the comet's distance from the Sun, AU (1 until known)
+  private double _sunDistanceAu = 1.0;
+
+  /// <summary>
+  /// The comet's distance from the Sun, AU: the exposure takes out the sunlight's (1 AU / r)², so
+  /// the view is as bright at 3 AU as at 1 AU. Resent when it changed by more than 1 %.
+  /// </summary>
+  internal void SetSunDistanceAu(double r)
+  {
+    if (double.IsNaN(r) || double.IsInfinity(r) || r <= 0 || Math.Abs(r / _sunDistanceAu - 1.0) <= 0.01)
+      return;
+    _sunDistanceAu = r;
+    SendExposure();
+  }
+
+  /// <summary>
+  /// The camera's sunlight factor at <paramref name="ev"/> for the dark-Lambert shading at
+  /// <paramref name="sunDistanceAu"/>: 2^EV / albedo × r², which the shader's albedo and (1 AU / r)²
+  /// bring back to 2^EV for the point under the Sun.
+  /// </summary>
+  internal static float ExposureFactor(float ev, double sunDistanceAu) =>
+    (float)(CameraService.ExposureFor(CameraMode.CometOrbiting, physicalLighting: true, ev, nucleusFromEarth: true)
+            * sunDistanceAu * sunDistanceAu);
+
+  private void SendExposure()
+  {
+    if (_flagsSet && Viewport?.CameraEntityId is { } cam and not 0)
+      _runtime.SetCameraExposure(cam, ExposureFactor(_exposureEv, _sunDistanceAu));
+  }
+
+  /// <summary>
+  /// The dark Lambert shading (sunlight only, no ambient fill: the night side is black, so what is
+  /// lit stands out), its brightness set by <see cref="ExposureEv"/> rather than by the physical
+  /// irradiance: the distance from the Sun is taken out (<see cref="ExposureFactor"/>). This view
+  /// is for finding the nucleus, its orientation and its lit side, not its photometry.
+  /// </summary>
+  private void ApplyShading(ulong cam)
+  {
+    _runtime.SetCameraShading(cam, CameraService.ShadingPhysical | CameraService.ShadingLambertDark);
+    _runtime.SetCameraExposure(cam, ExposureFactor(_exposureEv, _sunDistanceAu));
+  }
+
+  /// <summary>No dust, no labels, display shading, 5 fps: what makes this view cheap and readable.</summary>
   private bool SetFlags()
   {
     ulong cam = Viewport?.CameraEntityId ?? 0;
@@ -282,7 +382,7 @@ public partial class NucleusMiniViewModel : ObservableObject, IDisposable
       return false;
     bool noDust = _runtime.SetCameraNoDust(cam, true);
     bool noUi = _runtime.SetCameraNoUiLayer(cam, true);
-    _runtime.SetCameraShading(cam, CameraService.ShadingPhysical | CameraService.ShadingLambertDark);
+    ApplyShading(cam);
     _runtime.SetViewportMinFrameInterval(Viewport!.PresentationEngineId, FrameIntervalUs);
     return noDust && noUi;
   }
@@ -433,6 +533,7 @@ public partial class NucleusMiniViewModel : ObservableObject, IDisposable
   {
     _disposed = true;
     _cultureSubscription?.Dispose();
+    _positionSubscription?.Dispose();
     if (Viewport is { } viewport)
     {
       viewport.Attached -= OnAttached;

@@ -52,6 +52,7 @@ Compact.Playback.Reset
 Compact.Playback.RunToEnd
 Compact.Playback.Seek
 Compact.Playback.Speed
+Compact.View.DustExposure
 Compact.View.DustFlow
 Compact.View.Model
 Compact.View.Nucleus
@@ -90,6 +91,8 @@ ModelRotationsBox
 ModelSpanText
 ModelSunSection
 NucleusMiniView.Caption
+NucleusMiniView.Exposure
+NucleusMiniView.ExposureReset
 NucleusMiniView.ResetToEarth
 NucleusMiniViewExpander
 NucleusMiniViewHost

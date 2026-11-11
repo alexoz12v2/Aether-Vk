@@ -2322,11 +2322,88 @@ pub(crate) fn comet_screen_position(
 /// camera) for the comet's root-level overlays: the micro layer moves the comet itself, these
 /// move its label (which targets the comet body) and its lines (marked with a
 /// `LightTimeTrackComponent`) by the same `offset_au`, whatever layer the comet is on.
+///
+/// Each line is also moved onto the nucleus: by the vector from its closest point to the comet's
+/// (geometric) position. The reference orbit is a two-body conic from the elements, a few km off
+/// the comet's true (SPK) position through perturbations and non-gravitational forces: invisible
+/// in the orbit views, but a tenth of the field in the nucleus view from Earth (4 nucleus diameters
+/// tall), where the line only says which way the comet moves. The travelled path ends on the
+/// comet: its correction is ~0. A line farther than [`TRACK_SNAP_MAX_AU`] is left alone.
 #[derive(Debug, Default)]
 pub(crate) struct LightTimeOverlay {
   comet: Option<EntityId>,
   offset_au: aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64,
-  tracks: alloc::vec::Vec<EntityId>,
+  /// the comet's lines and each one's displacement (light time + snap onto the nucleus)
+  tracks: alloc::vec::Vec<(EntityId, aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64)>,
+}
+
+/// Lines missing the comet by more than this (1.5 million km) are not snapped onto it: that is no
+/// longer a reference error but another curve.
+pub(crate) const TRACK_SNAP_MAX_AU: f64 = 0.01;
+
+/// The point of the cubic Bézier chain `control_points` (4 per segment) closest to `p`: the
+/// segment whose chord passes closest (and its neighbours), then a sampled search refined by
+/// golden sections. Entity-local coordinates.
+pub(crate) fn closest_point_on_bezier_chain(control_points: &[[f64; 3]], p: [f64; 3]) -> Option<[f64; 3]> {
+  use crate::simulation_api::earth_observer::{add, dot, scale, sub};
+  let segments = control_points.len() / 4;
+  if segments == 0 {
+    return None;
+  }
+  let eval = |seg: usize, t: f64| -> [f64; 3] {
+    let c = &control_points[seg * 4..seg * 4 + 4];
+    let u = 1.0 - t;
+    let (b0, b1, b2, b3) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+    add(add(scale(c[0], b0), scale(c[1], b1)), add(scale(c[2], b2), scale(c[3], b3)))
+  };
+  let d2 = |q: [f64; 3]| {
+    let v = sub(q, p);
+    dot(v, v)
+  };
+  // the chord distance picks the segment
+  let mut best_seg = 0;
+  let mut best_chord = f64::INFINITY;
+  for seg in 0..segments {
+    let (a, b) = (control_points[seg * 4], control_points[seg * 4 + 3]);
+    let ab = sub(b, a);
+    let len2 = dot(ab, ab);
+    let t = if len2 > 0.0 { (dot(sub(p, a), ab) / len2).clamp(0.0, 1.0) } else { 0.0 };
+    let dist = d2(add(a, scale(ab, t)));
+    if dist < best_chord {
+      best_chord = dist;
+      best_seg = seg;
+    }
+  }
+  let mut best = (f64::INFINITY, [0.0; 3]);
+  for seg in best_seg.saturating_sub(1)..(best_seg + 2).min(segments) {
+    const N: usize = 16;
+    let mut k_best = 0;
+    let mut k_d = f64::INFINITY;
+    for k in 0..=N {
+      let dist = d2(eval(seg, k as f64 / N as f64));
+      if dist < k_d {
+        k_d = dist;
+        k_best = k;
+      }
+    }
+    // golden sections around the best sample
+    let (mut lo, mut hi) = ((k_best as f64 - 1.0).max(0.0) / N as f64, (k_best as f64 + 1.0).min(N as f64) / N as f64);
+    const G: f64 = 0.618_033_988_749_894_8;
+    for _ in 0..48 {
+      let (m1, m2) = (hi - G * (hi - lo), lo + G * (hi - lo));
+      if d2(eval(seg, m1)) < d2(eval(seg, m2)) {
+        hi = m2;
+      } else {
+        lo = m1;
+      }
+    }
+    let q = eval(seg, 0.5 * (lo + hi));
+    let dist = d2(q);
+    if dist < best.0 {
+      best = (dist, q);
+    }
+  }
+  Some(best.1)
 }
 
 impl LightTimeOverlay {
@@ -2335,21 +2412,47 @@ impl LightTimeOverlay {
     let Some(lt) = scene.with_component(camera, |l: &LightTimeViewComponent| *l) else {
       return Self::default();
     };
-    let mut tracks = alloc::vec::Vec::new();
+    use aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64;
+    let mut ids = alloc::vec::Vec::new();
     scene.query1(|id, t: &LightTimeTrackComponent| {
       if t.comet == lt.comet {
-        tracks.push(id);
+        ids.push(id);
       }
     });
-    Self {
-      comet: Some(lt.comet),
-      offset_au: aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64::from_components(
-        lt.offset_au[0],
-        lt.offset_au[1],
-        lt.offset_au[2],
-      ),
-      tracks,
+    let offset_au = Vec3f64::from_components(lt.offset_au[0], lt.offset_au[1], lt.offset_au[2]);
+    let comet_at = scene.global_transform_f64(lt.comet).map(|t| [t.position.x(), t.position.y(), t.position.z()]);
+    let tracks = ids
+      .into_iter()
+      .map(|id| {
+        let snap = comet_at
+          .and_then(|c| Self::snap_onto(scene, id, c))
+          .map(|v| Vec3f64::from_components(v[0], v[1], v[2]))
+          .unwrap_or_else(|| Vec3f64::from_components(0.0, 0.0, 0.0));
+        (id, offset_au + snap)
+      })
+      .collect();
+    Self { comet: Some(lt.comet), offset_au, tracks }
+  }
+
+  /// World vector (AU) from the line's closest point to `comet` (world AU), if it is within
+  /// [`TRACK_SNAP_MAX_AU`].
+  fn snap_onto(scene: &Scene, track: EntityId, comet: [f64; 3]) -> Option<[f64; 3]> {
+    use crate::simulation_api::earth_observer::{add, dot, qinverse, qnormalize, rotate, scale, sub};
+    let frame = scene.global_transform_f64(track)?;
+    let q = qnormalize([frame.rotation[0], frame.rotation[1], frame.rotation[2], frame.rotation[3]]);
+    let k = frame.scale.x() as f64;
+    if k == 0.0 {
+      return None;
     }
+    let origin = [frame.position.x(), frame.position.y(), frame.position.z()];
+    // the comet in the line's local frame, the closest point back in world
+    let local = scale(rotate(qinverse(q), sub(comet, origin)), 1.0 / k);
+    let closest = scene.with_component(track, |t: &crate::scene::trajectory::TrajectoryComponent| {
+      closest_point_on_bezier_chain(&t.control_points_f64, local)
+    })??;
+    let world = add(origin, rotate(q, scale(closest, k)));
+    let d = sub(comet, world);
+    (dot(d, d).sqrt() <= TRACK_SNAP_MAX_AU).then_some(d)
   }
 
   /// displacement (AU) of a label pointing at `target`
@@ -2365,7 +2468,7 @@ impl LightTimeOverlay {
     &self,
     entity: EntityId,
   ) -> Option<aethervk_oshal_rlib::math::vector::vec3f64::Vec3f64> {
-    self.tracks.contains(&entity).then_some(self.offset_au)
+    self.tracks.iter().find(|(id, _)| *id == entity).map(|(_, o)| *o)
   }
 }
 

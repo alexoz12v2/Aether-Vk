@@ -32,6 +32,22 @@
                      HorizontalAlignment="Center" VerticalAlignment="Center" Margin="8" />
         </Panel>
       </Border>
+      <!-- the exposure: the sunlit side's brightness; the night side stays black -->
+      <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="8" ToolTip.Tip="{Binding StrExposureTip}">
+        <TextBlock Grid.Column="0" Classes="note" VerticalAlignment="Center" Text="{Binding StrExposure}" />
+        <Slider Grid.Column="1" VerticalAlignment="Center"
+                AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.NucleusMiniViewExposure}"
+                Minimum="{x:Static vm:NucleusMiniViewModel.MinExposureEv}"
+                Maximum="{x:Static vm:NucleusMiniViewModel.MaxExposureEv}"
+                SmallChange="{x:Static vm:NucleusMiniViewModel.ExposureEvStep}"
+                LargeChange="1" TickFrequency="{x:Static vm:NucleusMiniViewModel.ExposureEvStep}"
+                IsSnapToTickEnabled="True" Value="{Binding ExposureEvValue, Mode=TwoWay}" />
+        <TextBlock Grid.Column="2" Classes="note" VerticalAlignment="Center" MinWidth="52" TextAlignment="Right"
+                   FontFamily="Cascadia Mono, Consolas, monospace" Text="{Binding ExposureEvText}" />
+        <Button Grid.Column="3"
+                AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.NucleusMiniViewExposureReset}"
+                Content="{Binding StrExposureReset}" Command="{Binding ResetExposureCommand}" />
+      </Grid>
       <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
         <TextBlock Grid.Column="0" Classes="note" TextWrapping="Wrap" VerticalAlignment="Center" Text="{Binding StrDragHint}" />
         <Button Grid.Column="1"

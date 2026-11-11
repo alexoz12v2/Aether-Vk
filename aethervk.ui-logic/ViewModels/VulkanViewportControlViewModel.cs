@@ -141,10 +141,16 @@ public partial class VulkanViewportControlViewModel(
     {
       // the mini-view's own drag: never the main viewport's operators
       _mouseSubscription = subscribable.SubscribeNativeMouseEvents(ev =>
-        miniPointer(ev.X, ev.Y, ev.IsDown && ev.Button != MouseButton.None, !ev.IsDown && ev.Button != MouseButton.None));
+      {
+        if (ev.IsDown && ev.Button != MouseButton.None)
+          _router.NativeViewportPressed();
+        miniPointer(ev.X, ev.Y, ev.IsDown && ev.Button != MouseButton.None, !ev.IsDown && ev.Button != MouseButton.None);
+      });
     }
     else _mouseSubscription = IsMini ? null : subscribable.SubscribeNativeMouseEvents(ev =>
     {
+      if (ev.IsDown && ev.Button != MouseButton.None)
+        _router.NativeViewportPressed();
       var state = new InputState(
         isPressed: ev.IsDown,
         modifiers: NativeInputConverter.ToInputModifiers(ev.Modifiers)
@@ -228,6 +234,37 @@ public partial class VulkanViewportControlViewModel(
       handleType = NativeWindowHandleProvider.HandleType.Windowless;
     }
 
+    // a start in the compact layout with the mini-view open creates the mini's native window
+    // before the main viewport's, and the runtime attaches a mini only beside an attached main
+    // viewport (ViewportRoleTable.CanAdd): attach it once the main viewport is attached
+    if (IsMini && _runtimeService.PresentationEngineId is null)
+    {
+      Console.WriteLine("[VulkanViewportControl] NucleusMini: waiting for the main viewport to attach");
+      _pendingMainAttach = () =>
+      {
+        MainAttached -= _pendingMainAttach;
+        _pendingMainAttach = null;
+        uint mw = _miniWidth > 0 ? _miniWidth : 320u;
+        uint mh = _miniHeight > 0 ? _miniHeight : 240u;
+        if (!AttachToEngine(mw, mh, provider, handleType) && handleType != NativeWindowHandleProvider.HandleType.Windowless)
+          ReportFatalError("Failed to initialize native input handler.");
+      };
+      MainAttached += _pendingMainAttach;
+      return true;
+    }
+
+    return AttachToEngine(w, h, provider, handleType)
+      || handleType == NativeWindowHandleProvider.HandleType.Windowless;
+  }
+
+  /// <summary>A main viewport attached its engine (UI thread): a mini-view whose native window came
+  /// first attaches now.</summary>
+  private static event Action? MainAttached;
+
+  private Action? _pendingMainAttach;
+
+  private bool AttachToEngine(uint w, uint h, Func<CNativeWindowHandle>? provider, uint handleType)
+  {
     bool ok = _runtimeService.AddViewport(
       w,
       h,
@@ -252,13 +289,14 @@ public partial class VulkanViewportControlViewModel(
       if (!IsMini)
         _viewport3DViewModel.OnViewportCreated(presentationEngineId, cameraEntityId);
       Attached?.Invoke();
+      if (!IsMini)
+        MainAttached?.Invoke();
     }
     else
     {
       Console.WriteLine($"[VulkanViewportControl] AddViewport ({Role}) failed.");
     }
-
-    return ok || handleType == NativeWindowHandleProvider.HandleType.Windowless;
+    return ok;
   }
 
   /// <summary>Broadcasts a fatal error via <see cref="WeakReferenceMessenger"/>.</summary>
@@ -300,6 +338,11 @@ public partial class VulkanViewportControlViewModel(
 
   public void Dispose()
   {
+    if (_pendingMainAttach is not null)
+    {
+      MainAttached -= _pendingMainAttach;
+      _pendingMainAttach = null;
+    }
     // The engine goes before the handler only so no frame is presented after the input hooks are
     // gone; the surface itself is on X11SurfaceDisplay (process lifetime), not on the handler's
     // connection, so closing that connection can no longer pull the display from under a surface.

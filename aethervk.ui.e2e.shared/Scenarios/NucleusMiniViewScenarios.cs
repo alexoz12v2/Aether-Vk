@@ -133,11 +133,12 @@ public static class NucleusMiniViewScenarios
     {
       OpenCompactWithMini(app, index, log);
       var main = MainViewport(app);
+      var (clickX, clickY) = ViewportClickPoint(app, main);
       double[] ModeGrid(char key)
       {
-        // a click in the main view's upper middle focuses its native window, then the row key
+        // a click in the main view (beside any billboard) focuses it, then the row key
         app.Foreground();
-        app.ClickAt((int)main.CentreX, main.Y + main.Height / 4);
+        app.ClickAt(clickX, clickY);
         Thread.Sleep(400);
         app.PressKey(key);
         Thread.Sleep(ModeSettle);

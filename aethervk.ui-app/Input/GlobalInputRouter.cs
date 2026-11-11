@@ -135,7 +135,11 @@ public sealed class GlobalInputRouter(InputRegistry registry) : IWindowInputRout
     var focused =
       TopLevel.GetTopLevel(e.Source as Visual)?.FocusManager?.GetFocusedElement() as Visual;
     if (focused == null)
+    {
+      if (_keyboardInNativeViewport)
+        RouteUnfocusedKeyToViewport(e, isPressed);
       return;
+    }
 
     // Let TextBoxes handle normal typing; only intercept Escape or modifier+key combos.
     if (
@@ -169,8 +173,44 @@ public sealed class GlobalInputRouter(InputRegistry registry) : IWindowInputRout
     }
   }
 
-  private void OnPointerPressed(object? sender, PointerPressedEventArgs e) =>
+  /// <summary>Set by a click in a native viewport, cleared by a click on an Avalonia control.</summary>
+  private volatile bool _keyboardInNativeViewport;
+
+  /// <inheritdoc/>
+  public void NativeViewportPressed() => _keyboardInNativeViewport = true;
+
+  /// <summary>
+  /// A key with no Avalonia focus after a click in a native viewport (macOS): dispatched to the
+  /// "Viewport" context like the native keystrokes, on the press only (as
+  /// <see cref="RouteNativeComposed"/>), the release swallowed with it.
+  /// </summary>
+  private void RouteUnfocusedKeyToViewport(KeyEventArgs e, bool isPressed)
+  {
+    var chord = new InputChord(
+      Key: e.Key.ToString(),
+      Shift: e.KeyModifiers.HasFlag(KeyModifiers.Shift),
+      Ctrl: e.KeyModifiers.HasFlag(KeyModifiers.Control),
+      Alt: e.KeyModifiers.HasFlag(KeyModifiers.Alt)
+    );
+    if (_registry.Resolve(ViewportContextId, chord) is null)
+      return;
+    e.Handled = true;
+    if (!isPressed)
+      return;
+    var state = new InputState(true, GetModifiers(e.KeyModifiers));
+    foreach (var window in _attachedWindows)
+      if (FindAndDispatch(window, ViewportContextId, chord, state))
+        return;
+  }
+
+  private const string ViewportContextId = "Viewport";
+
+  private void OnPointerPressed(object? sender, PointerPressedEventArgs e)
+  {
+    // a click on the overlay's transparent void is a click in the viewport below it
+    _keyboardInNativeViewport = e.Source is Control { Name: "TransparentRoot" };
     HandlePointerInput(e, true);
+  }
 
   private void OnPointerReleased(object? sender, PointerReleasedEventArgs e) =>
     HandlePointerInput(e, false);

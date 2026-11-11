@@ -108,8 +108,48 @@ public sealed class SaveFileService
     {
       var now = Fingerprint(_host.Capture());
       _fingerprint ??= now;
-      return !string.Equals(now, _fingerprint, StringComparison.Ordinal);
+      bool dirty = !string.Equals(now, _fingerprint, StringComparison.Ordinal);
+      if (dirty && !ReferenceEquals(_loggedBaseline, _fingerprint))
+      {
+        // once per baseline: what made the session dirty (the app log's answer to an unexpected "*")
+        _loggedBaseline = _fingerprint;
+        Console.WriteLine($"[SaveFile] dirty: {string.Join(", ", FingerprintDiff(_fingerprint, now).Take(12))}");
+      }
+      return dirty;
     }
+  }
+
+  private string? _loggedBaseline;
+
+  /// <summary>The JSON paths whose values differ between two fingerprints (with both values).</summary>
+  internal static IEnumerable<string> FingerprintDiff(string baseline, string now)
+  {
+    var diffs = new List<string>();
+    void Walk(System.Text.Json.Nodes.JsonNode? a, System.Text.Json.Nodes.JsonNode? b, string path)
+    {
+      if (a is System.Text.Json.Nodes.JsonObject oa && b is System.Text.Json.Nodes.JsonObject ob)
+      {
+        foreach (var key in oa.Select(kv => kv.Key).Union(ob.Select(kv => kv.Key)))
+          Walk(oa[key], ob[key], $"{path}.{key}");
+      }
+      else if (a is System.Text.Json.Nodes.JsonArray aa && b is System.Text.Json.Nodes.JsonArray ab && aa.Count == ab.Count)
+      {
+        for (int i = 0; i < aa.Count; i++)
+          Walk(aa[i], ab[i], $"{path}[{i}]");
+      }
+      else if (a?.ToJsonString() != b?.ToJsonString())
+      {
+        diffs.Add($"{path}: {Short(a)} -> {Short(b)}");
+      }
+    }
+    static string Short(System.Text.Json.Nodes.JsonNode? n)
+    {
+      var t = n?.ToJsonString() ?? "null";
+      return t.Length > 60 ? t.Substring(0, 60) + "…" : t;
+    }
+    try { Walk(System.Text.Json.Nodes.JsonNode.Parse(baseline), System.Text.Json.Nodes.JsonNode.Parse(now), "$"); }
+    catch (System.Text.Json.JsonException) { diffs.Add("(unparsable fingerprint)"); }
+    return diffs;
   }
 
   /// <summary>Test diagnostics: the baseline and the current fingerprint (null baseline = never checked).</summary>
@@ -151,11 +191,48 @@ public sealed class SaveFileService
       })],
       Assets = [.. s.Assets.Select(a => new AssetDto { Key = a.Key, ContentHash = SaveIndexMapping.HashHex(a.ContentHash) })],
       CometAppearance = s.Appearance,
-      Billboards = [.. s.Billboards],
+      Billboards = [.. s.Billboards.Select(Comparable)],
       // null (classic) is not written: fingerprints of the classic layout are unchanged
       UiLayout = s.UiLayout,
     };
     return SaveIndexIo.ToJson(index);
+  }
+
+  /// <summary>
+  /// A billboard as far as a save restores it. The desktop centre follows the window (compared by
+  /// the offset from the viewport instead); a comet-anchored one is put back on the comet at open
+  /// (its place is not the user's) and a physically bound one is re-sized for the viewport (its
+  /// size is not either). Without this, opening a save into another viewport size (the Compact
+  /// layout) or moving the window marked the session dirty.
+  /// </summary>
+  private static BillboardDto Comparable(BillboardDto b)
+  {
+    var c = System.Text.Json.JsonSerializer.Deserialize<BillboardDto>(System.Text.Json.JsonSerializer.Serialize(b))!;
+    bool anchored = b.PhysicalSizeBound || (b.ImageNucleusX is not null && b.ImageNucleusY is not null);
+    bool hasOffset = b.ViewportOffsetX is not null && b.ViewportOffsetY is not null;
+    if (anchored || hasOffset)
+    {
+      c.CenterX = 0;
+      c.CenterY = 0;
+    }
+    if (anchored)
+    {
+      c.ViewportOffsetX = null;
+      c.ViewportOffsetY = null;
+      c.ViewportScaling = null;
+    }
+    else if (hasOffset)
+    {
+      // past the f64 noise of following the viewport's moves
+      c.ViewportOffsetX = Math.Round(b.ViewportOffsetX!.Value, 3);
+      c.ViewportOffsetY = Math.Round(b.ViewportOffsetY!.Value, 3);
+    }
+    if (b.PhysicalSizeBound)
+    {
+      c.WidthPx = 0;
+      c.HeightPx = 0;
+    }
+    return c;
   }
 
   /// <summary>A viewport as a new one starts: the default mode, the observer not yet placed and

@@ -381,6 +381,99 @@ fn light_time_overlay_displaces_only_the_comet_label_and_lines() {
   assert!(lt.track_offset(comet).is_none(), "an unmarked entity is not a line");
 }
 
+/// The comet's lines are also moved onto the nucleus: by the vector from their closest point to
+/// the comet (a reference conic a few km off the true position would otherwise miss the nucleus
+/// in the view from Earth); a line farther than `TRACK_SNAP_MAX_AU` keeps the light time only.
+#[test]
+fn light_time_overlay_snaps_the_comet_lines_onto_the_nucleus() {
+  use super::{LightTimeOverlay, TRACK_SNAP_MAX_AU};
+  use crate::scene::trajectory::TrajectoryComponent;
+  use crate::simulation_api::earth_observer::{LightTimeViewComponent, mark_light_time_track};
+  use aethervk_oshal_rlib::math::vector::Vector3;
+
+  let scene = Scene::new(Arc::new(RwLock::new(TextureCache::new("test_light_time_snap"))));
+  scene.register_all_crate_components();
+  let camera = scene.spawn_entity("camera");
+  let comet = scene.spawn_entity("Comet_body");
+  let at = |x: f64, y: f64, z: f64| HighResTransformComponent {
+    position: Vec3f64::from_components(x, y, z),
+    ..Default::default()
+  };
+  scene.add_component(comet, at(1.0, 0.0, 0.0)).unwrap();
+  // a straight line along +Y through (1, miss, 0) .. split in 3 cubic segments, so the closest
+  // point is inside a segment: the comet is `miss` below it
+  let line = |name: &str, miss: f64| {
+    let e = scene.spawn_entity(name);
+    scene.add_component(e, at(0.0, 0.0, 0.0)).unwrap();
+    let mut cps = alloc::vec::Vec::new();
+    for seg in 0..3 {
+      let (a, b) = (-1e-3 + seg as f64 * 1e-3, seg as f64 * 1e-3);
+      for k in 0..4 {
+        let y = a + (b - a) * k as f64 / 3.0;
+        cps.push([1.0, y, miss]);
+      }
+    }
+    scene
+      .add_component(
+        e,
+        TrajectoryComponent {
+          control_points: alloc::vec::Vec::new(),
+          control_points_f64: cps,
+          color: [1.0; 4],
+          line_width: 1.0,
+          texture_id: 0,
+          subdivisions_per_segment: 1,
+        },
+      )
+      .unwrap();
+    mark_light_time_track(&scene, e, comet);
+    e
+  };
+  let miss = 3e-8; // 4.5 km
+  let near = line("Comet_orbit", miss);
+  let far = line("far", 2.0 * TRACK_SNAP_MAX_AU);
+
+  let offset_au = [1.5e-4, -2.0e-4, 3.0e-5];
+  scene.register_component::<LightTimeViewComponent>(&[]);
+  scene
+    .add_component(camera, LightTimeViewComponent { comet, delay_s: 1650.0, offset_au })
+    .unwrap();
+  let lt = LightTimeOverlay::of(&scene, camera);
+  let o = lt.track_offset(near).unwrap();
+  let expected = [offset_au[0], offset_au[1], offset_au[2] - miss];
+  for (got, want) in [o.x(), o.y(), o.z()].into_iter().zip(expected) {
+    assert!((got - want).abs() < 1e-12, "snapped offset {:?}, expected {expected:?}", [o.x(), o.y(), o.z()]);
+  }
+  let o = lt.track_offset(far).unwrap();
+  assert_eq!([o.x(), o.y(), o.z()], offset_au, "a line far from the comet keeps the light time only");
+  // the label (the comet itself) is not snapped
+  let o = lt.label_offset(comet).unwrap();
+  assert_eq!([o.x(), o.y(), o.z()], offset_au);
+}
+
+/// The closest point of a Bézier chain: on a quarter circle (radius 1) made of 8 cubic
+/// segments, the point nearest an outside point is the radial projection (within the Bézier
+/// approximation of the circle, ~1e-6 of the radius).
+#[test]
+fn closest_point_on_bezier_chain_is_the_radial_projection_on_a_circle() {
+  use super::closest_point_on_bezier_chain;
+  let n = 8;
+  let mut cps = alloc::vec::Vec::new();
+  for i in 0..n {
+    let (a0, a1) = (i as f64 / n as f64 * core::f64::consts::FRAC_PI_2, (i + 1) as f64 / n as f64 * core::f64::consts::FRAC_PI_2);
+    let k = 4.0 / 3.0 * ((a1 - a0) / 4.0).tan();
+    let (p0, p3) = ([a0.cos(), a0.sin(), 0.0], [a1.cos(), a1.sin(), 0.0]);
+    cps.push(p0);
+    cps.push([p0[0] - k * p0[1], p0[1] + k * p0[0], 0.0]);
+    cps.push([p3[0] + k * p3[1], p3[1] - k * p3[0], 0.0]);
+    cps.push(p3);
+  }
+  let ang: f64 = 0.7;
+  let q = closest_point_on_bezier_chain(&cps, [2.0 * ang.cos(), 2.0 * ang.sin(), 0.3]).unwrap();
+  assert!((q[0] - ang.cos()).abs() < 1e-5 && (q[1] - ang.sin()).abs() < 1e-5 && q[2] == 0.0, "{q:?}");
+  assert!(closest_point_on_bezier_chain(&[], [0.0; 3]).is_none());
+}
+
 /// Jet markers: a site facing the Sun (the heliocentric origin) is lit, the antipodal one is
 /// not, and turning the nucleus half a revolution swaps them (the marker follows the spin).
 #[test]

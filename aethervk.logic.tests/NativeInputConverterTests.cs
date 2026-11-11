@@ -77,4 +77,52 @@ public sealed class NativeInputConverterTests
   {
     Assert.Equal(200u, NativeInputConverter.NormalizeX11Keycode(200u));
   }
+
+  // macOS keyCodes are physical ANSI positions, unrelated to the VK codes. Only letters were mapped
+  // and the rest passed through raw, so the digit camera keys never worked on a Mac ('1' = 0x12,
+  // '3' = 0x14 = VK_CAPITAL) and other keys hit the wrong ones (Delete 0x33 read as '3').
+  [Theory]
+  [InlineData((ushort)0x1D, "D0")]
+  [InlineData((ushort)0x12, "D1")]
+  [InlineData((ushort)0x13, "D2")]
+  [InlineData((ushort)0x14, "D3")]
+  [InlineData((ushort)0x15, "D4")]
+  [InlineData((ushort)0x17, "D5")]
+  [InlineData((ushort)0x16, "D6")]
+  [InlineData((ushort)0x1A, "D7")]
+  [InlineData((ushort)0x1C, "D8")]
+  [InlineData((ushort)0x19, "D9")]
+  [InlineData((ushort)0x00, "A")]
+  [InlineData((ushort)0x06, "Z")]
+  [InlineData((ushort)0x53, "NumPad1")]
+  [InlineData((ushort)0x5C, "NumPad9")]
+  [InlineData((ushort)0x41, "NumPadDecimal")]
+  [InlineData((ushort)0x30, "Tab")]
+  [InlineData((ushort)0x35, "Escape")]
+  [InlineData((ushort)0x24, "Return")]
+  [InlineData((ushort)0x31, "Space")]
+  public void Mac_KeyCodes_MapToTheirKeys(ushort macKeyCode, string expected)
+  {
+    Assert.Equal(expected, KeyOf(NativeInputConverter.NormalizeMacKeyCode(macKeyCode)));
+  }
+
+  [Theory]
+  [InlineData((ushort)0x33, 0x08u)] // Delete (⌫) is VK_BACK, not '3'
+  [InlineData((ushort)0x60, 0x74u)] // F5 is VK_F5, not NumPad0
+  [InlineData((ushort)0x7B, 0x25u)] // Left arrow
+  [InlineData((ushort)0x1B, 0u)]    // '-' is no key, not Escape
+  [InlineData((ushort)0x21, 0u)]    // '[' is no key, not Page Up
+  public void Mac_KeyCodes_DoNotLandOnOtherKeys(ushort macKeyCode, uint expectedVk)
+  {
+    Assert.Equal(expectedVk, NativeInputConverter.NormalizeMacKeyCode(macKeyCode));
+  }
+
+  [Fact]
+  public void Mac_KeyCodes_AreDistinct()
+  {
+    var mapped = Enumerable.Range(0, 0x80).Select(c => NativeInputConverter.NormalizeMacKeyCode((ushort)c))
+      .Where(vk => vk != 0).ToList();
+    // Return and keypad Enter both give VK_RETURN; nothing else may share a key
+    Assert.Equal(mapped.Count - 1, mapped.Distinct().Count());
+  }
 }

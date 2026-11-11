@@ -78,27 +78,63 @@ public unsafe class MacNativeInputHandler(IntPtr handle, string handleDescriptor
     // swap clases for our handle, which should be a NSView (TODO add check)
     PInvokeObjC.object_setClass(_handle, swizzledClass);
 
-    // force window associated to nsview to accept mouse events (required for appkit)
-    nint window = PInvokeObjC.nint_objc_msgSend(_handle, PInvokeObjC.GetSelector("window"u8));
-    if (window != 0)
-    {
-      // [window setAcceptsMouseMovedEvents:YES]
-      PInvokeObjC.void_objc_msgSend_byte(window, PInvokeObjC.GetSelector("setAcceptsMouseMovedEvents:"u8), 1); // YES
-    }
-    else return false;
-
-    // [view setWantsLayer:YES] -> enables whether an NSView uses a Core animation CALayer
-    // backingstore. If not, you are constrained to the CPU based `drawRect:`.
-    // This triggers our swizzled `makeBackingLayer` automatically
-    PInvokeObjC.void_objc_msgSend_byte(_handle, PInvokeObjC.GetSelector("setWantsLayer"u8), 1); // YES
+    // [view setWantsLayer:YES]: a Core Animation backed view; AppKit asks the swizzled
+    // `makeBackingLayer` for the layer, which makes it a CAMetalLayer
+    PInvokeObjC.void_objc_msgSend_byte(_handle, PInvokeObjC.GetSelector("setWantsLayer:"u8), 1); // YES
+    // a view that already had a backing layer (Avalonia's host view is layer-backed before the
+    // swizzle) keeps it: give it a CAMetalLayer explicitly, the Vulkan surface needs one
+    // (MoltenVK otherwise throws: -[NSViewBackingLayer naturalDrawableSizeMVK]: unrecognized selector)
+    EnsureMetalLayer(_handle);
 
     // Manually trigger first scale update to ensure Retina bounds match 1:1
     PInvokeObjC.void_objc_msgSend(_handle, PInvokeObjC.GetSelector("viewDidChangeBackingProperties"u8));
+
+    // the window, for mouse-moved events: NativeControlHost creates the view before it is in a
+    // window, so this may have to wait for later UI turns
+    AcceptMouseMovedWhenInWindow(attemptsLeft: 50);
 
     if (_traceLevel >= TraceLevel.Basic)
       Log(TraceLevel.Basic, $"[macOS] ISA Swizzled NSView {_handle:X}");
 
     return true;
+  }
+
+  private static nint MetalLayerClass()
+  {
+    fixed (byte* pCAMetalLayer = "CAMetalLayer"u8)
+      return PInvokeObjC.objc_getClass(pCAMetalLayer);
+  }
+
+  private static void EnsureMetalLayer(nint view)
+  {
+    nint metalLayerClass = MetalLayerClass();
+    nint layer = PInvokeObjC.nint_objc_msgSend(view, PInvokeObjC.GetSelector("layer"u8));
+    if (layer != 0 && PInvokeObjC.byte_objc_msgSend_nint(layer, PInvokeObjC.GetSelector("isKindOfClass:"u8), metalLayerClass) != 0)
+      return;
+    nint alloc = PInvokeObjC.nint_objc_msgSend(metalLayerClass, PInvokeObjC.GetSelector("alloc"u8));
+    nint metalLayer = PInvokeObjC.nint_objc_msgSend(alloc, PInvokeObjC.GetSelector("init"u8));
+    // [view setLayer:] retains it: balance the +1 of alloc/init
+    PInvokeObjC.void_objc_msgSend_nint(view, PInvokeObjC.GetSelector("setLayer:"u8), metalLayer);
+    PInvokeObjC.void_objc_msgSend(metalLayer, PInvokeObjC.GetSelector("release"u8));
+    PInvokeObjC.void_objc_msgSend_byte(view, PInvokeObjC.GetSelector("setWantsLayer:"u8), 1);
+    Console.WriteLine($"[macOS] NSView {view:X}: backing layer {layer:X} replaced by a CAMetalLayer");
+  }
+
+  private void AcceptMouseMovedWhenInWindow(int attemptsLeft)
+  {
+    if (!s_instances.ContainsKey(_handle))
+      return; // unhooked meanwhile
+    using var pool = new CocoaAutoreleasePool();
+    nint window = PInvokeObjC.nint_objc_msgSend(_handle, PInvokeObjC.GetSelector("window"u8));
+    if (window != 0)
+    {
+      // [window setAcceptsMouseMovedEvents:YES] (required for appkit)
+      PInvokeObjC.void_objc_msgSend_byte(window, PInvokeObjC.GetSelector("setAcceptsMouseMovedEvents:"u8), 1); // YES
+      // the window's backing scale is known now
+      PInvokeObjC.void_objc_msgSend(_handle, PInvokeObjC.GetSelector("viewDidChangeBackingProperties"u8));
+    }
+    else if (attemptsLeft > 0)
+      _dispatcher.Dispatch(() => AcceptMouseMovedWhenInWindow(attemptsLeft - 1));
   }
 
   protected override void UnhookEvents()
@@ -152,9 +188,9 @@ public unsafe class MacNativeInputHandler(IntPtr handle, string handleDescriptor
       PInvokeObjC.class_addMethod(newClass, PInvokeObjC.GetSelector("viewDidChangeBackingProperties"u8), &ViewDidChangeBackingProperties, v_at_colon);
 
       // --- Input Tricks ---
-      // Force Top-Left coordinate system, instead of Bottom-Left AppKit's default, to match Vulkan
-      // and Avalonia
-      PInvokeObjC.class_addMethod(newClass, PInvokeObjC.GetSelector("isFlipped"u8), &AcceptsFirstResponder, c_at_colon);
+      // No isFlipped override: AppKit would then set geometryFlipped on the CAMetalLayer at each
+      // layout, and Core Animation would show the (already top-down) Vulkan frame upside down.
+      // Mouse coordinates are flipped by hand instead (PublishMouse).
 
       // --- Insertion in Responder chain for mouse events ---
       PInvokeObjC.class_addMethod(newClass, PInvokeObjC.GetSelector("acceptsFirstResponder"u8), &AcceptsFirstResponder, c_at_colon);
@@ -194,16 +230,13 @@ public unsafe class MacNativeInputHandler(IntPtr handle, string handleDescriptor
 
   #region Swizzled_Implementation
 
-  // used for both acceptsFirstResponder and isFlipped
   [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
   private static byte AcceptsFirstResponder(nint self, nint cmd) => 1; // YES
 
   [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
   private static nint MakeBackingLayer(nint self, nint cmd)
   {
-    nint metalLayerClass = 0;
-    fixed (byte* pCAMetalLayer = "CAMetalLayer"u8)
-      metalLayerClass = PInvokeObjC.objc_getClass(pCAMetalLayer); // without having to take QuartzCore!
+    nint metalLayerClass = MetalLayerClass(); // without having to take QuartzCore!
 
     nint alloc = PInvokeObjC.nint_objc_msgSend(metalLayerClass, PInvokeObjC.GetSelector("alloc"u8));
     return PInvokeObjC.nint_objc_msgSend(alloc, PInvokeObjC.GetSelector("init"u8));
@@ -277,7 +310,7 @@ public unsafe class MacNativeInputHandler(IntPtr handle, string handleDescriptor
     ushort keyCode = PInvokeObjC.ushort_objc_msgSend(nsEvent, PInvokeObjC.GetSelector("keyCode"u8));
     ulong modifierFlags = PInvokeObjC.ulong_objc_msgSend(nsEvent, PInvokeObjC.GetSelector("modifierFlags"u8));
 
-    instance.PublishKeyEvent(NormalizeMacKeyCode(keyCode), isDown, ParseModifiers(modifierFlags));
+    instance.PublishKeyEvent(Logic.Input.NativeInputConverter.NormalizeMacKeyCode(keyCode), isDown, ParseModifiers(modifierFlags));
   }
 
   private static void HandleMouseEvent(nint self, nint nsEvent, MouseButton button, bool isDown)
@@ -296,9 +329,10 @@ public unsafe class MacNativeInputHandler(IntPtr handle, string handleDescriptor
 
     ulong modifierFlags = PInvokeObjC.ulong_objc_msgSend(nsEvent, PInvokeObjC.GetSelector("modifierFlags"u8));
 
-    // Note: AppKit origin (0,0) is on the bottom left, Vulkan and Avalonia Both expect Top-Left, so
-    // our view has the isFlipped property set to YES
-    instance.PublishMouseEvent(viewPoint.X, viewPoint.Y, button, isDown, ParseModifiers(modifierFlags));
+    // AppKit's origin is bottom-left (the view is not flipped, see EnsureSwizzledClass); Vulkan and
+    // Avalonia expect top-left
+    double height = PInvokeObjC.GetBounds(self).Height;
+    instance.PublishMouseEvent(viewPoint.X, height - viewPoint.Y, button, isDown, ParseModifiers(modifierFlags));
   }
 
   private static NativeModifierFlags ParseModifiers(ulong flagsRaw)
@@ -311,49 +345,6 @@ public unsafe class MacNativeInputHandler(IntPtr handle, string handleDescriptor
     if (flags.HasFlag(NSEventModifierFlags.Command)) m |= NativeModifierFlags.Super;
     return m;
   }
-
-  /// <summary>
-  /// Translates macOS physical hardware keyCodes into the unified Win32-style
-  /// virtual key standard used by the shared logic dictionary.
-  /// </summary>
-  private static uint NormalizeMacKeyCode(ushort macKeyCode) => macKeyCode switch
-  {
-    // --- Alphabet (A-Z) ---
-    0x00 => 0x41, // A
-    0x0B => 0x42, // B
-    0x08 => 0x43, // C
-    0x02 => 0x44, // D
-    0x0E => 0x45, // E
-    0x03 => 0x46, // F
-    0x05 => 0x47, // G
-    0x04 => 0x48, // H
-    0x22 => 0x49, // I
-    0x26 => 0x4A, // J
-    0x28 => 0x4B, // K
-    0x25 => 0x4C, // L
-    0x2E => 0x4D, // M
-    0x2D => 0x4E, // N
-    0x1F => 0x4F, // O
-    0x23 => 0x50, // P
-    0x0C => 0x51, // Q
-    0x0F => 0x52, // R
-    0x01 => 0x53, // S
-    0x11 => 0x54, // T
-    0x20 => 0x55, // U
-    0x09 => 0x56, // V
-    0x0D => 0x57, // W
-    0x07 => 0x58, // X
-    0x10 => 0x59, // Y
-    0x06 => 0x5A, // Z
-
-    // --- Control Keys ---
-    0x35 => 0x1B, // Escape
-    0x24 => 0x0D, // Return
-    0x4C => 0x0D, // Keypad Enter -> Return
-    0x31 => 0x20, // Space
-
-    _ => macKeyCode // Unmapped keys pass through
-  };
 }
 
 /// <summary>
@@ -483,6 +474,9 @@ internal unsafe static class PInvokeObjC
   public static extern void void_objc_msgSend_nint(nint receiver, nint selector, nint arg1);
 
   [DllImport(Objc, EntryPoint = "objc_msgSend", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern byte byte_objc_msgSend_nint(nint receiver, nint selector, nint arg1);
+
+  [DllImport(Objc, EntryPoint = "objc_msgSend", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
   public static extern ushort ushort_objc_msgSend(nint receiver, nint selector);
 
   [DllImport(Objc, EntryPoint = "objc_msgSend", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
@@ -533,6 +527,35 @@ internal unsafe static class PInvokeObjC
   {
     public double X;
     public double Y;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  internal struct CGRect
+  {
+    public double X;
+    public double Y;
+    public double Width;
+    public double Height;
+  }
+
+  // CGRect (32 bytes): an HFA returned in d0-d3 on ARM64 (plain objc_msgSend); in memory on x86_64
+  // (objc_msgSend_stret)
+  [DllImport(Objc, EntryPoint = "objc_msgSend", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  private static extern CGRect CGRect_objc_msgSend(nint receiver, nint selector);
+
+  [DllImport(Objc, EntryPoint = "objc_msgSend_stret", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  private static extern void CGRect_objc_msgSend_stret(out CGRect result, nint receiver, nint selector);
+
+  /// <summary><c>[view bounds]</c>, ABI-safe on ARM64 and x86_64.</summary>
+  public static CGRect GetBounds(nint view)
+  {
+    nint sel = GetSelector("bounds"u8);
+    if (RuntimeInformation.ProcessArchitecture == Architecture.X64)
+    {
+      CGRect_objc_msgSend_stret(out CGRect r, view, sel);
+      return r;
+    }
+    return CGRect_objc_msgSend(view, sel);
   }
 
   /// <summary>Convenient handler for dynamic strings. Delete if not needed</summary>

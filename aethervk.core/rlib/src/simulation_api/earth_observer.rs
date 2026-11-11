@@ -343,7 +343,7 @@ pub fn clear_light_time_view(scene: &Scene, camera: EntityId) {
 
 // ─── vector / quaternion helpers (f64) ──────────────────────────────────────
 
-fn dot(a: V3, b: V3) -> f64 {
+pub fn dot(a: V3, b: V3) -> f64 {
   a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 fn cross(a: V3, b: V3) -> V3 {
@@ -353,10 +353,10 @@ fn cross(a: V3, b: V3) -> V3 {
     a[0] * b[1] - a[1] * b[0],
   ]
 }
-fn scale(a: V3, s: f64) -> V3 {
+pub fn scale(a: V3, s: f64) -> V3 {
   [a[0] * s, a[1] * s, a[2] * s]
 }
-fn add(a: V3, b: V3) -> V3 {
+pub fn add(a: V3, b: V3) -> V3 {
   [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 }
 pub fn sub(a: V3, b: V3) -> V3 {

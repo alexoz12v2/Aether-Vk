@@ -441,7 +441,21 @@ fn allocate_primary_vk_command_buffer(
       return Ok(cmd);
     }
 
-    let items = discard_pool.pop_ready_items(completed_timeline());
+    let completed = completed_timeline();
+    let items = discard_pool.pop_ready_items(completed);
+    // MoltenVK: a buffer that may carry a device address is destroyed only after an idle device
+    // (`DiscardPool::destroy_items_after_device_idle`, in `start_frame`). Destroyed here, while
+    // another viewport's thread holds a recorded command buffer not yet submitted, Metal rejects
+    // that command buffer (`Invalid Resource`, the device is lost). Back to the pool with them.
+    #[cfg(target_os = "macos")]
+    let items = {
+      let (later, now): (alloc::vec::Vec<_>, alloc::vec::Vec<_>) =
+        items.into_iter().partition(device::resources::DiscardItem::may_free_device_address_buffer);
+      for item in later {
+        discard_pool.discard_item(completed, item);
+      }
+      now
+    };
     device::resources::DiscardPool::destroy_items_lock_free(device, items);
 
     this_thread::sleep_for(core::time::Duration::from_micros(100));

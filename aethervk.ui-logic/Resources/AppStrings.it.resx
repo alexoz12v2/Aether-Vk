@@ -1922,4 +1922,13 @@ Il pulsante centrale avvia e ferma il tempo. Quello a sinistra torna all'inizio 
   <data name="NucleusMini_ResetToEarth" xml:space="preserve">
     <value>Torna alla vista da Terra</value>
   </data>
+  <data name="NucleusMini_Exposure" xml:space="preserve">
+    <value>Esposizione</value>
+  </data>
+  <data name="NucleusMini_ExposureTip" xml:space="preserve">
+    <value>Luminosità del lato illuminato, in stop (EV). A 0 il punto sotto il Sole è bianco, a qualunque distanza dal Sole; ogni stop raddoppia la luminosità. Il lato notturno resta nero, così alzandola si vede chiaramente cosa è illuminato.</value>
+  </data>
+  <data name="NucleusMini_ExposureReset" xml:space="preserve">
+    <value>0 EV</value>
+  </data>
 </root>
