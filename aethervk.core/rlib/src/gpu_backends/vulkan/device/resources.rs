@@ -139,6 +139,16 @@ pub(crate) enum DiscardItem {
   GenericHandle(Box<dyn DeviceResource + Send + Sync + 'static>),
 }
 
+impl DiscardItem {
+  /// Whether destroying this item may free a buffer created with `SHADER_DEVICE_ADDRESS` usage
+  /// (a `Buffer`, or a `GenericHandle`, which can own buffers). See
+  /// [`DiscardPool::destroy_items_after_device_idle`].
+  #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+  pub(crate) fn may_free_device_address_buffer(&self) -> bool {
+    matches!(self, Self::Buffer(_) | Self::GenericHandle(_))
+  }
+}
+
 #[cfg(test)]
 impl DiscardItem {
   /// The `vk::Buffer` a `Buffer` item destroys (tests match queued items by handle).
@@ -441,6 +451,46 @@ impl DiscardPool {
   pub fn queued_timeline_of_buffer(&self, buffer: vk::Buffer) -> Option<u64> {
     let items = crate::gpu_backends::vulkan::device::locks::DebugTrackedMutex::lock(&self.items);
     items.iter().find(|(_, item)| item.buffer_handle() == Some(buffer)).map(|(t, _)| *t)
+  }
+
+  /// Destroys `items` once the device is idle, with every queue's submission lock held, so no
+  /// submission can be made between the wait and the destroy.
+  ///
+  /// MoltenVK makes every live buffer created with `SHADER_DEVICE_ADDRESS` usage resident
+  /// (`useResource`) in every encoder whose pipeline uses physical storage buffer addresses, and
+  /// its queue-submit command buffers do not retain their resources. A buffer whose own timeline
+  /// value has completed can still be listed by a command buffer submitted after it was retired;
+  /// destroying it then makes Metal reject that command buffer (`Invalid Resource`, the device is
+  /// lost). Legal in Vulkan, so the validation layers do not report it. Only the destroy of such
+  /// buffers waits: it happens when a buffer is retired (a resize, a layout change), not per frame.
+  #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+  pub fn destroy_items_after_device_idle(device: &super::LogicalDevice, items: Vec<DiscardItem>) {
+    use core::sync::atomic::{AtomicU64, Ordering};
+    static WAITS: AtomicU64 = AtomicU64::new(0);
+    static WAITED_US: AtomicU64 = AtomicU64::new(0);
+    if items.is_empty() {
+      return;
+    }
+    // graphics first, then compute (the same lock in single-queue mode); presents take the
+    // graphics one too, so the queues are not used while the locks are held
+    let _graphics = device.submission_lock.lock();
+    let _compute = (!device.single_queue).then(|| device.compute_submission_lock().lock());
+    let start = aethervk_oshal_rlib::os::time::get_monotonic_time();
+    if let Err(e) = unsafe { device.device_wait_idle() } {
+      // a lost device: destroying is still safe (nothing will execute), and the loss is
+      // reported by the next submit or timeline read
+      aethervk_oshal_rlib::log!("[discard] device_wait_idle before a device-address destroy: {e:?}");
+    }
+    let waited = aethervk_oshal_rlib::os::time::get_monotonic_time().saturating_sub(start) as u64;
+    let n = WAITS.fetch_add(1, Ordering::Relaxed) + 1;
+    let total = WAITED_US.fetch_add(waited, Ordering::Relaxed) + waited;
+    aethervk_oshal_rlib::log!(
+      "[discard] {} item(s) destroyed after a device-idle wait of {:.2} ms (#{n}, {:.1} ms in all)",
+      items.len(),
+      waited as f64 / 1000.0,
+      total as f64 / 1000.0
+    );
+    Self::destroy_items_lock_free(device, items);
   }
 
   /// Executes Vulkan API destruction completely lock-free

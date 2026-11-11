@@ -3345,6 +3345,16 @@ impl RenderDevice for Device {
         .execute(|(items_to_destroy, staging_wait), _rollback| {
           // 2. Lock-free execution of Vulkan drop calls
           // (Note: No rollback defer is needed here because we are permanently destroying data, not creating it)
+          // MoltenVK: buffers that may carry a device address wait for an idle device
+          // (`DiscardPool::destroy_items_after_device_idle`), the rest go at once
+          #[cfg(target_os = "macos")]
+          let items_to_destroy = {
+            let (after_idle, now): (Vec<_>, Vec<_>) = items_to_destroy
+              .into_iter()
+              .partition(resources::DiscardItem::may_free_device_address_buffer);
+            resources::DiscardPool::destroy_items_after_device_idle(&self.device, after_idle);
+            now
+          };
           resources::DiscardPool::destroy_items_lock_free(&self.device, items_to_destroy);
 
           // the GPU is two frames behind: wait for the frame that last used our staging half
