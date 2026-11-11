@@ -67,6 +67,12 @@ public sealed class PreferencesFile
   /// <summary>Interface language (Settings › Language): "en" or "it"; missing or unknown = "en".</summary>
   [JsonPropertyName("language")]
   public string? Language { get; set; }
+  /// <summary>The UI layout new sessions start in (View menu): "compact"; missing = classic.</summary>
+  [JsonPropertyName("ui_layout")]
+  public string? UiLayout { get; set; }
+  /// <summary>The compact layout's "Nucleus seen from Earth" view expanded; missing = expanded.</summary>
+  [JsonPropertyName("nucleus_mini_expanded")]
+  public bool? NucleusMiniExpanded { get; set; }
 }
 
 public sealed class BindingDto
@@ -201,6 +207,27 @@ public sealed class PreferencesService
   /// <summary>The interface language: English unless another one was chosen in Settings; applied at
   /// startup (App) and when the picker changes.</summary>
   public string Language => SupportedLanguage(_file.Language) ?? Languages[0];
+
+  /// <summary>The UI layout last chosen; File › New and startup apply it (an opened save applies
+  /// its own). Classic when the file has none.</summary>
+  public UiLayout LastUiLayout => UiLayoutService.FromDto(_file.UiLayout);
+
+  public void SetLastUiLayout(UiLayout layout)
+  {
+    _file.UiLayout = UiLayoutService.ToDto(layout);
+    Save();
+  }
+
+  /// <summary>The compact layout's "Nucleus seen from Earth" view is expanded (the default).</summary>
+  public bool NucleusMiniExpanded => _file.NucleusMiniExpanded ?? true;
+
+  public void SetNucleusMiniExpanded(bool expanded)
+  {
+    if (_file.NucleusMiniExpanded == expanded)
+      return;
+    _file.NucleusMiniExpanded = expanded;
+    Save();
+  }
 
   public void SetLanguage(string code)
   {

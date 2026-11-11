@@ -220,6 +220,59 @@ impl EarthObserverState {
   }
 }
 
+/// The native Earth observers of a scene, one per camera, in the order they were installed. Each
+/// is posed by [`apply`] from its own state alone and leaves its light time on its own camera
+/// ([`LightTimeViewComponent`]): installing, re-posing or clearing one never touches another.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct EarthObservers(alloc::vec::Vec<EarthObserverState>);
+
+impl EarthObservers {
+  pub fn is_empty(&self) -> bool {
+    self.0.is_empty()
+  }
+
+  pub fn len(&self) -> usize {
+    self.0.len()
+  }
+
+  /// The observer that poses `camera`
+  pub fn get(&self, camera: EntityId) -> Option<EarthObserverState> {
+    self.0.iter().find(|o| o.camera == camera).copied()
+  }
+
+  /// The first installed observer still set (a scene with one observer: that one)
+  pub fn first(&self) -> Option<EarthObserverState> {
+    self.0.first().copied()
+  }
+
+  /// Whether an observer poses `camera`
+  pub fn owns(&self, camera: EntityId) -> bool {
+    self.0.iter().any(|o| o.camera == camera)
+  }
+
+  /// Sets the observer of `state.camera`: replaces that camera's (keeping its place), else appends
+  pub fn insert(&mut self, state: EarthObserverState) {
+    match self.0.iter_mut().find(|o| o.camera == state.camera) {
+      Some(o) => *o = state,
+      None => self.0.push(state),
+    }
+  }
+
+  /// Removes and returns the observer of `camera`
+  pub fn remove(&mut self, camera: EntityId) -> Option<EarthObserverState> {
+    let i = self.0.iter().position(|o| o.camera == camera)?;
+    Some(self.0.remove(i))
+  }
+
+  pub fn iter(&self) -> impl Iterator<Item = &EarthObserverState> {
+    self.0.iter()
+  }
+
+  pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut EarthObserverState> {
+    self.0.iter_mut()
+  }
+}
+
 /// Light time of the comet seen by the observer (see the module doc).
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct LightTime {

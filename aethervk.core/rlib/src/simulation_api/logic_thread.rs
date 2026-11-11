@@ -567,11 +567,32 @@ pub fn start_logic_thread(
 
             let mut render_frames = alloc::vec::Vec::new();
             let mut last_tasks = alloc::vec::Vec::new();
+            // views whose render budget paid for a frame of this batch (given back if the batch
+            // is not sent)
+            let mut budget_spent = alloc::vec::Vec::new();
+
+            // the render thread still has a batch to render after the one it is on: this display
+            // slot is skipped, no batch is queued behind them (`structs::RenderBatchesInFlight`)
+            let render_busy = context
+              .render_batches_in_flight
+              .load(core::sync::atomic::Ordering::Acquire)
+              >= structs::MAX_RENDER_BATCHES_IN_FLIGHT;
+            let pe_handles = if render_busy { alloc::vec::Vec::new() } else { pe_handles };
 
             for (pe, pe_data) in pe_handles {
               let Some(camera_entity) = pe_data.camera_entity else {
                 continue;
               };
+              // a paused view (`SimulationContext::set_viewport_active`) gets no frame, and its
+              // render budget is left as it is
+              if !pe_data.active.load(core::sync::atomic::Ordering::Acquire) {
+                continue;
+              }
+              // a view with a frame-rate cap (`SimulationContext::set_viewport_min_frame_interval`)
+              // skips the display slots that come sooner than its interval
+              if !pe_data.take_frame_slot(now.max(0) as u64) {
+                continue;
+              }
               // the render budget (`SimulationContext::set_render_budget`): a listed view is
               // sent a frame only while its budget lasts, one less per frame sent
               {
@@ -584,6 +605,7 @@ pub fn start_logic_thread(
                       continue;
                     }
                     *n -= 1;
+                    budget_spent.push(pe);
                   }
                 }
               }
@@ -616,6 +638,8 @@ pub fn start_logic_thread(
                 sky_entity: sky,
                 cursor_entity: cursor,
                 custom_render_callback: callback,
+                active: alloc::sync::Arc::clone(&pe_data.active),
+                frames_presented: alloc::sync::Arc::clone(&pe_data.frames_presented),
                 mean_intra_grains_distance_mm:
                   structs::particle_constants::MEAN_INTRA_GRAINS_DISTANCE_MM,
                 min_cumulated_mass_g: structs::particle_constants::MIN_CUMULATED_MASS_G,
@@ -626,10 +650,36 @@ pub fn start_logic_thread(
 
             let mut new_tasks = alloc::vec::Vec::new();
             if !render_frames.is_empty() {
+              // counted before the send: the render thread may finish the batch before
+              // `try_send` returns
+              context
+                .render_batches_in_flight
+                .fetch_add(1, core::sync::atomic::Ordering::AcqRel);
               let send_res = context.render_tx.try_send(
                 crate::simulation_api::structs::RenderCommand::RenderFrames(render_frames),
               );
+              if send_res.is_err() {
+                context
+                  .render_batches_in_flight
+                  .fetch_sub(1, core::sync::atomic::Ordering::AcqRel);
+              }
 
+              if send_res.is_err() && !budget_spent.is_empty() {
+                // The channel was full (the render thread is behind, e.g. another view of the
+                // scene renders unbudgeted): the batch is dropped, so the frames a budget paid
+                // for were never sent. Give them back, or a view released for exactly one frame
+                // would never get it.
+                let scenes = context.scenes.read();
+                if let Some(sc) = scenes.get(scene_id) {
+                  let sc = sc.read();
+                  let mut budgets = sc.render_budgets.write();
+                  for pe in budget_spent.iter() {
+                    if let Some(n) = budgets.get_mut(pe) {
+                      *n = n.saturating_add(1);
+                    }
+                  }
+                }
+              }
               if send_res.is_ok() {
                 for (task_id, is_windowless, pe_handle) in last_tasks.iter() {
                   // Fire-and-forget: do NOT spin-wait for the render tasklet to call
@@ -4286,21 +4336,24 @@ pub(crate) mod utils {
     cache: &dashmap::DashMap<crate::simulation_api::structs::SceneEntityId, CartesianState>,
   ) {
     refresh_comet_gizmo_velocity(scene, scene_id, cache);
-    let Some(mut obs) = scene.earth_observer else {
-      return;
-    };
-    obs.refresh_comet_velocity(scene_id, cache);
-    if crate::simulation_api::earth_observer::apply(&scene.scene, &mut obs).is_some() {
-      scene.earth_observer = Some(obs);
-      check_earth_observer_invariant(&scene.scene, &obs);
-      mark_component_changed::<crate::scene::HighResTransformComponent>(scene, obs.camera);
+    // every camera's observer, each from its own state (installation order)
+    let mut observers = core::mem::take(&mut scene.earth_observers);
+    for obs in observers.iter_mut() {
+      let mut next = *obs;
+      next.refresh_comet_velocity(scene_id, cache);
+      if crate::simulation_api::earth_observer::apply(&scene.scene, &mut next).is_some() {
+        *obs = next;
+        check_earth_observer_invariant(&scene.scene, &next);
+        mark_component_changed::<crate::scene::HighResTransformComponent>(scene, next.camera);
+      }
     }
+    scene.earth_observers = observers;
   }
 
   /// Whether `camera` is the native Earth observer's: its pose then belongs to
   /// [`crate::simulation_api::earth_observer::apply`] alone.
   pub fn earth_observer_owns(scene: &SceneContext, camera: EntityId) -> bool {
-    scene.earth_observer.is_some_and(|o| o.camera == camera)
+    scene.earth_observers.owns(camera)
   }
 
   /// Re-poses the native Earth observer (if set) after the Earth or the comet moved **outside a
@@ -4309,16 +4362,19 @@ pub(crate) mod utils {
   /// comet's velocity (light time) becomes `comet_vel_km_s` when given (an epoch jump changes it,
   /// [`observer_comet_velocity`]), else is kept.
   pub fn repose_earth_observer(scene: &mut SceneContext, comet_vel_km_s: Option<[f64; 3]>) {
-    let Some(mut obs) = scene.earth_observer else {
-      return;
-    };
-    if comet_vel_km_s.is_some() {
-      obs.comet_vel_km_s = comet_vel_km_s;
+    let mut observers = core::mem::take(&mut scene.earth_observers);
+    for obs in observers.iter_mut() {
+      let mut next = *obs;
+      // the scene's comet's velocity (`observer_comet_velocity`); unused without a comet
+      if comet_vel_km_s.is_some() {
+        next.comet_vel_km_s = comet_vel_km_s;
+      }
+      if crate::simulation_api::earth_observer::apply(&scene.scene, &mut next).is_some() {
+        *obs = next;
+        mark_component_changed::<crate::scene::HighResTransformComponent>(scene, next.camera);
+      }
     }
-    if crate::simulation_api::earth_observer::apply(&scene.scene, &mut obs).is_some() {
-      scene.earth_observer = Some(obs);
-      mark_component_changed::<crate::scene::HighResTransformComponent>(scene, obs.camera);
-    }
+    scene.earth_observers = observers;
   }
 
   /// The native Earth observer's comet velocity at `epoch` from the almanac (km/s, world axes),
@@ -4328,7 +4384,7 @@ pub(crate) mod utils {
     almanac: &crate::simulation::almanac::AlmanacPackedData,
     epoch: anise::time::Epoch,
   ) -> Option<[f64; 3]> {
-    let comet = scene.earth_observer?.comet?;
+    let comet = scene.earth_observers.iter().find_map(|o| o.comet)?;
     let naif = scene.scene.with_component(comet, |p: &crate::scene::AlmanacPlanet| p.naif_id)?;
     crate::simulation_api::earth_observer::comet_velocity_at(almanac, naif, epoch)
   }

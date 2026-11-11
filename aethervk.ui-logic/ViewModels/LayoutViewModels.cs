@@ -22,6 +22,27 @@ public enum SplitOrientation
   Vertical,
 }
 
+/// <summary>Which child of a split is collapsed to zero size (viewport-only presentation).</summary>
+public enum CollapsedSide
+{
+  None,
+  First,
+  Second,
+}
+
+/// <summary>Why <see cref="DockingManagerViewModel.SetViewportOnly"/> refuses to enter viewport-only mode.</summary>
+public enum ViewportOnlyBlocker
+{
+  None,
+  /// <summary>The layout holds no 3D viewport tab.</summary>
+  NoViewport,
+  /// <summary>
+  /// The viewport's group shows another tab. Re-selecting the viewport is never done for the user:
+  /// its view would be re-created and the viewport view model may already be disposed.
+  /// </summary>
+  ViewportNotSelected,
+}
+
 /// <summary>
 /// Base class for all layout nodes
 /// </summary>
@@ -51,6 +72,20 @@ public partial class SplitNodeViewModel : LayoutNodeViewModelBase
 
   [ObservableProperty]
   private double _splitRatio;
+
+  /// <summary>
+  /// Presentation only: hides one child and the splitter without touching the tree, so the
+  /// child views (and the native viewport host among them) are never re-parented.
+  /// </summary>
+  [ObservableProperty]
+  [NotifyPropertyChangedFor(nameof(IsFirstShown))]
+  [NotifyPropertyChangedFor(nameof(IsSecondShown))]
+  [NotifyPropertyChangedFor(nameof(IsSplitterShown))]
+  private CollapsedSide _collapsed;
+
+  public bool IsFirstShown => Collapsed != CollapsedSide.First;
+  public bool IsSecondShown => Collapsed != CollapsedSide.Second;
+  public bool IsSplitterShown => Collapsed == CollapsedSide.None;
 
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
   public SplitNodeViewModel(
@@ -83,6 +118,10 @@ public partial class TabGroupNodeViewModel
 
   [ObservableProperty]
   private bool _hasTabs;
+
+  /// <summary>Hides the tab strip, the session header, the border and the empty-group "+" button.</summary>
+  [ObservableProperty]
+  private bool _isChromeHidden;
 
   private readonly ITabFactory _tabFactory;
   private readonly ILayoutMessenger _layoutMessenger;
@@ -227,6 +266,18 @@ public partial class TabGroupNodeViewModel
       SplitNodeViewModel s => Collect(s.FirstChild).Concat(Collect(s.SecondChild)),
       _ => [],
     };
+  }
+
+  /// <summary>
+  /// Adds a tab WITHOUT selecting it: the selected tab (possibly the 3D viewport) keeps its view.
+  /// <paramref name="dispose"/> is the tab's scope disposer, run when the tab is closed.
+  /// </summary>
+  public void AddParked(TabItemViewModel tab, Action? dispose)
+  {
+    if (!Tabs.Contains(tab))
+      Tabs.Add(tab);
+    if (dispose != null)
+      _tabDisposers[tab] = dispose;
   }
 
   /// <summary>
@@ -587,6 +638,132 @@ public partial class DockingManagerViewModel
         parent.SecondChild = newNode;
 
       newNode.Parent = parent;
+    }
+  }
+
+  // --- Viewport-only presentation ---
+
+  private bool _isViewportOnly;
+
+  /// <summary>True while every split on the viewport's path shows only the viewport side.</summary>
+  public bool IsViewportOnly
+  {
+    get => _isViewportOnly;
+    private set => SetProperty(ref _isViewportOnly, value);
+  }
+
+  public bool CanEnterViewportOnly => ViewportOnlyBlockedBy() == ViewportOnlyBlocker.None;
+
+  /// <summary>Why viewport-only mode cannot be entered now, or <see cref="ViewportOnlyBlocker.None"/>.</summary>
+  public ViewportOnlyBlocker ViewportOnlyBlockedBy()
+  {
+    if (FindViewport() is not { } found)
+      return ViewportOnlyBlocker.NoViewport;
+    return ReferenceEquals(found.Group.SelectedTab, found.Tab)
+      ? ViewportOnlyBlocker.None
+      : ViewportOnlyBlocker.ViewportNotSelected;
+  }
+
+  /// <summary>
+  /// Viewport-only on: every split on the path from the viewport's group to the root collapses the
+  /// side not on that path, and the viewport's group hides its chrome. Off: every split and group
+  /// of the tree is reset. Only presentation properties change; nodes, Parent links, children and
+  /// selected tabs stay as they are. Returns false (and changes nothing) when entering is refused.
+  /// </summary>
+  public bool SetViewportOnly(bool on)
+  {
+    if (!on)
+    {
+      foreach (var node in Nodes(RootNode))
+      {
+        if (node is SplitNodeViewModel split)
+          split.Collapsed = CollapsedSide.None;
+        else if (node is TabGroupNodeViewModel group)
+          group.IsChromeHidden = false;
+      }
+      IsViewportOnly = false;
+      return true;
+    }
+
+    if (ViewportOnlyBlockedBy() != ViewportOnlyBlocker.None || FindViewport() is not { } found)
+      return false;
+
+    // the side each split on the path must keep; every other split shows both sides
+    var keep = new Dictionary<SplitNodeViewModel, CollapsedSide>();
+    LayoutNodeViewModelBase child = found.Group;
+    for (var parent = child.Parent; parent is not null; child = parent, parent = parent.Parent)
+      keep[parent] = ReferenceEquals(parent.FirstChild, child) ? CollapsedSide.Second : CollapsedSide.First;
+
+    foreach (var node in Nodes(RootNode))
+    {
+      if (node is SplitNodeViewModel split)
+        split.Collapsed = keep.TryGetValue(split, out var side) ? side : CollapsedSide.None;
+      else if (node is TabGroupNodeViewModel group)
+        group.IsChromeHidden = ReferenceEquals(group, found.Group);
+    }
+    IsViewportOnly = true;
+    return true;
+  }
+
+  /// <summary>
+  /// The tab of type <typeparamref name="T"/> already in the layout, or a new one added unselected
+  /// (see <see cref="EnsureTab(Type)"/>).
+  /// </summary>
+  public T EnsureTab<T>() where T : TabItemViewModel => (T)EnsureTab(typeof(T));
+
+  /// <summary>
+  /// The tab of exactly <paramref name="tabType"/> already in the layout, or a new scoped one parked
+  /// unselected in the first group that does not hold the viewport (the viewport's group only when
+  /// no other group exists). Never splits a group and never changes the viewport group's selection.
+  /// </summary>
+  public TabItemViewModel EnsureTab(Type tabType)
+  {
+    if (LayoutTabs().FirstOrDefault(t => t?.GetType() == tabType) is { } existing)
+      return existing;
+
+    var (vm, dispose) = _tabFactory.CreateScopedTab(tabType);
+    if (vm is not TabItemViewModel tab)
+    {
+      dispose?.Invoke();
+      throw new InvalidOperationException($"the tab factory made no tab of type {tabType.Name}");
+    }
+
+    var viewportGroup = FindViewport()?.Group;
+    var groups = Nodes(RootNode).OfType<TabGroupNodeViewModel>().ToList();
+    var target = groups.FirstOrDefault(g => !ReferenceEquals(g, viewportGroup)) ?? viewportGroup;
+    if (target is null)
+    {
+      dispose?.Invoke();
+      throw new InvalidOperationException("the layout holds no tab group");
+    }
+    target.AddParked(tab, dispose);
+    return tab;
+  }
+
+  /// <summary>Every tab of the layout, in tree order (first child before second).</summary>
+  public IEnumerable<TabItemViewModel> LayoutTabs() =>
+    Nodes(RootNode).OfType<TabGroupNodeViewModel>().SelectMany(g => g.Tabs);
+
+  /// <summary>The group holding the 3D viewport (the single-instance, pinned tab) and that tab.</summary>
+  private (TabGroupNodeViewModel Group, TabItemViewModel Tab)? FindViewport()
+  {
+    foreach (var group in Nodes(RootNode).OfType<TabGroupNodeViewModel>())
+      foreach (var tab in group.Tabs)
+        if (tab is { IsSingleInstance: true, IsPinned: true })
+          return (group, tab);
+    return null;
+  }
+
+  /// <summary>Every node of the tree, pre-order.</summary>
+  private static IEnumerable<LayoutNodeViewModelBase> Nodes(LayoutNodeViewModelBase node)
+  {
+    yield return node;
+    if (node is SplitNodeViewModel split)
+    {
+      foreach (var n in Nodes(split.FirstChild))
+        yield return n;
+      foreach (var n in Nodes(split.SecondChild))
+        yield return n;
     }
   }
 

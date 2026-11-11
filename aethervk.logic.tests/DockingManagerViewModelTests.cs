@@ -362,5 +362,243 @@ public class DockingManagerViewModelTests : IDisposable
 
     Assert.Equal([pinned], left.Tabs);
   }
+
+  // ── viewport-only presentation: only Collapsed / IsChromeHidden change, never the tree ──
+
+  private sealed class ParkedTab() : TabItemViewModel("Parked");
+
+  private TabGroupNodeViewModel Group(TabItemViewModel tab) =>
+    new(tab, _mockFactory.Object, _mockLayoutMessenger.Object);
+
+  private static SplitNodeViewModel Split(LayoutNodeViewModelBase first, LayoutNodeViewModelBase second, SplitOrientation orientation)
+  {
+    var split = new SplitNodeViewModel(first, second, orientation);
+    first.Parent = split;
+    second.Parent = split;
+    return split;
+  }
+
+  private DockingManagerViewModel Manager(LayoutNodeViewModelBase root) =>
+    new(_mockFactory.Object, _mockLayoutMessenger.Object, root);
+
+  private static System.Collections.Generic.IEnumerable<LayoutNodeViewModelBase> Nodes(LayoutNodeViewModelBase node) =>
+    node is SplitNodeViewModel s ? new[] { node }.Concat(Nodes(s.FirstChild)).Concat(Nodes(s.SecondChild)) : new[] { node };
+
+  /// <summary>The default layout with a pinned single-instance tab standing in for the 3D viewport.</summary>
+  private DockingManagerViewModel DefaultLayoutWithViewport(out PinnedSingleTab viewport)
+  {
+    var pinned = new PinnedSingleTab();
+    viewport = pinned;
+    _mockFactory.Setup(f => f.CreateScopedTab(typeof(Viewport3DViewModel))).Returns(() => (pinned, null));
+    foreach (var type in new[] { typeof(SettingsTabViewModel), typeof(CometTabViewModel), typeof(ModelTabViewModel), typeof(ImportsTabViewModel), typeof(TimelineTabViewModel) })
+      _mockFactory.Setup(f => f.CreateScopedTab(type)).Returns(() => (new TabItemViewModel(type.Name), null));
+    _mockFactory.Setup(f => f.CreateScopedTab(typeof(ParkedTab))).Returns(() => (new ParkedTab(), null));
+    return new DockingManagerViewModel(_mockFactory.Object, _mockLayoutMessenger.Object);
+  }
+
+  private static void AssertAllReset(DockingManagerViewModel vm)
+  {
+    Assert.All(Nodes(vm.RootNode).OfType<SplitNodeViewModel>(), s =>
+    {
+      Assert.Equal(CollapsedSide.None, s.Collapsed);
+      Assert.True(s.IsFirstShown && s.IsSecondShown && s.IsSplitterShown);
+    });
+    Assert.All(Nodes(vm.RootNode).OfType<TabGroupNodeViewModel>(), g => Assert.False(g.IsChromeHidden));
+  }
+
+  [Fact]
+  public void ViewportOnly_CollapsesOffPathSiblings_DefaultLayout()
+  {
+    var vm = DefaultLayoutWithViewport(out var viewport);
+    // settings | ((viewport | imports) / timeline)
+    var root = Assert.IsType<SplitNodeViewModel>(vm.RootNode);
+    var allButSettings = Assert.IsType<SplitNodeViewModel>(root.SecondChild);
+    var viewportAndImports = Assert.IsType<SplitNodeViewModel>(allButSettings.FirstChild);
+    var center = Assert.IsType<TabGroupNodeViewModel>(viewportAndImports.FirstChild);
+    Assert.Same(viewport, center.SelectedTab);
+
+    Assert.True(vm.CanEnterViewportOnly);
+    Assert.True(vm.SetViewportOnly(true));
+
+    Assert.True(vm.IsViewportOnly);
+    Assert.Equal(CollapsedSide.First, root.Collapsed);
+    Assert.Equal(CollapsedSide.Second, allButSettings.Collapsed);
+    Assert.Equal(CollapsedSide.Second, viewportAndImports.Collapsed);
+    Assert.False(root.IsFirstShown);
+    Assert.True(root.IsSecondShown);
+    Assert.False(root.IsSplitterShown);
+    Assert.True(viewportAndImports.IsFirstShown);
+    Assert.False(viewportAndImports.IsSecondShown);
+    Assert.True(center.IsChromeHidden);
+    Assert.All(Nodes(vm.RootNode).OfType<TabGroupNodeViewModel>().Where(g => g != center), g => Assert.False(g.IsChromeHidden));
+  }
+
+  [Fact]
+  public void ViewportOnly_CollapsedRaisesTheShownFlags()
+  {
+    var split = Split(Group(new PinnedSingleTab()), Group(new DebugUiViewModel()), SplitOrientation.Horizontal);
+    var vm = Manager(split);
+    var raised = new System.Collections.Generic.List<string?>();
+    split.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+    vm.SetViewportOnly(true);
+
+    Assert.Contains(nameof(SplitNodeViewModel.Collapsed), raised);
+    Assert.Contains(nameof(SplitNodeViewModel.IsFirstShown), raised);
+    Assert.Contains(nameof(SplitNodeViewModel.IsSecondShown), raised);
+    Assert.Contains(nameof(SplitNodeViewModel.IsSplitterShown), raised);
+  }
+
+  [Fact]
+  public void ViewportOnly_RearrangedTree()
+  {
+    // (a1 | a2) / (((b | viewport) / c) | d): the viewport sits three splits deep, on second sides
+    var viewportGroup = Group(new PinnedSingleTab());
+    var offPath = Split(Group(new DebugUiViewModel()), Group(new DebugUiViewModel()), SplitOrientation.Horizontal);
+    var inner = Split(Group(new DebugUiViewModel()), viewportGroup, SplitOrientation.Horizontal);
+    var middle = Split(inner, Group(new DebugUiViewModel()), SplitOrientation.Vertical);
+    var outer = Split(middle, Group(new DebugUiViewModel()), SplitOrientation.Horizontal);
+    var root = Split(offPath, outer, SplitOrientation.Vertical);
+    var vm = Manager(root);
+
+    Assert.True(vm.SetViewportOnly(true));
+
+    Assert.Equal(CollapsedSide.First, root.Collapsed);
+    Assert.Equal(CollapsedSide.Second, outer.Collapsed);
+    Assert.Equal(CollapsedSide.Second, middle.Collapsed);
+    Assert.Equal(CollapsedSide.First, inner.Collapsed);
+    Assert.Equal(CollapsedSide.None, offPath.Collapsed);
+    Assert.True(viewportGroup.IsChromeHidden);
+    Assert.Single(Nodes(vm.RootNode).OfType<TabGroupNodeViewModel>(), g => g.IsChromeHidden);
+  }
+
+  [Fact]
+  public void ViewportOnly_Off_RestoresNone()
+  {
+    var vm = DefaultLayoutWithViewport(out _);
+    Assert.True(vm.SetViewportOnly(true));
+
+    Assert.True(vm.SetViewportOnly(false));
+
+    Assert.False(vm.IsViewportOnly);
+    AssertAllReset(vm);
+  }
+
+  [Fact]
+  public void ViewportOnly_DoesNotMutateTree()
+  {
+    var vm = DefaultLayoutWithViewport(out var viewport);
+    var rootBefore = vm.RootNode;
+    var before = Nodes(vm.RootNode).Select(Snapshot).ToList();
+
+    for (var i = 0; i < 3; ++i)
+    {
+      Assert.True(vm.SetViewportOnly(true));
+      Assert.Same(rootBefore, vm.RootNode);
+      Assert.Equal(before, Nodes(vm.RootNode).Select(Snapshot).ToList());
+      Assert.True(vm.SetViewportOnly(false));
+      Assert.Same(rootBefore, vm.RootNode);
+      Assert.Equal(before, Nodes(vm.RootNode).Select(Snapshot).ToList());
+    }
+    Assert.Same(viewport, vm.FindNodeContainingTab(vm.RootNode, viewport)!.SelectedTab);
+
+    // reference identity of every node, its parent, its children / tabs and its selection
+    static string Snapshot(LayoutNodeViewModelBase n) =>
+      $"{Id(n)} p={Id(n.Parent)} " + n switch
+      {
+        SplitNodeViewModel s => $"split {Id(s.FirstChild)} {Id(s.SecondChild)} {s.Orientation} {s.SplitRatio}",
+        TabGroupNodeViewModel g => $"group sel={Id(g.SelectedTab)} tabs={string.Join(",", g.Tabs.Select(Id))}",
+        _ => "?",
+      };
+    static string Id(object? o) =>
+      o is null ? "null" : System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(o).ToString();
+  }
+
+  [Fact]
+  public void ViewportOnly_Refused_WhenViewportNotSelected()
+  {
+    var pinned = new PinnedSingleTab();
+    var viewportGroup = Group(pinned);
+    var other = new DebugUiViewModel();
+    viewportGroup.Tabs.Add(other);
+    viewportGroup.SelectedTab = other;
+    var root = Split(viewportGroup, Group(new DebugUiViewModel()), SplitOrientation.Horizontal);
+    var vm = Manager(root);
+
+    Assert.False(vm.CanEnterViewportOnly);
+    Assert.Equal(ViewportOnlyBlocker.ViewportNotSelected, vm.ViewportOnlyBlockedBy());
+    Assert.False(vm.SetViewportOnly(true));
+
+    Assert.False(vm.IsViewportOnly);
+    Assert.Same(other, viewportGroup.SelectedTab);
+    AssertAllReset(vm);
+  }
+
+  [Fact]
+  public void ViewportOnly_Refused_WithoutViewport()
+  {
+    var root = Split(Group(new DebugUiViewModel()), Group(new DebugUiViewModel()), SplitOrientation.Horizontal);
+    var vm = Manager(root);
+
+    Assert.Equal(ViewportOnlyBlocker.NoViewport, vm.ViewportOnlyBlockedBy());
+    Assert.False(vm.SetViewportOnly(true));
+    AssertAllReset(vm);
+  }
+
+  [Fact]
+  public void EnsureTab_ReturnsExisting()
+  {
+    var parked = new ParkedTab();
+    var holder = Group(new DebugUiViewModel());
+    holder.Tabs.Add(parked);
+    var vm = Manager(Split(Group(new PinnedSingleTab()), holder, SplitOrientation.Horizontal));
+
+    Assert.Same(parked, vm.EnsureTab<ParkedTab>());
+    Assert.Same(parked, vm.EnsureTab(typeof(ParkedTab)));
+    Assert.Equal(2, holder.Tabs.Count);
+    _mockFactory.Verify(f => f.CreateScopedTab(typeof(ParkedTab)), Times.Never);
+  }
+
+  [Fact]
+  public void EnsureTab_CreatesParked_NeverSelectsOverViewport()
+  {
+    _mockFactory.Setup(f => f.CreateScopedTab(typeof(ParkedTab))).Returns(() => (new ParkedTab(), null));
+    var pinned = new PinnedSingleTab();
+    var viewportGroup = Group(pinned);
+    var otherSelected = new DebugUiViewModel();
+    var otherGroup = Group(otherSelected);
+    var root = Split(viewportGroup, otherGroup, SplitOrientation.Horizontal);
+    var vm = Manager(root);
+
+    var tab = vm.EnsureTab<ParkedTab>();
+
+    Assert.Contains(tab, otherGroup.Tabs);
+    Assert.DoesNotContain(tab, viewportGroup.Tabs);
+    Assert.False(tab.IsSelected);
+    Assert.Same(otherSelected, otherGroup.SelectedTab);
+    Assert.Same(pinned, viewportGroup.SelectedTab);
+    Assert.Same(root, vm.RootNode);
+    Assert.Same(tab, vm.EnsureTab<ParkedTab>());
+    _mockFactory.Verify(f => f.CreateScopedTab(typeof(ParkedTab)), Times.Once);
+  }
+
+  [Fact]
+  public void EnsureTab_NeverSplitsViewportGroup()
+  {
+    _mockFactory.Setup(f => f.CreateScopedTab(typeof(ParkedTab))).Returns(() => (new ParkedTab(), null));
+    var pinned = new PinnedSingleTab();
+    var viewportGroup = Group(pinned);
+    var vm = Manager(viewportGroup);
+
+    var tab = vm.EnsureTab<ParkedTab>();
+
+    Assert.Same(viewportGroup, vm.RootNode);
+    Assert.Null(viewportGroup.Parent);
+    Assert.Equal(new TabItemViewModel[] { pinned, tab }, viewportGroup.Tabs);
+    Assert.Same(pinned, viewportGroup.SelectedTab);
+    Assert.False(tab.IsSelected);
+    Assert.True(vm.SetViewportOnly(true));
+    Assert.True(viewportGroup.IsChromeHidden);
+  }
 }
 #endif

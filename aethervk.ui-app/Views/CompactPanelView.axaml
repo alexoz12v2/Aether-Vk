@@ -1,0 +1,443 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:AetherVk.Logic.ViewModels"
+             xmlns:models="using:AetherVk.Logic.Models"
+             xmlns:views="using:AetherVk.Views"
+             xmlns:controls="using:AetherVk.Controls"
+             xmlns:ids="using:AetherVk.Logic.Automation"
+             mc:Ignorable="d" d:DesignWidth="380" d:DesignHeight="900"
+             x:Class="AetherVk.Views.CompactPanelView"
+             x:DataType="vm:CompactPanelViewModel"
+             Classes="compact-panel"
+             AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.CompactPanel}">
+  <!--
+    The compact layout's panel: the workflow as one column of cards, in the order it is done.
+    Every card binds to the classic tabs' own view models (CompactPanelViewModel holds the docking
+    tree's instances), so both layouts edit the same state.
+    Layout: the nucleus view on top, outside the cards' ScrollViewer (a native child window is
+    never clipped: inside a scroller it would draw over its neighbours), the cards scrolling
+    below it, the way back to the classic layout at the bottom.
+  -->
+  <UserControl.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceInclude Source="../Styles/Colors.axaml" />
+      </ResourceDictionary.MergedDictionaries>
+    </ResourceDictionary>
+  </UserControl.Resources>
+  <UserControl.Styles>
+    <StyleInclude Source="avares://AetherVk/Styles/Compact.axaml" />
+  </UserControl.Styles>
+
+  <Grid RowDefinitions="Auto,*,Auto" Margin="8" RowSpacing="8">
+
+    <views:NucleusMiniView Grid.Row="0" DataContext="{Binding NucleusMini}" />
+
+    <ScrollViewer x:Name="CardsScroller" Grid.Row="1" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+      <StackPanel Spacing="8" Margin="0,0,8,0">
+
+        <!-- 1 Comet -->
+        <Border Classes="card" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.CometCard}">
+          <StackPanel Spacing="8">
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBlock Classes="card-title" Text="{Binding StrCometTitle}" />
+              <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrCometTitle}" HelpContent="{Binding StrCometHelp}" FlyoutMaxWidth="320" />
+            </Grid>
+            <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+              <Button Grid.Column="0" Classes="wide" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.CometPreset67P}"
+                      Content="67P" Command="{Binding Preset67PCommand}" ToolTip.Tip="67P/Churyumov-Gerasimenko" />
+              <Button Grid.Column="1" Classes="wide" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.CometPreset10P}"
+                      Content="10P" Command="{Binding Preset10PCommand}" ToolTip.Tip="10P/Tempel 2" />
+            </Grid>
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+              <TextBox Grid.Column="0" Classes="field" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.CometSearch}"
+                       Text="{Binding Comet.SearchQuery}" Watermark="{Binding StrCometSearchWatermark}">
+                <TextBox.KeyBindings>
+                  <KeyBinding Gesture="Enter" Command="{Binding Comet.SearchCometsCommand}" />
+                </TextBox.KeyBindings>
+              </TextBox>
+              <Button Grid.Column="1" Content="{Binding StrCometSearchButton}" Command="{Binding Comet.SearchCometsCommand}" />
+            </Grid>
+            <ProgressBar IsIndeterminate="True" Height="4" IsVisible="{Binding Comet.IsSearching}" />
+            <ListBox Classes="list" ItemsSource="{Binding Comet.FilteredSearchResults}"
+                     SelectedItem="{Binding Comet.SelectedComet}"
+                     IsVisible="{Binding Comet.FilteredSearchResults.Count}">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="models:CometSearchResult">
+                  <TextBlock Text="{Binding Name}" FontSize="12" TextTrimming="CharacterEllipsis" />
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+            <StackPanel Spacing="4" IsVisible="{Binding Comet.SelectedComet, Converter={x:Static ObjectConverters.IsNotNull}}">
+              <TextBlock Classes="row-label" Text="{Binding StrCometRecord}" />
+              <ProgressBar IsIndeterminate="True" Height="4" IsVisible="{Binding Comet.IsLoadingSpkRecords}" />
+              <ComboBox HorizontalAlignment="Stretch" ItemsSource="{Binding Comet.SpkRecords}"
+                        SelectedItem="{Binding Comet.SelectedSpkRecord}">
+                <ComboBox.ItemTemplate>
+                  <DataTemplate x:DataType="models:SpkRecordItem">
+                    <TextBlock FontSize="12" TextTrimming="CharacterEllipsis">
+                      <Run Text="{Binding RecordId}" /><Run Text="  " /><Run Text="{Binding Name}" /><Run Text="  " /><Run Text="{Binding EpochYear}" />
+                    </TextBlock>
+                  </DataTemplate>
+                </ComboBox.ItemTemplate>
+              </ComboBox>
+            </StackPanel>
+            <Button Classes="wide primary" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.CometCommit}"
+                    Content="{Binding StrCometCommit}" Command="{Binding Comet.DownloadAndCommitCommand}" />
+            <ProgressBar IsIndeterminate="True" Height="4" IsVisible="{Binding Comet.IsDownloading}" />
+            <TextBlock Classes="note" Text="{Binding Comet.DownloadStatus}"
+                       IsVisible="{Binding Comet.DownloadStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+            <TextBlock Classes="note" Text="{Binding Comet.CommittedCometName}" FontWeight="SemiBold"
+                       IsVisible="{Binding Comet.IsAlmanacCommitted}" />
+          </StackPanel>
+        </Border>
+
+        <!-- 2 Observation period -->
+        <Border Classes="card">
+          <StackPanel Spacing="8">
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBlock Classes="card-title" Text="{Binding StrPeriodTitle}" />
+              <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrPeriodTitle}" HelpContent="{Binding StrPeriodHelp}" FlyoutMaxWidth="320" />
+            </Grid>
+            <Grid Classes="row" ColumnDefinitions="*,Auto,130" ColumnSpacing="8">
+              <TextBlock Classes="row-label" Text="{Binding StrPeriodImageDate}" />
+              <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrPeriodImageDate}" HelpContent="{Binding StrPeriodImageDateHelp}" FlyoutMaxWidth="320" />
+              <TextBox Grid.Column="2" Classes="field" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.PeriodImageDate}" Text="{Binding Comet.Range.ObservationEpoch}" Watermark="yyyy-MM-ddTHH:mm:ss" FontFamily="Cascadia Mono, Consolas, monospace" />
+            </Grid>
+            <Button Classes="wide" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.PeriodFromImage}"
+                    Content="{Binding StrPeriodFromImage}" Command="{Binding Comet.Range.FromImageCommand}" />
+            <Grid Classes="row" ColumnDefinitions="*,Auto,130" ColumnSpacing="8">
+              <TextBlock Classes="row-label" Text="{Binding StrPeriodRotationPeriod}" />
+              <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrPeriodRotationPeriod}" HelpContent="{Binding StrPeriodRotationPeriodHelp}" FlyoutMaxWidth="320" />
+              <NumericUpDown Grid.Column="2" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.PeriodRotationPeriodHours}" Value="{Binding Comet.RotationPeriodHours}" Minimum="0" Maximum="100000" Increment="0.1" FormatString="0.####" />
+            </Grid>
+            <Grid Classes="row" ColumnDefinitions="*,Auto,130" ColumnSpacing="8">
+              <TextBlock Classes="row-label" Text="{Binding StrPeriodRotations}" />
+              <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrPeriodRotations}" HelpContent="{Binding StrPeriodRotationsHelp}" FlyoutMaxWidth="320" />
+              <NumericUpDown Grid.Column="2" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.PeriodRotations}" Value="{Binding Comet.Range.ModelRotations}" Minimum="1" Maximum="1000" Increment="1" FormatString="0" />
+            </Grid>
+            <TextBlock Classes="value" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.PeriodPreview}"
+                       Text="{Binding Comet.Range.ModelRangePreviewText}" FontFamily="Cascadia Mono, Consolas, monospace" />
+            <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+              <Button Grid.Column="0" Classes="wide" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.PeriodApply}"
+                      Content="{Binding StrPeriodApply}" Command="{Binding Comet.Range.ApplyModelRangeCommand}" />
+              <Button Grid.Column="1" Classes="wide primary"
+                      Content="{Binding StrPeriodRun}" Command="{Binding Comet.Range.RunAtDateCommand}" />
+            </Grid>
+            <ProgressBar IsIndeterminate="True" Height="4" IsVisible="{Binding Comet.Range.IsRunning}" />
+            <TextBlock Classes="note" Text="{Binding Comet.Range.RunStatus}" IsVisible="{Binding Comet.Range.HasRunStatus}" />
+            <TextBlock Classes="note" Text="{Binding Comet.Range.ErrorMessage}" Foreground="{DynamicResource Sem.Error}"
+                       IsVisible="{Binding Comet.Range.HasError}" />
+            <!-- the period differs from the loaded one: say so, and offer to load the comet again -->
+            <StackPanel Spacing="4" IsVisible="{Binding Comet.Range.IsRangeLocked}">
+              <TextBlock Classes="note" Text="{x:Static vm:RangeEntryViewModel.RangeLockedText}" Foreground="{DynamicResource Sem.Warning}" />
+              <Button Classes="wide" Content="{Binding StrPeriodRecommit}" Command="{Binding Comet.Range.RecommitWithRangeCommand}" />
+            </StackPanel>
+          </StackPanel>
+        </Border>
+
+        <!-- 3 Nucleus -->
+        <Border Classes="card">
+          <StackPanel Spacing="8">
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBlock Classes="card-title" Text="{Binding StrNucleusTitle}" />
+              <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrNucleusTitle}" HelpContent="{Binding StrNucleusHelp}" FlyoutMaxWidth="320" />
+            </Grid>
+            <Grid Classes="row" ColumnDefinitions="*,Auto,130" ColumnSpacing="8">
+              <TextBlock Classes="row-label" Text="{Binding StrNucleusRadius}" />
+              <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrNucleusRadius}" HelpContent="{Binding StrNucleusRadiusHelp}" FlyoutMaxWidth="320" />
+              <NumericUpDown Grid.Column="2" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.NucleusRadiusKm}" Value="{Binding Comet.ManualNucleusRadiusKmNullable}" Minimum="0" Maximum="1000" Increment="0.1" FormatString="0.###" />
+            </Grid>
+            <Grid Classes="row" ColumnDefinitions="*,Auto,130" ColumnSpacing="8">
+              <TextBlock Classes="row-label" Text="{Binding StrNucleusPoleRa}" />
+              <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrNucleusPoleRa}" HelpContent="{Binding StrNucleusPoleHelp}" FlyoutMaxWidth="320" />
+              <NumericUpDown Grid.Column="2" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.NucleusPoleRa}" Value="{Binding Comet.PoleRaDeg}" Minimum="-360" Maximum="360" Increment="1" FormatString="0.###" />
+            </Grid>
+            <Grid Classes="row" ColumnDefinitions="*,Auto,130" ColumnSpacing="8">
+              <TextBlock Classes="row-label" Text="{Binding StrNucleusPoleDec}" />
+              <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrNucleusPoleDec}" HelpContent="{Binding StrNucleusPoleHelp}" FlyoutMaxWidth="320" />
+              <NumericUpDown Grid.Column="2" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.NucleusPoleDec}" Value="{Binding Comet.PoleDecDeg}" Minimum="-90" Maximum="90" Increment="1" FormatString="0.###" />
+            </Grid>
+          </StackPanel>
+        </Border>
+
+        <!-- 4 Jets -->
+        <Border Classes="card">
+          <StackPanel Spacing="8">
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBlock Classes="card-title" Text="{Binding StrJetsTitle}" />
+              <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrJetsTitle}" HelpContent="{Binding StrJetsHelp}" FlyoutMaxWidth="320" />
+            </Grid>
+            <ListBox Classes="list" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.JetsList}"
+                     ItemsSource="{Binding Model.Jets}" SelectedItem="{Binding Model.SelectedJet, Mode=TwoWay}">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:JetViewModel">
+                  <TextBlock FontSize="12">
+                    <Run Text="#" /><Run Text="{Binding DisplayIndex}" /><Run Text="   φ " /><Run Text="{Binding LatitudeDeg, StringFormat='{}{0:F1}°'}" /><Run Text="   λ " /><Run Text="{Binding LongitudeDeg, StringFormat='{}{0:F1}°'}" />
+                  </TextBlock>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+            <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+              <Button Grid.Column="0" Classes="wide primary" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.JetsAdd}"
+                      Content="{Binding StrJetsAdd}" Command="{Binding Model.AddJetCommand}" />
+              <Button Grid.Column="1" Classes="wide" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.JetsRemove}"
+                      Content="{Binding StrJetsRemove}" Command="{Binding Model.RemoveJetCommand}"
+                      CommandParameter="{Binding Model.SelectedJet}" />
+            </Grid>
+            <TextBlock Classes="note" Text="{Binding StrJetsNeedComet}" IsVisible="{Binding !Model.IsCometCommitted}" />
+            <StackPanel Spacing="8" IsVisible="{Binding Model.SelectedJet, Converter={x:Static ObjectConverters.IsNotNull}}">
+              <Grid Classes="row" ColumnDefinitions="*,Auto,130" ColumnSpacing="8">
+                <TextBlock Classes="row-label" Text="{Binding StrJetLatitude}" />
+                <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrJetLatitude}" HelpContent="{Binding StrJetLatitudeHelp}" FlyoutMaxWidth="320" />
+                <NumericUpDown Grid.Column="2" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.JetLatitude}" Value="{Binding Model.SelectedJet.LatitudeDeg}" Minimum="-90" Maximum="90" Increment="1" FormatString="0.##" />
+              </Grid>
+              <Grid Classes="row" ColumnDefinitions="*,Auto,130" ColumnSpacing="8">
+                <TextBlock Classes="row-label" Text="{Binding StrJetLongitude}" />
+                <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrJetLongitude}" HelpContent="{Binding StrJetLongitudeHelp}" FlyoutMaxWidth="320" />
+                <NumericUpDown Grid.Column="2" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.JetLongitude}" Value="{Binding Model.SelectedJet.LongitudeDeg}" Minimum="-360" Maximum="360" Increment="1" FormatString="0.##" />
+              </Grid>
+              <Grid Classes="row" ColumnDefinitions="*,Auto,130" ColumnSpacing="8">
+                <TextBlock Classes="row-label" Text="{Binding StrJetAperture}" />
+                <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrJetAperture}" HelpContent="{Binding StrJetApertureHelp}" FlyoutMaxWidth="320" />
+                <NumericUpDown Grid.Column="2" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.JetAperture}" Value="{Binding Model.SelectedJet.ApertureDeg}" Minimum="0" Maximum="360" Increment="1" FormatString="0.##" />
+              </Grid>
+              <Grid Classes="row" ColumnDefinitions="*,Auto,130" ColumnSpacing="8">
+                <TextBlock Classes="row-label" Text="{Binding StrJetVelocity}" />
+                <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrJetVelocity}" HelpContent="{Binding StrJetVelocityHelp}" FlyoutMaxWidth="320" />
+                <NumericUpDown Grid.Column="2" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.JetVelocity}" Value="{Binding Model.SelectedJet.StartVelocityMeanMs}" Minimum="0.01" Maximum="1000" Increment="1" FormatString="0.##" ClipValueToMinMax="True" />
+              </Grid>
+              <Grid Classes="row" ColumnDefinitions="*,Auto,130" ColumnSpacing="8">
+                <TextBlock Classes="row-label" Text="{Binding StrJetLifetime}" />
+                <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrJetLifetime}" HelpContent="{Binding StrJetLifetimeHelp}" FlyoutMaxWidth="320" />
+                <NumericUpDown Grid.Column="2" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.JetLifetime}" Value="{Binding Model.SelectedJet.LifetimeDays}" Minimum="1" Maximum="365" Increment="1" FormatString="0.#" ClipValueToMinMax="True" />
+              </Grid>
+              <Grid Classes="row" ColumnDefinitions="*,Auto,130" ColumnSpacing="8">
+                <TextBlock Classes="row-label" Text="{Binding StrJetEmissionSteps}" />
+                <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrJetEmissionSteps}" HelpContent="{Binding StrJetEmissionStepsHelp}" FlyoutMaxWidth="320" />
+                <TextBlock Grid.Column="2" Classes="value" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.JetEmissionSteps}" Text="{Binding Model.SelectedJet.EmissionStepsText}" />
+              </Grid>
+              <TextBlock Classes="note" Text="{Binding Model.SelectedJet.LitWarning}" Foreground="{DynamicResource Sem.Warning}"
+                         IsVisible="{Binding Model.SelectedJet.LitWarning, Converter={x:Static ObjectConverters.IsNotNull}}" />
+              <TextBlock Classes="note" Text="{Binding Model.SelectedJet.NativeError}" Foreground="{DynamicResource Sem.Error}"
+                         IsVisible="{Binding Model.SelectedJet.NativeError, Converter={x:Static ObjectConverters.IsNotNull}}" />
+            </StackPanel>
+          </StackPanel>
+        </Border>
+
+        <!-- 5 Dust of the selected jet -->
+        <Border Classes="card">
+          <StackPanel Spacing="8">
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBlock Classes="card-title" Text="{Binding StrDustTitle}" />
+              <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrDustTitle}" HelpContent="{Binding StrDustHelp}" FlyoutMaxWidth="320" />
+            </Grid>
+            <TextBlock Classes="note" Text="{Binding StrDustSelectJet}"
+                       IsVisible="{Binding Model.SelectedJet, Converter={x:Static ObjectConverters.IsNull}}" />
+            <StackPanel Spacing="8" IsVisible="{Binding Model.SelectedJet, Converter={x:Static ObjectConverters.IsNotNull}}">
+              <Grid Classes="row" ColumnDefinitions="*,Auto,130" ColumnSpacing="8">
+                <TextBlock Classes="row-label" Text="{Binding StrDustMinDiameter}" />
+                <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrDustMinDiameter}" HelpContent="{Binding StrDustDiameterHelp}" FlyoutMaxWidth="320" />
+                <NumericUpDown Grid.Column="2" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.DustMinDiameter}" Value="{Binding Model.SelectedJet.MinDiameterUm}" Minimum="0.01" Maximum="10000" Increment="1" FormatString="0.###" ClipValueToMinMax="True" />
+              </Grid>
+              <Grid Classes="row" ColumnDefinitions="*,Auto,130" ColumnSpacing="8">
+                <TextBlock Classes="row-label" Text="{Binding StrDustMaxDiameter}" />
+                <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrDustMaxDiameter}" HelpContent="{Binding StrDustDiameterHelp}" FlyoutMaxWidth="320" />
+                <NumericUpDown Grid.Column="2" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.DustMaxDiameter}" Value="{Binding Model.SelectedJet.MaxDiameterUm}" Minimum="0.01" Maximum="10000" Increment="1" FormatString="0.###" ClipValueToMinMax="True" />
+              </Grid>
+              <Grid Classes="row" ColumnDefinitions="*,Auto,130" ColumnSpacing="8">
+                <TextBlock Classes="row-label" Text="{Binding StrDustSizeQ}" />
+                <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrDustSizeQ}" HelpContent="{Binding StrDustSizeQHelp}" FlyoutMaxWidth="320" />
+                <NumericUpDown Grid.Column="2" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.DustSizeQ}" Value="{Binding Model.SelectedJet.SizeQ}" Minimum="2" Maximum="5" Increment="0.1" FormatString="0.##" ClipValueToMinMax="True" />
+              </Grid>
+              <Grid Classes="row" ColumnDefinitions="*,Auto,130" ColumnSpacing="8">
+                <TextBlock Classes="row-label" Text="{Binding StrDustDensity}" />
+                <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrDustDensity}" HelpContent="{Binding StrDustDensityHelp}" FlyoutMaxWidth="320" />
+                <NumericUpDown Grid.Column="2" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.DustDensity}" Value="{Binding Model.SelectedJet.DensityGCm3}" Minimum="0.00001" Maximum="7" Increment="0.1" FormatString="0.#####" ClipValueToMinMax="True" />
+              </Grid>
+              <Grid Classes="row" ColumnDefinitions="*,Auto,130" ColumnSpacing="8">
+                <TextBlock Classes="row-label" Text="{Binding StrDustAlbedo}" />
+                <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrDustAlbedo}" HelpContent="{Binding StrDustAlbedoHelp}" FlyoutMaxWidth="320" />
+                <NumericUpDown Grid.Column="2" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.DustAlbedo}" Value="{Binding Model.SelectedJet.GeometricAlbedo}" Minimum="0.01" Maximum="0.5" Increment="0.01" FormatString="0.###" ClipValueToMinMax="True" />
+              </Grid>
+              <Grid Classes="row" ColumnDefinitions="*,Auto,130" ColumnSpacing="8">
+                <TextBlock Classes="row-label" Text="{Binding StrDustBeta}" />
+                <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrDustBeta}" HelpContent="{Binding StrDustBetaHelp}" FlyoutMaxWidth="320" />
+                <TextBlock Grid.Column="2" Classes="value" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.DustBeta}" Text="{Binding Model.SelectedJet.BetaRangeText}" />
+              </Grid>
+              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                <Button Grid.Column="0" Classes="wide" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.DustCopyToAllJets}"
+                        Content="{Binding StrDustCopyToAllJets}" Command="{Binding Model.CopyGrainToAllJetsCommand}" />
+                <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrDustCopyToAllJets}"
+                                             HelpContent="{Binding StrDustCopyHelp}" FlyoutMaxWidth="320" />
+              </Grid>
+            </StackPanel>
+          </StackPanel>
+        </Border>
+
+        <!-- 6 FITS image -->
+        <Border Classes="card">
+          <StackPanel Spacing="8">
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBlock Classes="card-title" Text="{Binding StrFitsTitle}" />
+              <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrFitsTitle}" HelpContent="{Binding StrFitsHelp}" FlyoutMaxWidth="320" />
+            </Grid>
+            <Button Classes="wide primary" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.FitsImportAndOverlay}"
+                    Content="{Binding StrFitsImportAndOverlay}" Command="{Binding ImportAndOverlayCommand}" />
+            <ProgressBar IsIndeterminate="True" Height="4" IsVisible="{Binding Imports.IsImporting}" />
+            <TextBlock Classes="note" Text="{Binding FitsStatus}"
+                       IsVisible="{Binding FitsStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+            <ListBox Classes="list" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.FitsList}"
+                     ItemsSource="{Binding Settings.Billboards.Items}" SelectedItem="{Binding SelectedBillboard, Mode=TwoWay}">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:DesktopBillboardItemViewModel">
+                  <TextBlock Text="{Binding TextureLabel}" FontSize="12" TextTrimming="CharacterEllipsis" />
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+            <TextBlock Classes="note" Text="{Binding StrFitsNone}"
+                       IsVisible="{Binding SelectedBillboard, Converter={x:Static ObjectConverters.IsNull}}" />
+            <StackPanel Spacing="8" IsVisible="{Binding SelectedBillboard, Converter={x:Static ObjectConverters.IsNotNull}}">
+              <CheckBox AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.FitsVisible}"
+                        Content="{Binding StrFitsVisible}" IsChecked="{Binding SelectedBillboard.IsVisible}" />
+              <Grid Classes="row" ColumnDefinitions="*,Auto,130" ColumnSpacing="8">
+                <TextBlock Classes="row-label" Text="{Binding StrFitsOpacity}" />
+                <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrFitsOpacity}" HelpContent="{Binding StrFitsOpacityHelp}" FlyoutMaxWidth="320" />
+                <Slider Grid.Column="2" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.FitsOpacity}" Minimum="0" Maximum="1" SmallChange="0.05" LargeChange="0.1" Value="{Binding SelectedBillboard.Alpha}" />
+              </Grid>
+              <Grid Classes="row" ColumnDefinitions="*,Auto,130" ColumnSpacing="8" IsVisible="{Binding SelectedBillboard.Fits.HasPlanes}">
+                <TextBlock Classes="row-label" Text="{Binding StrFitsPlane}" />
+                <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrFitsPlane}" HelpContent="{Binding StrFitsPlaneHelp}" FlyoutMaxWidth="320" />
+                <NumericUpDown Grid.Column="2" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.FitsPlane}"
+                               Minimum="1" Maximum="{Binding SelectedBillboard.Fits.PlaneMaximum}" Increment="1" FormatString="0"
+                               ParsingNumberStyle="Integer" Value="{Binding SelectedBillboard.Fits.PlaneValue}" />
+              </Grid>
+              <TextBlock Classes="note" Text="{Binding SelectedBillboard.Fits.PlaneOfText}" IsVisible="{Binding SelectedBillboard.Fits.HasPlanes}" />
+              <!-- what the image's header says: date, telescope, scale -->
+              <StackPanel Spacing="2" IsVisible="{Binding SelectedBillboard.IsFits}">
+                <TextBlock Classes="note" Text="{Binding SelectedBillboard.Fits.DateCardText}"
+                           IsVisible="{Binding SelectedBillboard.Fits.DateCardText, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                <ItemsControl ItemsSource="{Binding SelectedBillboard.Fits.Facts}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:FitsFactItem">
+                      <Grid ColumnDefinitions="110,8,*" Margin="0,0,0,2">
+                        <TextBlock Grid.Column="0" Classes="note" Text="{Binding Label}" />
+                        <SelectableTextBlock Grid.Column="2" FontSize="11" Text="{Binding Value}" TextWrapping="Wrap" />
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </StackPanel>
+          </StackPanel>
+        </Border>
+
+        <!-- 7 View -->
+        <Border Classes="card">
+          <StackPanel Spacing="8">
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBlock Classes="card-title" Text="{Binding StrViewTitle}" />
+              <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrViewTitle}" HelpContent="{Binding StrViewHelp}" FlyoutMaxWidth="320" />
+            </Grid>
+            <Grid ColumnDefinitions="*,*,*" ColumnSpacing="8"
+                  IsVisible="{Binding ModeBar, Converter={x:Static ObjectConverters.IsNotNull}}">
+              <Button Grid.Column="0" Classes="wide mode" Classes.active="{Binding ModeBar.IsOrbitActive}" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.ViewOrbit}"
+                      Content="{Binding ModeBar.StrOrbit}" Command="{Binding ModeBar.SelectOrbitCommand}" ToolTip.Tip="{Binding ModeBar.StrOrbitTip}" />
+              <Button Grid.Column="1" Classes="wide mode" Classes.active="{Binding ModeBar.IsNucleusActive}" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.ViewNucleus}"
+                      Content="{Binding ModeBar.StrNucleus}" Command="{Binding ModeBar.SelectNucleusCommand}" ToolTip.Tip="{Binding ModeBar.StrNucleusTip}" />
+              <Button Grid.Column="2" Classes="wide mode" Classes.active="{Binding ModeBar.IsModelActive}" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.ViewModel}"
+                      Content="{Binding ModeBar.StrModel}" Command="{Binding ModeBar.SelectModelCommand}" ToolTip.Tip="{Binding ModeBar.StrModelShortTip}" />
+            </Grid>
+            <TextBlock Classes="note" Text="{Binding ModeBar.Hint}" IsVisible="{Binding ModeBar.HasHint}" />
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+              <CheckBox Grid.Column="0" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.ViewDustFlow}"
+                        Content="{Binding StrViewDustFlow}" IsChecked="{Binding Model.DustFlow}" />
+              <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrViewDustFlow}"
+                                           HelpContent="{Binding StrViewDustFlowHelp}" FlyoutMaxWidth="320" />
+            </Grid>
+          </StackPanel>
+        </Border>
+
+        <!-- 8 Playback -->
+        <Border Classes="card">
+          <StackPanel Spacing="8">
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBlock Classes="card-title" Text="{Binding StrPlaybackTitle}" />
+              <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrPlaybackTitle}" HelpContent="{Binding StrPlaybackHelp}" FlyoutMaxWidth="320" />
+            </Grid>
+            <TextBlock Classes="note" Text="{Binding StrPlaybackNotCommitted}" IsVisible="{Binding !Timeline.HasCommittedState}" />
+            <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
+              <Button Classes="playback" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.PlaybackReset}"
+                      Command="{Binding Timeline.ResetCommand}" ToolTip.Tip="{Binding StrPlaybackReset}">
+                <Path Data="M 16,6 L 8,12 L 16,18 Z M 24,6 L 16,12 L 24,18 Z" Fill="{DynamicResource Text.Primary}" Stretch="Uniform" Width="16" Height="12" />
+              </Button>
+              <Button Classes="playback" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.PlaybackPlayPause}"
+                      Command="{Binding Timeline.PlayPauseCommand}" ToolTip.Tip="{Binding StrPlaybackPlayPause}">
+                <Panel Width="14" Height="14">
+                  <Path Data="M 6,4 L 18,11 L 6,18 Z" Fill="{DynamicResource Text.Primary}" Stretch="Uniform" IsVisible="{Binding !Timeline.IsPlaying}" />
+                  <Path Data="M 6,4 L 9,4 L 9,18 L 6,18 Z M 15,4 L 18,4 L 18,18 L 15,18 Z" Fill="{DynamicResource Text.Primary}" Stretch="Uniform" IsVisible="{Binding Timeline.IsPlaying}" />
+                </Panel>
+              </Button>
+              <Button Classes="playback" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.PlaybackRunToEnd}"
+                      Command="{Binding Timeline.RunToEndCommand}" ToolTip.Tip="{Binding StrPlaybackRunToEnd}">
+                <Path Data="M 8,6 L 8,18 L 11,18 L 11,6 Z M 13,6 L 21,12 L 13,18 Z" Fill="{DynamicResource Text.Primary}" Stretch="Uniform" Width="16" Height="12" />
+              </Button>
+            </StackPanel>
+            <ProgressBar Minimum="0" Maximum="100" Value="{Binding Timeline.Progress, FallbackValue=0}" Height="6" CornerRadius="3"
+                         Background="{DynamicResource Bg.Subtle}" Foreground="{DynamicResource Accent.Primary}" />
+            <Grid Classes="row" ColumnDefinitions="*,Auto,130" ColumnSpacing="8">
+              <TextBlock Classes="row-label" Text="{Binding StrPlaybackSpeed}" />
+              <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrPlaybackSpeed}" HelpContent="{Binding StrPlaybackSpeedHelp}" FlyoutMaxWidth="320" />
+              <ComboBox Grid.Column="2" HorizontalAlignment="Stretch" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.PlaybackSpeed}"
+                        ItemsSource="{Binding Timeline.SpeedOptions}"
+                        DisplayMemberBinding="{Binding Label, x:DataType=vm:TimelineTabViewModel+SpeedOption}"
+                        SelectedValueBinding="{Binding Speed, x:DataType=vm:TimelineTabViewModel+SpeedOption}"
+                        SelectedValue="{Binding Timeline.SelectedSpeed}" />
+            </Grid>
+            <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="8">
+              <TextBlock Grid.Column="0" Classes="row-label" Text="{Binding StrPlaybackEpoch}" />
+              <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrPlaybackEpoch}" HelpContent="{Binding StrPlaybackEpochHelp}" FlyoutMaxWidth="320" />
+              <TextBox x:Name="EpochBox" Grid.Column="2" Classes="field" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.PlaybackEpoch}"
+                       Text="{Binding Timeline.CurrentEpochText}" Watermark="yyyy-MM-dd HH:mm:ss"
+                       FontFamily="Cascadia Mono, Consolas, monospace">
+                <TextBox.KeyBindings>
+                  <KeyBinding Gesture="Enter" Command="{Binding Timeline.SeekToEpochCommand}" />
+                </TextBox.KeyBindings>
+              </TextBox>
+              <Button Grid.Column="3" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.PlaybackSeek}"
+                      Content="{Binding StrPlaybackSeek}" Command="{Binding Timeline.SeekToEpochCommand}" />
+            </Grid>
+            <TextBlock Classes="note" Text="{Binding Timeline.ScaleName}" ToolTip.Tip="{Binding Timeline.ScaleTip}" />
+            <TextBlock Classes="note" Text="{Binding Timeline.CurrentEpochError}" Foreground="{DynamicResource Sem.Error}"
+                       IsVisible="{Binding Timeline.HasCurrentEpochError}" />
+          </StackPanel>
+        </Border>
+
+        <!-- 9 Export -->
+        <Border Classes="card">
+          <StackPanel Spacing="8">
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBlock Classes="card-title" Text="{Binding StrExportTitle}" />
+              <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrExportTitle}" HelpContent="{Binding StrExportHelp}" FlyoutMaxWidth="320" />
+            </Grid>
+            <Button Classes="wide primary" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.ExportButton}"
+                    Content="{Binding StrExportButton}" Command="{Binding ExportImageCommand}" />
+            <TextBlock Classes="note" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.ExportStatus}"
+                       Text="{Binding ExportStatus}" />
+          </StackPanel>
+        </Border>
+
+      </StackPanel>
+    </ScrollViewer>
+
+    <!-- everything else lives in the classic layout -->
+    <Grid Grid.Row="2" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+      <Button Grid.Column="0" Classes="wide" AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.MoreSettings}"
+              Content="{Binding StrMoreSettings}" Command="{Binding ClassicLayoutCommand}" />
+      <controls:PropertyHelpButton Grid.Column="1" HelpHeader="{Binding StrMoreSettings}"
+                                   HelpContent="{Binding StrMoreSettingsHelp}" FlyoutMaxWidth="320" FlyoutPlacement="Top" />
+    </Grid>
+  </Grid>
+</UserControl>

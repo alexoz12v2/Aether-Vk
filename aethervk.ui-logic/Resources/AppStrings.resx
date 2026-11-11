@@ -1601,4 +1601,323 @@ Type an epoch inside the committed range and press Enter, or Go, to jump there; 
   <data name="Billboard_FitsProjection_XPH" xml:space="preserve">
     <value>polar HEALPix (butterfly)</value>
   </data>
+  <data name="Menu_Layout" xml:space="preserve">
+    <value>Layout</value>
+  </data>
+  <data name="Menu_Layout_Classic" xml:space="preserve">
+    <value>Classic</value>
+  </data>
+  <data name="Menu_Layout_Compact" xml:space="preserve">
+    <value>Compact</value>
+  </data>
+  <data name="Layout_CompactUnavailable" xml:space="preserve">
+    <value>Compact layout needs the 3D viewport tab to be visible.</value>
+  </data>
+  <data name="Range_ModelPreviewFormat" xml:space="preserve">
+    <value>start {0} → end {1}</value>
+  </data>
+  <data name="Compact_Comet_Title" xml:space="preserve">
+    <value>1 · Comet</value>
+  </data>
+  <data name="Compact_Comet_Help" xml:space="preserve">
+    <value>Choose the comet to study.
+
+Type its name or number and press Search, then pick it in the list. The two buttons choose 67P or 10P directly.
+
+Then press the coloured button: the program downloads the comet's path around the Sun and shows the comet in the view. You need to be online for this.</value>
+  </data>
+  <data name="Compact_Comet_SearchWatermark" xml:space="preserve">
+    <value>Comet name or number (e.g. 67P, Halley)</value>
+  </data>
+  <data name="Compact_Comet_SearchButton" xml:space="preserve">
+    <value>Search</value>
+  </data>
+  <data name="Compact_Comet_Record" xml:space="preserve">
+    <value>Orbit solution to use</value>
+  </data>
+  <data name="Compact_Comet_Commit" xml:space="preserve">
+    <value>Download and show the comet</value>
+  </data>
+  <data name="Compact_Period_Title" xml:space="preserve">
+    <value>2 · Observation period</value>
+  </data>
+  <data name="Compact_Period_Help" xml:space="preserve">
+    <value>Say when the image was taken and how long before it the nucleus was already emitting dust.
+
+The model starts a chosen number of rotations of the nucleus before the image date and ends at the image date. The line below the boxes shows the start and the end it will use.
+
+'Set this period' only writes the period. 'Compute at this date' also loads the comet for it and moves the clock to the image date.</value>
+  </data>
+  <data name="Compact_Period_ImageDate" xml:space="preserve">
+    <value>Image date (UTC)</value>
+  </data>
+  <data name="Compact_Period_ImageDateHelp" xml:space="preserve">
+    <value>The date and time the image was taken, in Universal Time, written as year-month-day, the letter T, then hours:minutes:seconds. Example: 2021-12-05T21:30:00.
+
+If a FITS image is loaded, the button below copies its date here.</value>
+  </data>
+  <data name="Compact_Period_FromImage" xml:space="preserve">
+    <value>Use the date of the FITS image</value>
+  </data>
+  <data name="Compact_Period_RotationPeriod" xml:space="preserve">
+    <value>Rotation period (hours)</value>
+  </data>
+  <data name="Compact_Period_RotationPeriodHelp" xml:space="preserve">
+    <value>How many hours the nucleus takes to turn once around its axis. For 67P it is about 12.4 hours.</value>
+  </data>
+  <data name="Compact_Period_Rotations" xml:space="preserve">
+    <value>Number of rotations</value>
+  </data>
+  <data name="Compact_Period_RotationsHelp" xml:space="preserve">
+    <value>How many turns of the nucleus the model covers before the image date. More rotations show older dust, farther from the nucleus, and take longer to compute. The period is never shorter than one day.</value>
+  </data>
+  <data name="Compact_Period_Apply" xml:space="preserve">
+    <value>Set this period</value>
+  </data>
+  <data name="Compact_Period_Run" xml:space="preserve">
+    <value>Compute at this date</value>
+  </data>
+  <data name="Compact_Period_Recommit" xml:space="preserve">
+    <value>Load the comet again with this period</value>
+  </data>
+  <data name="Compact_Nucleus_Title" xml:space="preserve">
+    <value>3 · Nucleus</value>
+  </data>
+  <data name="Compact_Nucleus_Help" xml:space="preserve">
+    <value>The size of the nucleus and the direction of its rotation axis in the sky.</value>
+  </data>
+  <data name="Compact_Nucleus_Radius" xml:space="preserve">
+    <value>Radius (km)</value>
+  </data>
+  <data name="Compact_Nucleus_RadiusHelp" xml:space="preserve">
+    <value>The radius of the nucleus in kilometres. Jets start from its surface. Leave it empty to use the catalogue value, when there is one.</value>
+  </data>
+  <data name="Compact_Nucleus_PoleRa" xml:space="preserve">
+    <value>Rotation axis: right ascension (°)</value>
+  </data>
+  <data name="Compact_Nucleus_PoleDec" xml:space="preserve">
+    <value>Rotation axis: declination (°)</value>
+  </data>
+  <data name="Compact_Nucleus_PoleHelp" xml:space="preserve">
+    <value>Where the north end of the rotation axis points in the sky, as right ascension and declination in degrees (J2000). The small view above shows the axis as a light-blue line.</value>
+  </data>
+  <data name="Compact_Jets_Title" xml:space="preserve">
+    <value>4 · Jets</value>
+  </data>
+  <data name="Compact_Jets_Help" xml:space="preserve">
+    <value>A jet is a place on the nucleus that emits dust. Add one, select it in the list, then set where it is and how it emits. The list shows each jet's latitude (φ) and longitude (λ).</value>
+  </data>
+  <data name="Compact_Jets_Add" xml:space="preserve">
+    <value>Add a jet</value>
+  </data>
+  <data name="Compact_Jets_Remove" xml:space="preserve">
+    <value>Remove the selected jet</value>
+  </data>
+  <data name="Compact_Jets_NeedComet" xml:space="preserve">
+    <value>Show a comet first (card 1), and give the nucleus a radius (card 3).</value>
+  </data>
+  <data name="Compact_Jet_Latitude" xml:space="preserve">
+    <value>Latitude (°)</value>
+  </data>
+  <data name="Compact_Jet_LatitudeHelp" xml:space="preserve">
+    <value>How far the jet is from the equator of the nucleus: +90 is the north pole, 0 the equator, −90 the south pole.</value>
+  </data>
+  <data name="Compact_Jet_Longitude" xml:space="preserve">
+    <value>Longitude (°)</value>
+  </data>
+  <data name="Compact_Jet_LongitudeHelp" xml:space="preserve">
+    <value>The position of the jet around the rotation axis, in degrees from the nucleus' reference meridian.</value>
+  </data>
+  <data name="Compact_Jet_Aperture" xml:space="preserve">
+    <value>Opening angle (°)</value>
+  </data>
+  <data name="Compact_Jet_ApertureHelp" xml:space="preserve">
+    <value>How wide the cone of dust is. A small angle gives a narrow jet, a large one a broad fan.</value>
+  </data>
+  <data name="Compact_Jet_Velocity" xml:space="preserve">
+    <value>Dust speed (m/s)</value>
+  </data>
+  <data name="Compact_Jet_VelocityHelp" xml:space="preserve">
+    <value>How fast the dust leaves the nucleus, in metres per second.</value>
+  </data>
+  <data name="Compact_Jet_Lifetime" xml:space="preserve">
+    <value>Dust lifetime (days)</value>
+  </data>
+  <data name="Compact_Jet_LifetimeHelp" xml:space="preserve">
+    <value>For how many days a grain is followed after it leaves the nucleus. Older grains are no longer drawn.</value>
+  </data>
+  <data name="Compact_Jet_EmissionSteps" xml:space="preserve">
+    <value>Emission steps</value>
+  </data>
+  <data name="Compact_Jet_EmissionStepsHelp" xml:space="preserve">
+    <value>How finely the emission is divided in time. The program derives it from the dust lifetime; it is shown for information.</value>
+  </data>
+  <data name="Compact_Dust_Title" xml:space="preserve">
+    <value>5 · Dust of the selected jet</value>
+  </data>
+  <data name="Compact_Dust_Help" xml:space="preserve">
+    <value>What the dust of the jet selected in card 4 is made of: the sizes of the grains, how the sizes are distributed, how dense and how reflective the grains are.</value>
+  </data>
+  <data name="Compact_Dust_SelectJet" xml:space="preserve">
+    <value>Select a jet in card 4 to edit its dust.</value>
+  </data>
+  <data name="Compact_Dust_MinDiameter" xml:space="preserve">
+    <value>Smallest grain (μm)</value>
+  </data>
+  <data name="Compact_Dust_MaxDiameter" xml:space="preserve">
+    <value>Largest grain (μm)</value>
+  </data>
+  <data name="Compact_Dust_DiameterHelp" xml:space="preserve">
+    <value>The diameters of the smallest and of the largest grain the jet emits, in thousandths of a millimetre. Sunlight pushes small grains away faster than large ones.</value>
+  </data>
+  <data name="Compact_Dust_SizeQ" xml:space="preserve">
+    <value>Size distribution exponent q</value>
+  </data>
+  <data name="Compact_Dust_SizeQHelp" xml:space="preserve">
+    <value>How the number of grains falls as their size grows. A larger q means many more small grains than large ones. A common value is 3.5.</value>
+  </data>
+  <data name="Compact_Dust_Density" xml:space="preserve">
+    <value>Grain density (g/cm³)</value>
+  </data>
+  <data name="Compact_Dust_DensityHelp" xml:space="preserve">
+    <value>How heavy the material of the grains is. Water is 1 g/cm³. Lighter grains are pushed away faster by sunlight.</value>
+  </data>
+  <data name="Compact_Dust_Albedo" xml:space="preserve">
+    <value>Albedo</value>
+  </data>
+  <data name="Compact_Dust_AlbedoHelp" xml:space="preserve">
+    <value>The fraction of sunlight a grain reflects: 0.04 is very dark, 0.5 is bright. It changes how bright the dust looks, not where it goes.</value>
+  </data>
+  <data name="Compact_Dust_Beta" xml:space="preserve">
+    <value>β (push of sunlight)</value>
+  </data>
+  <data name="Compact_Dust_BetaHelp" xml:space="preserve">
+    <value>How strongly sunlight pushes the grains compared with the pull of the Sun's gravity, from the largest grain to the smallest. The program computes it from the sizes and the density.</value>
+  </data>
+  <data name="Compact_Dust_CopyToAllJets" xml:space="preserve">
+    <value>Copy to all jets</value>
+  </data>
+  <data name="Compact_Dust_CopyHelp" xml:space="preserve">
+    <value>Gives every other jet the dust of this jet. The positions, the opening angles and the speeds of the jets stay as they are.</value>
+  </data>
+  <data name="Compact_Fits_Title" xml:space="preserve">
+    <value>6 · FITS image</value>
+  </data>
+  <data name="Compact_Fits_Help" xml:space="preserve">
+    <value>Load your image of the comet and lay it over the view, to compare it with the model.
+
+The button asks for the file, loads it and places it over the view. Below you can hide it, make it more or less transparent and, for an image with several planes, choose the plane.</value>
+  </data>
+  <data name="Compact_Fits_ImportAndOverlay" xml:space="preserve">
+    <value>Import and overlay</value>
+  </data>
+  <data name="Compact_Fits_None" xml:space="preserve">
+    <value>No image yet.</value>
+  </data>
+  <data name="Compact_Fits_NothingImported" xml:space="preserve">
+    <value>No new image was imported.</value>
+  </data>
+  <data name="Compact_Fits_Overlaid" xml:space="preserve">
+    <value>Overlaid:</value>
+  </data>
+  <data name="Compact_Fits_Visible" xml:space="preserve">
+    <value>Show the image over the view</value>
+  </data>
+  <data name="Compact_Fits_Opacity" xml:space="preserve">
+    <value>Opacity</value>
+  </data>
+  <data name="Compact_Fits_OpacityHelp" xml:space="preserve">
+    <value>How much the image covers the model underneath: to the left it is transparent, to the right it hides the model.</value>
+  </data>
+  <data name="Compact_Fits_Plane" xml:space="preserve">
+    <value>Plane of the image</value>
+  </data>
+  <data name="Compact_Fits_PlaneHelp" xml:space="preserve">
+    <value>Some FITS files hold several images, one per plane (for example one per filter). Choose which one to show.</value>
+  </data>
+  <data name="Compact_View_Title" xml:space="preserve">
+    <value>7 · View</value>
+  </data>
+  <data name="Compact_View_Help" xml:space="preserve">
+    <value>What the large view shows.
+
+Orbit: the comet's path around the Sun. Nucleus: the nucleus up close, with its jets. Model: the comet as seen from Earth, to compare with your image.</value>
+  </data>
+  <data name="Compact_View_DustFlow" xml:space="preserve">
+    <value>Show how the dust flows</value>
+  </data>
+  <data name="Compact_View_DustFlowHelp" xml:space="preserve">
+    <value>Draws moving marks along the dust, so you can see which way it travels. It changes the picture only, not the model.</value>
+  </data>
+  <data name="Compact_Playback_Title" xml:space="preserve">
+    <value>8 · Playback</value>
+  </data>
+  <data name="Compact_Playback_Help" xml:space="preserve">
+    <value>Let time run and watch the dust form.
+
+The middle button starts and stops time. The left one goes back to the start of the period, the right one jumps to its end. The bar shows how far through the period you are.</value>
+  </data>
+  <data name="Compact_Playback_NotCommitted" xml:space="preserve">
+    <value>Show a comet first (card 1).</value>
+  </data>
+  <data name="Compact_Playback_PlayPause" xml:space="preserve">
+    <value>Start or stop time</value>
+  </data>
+  <data name="Compact_Playback_Reset" xml:space="preserve">
+    <value>Back to the start of the period</value>
+  </data>
+  <data name="Compact_Playback_RunToEnd" xml:space="preserve">
+    <value>Jump to the end of the period</value>
+  </data>
+  <data name="Compact_Playback_Speed" xml:space="preserve">
+    <value>Speed</value>
+  </data>
+  <data name="Compact_Playback_SpeedHelp" xml:space="preserve">
+    <value>How fast time runs while playing.</value>
+  </data>
+  <data name="Compact_Playback_Epoch" xml:space="preserve">
+    <value>Date</value>
+  </data>
+  <data name="Compact_Playback_EpochHelp" xml:space="preserve">
+    <value>The date the view shows now. To go to another date inside the period, type it as year-month-day hours:minutes:seconds and press Go.</value>
+  </data>
+  <data name="Compact_Playback_Seek" xml:space="preserve">
+    <value>Go</value>
+  </data>
+  <data name="Compact_Export_Title" xml:space="preserve">
+    <value>9 · Export</value>
+  </data>
+  <data name="Compact_Export_Help" xml:space="preserve">
+    <value>Saves what the large view shows as a picture file. If an image is laid over the view, a second picture with the image on top is saved too.</value>
+  </data>
+  <data name="Compact_Export_Button" xml:space="preserve">
+    <value>Export image…</value>
+  </data>
+  <data name="Compact_MoreSettings" xml:space="preserve">
+    <value>More settings → Classic layout</value>
+  </data>
+  <data name="Compact_MoreSettingsHelp" xml:space="preserve">
+    <value>This panel shows the settings used most. Every other setting is in the classic layout. You can come back here at any time from the Layout menu; nothing is lost when you switch.</value>
+  </data>
+  <data name="NucleusMini_Header" xml:space="preserve">
+    <value>Nucleus seen from Earth</value>
+  </data>
+  <data name="NucleusMini_CaptionEarth" xml:space="preserve">
+    <value>As a telescope on Earth sees it: north up, east to the left, lit by the Sun.</value>
+  </data>
+  <data name="NucleusMini_CaptionFree" xml:space="preserve">
+    <value>Free view: you turned the nucleus by dragging.</value>
+  </data>
+  <data name="NucleusMini_SunLegend" xml:space="preserve">
+    <value>Yellow line: direction of the Sun. Light-blue line: rotation axis.</value>
+  </data>
+  <data name="NucleusMini_WaitingForComet" xml:space="preserve">
+    <value>Show a comet (card 1) to see its nucleus here.</value>
+  </data>
+  <data name="NucleusMini_DragHint" xml:space="preserve">
+    <value>Drag on the picture to turn the nucleus.</value>
+  </data>
+  <data name="NucleusMini_ResetToEarth" xml:space="preserve">
+    <value>Back to Earth view</value>
+  </data>
 </root>

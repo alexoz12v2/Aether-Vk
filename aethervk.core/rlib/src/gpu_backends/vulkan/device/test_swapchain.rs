@@ -23,6 +23,51 @@ mod tests {
     }
   }
 
+  /// The present mode of a windowed swapchain over a table of surface capabilities
+  /// (`choose_present_mode`, no device): a low-latency engine takes MAILBOX, else IMMEDIATE, else
+  /// FIFO, whatever its vsync setting; the others keep their rule (MAILBOX with vsync, IMMEDIATE
+  /// without, else FIFO); FIFO, which every surface has, is the answer even to an empty list.
+  #[test]
+  fn low_latency_present_mode_selection() {
+    use vk::PresentModeKHR as M;
+    let (mailbox, immediate, fifo, relaxed) = (M::MAILBOX, M::IMMEDIATE, M::FIFO, M::FIFO_RELAXED);
+    // (supported, low latency, vsync on, vsync off)
+    let table: [(&[M], M, M, M); 9] = [
+      (&[fifo, mailbox, immediate, relaxed], mailbox, mailbox, immediate),
+      (&[immediate, mailbox, fifo], mailbox, mailbox, immediate),
+      (&[fifo, mailbox], mailbox, mailbox, fifo),
+      (&[fifo, relaxed, mailbox], mailbox, mailbox, fifo),
+      (&[fifo, immediate], immediate, fifo, immediate),
+      (&[immediate, relaxed, fifo], immediate, fifo, immediate),
+      (&[fifo, relaxed], fifo, fifo, fifo),
+      (&[fifo], fifo, fifo, fifo),
+      (&[], fifo, fifo, fifo),
+    ];
+    for (supported, low_latency, vsync_on, vsync_off) in table {
+      for vsync in [false, true] {
+        assert_eq!(
+          choose_present_mode(supported, vsync, true),
+          low_latency,
+          "low latency (vsync {vsync}) over {supported:?}"
+        );
+      }
+      assert_eq!(choose_present_mode(supported, true, false), vsync_on, "vsync over {supported:?}");
+      assert_eq!(choose_present_mode(supported, false, false), vsync_off, "no vsync over {supported:?}");
+      // the choice is one of the supported modes, or FIFO
+      for (vsync, low) in [(false, false), (true, false), (false, true), (true, true)] {
+        let chosen = choose_present_mode(supported, vsync, low);
+        assert!(chosen == fifo || supported.contains(&chosen));
+      }
+    }
+    // the order of the surface's list never matters
+    let mut modes = alloc::vec![fifo, relaxed, immediate, mailbox];
+    for _ in 0..modes.len() {
+      modes.rotate_left(1);
+      assert_eq!(choose_present_mode(&modes, false, true), mailbox);
+      assert_eq!(choose_present_mode(&modes[..3], true, true), choose_present_mode(&modes[..3], false, true));
+    }
+  }
+
   // Helper to get real Vulkan device objects for testing swapchain directly
   fn setup_test_render(
     enable_maintenance1: bool,
@@ -765,6 +810,7 @@ mod tests {
       height: 600,
       vsync: false,
       buffer_count: 3,
+      low_latency: false,
     };
 
     let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&log_device);
@@ -897,6 +943,7 @@ mod tests {
       height: 600,
       vsync: false,
       buffer_count: 3,
+      low_latency: false,
     };
     let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&log_device);
     let mut vp1 = PresentationState::new(
@@ -935,6 +982,7 @@ mod tests {
       height: 600,
       vsync: false,
       buffer_count: 3,
+      low_latency: false,
     };
     let mut vp2 = PresentationState::new(
       &entry,
@@ -972,6 +1020,7 @@ mod tests {
       height: 400,
       vsync: false,
       buffer_count: 3,
+      low_latency: false,
     };
     let mut mv = PresentationState::new(
       &entry,
@@ -1184,6 +1233,7 @@ mod tests {
       height: 600,
       vsync: false,
       buffer_count: 3,
+      low_latency: false,
     };
 
     let mut rollback = crate::gpu_backends::vulkan::utils::RollbackContext::new(&log_device);

@@ -64,6 +64,16 @@ internal sealed class AppRig : IDisposable
   public RecordingPrompt Prompt { get; } = new();
   public MainWindowViewModel Vm { get; private set; }
   public MainWindow Main { get; private set; }
+  /// <summary>Set by <see cref="Dispose"/>: what the shutdown threw (null = nothing).</summary>
+  public Exception? ShutdownError { get; private set; }
+
+  /// <summary>Set by <see cref="Dispose"/>: the shutdown finished within its time limit.</summary>
+  public bool ShutdownCompleted { get; private set; }
+
+  /// <summary>Called by <see cref="Dispose"/> on its worker thread after the window closed and the
+  /// host stopped, right before the engine stops.</summary>
+  public Action? BeforeEngineShutdown { get; set; }
+
   public SaveFileService Saves => Host.Services.GetRequiredService<SaveFileService>();
   public PreferencesService Preferences => Host.Services.GetRequiredService<PreferencesService>();
 
@@ -215,10 +225,9 @@ internal sealed class AppRig : IDisposable
       {
         Ui(() =>
         {
-          // as App does at shutdown: the viewport goes before its window
-          var runtime = Host.Services.GetService<INativeRuntimeService>();
-          if (runtime?.PresentationEngineId is ulong pe)
-            runtime.RemoveViewport(pe);
+          // as App does at shutdown: every viewport (the nucleus mini-view first, then the main
+          // one) goes before its window, none may present to a closed window
+          Host.Services.GetService<INativeRuntimeService>()?.RemoveAllViewports();
           if (Application.Current!.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
             desktop.MainWindow = null;
           Main.Close();
@@ -227,17 +236,20 @@ internal sealed class AppRig : IDisposable
         // stop, not dispose: the Avalonia loop outlives this rig (the app's ends first), and
         // its timers (title, camera) would read disposed services; the process exits after the run
         Host.StopAsync().Wait();
+        BeforeEngineShutdown?.Invoke();
         // the engine stops as the app's runtime Dispose stops it: threads joined, device and
         // instance released while the X Display is still open (left running, the process exit
         // tore them down mid-call: SIGSEGV in the driver, or SIGABRT under the validation layer).
         // Not Dispose: the timers above may still query the service, which answers defaults now.
         Ui(() => (Host.Services.GetService<INativeRuntimeService>() as NativeRuntimeService)?.ShutdownSync());
       });
-      done.Wait(TimeSpan.FromSeconds(30));
+      ShutdownCompleted = done.Wait(TimeSpan.FromSeconds(30));
     }
-    catch (Exception)
+    catch (Exception e)
     {
-      // a shutdown hang must not take the test result with it
+      // a shutdown failure must not take the test result with it (a test that checks the
+      // shutdown reads ShutdownError)
+      ShutdownError = e;
     }
     finally
     {

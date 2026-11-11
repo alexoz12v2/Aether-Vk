@@ -1,0 +1,43 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:AetherVk.Logic.ViewModels"
+             xmlns:ids="using:AetherVk.Logic.Automation"
+             x:Class="AetherVk.Views.NucleusMiniView"
+             x:DataType="vm:NucleusMiniViewModel">
+  <!--
+    "Nucleus seen from Earth": a second, small native 3D view.
+    A native child window is drawn above every Avalonia control of this window and is never
+    clipped, so: this view sits outside any ScrollViewer; the caption, the date and the legend are
+    plain text above the native area, never over it; and the area keeps 8 px of padding around it
+    (as the main viewport does), so that no neighbour is covered.
+    The native control itself (NucleusMiniViewHost) is created by the code-behind the first time
+    the view model has a viewport, added to HostSlot once and never moved: re-parenting it would
+    destroy its window.
+  -->
+  <Expander Classes="mini" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
+            AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.NucleusMiniViewExpander}"
+            Header="{Binding StrHeader}" IsExpanded="{Binding IsExpanded, Mode=TwoWay}">
+    <StackPanel Spacing="4">
+      <TextBlock Classes="note" TextWrapping="Wrap"
+                 AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.NucleusMiniViewCaption}"
+                 Text="{Binding CaptionText}" />
+      <TextBlock Classes="note" Text="{Binding DateText}" FontFamily="Cascadia Mono, Consolas, monospace"
+                 IsVisible="{Binding DateText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+      <TextBlock Classes="note" TextWrapping="Wrap" Text="{Binding StrSunLegend}" />
+      <!-- 8 px of airspace around the native area -->
+      <Border x:Name="HostFrame" Padding="8" HorizontalAlignment="Center" Background="#1A1A1A" CornerRadius="4">
+        <Panel x:Name="HostSlot">
+          <TextBlock Text="{Binding StrWaitingForComet}" IsVisible="{Binding IsWaitingForComet}"
+                     Foreground="#C9D1E5" FontSize="12" TextWrapping="Wrap" TextAlignment="Center"
+                     HorizontalAlignment="Center" VerticalAlignment="Center" Margin="8" />
+        </Panel>
+      </Border>
+      <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+        <TextBlock Grid.Column="0" Classes="note" TextWrapping="Wrap" VerticalAlignment="Center" Text="{Binding StrDragHint}" />
+        <Button Grid.Column="1"
+                AutomationProperties.AutomationId="{x:Static ids:CompactAutomationIds.NucleusMiniViewResetToEarth}"
+                Content="{Binding StrResetToEarth}" Command="{Binding ResetToEarthCommand}" />
+      </Grid>
+    </StackPanel>
+  </Expander>
+</UserControl>

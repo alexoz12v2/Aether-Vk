@@ -4,7 +4,7 @@ use crate::{
   gpu::{self, PresentationEngineHandle, RenderDevice, scene_conversion::SceneConversionExt2},
   gpu_backends::vulkan::{self, utils::RwLockable},
   simulation_api::{
-    invoke_main_thread_flush_cleanup, invoke_main_thread_process_cleanup,
+    MainThreadCleanupSignal, invoke_main_thread_flush_cleanup, invoke_main_thread_process_cleanup,
     structs::{RenderCommand, RenderThreadContext},
   },
   types::{EngineError, EngineResult, GpuError, GpuResult},
@@ -77,7 +77,18 @@ pub fn start_render_thread(
     const CLEANUP_DELTA_UNSCALED_US: timeus_t = oshal::os::time::timeus_milliseconds(500);
 
     // atomic boolean used as a signaling mechanism to ensure that main thread callbacks are
-    let main_thread_cb_signal_done = core::sync::atomic::AtomicBool::new(true);
+    // On the heap and released when this thread exits, on every path (`MainThreadCleanupSignal`):
+    // a callback still queued on the UI dispatcher then neither writes to this stack nor touches
+    // the device.
+    struct ReleaseOnExit(*mut MainThreadCleanupSignal);
+    impl Drop for ReleaseOnExit {
+      fn drop(&mut self) {
+        unsafe { MainThreadCleanupSignal::release(self.0) };
+      }
+    }
+    let signal_owner = ReleaseOnExit(MainThreadCleanupSignal::new_raw());
+    let main_thread_cb_signal: &MainThreadCleanupSignal = unsafe { &*signal_owner.0 };
+    let main_thread_cb_signal_done = &main_thread_cb_signal.done;
 
     loop {
       let mut core_logic = || -> bool {
@@ -119,7 +130,7 @@ pub fn start_render_thread(
                 .is_ok()
               {
                 unsafe {
-                  invoke_main_thread_process_cleanup(vulkan_device, &main_thread_cb_signal_done)
+                  invoke_main_thread_process_cleanup(vulkan_device, main_thread_cb_signal)
                 };
               }
             }
@@ -162,14 +173,14 @@ pub fn start_render_thread(
                   }
                   main_thread_cb_signal_done.store(false, Ordering::Release);
                   unsafe {
-                    invoke_main_thread_flush_cleanup(vulkan_device, &main_thread_cb_signal_done);
+                    invoke_main_thread_flush_cleanup(vulkan_device, main_thread_cb_signal);
                   }
 
-                  // since this is shutdown, wait for it to be done
+                  // since this is shutdown, wait for it to be done (the flag stays set: nothing
+                  // is pending when the thread exits)
                   while !main_thread_cb_signal_done.load(Ordering::Acquire) {
                     core::hint::spin_loop();
                   }
-                  main_thread_cb_signal_done.store(false, Ordering::Release);
 
                   Ok(())
                 })
@@ -178,6 +189,7 @@ pub fn start_render_thread(
             }
 
             debug_assert!(alloc::sync::Arc::strong_count(&render_frontend) < 16);
+            let is_frame_batch = matches!(cmd, RenderCommand::RenderFrames(_));
             if let Err(e) = render_frontend.with_device(render_device_handle, |render_device| {
               process_command(
                 cmd,
@@ -193,6 +205,13 @@ pub fn start_render_thread(
               )
             }) {
               oshal::log!("render_thread | process_command failed: {:?}", e);
+            }
+            // done with it, rendered or not: the logic thread may send the next one
+            // (`structs::RenderBatchesInFlight`)
+            if is_frame_batch {
+              render_params
+                .render_batches_in_flight
+                .fetch_sub(1, core::sync::atomic::Ordering::AcqRel);
             }
             false
           }
@@ -230,6 +249,10 @@ fn render_failure_streak_reset() {
   RENDER_FAILURE_STREAK.store(0, core::sync::atomic::Ordering::Relaxed);
 }
 static RENDER_FAILURE_STREAK: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+/// frames skipped because the engine's image could not be acquired / its swapchain awaits
+/// recreation (all engines; rate-limits the two log lines of the frame loop)
+static ACQUIRE_SKIPS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static RECREATION_SKIPS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 fn process_command(
   cmd: RenderCommand,
@@ -292,6 +315,12 @@ fn process_command(
           task_id_feedback.store(u64::MAX, core::sync::atomic::Ordering::Release);
           continue;
         }
+        // paused after this frame was queued (`SimulationContext::set_viewport_active`): its
+        // swapchain is neither acquired nor presented
+        if !render_frame.active.load(core::sync::atomic::Ordering::Acquire) {
+          task_id_feedback.store(u64::MAX, core::sync::atomic::Ordering::Release);
+          continue;
+        }
         let extent_res =
           render_device.get_presentation_engine_extent(render_frame.presentation_engine_handle);
         let extent = match extent_res {
@@ -310,13 +339,32 @@ fn process_command(
           render_device.acquire_next_image(render_frame.presentation_engine_handle);
         let acquire_result = match acquire_result {
           Ok(res) => res,
-          Err(_) => {
+          Err(e) => {
+            // a view whose acquire keeps failing shows nothing and captures nothing: say why
+            // (the first time, then every 300th skipped frame)
+            let n = ACQUIRE_SKIPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            if n % 300 == 0 {
+              oshal::log!(
+                "[Render Thread] acquire failed for PE {:?}, frame skipped ({} skipped so far): {:?}",
+                render_frame.presentation_engine_handle,
+                n + 1,
+                e
+              );
+            }
             task_id_feedback.store(u64::MAX, core::sync::atomic::Ordering::Release);
             continue;
           }
         };
 
         if acquire_result.status.needs_resize() {
+          let n = RECREATION_SKIPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+          if n % 300 == 299 {
+            oshal::log!(
+              "[Render Thread] PE {:?}: swapchain waiting for recreation, frame skipped ({} skipped so far)",
+              render_frame.presentation_engine_handle,
+              n + 1
+            );
+          }
           task_id_feedback.store(u64::MAX, core::sync::atomic::Ordering::Release);
           continue;
         }
@@ -337,6 +385,7 @@ fn process_command(
         let handle = render_device_handle;
         let thread_pool = alloc::sync::Arc::clone(&ctx.thread_pool);
         let pe_handle = render_frame.presentation_engine_handle;
+        let frames_presented = alloc::sync::Arc::clone(&render_frame.frames_presented);
         let task_id_feedback_err = alloc::sync::Arc::clone(&render_frame.task_id);
         let task_id_feedback_err_clone = alloc::sync::Arc::clone(&task_id_feedback_err);
         // an image export waiting for this viewport's next frame: taken here (one frame), drawn
@@ -486,7 +535,18 @@ fn process_command(
                 // preview the flow marks are on and paced by the play speed (a visual aid: at
                 // 10 s/s nothing physical moves on screen), the user's flags and K come back with
                 // the full render
-                {
+                // A view whose camera draws no dust (`CAMERA_VIEW_NO_DUST`) leaves the scene's flow
+                // clock alone: the clock sums `(K − 1)·Δt` over the steps it is synced at, so one
+                // more view syncing it at its own instants would split the dust views' steps and
+                // round their sum differently.
+                let camera_draws_dust = !scene_context_read
+                  .scene
+                  .with_component(
+                    render_frame.camera_entity,
+                    |f: &crate::scene::CameraViewFlagsComponent| f.0,
+                  )
+                  .is_some_and(|f| f & crate::scene::CAMERA_VIEW_NO_DUST != 0);
+                if camera_draws_dust {
                   let preview_k = dust_play.then(|| crate::scene::dust::preview_flow_speed(dust_sim_speed));
                   let mut clock = scene_context_read.dust_flow_clock.lock();
                   clock.sync_at(unscaled_time_us, scaled_time_us, preview_k);
@@ -547,7 +607,8 @@ fn process_command(
               render_scene.dust_view_flags = dust_view_flags;
               render_scene.dust_exposure_ev = dust_exposure_ev;
               render_scene.dust_flow = dust_flow;
-              render_scene.hide_ui_labels =
+              // the camera's own choice (`CAMERA_VIEW_NO_UI_LAYER`) stays; a capture adds to it
+              render_scene.hide_ui_labels |=
                 viewport_capture_in_frame.as_ref().is_some_and(|c| c.hide_labels);
 
               // Dust v3: evaluate clusters before the render pass; the draw must wait for the
@@ -777,6 +838,7 @@ fn process_command(
             is_first_render,
             pe_handle,
             acquire_result,
+            frames_presented,
           ));
         } else {
           // consecutive failures back off (50 ms doubling to 1 s) and are logged every 100th
@@ -800,7 +862,9 @@ fn process_command(
       }
 
       // Step 2: Synchronize and submit sequentially
-      for (_cmd_buffer, _is_windowless, is_first_render, pe_handle, acquire_result) in handles {
+      for (_cmd_buffer, _is_windowless, is_first_render, pe_handle, acquire_result, frames_presented)
+        in handles
+      {
         if is_first_render {
           *unsafe { first_render_map.get_mut(&pe_handle).unwrap_unchecked() } = false;
         }
@@ -828,6 +892,7 @@ fn process_command(
           acquire_result.frame_index as usize,
         ) {
           Ok(crate::gpu::SwapchainStatus::Optimal) => {
+            frames_presented.fetch_add(1, core::sync::atomic::Ordering::AcqRel);
             // Milestones only (the first present, then every 600th), so a black window is visible in the log
             static PRESENTED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
             let n = PRESENTED.fetch_add(1, core::sync::atomic::Ordering::Relaxed) + 1;
@@ -836,6 +901,8 @@ fn process_command(
             }
           }
           Ok(status) => {
+            // presented on a stale swapchain (it is recreated by the next acquire): still a frame
+            frames_presented.fetch_add(1, core::sync::atomic::Ordering::AcqRel);
             oshal::log!(
               "[Render Thread] Warning: present status={:?} for PE {:?} — may need resize",
               status,

@@ -87,6 +87,8 @@ public static class ServiceCollectionExtensions
     inputRegistry.CaptureDefaults();
     collection.AddSingleton<InputRegistry>(_ => inputRegistry);
     collection.AddSingleton<PreferencesService>();
+    // Classic / Compact UI layout: saved in the index (ui_layout), the last choice in preferences.json
+    collection.AddSingleton<UiLayoutService>();
     // UTC <-> TDB through the core's leap-second table; the dates' scale is a preference
     collection.AddSingleton<ITimeScaleConverter, NativeTimeScaleConverter>();
     collection.AddSingleton(sp => new TimeScaleService(

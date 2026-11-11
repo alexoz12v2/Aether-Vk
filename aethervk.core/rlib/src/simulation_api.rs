@@ -38,6 +38,8 @@ pub mod scene_dump;
 mod scene_dump_tests;
 #[cfg(test)]
 mod review_67p_repro_tests;
+#[cfg(test)]
+mod multi_view_tests;
 pub mod structs;
 pub mod time_api;
 const MAX_UNSCALED_DELTA_MS: u32 = 500_u32;
@@ -412,26 +414,100 @@ pub fn register_main_thread_dispatcher(cb: Option<MainThreadDispatchCallback>) {
   *MAIN_THREAD_DISPATCH_CALLBACK.write() = cb
 }
 
+/// The completion flag of a main-thread cleanup callback, shared by the render thread that posts
+/// the callback and the UI thread that runs it.
+///
+/// It lives on the heap, not on the render thread's stack: a callback posted asynchronously to the
+/// UI dispatcher can run after its render thread has exited (the render loop also ends when its
+/// channel closes, without a `Shutdown` command), and must then neither write to that thread's
+/// stack nor touch the device. On exit the render thread calls [`Self::release`]: a callback that
+/// has not started yet is marked abandoned and frees the flag when it runs, without touching the
+/// device; one that is running is waited for (it needs nothing from the render thread).
+///
+/// `#[repr(C)]` with `done` first: the C# side receives a pointer to this struct as the
+/// `signal_done` byte and may write `1` there itself when it does not call back into Rust.
+#[repr(C)]
+pub(crate) struct MainThreadCleanupSignal {
+  /// `true` = no callback pending (the render thread may post the next one)
+  pub(crate) done: core::sync::atomic::AtomicBool,
+  /// `CLEANUP_CLAIM_*`
+  claim: core::sync::atomic::AtomicU8,
+}
+
+const CLEANUP_CLAIM_FREE: u8 = 0;
+const CLEANUP_CLAIM_RUNNING: u8 = 1;
+const CLEANUP_CLAIM_ABANDONED: u8 = 2;
+
+impl MainThreadCleanupSignal {
+  /// A heap flag with no callback pending; give it back with [`Self::release`].
+  pub(crate) fn new_raw() -> *mut Self {
+    alloc::boxed::Box::into_raw(alloc::boxed::Box::new(Self {
+      done: core::sync::atomic::AtomicBool::new(true),
+      claim: core::sync::atomic::AtomicU8::new(CLEANUP_CLAIM_FREE),
+    }))
+  }
+
+  /// The posting thread is done with the flag (it exits).
+  ///
+  /// # Safety
+  /// `ptr` comes from [`Self::new_raw`] and is released once; the caller does not use it afterwards.
+  pub(crate) unsafe fn release(ptr: *mut Self) {
+    use core::sync::atomic::Ordering;
+    let signal = unsafe { &*ptr };
+    loop {
+      if signal.done.load(Ordering::Acquire) {
+        // nothing pending: no callback holds the pointer any more
+        drop(unsafe { alloc::boxed::Box::from_raw(ptr) });
+        return;
+      }
+      match signal.claim.compare_exchange(
+        CLEANUP_CLAIM_FREE,
+        CLEANUP_CLAIM_ABANDONED,
+        Ordering::AcqRel,
+        Ordering::Acquire,
+      ) {
+        // the posted callback has not started: it owns the flag now and frees it when it runs
+        // (never, if the dispatcher never runs it: a leak of a few bytes at shutdown)
+        Ok(_) => return,
+        // it is running on the UI thread and finishes without this thread
+        Err(_) => core::hint::spin_loop(),
+      }
+    }
+  }
+}
+
 /// This function should be pointed by the C# managed code to be called when the `MAIN_THREAD_DISPATCH_CALLBACK`
 /// is invoked
 ///
 /// This should be reexpoted with C ABI towards C#, and it should be called
 ///
 /// # Safety
-/// - `device_ptr` should be not null and pointing to a valid vulkan device abstraction
+/// - `signal_done` is null or the [`MainThreadCleanupSignal`] the callback was posted with
+/// - `device_ptr` should be not null and pointing to a valid vulkan device abstraction, unless the
+///   signal was abandoned by its render thread (then the device is never touched)
 pub unsafe fn execute_main_thread_cleanup(
   device_ptr: *const vulkan::device::Device,
   command: u32,
   signal_done: *const core::sync::atomic::AtomicBool,
 ) {
+  use core::sync::atomic::Ordering;
   const PROCESS_MAIN_THREAD_CLEANUP_QUEUE: u32 = 1;
   const FLUSH_MAIN_THREAD_CLEANUP_QUEUE: u32 = 2;
-  let vulkan_device = unsafe { device_ptr.as_ref().unwrap() };
-  #[cfg(debug_assertions)]
-  if !signal_done.is_null() {
-    let atomic_ref = unsafe { signal_done.as_ref().unwrap() };
-    assert!(!atomic_ref.load(core::sync::atomic::Ordering::Relaxed));
+  let signal = signal_done as *const MainThreadCleanupSignal;
+  if let Some(s) = unsafe { signal.as_ref() } {
+    #[cfg(debug_assertions)]
+    assert!(!s.done.load(Ordering::Relaxed));
+    if s
+      .claim
+      .compare_exchange(CLEANUP_CLAIM_FREE, CLEANUP_CLAIM_RUNNING, Ordering::AcqRel, Ordering::Acquire)
+      .is_err()
+    {
+      // abandoned: its render thread exited and the device may be gone; this callback owns the flag
+      drop(unsafe { alloc::boxed::Box::from_raw(signal as *mut MainThreadCleanupSignal) });
+      return;
+    }
   }
+  let vulkan_device = unsafe { device_ptr.as_ref().unwrap() };
 
   // TODO add logging on error
   if command == PROCESS_MAIN_THREAD_CLEANUP_QUEUE {
@@ -440,9 +516,10 @@ pub unsafe fn execute_main_thread_cleanup(
     let _ = vulkan_device.flush_main_thread_cleanup_queue();
   }
 
-  if !signal_done.is_null() {
-    let atomic_ref = unsafe { signal_done.as_ref().unwrap() };
-    atomic_ref.store(true, core::sync::atomic::Ordering::Release);
+  if let Some(s) = unsafe { signal.as_ref() } {
+    s.claim.store(CLEANUP_CLAIM_FREE, Ordering::Release);
+    // last access: once `done` is set the render thread may free the flag
+    s.done.store(true, Ordering::Release);
   }
 }
 
@@ -456,15 +533,15 @@ pub unsafe fn execute_main_thread_cleanup(
 /// - `signal_done` should be false
 pub(crate) unsafe fn invoke_main_thread_process_cleanup(
   vulkan_device: &vulkan::device::Device,
-  signal_done: &core::sync::atomic::AtomicBool,
+  signal: &MainThreadCleanupSignal,
 ) {
   if let Some(cb) = *MAIN_THREAD_DISPATCH_CALLBACK.read() {
-    unsafe { cb(vulkan_device as *const _, 1, signal_done as *const _) };
+    unsafe { cb(vulkan_device as *const _, 1, &signal.done as *const _) };
   } else {
     // No C# dispatch callback registered (e.g. test mode without Avalonia).
     // Immediately signal completion so the render thread's spin-wait at
     // render_thread.rs:104-106 doesn't hang forever on the second 500 ms cleanup trigger.
-    signal_done.store(true, core::sync::atomic::Ordering::Release);
+    signal.done.store(true, core::sync::atomic::Ordering::Release);
   }
 }
 
@@ -478,13 +555,13 @@ pub(crate) unsafe fn invoke_main_thread_process_cleanup(
 /// - `signal_done` should be false
 pub(crate) unsafe fn invoke_main_thread_flush_cleanup(
   vulkan_device: &vulkan::device::Device,
-  signal_done: &core::sync::atomic::AtomicBool,
+  signal: &MainThreadCleanupSignal,
 ) {
   if let Some(cb) = *MAIN_THREAD_DISPATCH_CALLBACK.read() {
-    unsafe { cb(vulkan_device as *const _, 2, signal_done as *const _) };
+    unsafe { cb(vulkan_device as *const _, 2, &signal.done as *const _) };
   } else {
     // No C# dispatch callback: signal completion immediately (same reasoning as above).
-    signal_done.store(true, core::sync::atomic::Ordering::Release);
+    signal.done.store(true, core::sync::atomic::Ordering::Release);
   }
 }
 
@@ -1000,3 +1077,56 @@ mod tests;
 
 #[cfg(test)]
 mod integration_test_large;
+
+#[cfg(test)]
+mod main_thread_cleanup_signal_tests {
+  use super::{MainThreadCleanupSignal, execute_main_thread_cleanup};
+  use core::sync::atomic::Ordering;
+
+  /// A callback the render thread posted and then left behind (it exited) runs later on the UI
+  /// thread: it must not touch the device (null here: touching it panics) and frees the flag.
+  #[test]
+  fn abandoned_callback_skips_the_device_and_frees_the_flag() {
+    let ptr = MainThreadCleanupSignal::new_raw();
+    // posted: the render thread clears `done` before calling the dispatcher
+    unsafe { &*ptr }.done.store(false, Ordering::Release);
+    unsafe { MainThreadCleanupSignal::release(ptr) };
+    unsafe { execute_main_thread_cleanup(core::ptr::null(), 1, ptr as *const _) };
+  }
+
+  /// Nothing pending (the callback completed, or the C# side signalled without calling back):
+  /// the render thread frees the flag on exit and returns at once.
+  #[test]
+  fn release_with_nothing_pending_returns_at_once() {
+    let ptr = MainThreadCleanupSignal::new_raw();
+    unsafe { MainThreadCleanupSignal::release(ptr) };
+    let ptr = MainThreadCleanupSignal::new_raw();
+    unsafe { &*ptr }.done.store(false, Ordering::Release);
+    // the C# fallback: writes the first byte without calling into Rust
+    unsafe { core::ptr::write_volatile(ptr as *mut u8, 1) };
+    unsafe { MainThreadCleanupSignal::release(ptr) };
+  }
+
+  /// A callback running while its render thread exits: the exit waits for it (it does not mark
+  /// the flag abandoned under a running callback), and the flag is freed once.
+  #[test]
+  fn release_waits_for_a_running_callback() {
+    extern crate std;
+    let ptr = MainThreadCleanupSignal::new_raw();
+    let signal = unsafe { &*ptr };
+    signal.done.store(false, Ordering::Release);
+    // the callback claimed it (what `execute_main_thread_cleanup` does before the device work)
+    signal.claim.store(super::CLEANUP_CLAIM_RUNNING, Ordering::Release);
+    let addr = ptr as usize;
+    let finisher = std::thread::spawn(move || {
+      std::thread::sleep(core::time::Duration::from_millis(50));
+      let s = unsafe { &*(addr as *const MainThreadCleanupSignal) };
+      s.claim.store(super::CLEANUP_CLAIM_FREE, Ordering::Release);
+      s.done.store(true, Ordering::Release);
+    });
+    let started = std::time::Instant::now();
+    unsafe { MainThreadCleanupSignal::release(ptr) };
+    assert!(started.elapsed() >= core::time::Duration::from_millis(40), "release did not wait for the running callback");
+    finisher.join().unwrap();
+  }
+}

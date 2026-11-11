@@ -152,6 +152,8 @@ public sealed class SaveFileService
       Assets = [.. s.Assets.Select(a => new AssetDto { Key = a.Key, ContentHash = SaveIndexMapping.HashHex(a.ContentHash) })],
       CometAppearance = s.Appearance,
       Billboards = [.. s.Billboards],
+      // null (classic) is not written: fingerprints of the classic layout are unchanged
+      UiLayout = s.UiLayout,
     };
     return SaveIndexIo.ToJson(index);
   }
@@ -177,6 +179,9 @@ public sealed class SaveFileService
     {
       await _host.ResetAsync();
       Forget();
+      // a new session starts in the user's last chosen layout (part of the baseline: not a change)
+      if (_preferences is not null)
+        _host.ApplyUiLayout(UiLayoutService.ToDto(_preferences.LastUiLayout));
       _fingerprint = Fingerprint(_host.Capture());
     }
     finally
@@ -272,6 +277,8 @@ public sealed class SaveFileService
     index.Viewports = [.. snap.Viewports];
     index.CometAppearance = snap.Appearance;
     index.Billboards = [.. snap.Billboards];
+    // always assigned: a save in place reuses the open index, and switching back to classic drops the key
+    index.UiLayout = snap.UiLayout;
     try
     {
       SaveIndexIo.Write(dir, index);
@@ -529,6 +536,8 @@ public sealed class SaveFileService
     // the app log's record of how the scene came back (the e2e reads it: a compatible save restores, it does not seek)
     Console.WriteLine($"[Open] state restored: {restored}, sought: {sought}");
 
+    // the save's layout wins over the preference; absent (older saves) is classic
+    _host.ApplyUiLayout(index.UiLayout);
     _host.ApplyViewports(index.Viewports);
     _host.ApplyBillboards([.. index.Billboards.Select(b => Remap(b, byKey))]);
     _host.SyncClock();

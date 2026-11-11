@@ -2363,7 +2363,8 @@ fn observer_comet_targets(
   let g = g.read();
   let c: [f64; 3] = g.scene.global_transform_f64(comet).unwrap().position.into();
   let lt = g
-    .earth_observer
+    .earth_observers
+    .first()
     .and_then(|o| o.light_time)
     .expect("observer light time");
   (
@@ -4136,7 +4137,7 @@ fn nucleus_view_from_earth_follows_the_comet_until_cleared() {
   // refused without a comet or with no distance: nothing posed, the UI keeps the camera
   assert!(!ctx.set_nucleus_view_from_earth(scene_id, cam.as_ffi(), earth.as_ffi(), 0, d_au));
   assert!(!ctx.set_nucleus_view_from_earth(scene_id, cam.as_ffi(), earth.as_ffi(), comet.as_ffi(), 0.0));
-  assert!(ctx.scenes.read().get_scene(scene_id).unwrap().read().earth_observer.is_none());
+  assert!(ctx.scenes.read().get_scene(scene_id).unwrap().read().earth_observers.is_empty());
   assert!(ctx.set_nucleus_view_from_earth(
     scene_id,
     cam.as_ffi(),
@@ -4156,7 +4157,7 @@ fn nucleus_view_from_earth_follows_the_comet_until_cleared() {
     let up: [f64; 3] = t.rotation.rotate_vector(Vec3f64::from_components(0.0, 0.0, 1.0)).into();
     let e: [f64; 3] = g.scene.global_transform_f64(earth).unwrap().position.into();
     let c: [f64; 3] = g.scene.global_transform_f64(comet).unwrap().position.into();
-    let lt = g.earth_observer.and_then(|o| o.light_time).expect("the view's light time");
+    let lt = g.earth_observers.first().and_then(|o| o.light_time).expect("the view's light time");
     (p, fwd, up, e, [0, 1, 2].map(|i| c[i] + lt.offset_au[i]))
   };
   let angle = |a: [f64; 3], b: [f64; 3]| {
@@ -4260,7 +4261,7 @@ fn nucleus_view_from_earth_follows_the_comet_until_cleared() {
     [0.0, 0.0, 0.0, 1.0],
     crate::simulation_api::earth_observer::ObserverUp::CelestialNorth
   ));
-  assert!(ctx.scenes.read().get_scene(scene_id).unwrap().read().earth_observer.is_none());
+  assert!(ctx.scenes.read().get_scene(scene_id).unwrap().read().earth_observers.is_empty());
   let p4 = ui_write(elsewhere);
   assert!(moved(p4, elsewhere) < 1e-9, "cleared: the UI's write must land ({:?} AU)", p4);
   ctx.threads.logic_thread.tx().try_send(LogicCommand::Shutdown).unwrap();
@@ -4354,5 +4355,205 @@ fn test_destroy_presentation_engine_returns_after_the_device_released_it() {
   ctx.destroy_presentation_engine(scene_id, pe2).unwrap();
   assert!(ctx.with_device(|device| device.retire_presentation_engine(pe2)).is_err());
 
+  ctx.threads.logic_thread.tx().try_send(LogicCommand::Shutdown).unwrap();
+}
+
+/// Earth observers are per camera: the Earth observer of one camera and the "nucleus from Earth"
+/// view of another live in the same scene, each posed from its own state.
+/// - Each camera's pose equals the pose the same observer gives alone in a scene of its own (the
+///   single-observer math), to 1e-9 (AU, quaternion components).
+/// - Setting, re-setting, refusing and clearing the second camera's view leaves the first
+///   camera's pose bit-identical and its observer in place; clearing with camera 0 clears nothing.
+/// - A few commits while playing re-pose both: each still aims at the comet.
+#[test]
+fn two_cameras_posed_from_earth_independently() {
+  use crate::scene::{CameraComponent, TransformComponent};
+  use crate::simulation_api::earth_observer::{
+    EarthObserverMode, LightTimeViewComponent, ObserverUp,
+  };
+  use aethervk_oshal_rlib::os::time::v2::SimSpeed;
+  type Pose = ([f64; 3], [f64; 4]);
+  let d_au = 32.0 / crate::simulation_api::astrometry::AU_KM;
+  let pose_of = |ctx: &SimulationContext, scene_id: u64, cam: EntityId| -> Pose {
+    let scenes = ctx.scenes.read();
+    let g = scenes.get_scene(scene_id).unwrap();
+    let g = g.read();
+    let t = g.scene.global_transform_f64(cam).unwrap();
+    (
+      t.position.into(),
+      [t.rotation[0], t.rotation[1], t.rotation[2], t.rotation[3]],
+    )
+  };
+  // largest component difference; a quaternion and its negative are the same rotation
+  let pose_distance = |a: Pose, b: Pose| -> (f64, f64) {
+    let dp = (0..3).map(|i| (a.0[i] - b.0[i]).abs()).fold(0.0, f64::max);
+    let same = (0..4).map(|i| (a.1[i] - b.1[i]).abs()).fold(0.0, f64::max);
+    let flipped = (0..4).map(|i| (a.1[i] + b.1[i]).abs()).fold(0.0, f64::max);
+    (dp, same.min(flipped))
+  };
+  let clear = |ctx: &SimulationContext, scene_id: u64, camera: u64, earth: EntityId, comet: EntityId| {
+    ctx.set_earth_observer(
+      scene_id,
+      camera,
+      None,
+      earth.as_ffi(),
+      comet.as_ffi(),
+      false,
+      0.0,
+      0.0,
+      0.0,
+      [0.0, 0.0, 0.0, 1.0],
+      ObserverUp::CelestialNorth,
+    )
+  };
+
+  // the single-observer math: each observer alone, in a scene of its own
+  let observer_alone = {
+    let (ctx, scene_id, cam, earth, comet, site) = light_time_observer_fixture();
+    assert!(set_light_time_observer(&ctx, scene_id, cam, earth, comet, site));
+    let pose = pose_of(&ctx, scene_id, cam);
+    ctx.threads.logic_thread.tx().try_send(LogicCommand::Shutdown).unwrap();
+    pose
+  };
+  let nucleus_alone = {
+    let (ctx, scene_id, cam, earth, comet, _site) = light_time_observer_fixture();
+    assert!(ctx.set_nucleus_view_from_earth(
+      scene_id,
+      cam.as_ffi(),
+      earth.as_ffi(),
+      comet.as_ffi(),
+      d_au
+    ));
+    let pose = pose_of(&ctx, scene_id, cam);
+    ctx.threads.logic_thread.tx().try_send(LogicCommand::Shutdown).unwrap();
+    pose
+  };
+
+  // both in one scene: the fixture's camera observes from the site, a second camera gets the
+  // nucleus view
+  let (ctx, scene_id, cam, earth, comet, site) = light_time_observer_fixture();
+  let mini = {
+    let scenes = ctx.scenes.read();
+    let g = scenes.get_scene(scene_id).unwrap();
+    let g = g.read();
+    g.scene.spawn_camera(
+      "nucleus view",
+      Some(g.root_entity),
+      TransformComponent::default(),
+      CameraComponent::new_persp(0.5, 1.0, 1e-9, 1.0),
+    )
+  };
+  // `(observers, the first camera owned, the second owned, light-time views of the two cameras)`
+  let state = || {
+    let scenes = ctx.scenes.read();
+    let g = scenes.get_scene(scene_id).unwrap();
+    let g = g.read();
+    let view = |c: EntityId| g.scene.with_component(c, |_: &LightTimeViewComponent| ()).is_some();
+    (
+      g.earth_observers.len(),
+      g.earth_observers.owns(cam),
+      g.earth_observers.owns(mini),
+      view(cam),
+      view(mini),
+    )
+  };
+  assert!(set_light_time_observer(&ctx, scene_id, cam, earth, comet, site));
+  assert_eq!(state(), (1, true, false, true, false));
+  let main_pose = pose_of(&ctx, scene_id, cam);
+
+  assert!(ctx.set_nucleus_view_from_earth(
+    scene_id,
+    mini.as_ffi(),
+    earth.as_ffi(),
+    comet.as_ffi(),
+    d_au
+  ));
+  assert_eq!(state(), (2, true, true, true, true), "the second camera's view must not displace the first");
+  assert_eq!(
+    pose_of(&ctx, scene_id, cam),
+    main_pose,
+    "posing the second camera moved the first"
+  );
+  let mini_pose = pose_of(&ctx, scene_id, mini);
+  let (dp, dq) = pose_distance(main_pose, observer_alone);
+  println!("observer camera vs alone: {dp:.3e} AU, {dq:.3e}");
+  assert!(dp < 1e-9 && dq < 1e-9, "the observer's pose differs from the single-observer one: {dp:e} AU, {dq:e}");
+  let (dp, dq) = pose_distance(mini_pose, nucleus_alone);
+  println!("nucleus-view camera vs alone: {dp:.3e} AU, {dq:.3e}");
+  assert!(dp < 1e-9 && dq < 1e-9, "the nucleus view's pose differs from the single-observer one: {dp:e} AU, {dq:e}");
+  {
+    let scenes = ctx.scenes.read();
+    let g = scenes.get_scene(scene_id).unwrap();
+    let g = g.read();
+    let (a, b) = (g.earth_observers.get(cam).unwrap(), g.earth_observers.get(mini).unwrap());
+    assert_eq!((a.mode, a.nucleus_distance_au), (EarthObserverMode::CometTracking, None));
+    assert_eq!((b.mode, b.nucleus_distance_au), (EarthObserverMode::CometTracking, Some(d_au)));
+    assert!(a.topocentric && !b.topocentric);
+  }
+  // the scene's status is the first camera's; each camera's own is read by camera
+  assert!(ctx.earth_observer_status(scene_id).is_some());
+  assert!(ctx.earth_observer_status_of(scene_id, cam.as_ffi()).is_some());
+  assert!(ctx.earth_observer_status_of(scene_id, mini.as_ffi()).is_some());
+  assert!(ctx.earth_observer_status_of(scene_id, earth.as_ffi()).is_none());
+
+  // the second camera's view re-set at another distance: only it moves
+  assert!(ctx.set_nucleus_view_from_earth(
+    scene_id,
+    mini.as_ffi(),
+    earth.as_ffi(),
+    comet.as_ffi(),
+    2.0 * d_au
+  ));
+  assert_eq!(state(), (2, true, true, true, true));
+  assert_eq!(pose_of(&ctx, scene_id, cam), main_pose, "re-setting the second camera moved the first");
+  let (moved, _) = pose_distance(pose_of(&ctx, scene_id, mini), mini_pose);
+  assert!(moved > 0.25 * d_au, "the second camera must have moved to the new distance ({moved:e} AU)");
+
+  // refused (no comet): the second camera's view goes, the first camera's stays
+  assert!(!ctx.set_nucleus_view_from_earth(scene_id, mini.as_ffi(), earth.as_ffi(), 0, d_au));
+  assert_eq!(state(), (1, true, false, true, false));
+  assert_eq!(pose_of(&ctx, scene_id, cam), main_pose);
+
+  // set again, then cleared like the Earth observer, by camera
+  assert!(ctx.set_nucleus_view_from_earth(
+    scene_id,
+    mini.as_ffi(),
+    earth.as_ffi(),
+    comet.as_ffi(),
+    d_au
+  ));
+  let (dp, dq) = pose_distance(pose_of(&ctx, scene_id, mini), mini_pose);
+  assert!(dp < 1e-12 && dq < 1e-12, "set again, the view must be where it was ({dp:e} AU, {dq:e})");
+  assert!(clear(&ctx, scene_id, mini.as_ffi(), earth, comet));
+  assert_eq!(state(), (1, true, false, true, false));
+  // camera 0 names no camera: nothing is cleared
+  assert!(clear(&ctx, scene_id, 0, earth, comet));
+  assert_eq!(state(), (1, true, false, true, false));
+  assert_eq!(pose_of(&ctx, scene_id, cam), main_pose);
+
+  // both set, a few commits while playing: each is re-posed and still aims at the comet
+  assert!(ctx.set_nucleus_view_from_earth(
+    scene_id,
+    mini.as_ffi(),
+    earth.as_ffi(),
+    comet.as_ffi(),
+    d_au
+  ));
+  assert!(ctx.start_simulation(scene_id, SimSpeed::OneHourPerSec));
+  std::thread::sleep(std::time::Duration::from_millis(400));
+  assert!(ctx.pause_simulation_sync(scene_id));
+  assert_eq!(state(), (2, true, true, true, true));
+  let (moved_main, _) = pose_distance(pose_of(&ctx, scene_id, cam), main_pose);
+  let (moved_mini, _) = pose_distance(pose_of(&ctx, scene_id, mini), mini_pose);
+  assert!(moved_main > 0.0 && moved_mini > 0.0, "both cameras must follow the commits ({moved_main:e}, {moved_mini:e} AU)");
+  let (_, aim_main, _) = ctx.earth_observer_status_of(scene_id, cam.as_ffi()).unwrap();
+  let (_, aim_mini, _) = ctx.earth_observer_status_of(scene_id, mini.as_ffi()).unwrap();
+  println!("after playing: aim {aim_main:.3e} rad (observer), {aim_mini:.3e} rad (nucleus view)");
+  assert!(aim_main < 1e-5, "the observer camera is {aim_main} rad off the comet");
+  assert!(aim_mini < 1e-5, "the nucleus-view camera is {aim_mini} rad off the comet");
+
+  // the first camera's observer cleared: the second camera's stays
+  assert!(clear(&ctx, scene_id, cam.as_ffi(), earth, comet));
+  assert_eq!(state(), (1, false, true, false, true));
   ctx.threads.logic_thread.tx().try_send(LogicCommand::Shutdown).unwrap();
 }

@@ -10,8 +10,23 @@
              mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
              x:DataType="vm:TabGroupNodeViewModel"
              x:Class="AetherVk.Views.TabGroupNodeView">
-  <Border BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="1" Margin="2"
-          Background="{DynamicResource Bg.Canvas}" CornerRadius="6">
+  <!-- IsChromeHidden (viewport-only mode) hides the border, the tab strip, the session header and
+       the empty-group "+" button; the content presenter stays put so its view is never rebuilt. -->
+  <Border BorderBrush="{DynamicResource Bg.Outline}" Background="{DynamicResource Bg.Canvas}"
+          Classes="groupFrame" Classes.chromeHidden="{Binding IsChromeHidden}">
+    <Border.Styles>
+      <!-- styles, not local values: a local value would beat the chromeHidden setters -->
+      <Style Selector="Border.groupFrame">
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Margin" Value="2" />
+        <Setter Property="CornerRadius" Value="6" />
+      </Style>
+      <Style Selector="Border.groupFrame.chromeHidden">
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Margin" Value="0" />
+        <Setter Property="CornerRadius" Value="0" />
+      </Style>
+    </Border.Styles>
     <Grid>
       <Grid.RowDefinitions>
         <RowDefinition Height="Auto" />
@@ -19,7 +34,8 @@
       </Grid.RowDefinitions>
 
       <Border Grid.Row="0" BorderBrush="{DynamicResource Bg.Outline}" BorderThickness="0,0,0,1"
-              Background="{DynamicResource Bg.Surface}" CornerRadius="6,6,0,0">
+              Background="{DynamicResource Bg.Surface}" CornerRadius="6,6,0,0"
+              IsVisible="{Binding !IsChromeHidden}">
         <Grid>
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*" />
@@ -156,11 +172,12 @@
       <Grid Grid.Row="1" RowDefinitions="Auto,*">
 
         <!-- Session strip — only visible when SelectedTab implements IStatefulTabHeader -->
-        <controls:CommonTabHeader
-            Grid.Row="0"
-            DataContext="{Binding SelectedTab}"
-            IsVisible="{Binding #RootControl.((vm:TabGroupNodeViewModel)DataContext).SelectedTab,
-                Converter={x:Static converters:IsStatefulTabConverter.Instance}}"/>
+        <Panel Grid.Row="0" IsVisible="{Binding !IsChromeHidden}">
+          <controls:CommonTabHeader
+              DataContext="{Binding SelectedTab}"
+              IsVisible="{Binding #RootControl.((vm:TabGroupNodeViewModel)DataContext).SelectedTab,
+                  Converter={x:Static converters:IsStatefulTabConverter.Instance}}"/>
+        </Panel>
 
         <!-- Tab content view resolved via DataTemplate / ViewLocator -->
         <ContentControl Grid.Row="1"
@@ -170,22 +187,24 @@
 
       </Grid>
 
-      <Button Grid.Row="1" Content="+" Classes="accent" FontSize="48" Width="100" Height="100"
-              HorizontalAlignment="Center" VerticalAlignment="Center"
-              IsVisible="{Binding !HasTabs}" HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
-          <Button.Flyout>
-            <MenuFlyout ItemsSource="{Binding AvailableTabs}">
-              <!-- Here DataContext is TabDescriptor -->
-              <MenuFlyout.ItemContainerTheme>
-                <ControlTheme TargetType="MenuItem" x:DataType="vm:TabDescriptor" BasedOn="{StaticResource {x:Type MenuItem}}">
-                  <Setter Property="Header" Value="{Binding Header}" />
-                  <Setter Property="Command" Value="{Binding $parent[MenuFlyoutPresenter].((vm:TabGroupNodeViewModel)DataContext).AddNewTabCommand}" />
-                  <Setter Property="CommandParameter" Value="{Binding TabType}" />
-                </ControlTheme>
-              </MenuFlyout.ItemContainerTheme>
-            </MenuFlyout>
-          </Button.Flyout>
-      </Button>
+      <Panel Grid.Row="1" IsVisible="{Binding !IsChromeHidden}">
+        <Button Content="+" Classes="accent" FontSize="48" Width="100" Height="100"
+                HorizontalAlignment="Center" VerticalAlignment="Center"
+                IsVisible="{Binding !HasTabs}" HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
+            <Button.Flyout>
+              <MenuFlyout ItemsSource="{Binding AvailableTabs}">
+                <!-- Here DataContext is TabDescriptor -->
+                <MenuFlyout.ItemContainerTheme>
+                  <ControlTheme TargetType="MenuItem" x:DataType="vm:TabDescriptor" BasedOn="{StaticResource {x:Type MenuItem}}">
+                    <Setter Property="Header" Value="{Binding Header}" />
+                    <Setter Property="Command" Value="{Binding $parent[MenuFlyoutPresenter].((vm:TabGroupNodeViewModel)DataContext).AddNewTabCommand}" />
+                    <Setter Property="CommandParameter" Value="{Binding TabType}" />
+                  </ControlTheme>
+                </MenuFlyout.ItemContainerTheme>
+              </MenuFlyout>
+            </Button.Flyout>
+        </Button>
+      </Panel>
 
       <Grid x:Name="PreviewOverlay" Grid.Row="0" Grid.RowSpan="2" IsHitTestVisible="False" Opacity="0.5">
         <Border x:Name="PreviewBox" Background="{DynamicResource Accent.Hover}" IsVisible="False" BorderThickness="2"

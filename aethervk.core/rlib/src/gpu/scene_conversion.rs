@@ -75,7 +75,15 @@ impl SceneConversionExt2 for Scene {
     debug_name: &str,
   ) -> GpuResult<gpu::RenderScene> {
     // ------ 1. Precompute Camera & Hierarchy ----------------------------------------------
-    ui::update_ui_layouts(self, [window_extent[0] as f32, window_extent[1] as f32]);
+    let camera_view_flags = self
+      .with_component(camera_entity, |f: &crate::scene::CameraViewFlagsComponent| f.0)
+      .unwrap_or(0);
+    let camera_no_ui_layer = camera_view_flags & crate::scene::CAMERA_VIEW_NO_UI_LAYER != 0;
+    // the UI layouts live in the scene, sized to the view that draws them: a camera without the
+    // UI layer leaves them as the other views laid them out
+    if !camera_no_ui_layer {
+      ui::update_ui_layouts(self, [window_extent[0] as f32, window_extent[1] as f32]);
+    }
     let should_par = self.should_parallelize() && pool.is_some();
 
     let cam_global_f64 = self
@@ -336,7 +344,8 @@ impl SceneConversionExt2 for Scene {
       layer_ref_dist: core::array::from_fn(|i| layer_ref_dists.get(&(i as u32)).copied().unwrap_or(0.0)),
       mesh_shading: camera_flags,
       mesh_exposure: camera_exposure,
-      hide_ui_labels: false,
+      hide_ui_labels: camera_no_ui_layer,
+      no_dust: camera_view_flags & crate::scene::CAMERA_VIEW_NO_DUST != 0,
     };
 
     // ------ 3. Zero-Copy GPU Upload Abstraction Macro -------------------------------------
@@ -1720,10 +1729,11 @@ impl SceneConversionExt2 for Scene {
       );
     }
 
-    if !gpu_ui.is_empty() {
+    // a camera without the UI layer (`CAMERA_VIEW_NO_UI_LAYER`) uploads neither batch
+    if !gpu_ui.is_empty() && !camera_no_ui_layer {
       render_scene.ui_call = device.upload_ui(cmd_buffer, &gpu_ui).ok().flatten();
     }
-    if !text_batch.is_empty() {
+    if !text_batch.is_empty() && !camera_no_ui_layer {
       render_scene.text2_call = device.upload_text2(cmd_buffer, &text_batch).ok().flatten();
     }
 
@@ -1949,6 +1959,14 @@ impl Scene {
     &self,
     camera_entity: EntityId,
   ) -> alloc::vec::Vec<(u32, alloc::vec::Vec<DustDrawCall>)> {
+    // a camera that draws no dust (`CAMERA_VIEW_NO_DUST`): no call, hence no dust view of its
+    // presentation engine and no dust pass (`frame::prepare_dust`)
+    if self
+      .with_component(camera_entity, |f: &crate::scene::CameraViewFlagsComponent| f.0)
+      .is_some_and(|f| f & crate::scene::CAMERA_VIEW_NO_DUST != 0)
+    {
+      return alloc::vec::Vec::new();
+    }
     let Some(cam) = self.global_transform_f64(camera_entity) else {
       return alloc::vec::Vec::new();
     };

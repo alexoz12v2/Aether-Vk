@@ -16,29 +16,33 @@
         <local:RatioToStarConverter x:Key="RatioToStar" />
         <local:InverseRatioToStarConverter x:Key="InverseRatioToStar" />
     </UserControl.Resources>
+    <!-- A ContentControl builds its child view when its template is applied on measure, and the grid
+         of the inactive orientation is never measured, so each child view exists once (the app tests
+         count the viewport hosts). Viewport-only mode hides a side and zeroes its track; the
+         children never move. -->
     <Grid>
         <!-- Horizontal split: FirstChild | splitter | SecondChild -->
-        <Grid IsVisible="{Binding Orientation, Converter={StaticResource EnumToBoolConverter}, ConverterParameter={x:Static vm:SplitOrientation.Horizontal}}">
+        <Grid x:Name="HorizontalGrid" IsVisible="{Binding Orientation, Converter={StaticResource EnumToBoolConverter}, ConverterParameter={x:Static vm:SplitOrientation.Horizontal}}">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="{Binding SplitRatio, Converter={StaticResource RatioToStar}}" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="{Binding SplitRatio, Converter={StaticResource InverseRatioToStar}}" />
             </Grid.ColumnDefinitions>
-            <ContentControl Grid.Column="0" Content="{Binding FirstChild}" />
-            <GridSplitter Grid.Column="1" Background="{DynamicResource Bg.Outline}" ResizeDirection="Columns" />
-            <ContentControl Grid.Column="2" Content="{Binding SecondChild}" />
+            <ContentControl Grid.Column="0" Content="{Binding FirstChild}" IsVisible="{Binding IsFirstShown}" />
+            <GridSplitter Grid.Column="1" Background="{DynamicResource Bg.Outline}" ResizeDirection="Columns" IsVisible="{Binding IsSplitterShown}" />
+            <ContentControl Grid.Column="2" Content="{Binding SecondChild}" IsVisible="{Binding IsSecondShown}" />
         </Grid>
 
         <!-- Vertical split: FirstChild / splitter / SecondChild -->
-        <Grid IsVisible="{Binding Orientation, Converter={StaticResource EnumToBoolConverter}, ConverterParameter={x:Static vm:SplitOrientation.Vertical}}">
+        <Grid x:Name="VerticalGrid" IsVisible="{Binding Orientation, Converter={StaticResource EnumToBoolConverter}, ConverterParameter={x:Static vm:SplitOrientation.Vertical}}">
             <Grid.RowDefinitions>
                 <RowDefinition Height="{Binding SplitRatio, Converter={StaticResource RatioToStar}}" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="{Binding SplitRatio, Converter={StaticResource InverseRatioToStar}}" />
             </Grid.RowDefinitions>
-            <ContentControl Grid.Row="0" Content="{Binding FirstChild}" />
-            <GridSplitter Grid.Row="1" Background="{DynamicResource Bg.Outline}" ResizeDirection="Rows" />
-            <ContentControl Grid.Row="2" Content="{Binding SecondChild}" />
+            <ContentControl Grid.Row="0" Content="{Binding FirstChild}" IsVisible="{Binding IsFirstShown}" />
+            <GridSplitter Grid.Row="1" Background="{DynamicResource Bg.Outline}" ResizeDirection="Rows" IsVisible="{Binding IsSplitterShown}" />
+            <ContentControl Grid.Row="2" Content="{Binding SecondChild}" IsVisible="{Binding IsSecondShown}" />
         </Grid>
     </Grid>
 </UserControl>

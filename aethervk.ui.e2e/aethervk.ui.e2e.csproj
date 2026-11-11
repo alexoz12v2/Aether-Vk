@@ -50,6 +50,13 @@
     <Compile Include="..\tests-shared\TestAssets.cs" Link="TestAssets.cs" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- the scenarios and probe math shared with aethervk.ui.e2e.mac (source, not a project: each
+         suite keeps its own Appium client), and the compact panel's AutomationIds -->
+    <Compile Include="..\aethervk.ui.e2e.shared\**\*.cs" Link="Shared\%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="..\aethervk.ui-logic\Automation\CompactAutomationIds.cs" Link="Shared\CompactAutomationIds.cs" />
+  </ItemGroup>
+
   <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
   <!-- Without the flag Build / Test do nothing (imported last, so they replace the SDK targets) -->
   <Import Project="E2ESkip.targets" Condition="'$(BuildE2E)' != 'true'" />

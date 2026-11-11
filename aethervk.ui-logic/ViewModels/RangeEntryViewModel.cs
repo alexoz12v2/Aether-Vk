@@ -244,11 +244,13 @@ public partial class RangeEntryViewModel : ObservableObject, IDisposable
   {
     if (!_reloading)
       Update(s => s.ObservationEpochUtc = value);
+    OnPropertyChanged(nameof(ModelRangePreviewText));
   }
 
   /// <summary>Nucleus rotations the range spans before the observation date (N ≥ 1).</summary>
   [ObservableProperty]
   [NotifyPropertyChangedFor(nameof(ModelSpanText))]
+  [NotifyPropertyChangedFor(nameof(ModelRangePreviewText))]
   private int _modelRotations = DefaultRotations;
 
   partial void OnModelRotationsChanged(int value)
@@ -279,7 +281,42 @@ public partial class RangeEntryViewModel : ObservableObject, IDisposable
   }
 
   /// <summary>The rotation rate changed (the Comet tab's Rotational Model): the span text follows.</summary>
-  public void RefreshModelSpan() => OnPropertyChanged(nameof(ModelSpanText));
+  public void RefreshModelSpan()
+  {
+    OnPropertyChanged(nameof(ModelSpanText));
+    OnPropertyChanged(nameof(ModelRangePreviewText));
+  }
+
+  /// <summary>
+  /// "start … → end …" (UTC): the period <see cref="ApplyModelRangeCommand"/> would propose, from
+  /// <see cref="ModelRange"/>: the end is the observation date, the start
+  /// <see cref="ModelRotations"/> rotation periods before it (at least <see cref="MinRangeDays"/>).
+  /// Empty without a readable observation date or a rotation period.
+  /// </summary>
+  public string ModelRangePreviewText
+  {
+    get
+    {
+      if (ModelRangePreview(ObservationEpoch, ModelRotations, PeriodHours()) is not { } r)
+        return string.Empty;
+      // "start {0} → end {1}" in the UI language
+      string format = GetString(ModelRangePreviewFormatKey);
+      if (format.StartsWith("[", StringComparison.Ordinal) || !format.Contains("{0}") || !format.Contains("{1}"))
+        format = "start {0} → end {1}";
+      return string.Format(System.Globalization.CultureInfo.InvariantCulture, format, FormatUtc(r.Start), FormatUtc(r.End));
+    }
+  }
+
+  /// <summary>The AppStrings key of <see cref="ModelRangePreviewText"/>'s format.</summary>
+  public const string ModelRangePreviewFormatKey = "Range_ModelPreviewFormat";
+
+  /// <summary>The range of <see cref="ModelRangePreviewText"/>; null without a readable date or a period.</summary>
+  internal static (DateTimeOffset Start, DateTimeOffset End)? ModelRangePreview(string observationUtc, int rotations, double periodHours)
+  {
+    if (string.IsNullOrWhiteSpace(observationUtc) || !TimeUtils.TryParseIso8601(observationUtc, out var end))
+      return null;
+    return ModelRange(end, rotations, periodHours);
+  }
 
   /// <summary>A UTC instant in the observation box format.</summary>
   public static string FormatUtc(DateTimeOffset utc) =>

@@ -1,0 +1,57 @@
+<Project>
+  <!-- Appium Mac2 end-to-end tests of the packaged macOS app: the scenarios shared with the Windows
+       suite (aethervk.ui.e2e.shared) plus the harness self-tests. macOS only (it compiles anywhere;
+       every test skips off macOS), slow, so the solution build skips it: build and run it explicitly
+
+         dotnet test aethervk.ui.e2e.mac -p:BuildE2E=true
+
+       It drives bin/publish/AetherVk-SxS-1.0.1-Release.app (scripts/package_macos.sh osx-arm64
+       Release SideBySide; override with AETHERVK_E2E_APP) and starts `appium` if nothing listens
+       on 127.0.0.1:4723. Setup: README.md next to this file. -->
+  <Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <AssemblyName>AetherVk.UI.E2E.Mac</AssemblyName>
+    <RootNamespace>AetherVk.UI.E2E.Mac</RootNamespace>
+    <!-- Selenium marks GetAttribute obsolete; Mac2 still answers it (value, selected, frame) -->
+    <NoWarn>$(NoWarn);CS0618</NoWarn>
+    <RunSettingsFilePath>$(MSBuildThisFileDirectory)e2e.runsettings</RunSettingsFilePath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <!-- 5+ speaks W3C to an Appium 2/3 server and has MacDriver (the Mac2 driver); pinned -->
+    <PackageReference Include="Appium.WebDriver" Version="8.0.1" />
+    <PackageReference Include="xunit" Version="2.5.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
+    <PackageReference Include="Xunit.SkippableFact" Version="1.5.85" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="xunit.runner.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <None Include="README.md" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- test_assets/ASSETS.tsv: assets fetched on demand -->
+    <Compile Include="..\tests-shared\TestAssets.cs" Link="TestAssets.cs" />
+    <!-- the scenarios and probe math shared with aethervk.ui.e2e (Windows), and the compact ids -->
+    <Compile Include="..\aethervk.ui.e2e.shared\**\*.cs" Link="Shared\%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="..\aethervk.ui-logic\Automation\CompactAutomationIds.cs" Link="Shared\CompactAutomationIds.cs" />
+  </ItemGroup>
+
+  <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
+  <!-- Without the flag Build / Test do nothing (imported last, so they replace the SDK targets) -->
+  <Import Project="E2ESkip.targets" Condition="'$(BuildE2E)' != 'true'" />
+</Project>

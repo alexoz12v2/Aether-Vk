@@ -868,7 +868,7 @@ impl SimulationContext {
   ) -> bool {
     use crate::simulation_api::earth_observer::EarthObserverState;
     let Some(mode) = mode else {
-      return self.clear_earth_observer(scene_id);
+      return self.clear_earth_observer(scene_id, camera);
     };
     self.install_earth_observer(scene_id, camera, comet, |comet, last| {
       let mut state = EarthObserverState::new(
@@ -905,7 +905,7 @@ impl SimulationContext {
   ) -> bool {
     use crate::simulation_api::earth_observer::{EarthObserverMode, EarthObserverState, ObserverUp};
     if comet == 0 || !(distance_au > 0.0 && distance_au.is_finite()) {
-      let _ = self.clear_earth_observer(scene_id);
+      let _ = self.clear_earth_observer(scene_id, camera);
       return false;
     }
     // the camera is posed a few tens of km from the nucleus: a parent ~1 AU away (the Earth)
@@ -941,15 +941,19 @@ impl SimulationContext {
     })
   }
 
-  /// Clears the native Earth observer (or nucleus view) of `scene_id`: the UI poses the camera
-  /// again. False without the scene.
-  fn clear_earth_observer(&self, scene_id: u64) -> bool {
+  /// Clears the native Earth observer (or nucleus view) of the camera `camera` (FFI id) of
+  /// `scene_id`: the UI poses that camera again. The observers of other cameras stay; a camera
+  /// without one (or id 0) clears nothing. False without the scene.
+  fn clear_earth_observer(&self, scene_id: u64, camera: u64) -> bool {
     use crate::simulation_api::earth_observer::clear_light_time_view;
     let Some(scene_arc) = self.scenes.read().get_scene(scene_id) else {
       return false;
     };
+    if camera == 0 {
+      return true;
+    }
     let mut guard = scene_arc.write();
-    if let Some(old) = guard.earth_observer.take() {
+    if let Some(old) = guard.earth_observers.remove(EntityId::from_ffi(camera)) {
       clear_light_time_view(&guard.scene, old.camera);
     }
     true
@@ -999,19 +1003,17 @@ impl SimulationContext {
       _ => None,
     };
     let mut guard = scene_arc.write();
+    let camera = EntityId::from_ffi(camera);
+    // this camera's observer only: the other cameras keep theirs
     let refuse = |guard: &mut crate::simulation_api::structs::SceneContext| {
-      if let Some(old) = guard.earth_observer.take() {
+      if let Some(old) = guard.earth_observers.remove(camera) {
         clear_light_time_view(&guard.scene, old.camera);
       }
       false
     };
-    let camera = EntityId::from_ffi(camera);
     let Some(cam) = guard.scene.global_transform_f64(camera) else {
       return refuse(&mut guard);
     };
-    if let Some(old) = guard.earth_observer.filter(|o| o.camera != camera) {
-      clear_light_time_view(&guard.scene, old.camera);
-    }
     let mut state = build(
       comet,
       [
@@ -1025,7 +1027,7 @@ impl SimulationContext {
     if crate::simulation_api::earth_observer::apply(&guard.scene, &mut state).is_none() {
       return refuse(&mut guard);
     }
-    guard.earth_observer = Some(state);
+    guard.earth_observers.insert(state);
     guard.mark_component_changed(
       camera.as_ffi(),
       <crate::scene::HighResTransformComponent as crate::scene::ForeignSerializable>::COMPONENT_ID,
@@ -1038,6 +1040,11 @@ impl SimulationContext {
   /// it is now ([`crate::simulation_api::earth_observer::current_aim`]), not on the last pose: a
   /// later write to the camera shows up instead of a stale "aimed" (a Free look reports the last
   /// pose's values).
+  ///
+  /// With several observers (one per camera) this is the main view's: the observer of the camera
+  /// of the scene's first presentation engine, else the first observer whose camera belongs to no
+  /// other presentation engine (a camera without a viewport). The observer of a further
+  /// viewport's camera is read with [`Self::earth_observer_status_of`].
   pub fn earth_observer_status(
     &self,
     scene_id: u64,
@@ -1048,7 +1055,36 @@ impl SimulationContext {
   )> {
     let scene_arc = self.scenes.read().get_scene(scene_id)?;
     let g = scene_arc.read();
-    g.earth_observer.map(|o| {
+    let main = {
+      let pes = g.presentation_engines.read();
+      let mut cameras = pes.values().filter_map(|d| d.camera_entity);
+      let first = cameras.next();
+      let others: alloc::vec::Vec<EntityId> = cameras.collect();
+      first
+        .and_then(|c| g.earth_observers.get(c))
+        .or_else(|| g.earth_observers.iter().find(|o| !others.contains(&o.camera)).copied())
+    };
+    main.map(|o| {
+      let (error, elevation) = crate::simulation_api::earth_observer::current_aim(&g.scene, &o)
+        .unwrap_or((o.last_error, o.last_elevation));
+      (o.mode, error, elevation)
+    })
+  }
+
+  /// [`Self::earth_observer_status`] of the observer that poses the camera `camera` (FFI id);
+  /// `None` when that camera has none.
+  pub fn earth_observer_status_of(
+    &self,
+    scene_id: u64,
+    camera: u64,
+  ) -> Option<(
+    crate::simulation_api::earth_observer::EarthObserverMode,
+    f64,
+    f64,
+  )> {
+    let scene_arc = self.scenes.read().get_scene(scene_id)?;
+    let g = scene_arc.read();
+    g.earth_observers.get(EntityId::from_ffi(camera)).map(|o| {
       let (error, elevation) = crate::simulation_api::earth_observer::current_aim(&g.scene, &o)
         .unwrap_or((o.last_error, o.last_elevation));
       (o.mode, error, elevation)
@@ -1501,6 +1537,31 @@ impl SimulationContext {
       .is_none()
     {
       let _ = guard.scene.add_component(camera, component);
+    }
+    true
+  }
+
+  /// Sets or clears `bits` (`crate::scene::CAMERA_VIEW_*`) of what the camera `camera_entity`
+  /// (FFI id) leaves out of its view (`CameraViewFlagsComponent`). Synchronous; false when the
+  /// scene is missing or the entity has no camera.
+  pub fn set_camera_view_flags(&self, scene_id: u64, camera_entity: u64, bits: u32, on: bool) -> bool {
+    let Some(scene_arc) = self.scenes.read().get_scene(scene_id) else {
+      return false;
+    };
+    let guard = scene_arc.read();
+    let camera: EntityId = slotmap::KeyData::from_ffi(camera_entity).into();
+    if guard.scene.has_component::<crate::scene::CameraComponent>(camera)
+      != crate::scene::HasComponentResultEnum::EntityHasComponent
+    {
+      return false;
+    }
+    let apply = |f: u32| if on { f | bits } else { f & !bits };
+    if guard
+      .scene
+      .with_component_mut(camera, |m: &mut crate::scene::CameraViewFlagsComponent| m.0 = apply(m.0))
+      .is_none()
+    {
+      let _ = guard.scene.add_component(camera, crate::scene::CameraViewFlagsComponent(apply(0)));
     }
     true
   }

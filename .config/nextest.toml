@@ -34,6 +34,12 @@ slow-timeout = { period = "60s", terminate-after = 20 }
 filter = 'test(gpu_dust_cadence_handover) | test(=gpu_backends::vulkan::device::test_dust::gpu_dust_splat_matches_reference_spinning_site_perspective)'
 slow-timeout = { period = "60s", terminate-after = 15 }
 
+[[profile.default.overrides]]
+# Four fresh engines in a row, each building the 67P dust scene and releasing 44 dust frames one
+# at a time (debug build); the no-dust test builds the same scene once.
+filter = 'test(=simulation_api::multi_view_tests::main_view_dust_bytes_identical_with_and_without_a_mini_view) | test(=simulation_api::multi_view_tests::camera_without_dust_allocates_no_dust_view)'
+slow-timeout = { period = "60s", terminate-after = 30 }
+
 [test-groups]
 vulkan-tests = { max-threads = 1 }
 

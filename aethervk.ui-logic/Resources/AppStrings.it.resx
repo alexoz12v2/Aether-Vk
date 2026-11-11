@@ -1603,4 +1603,323 @@ Scrivi un'epoca dentro l'intervallo confermato e premi Invio, o Vai, per saltarc
   <data name="Billboard_FitsProjection_XPH" xml:space="preserve">
     <value>HEALPix polare (a farfalla)</value>
   </data>
+  <data name="Menu_Layout" xml:space="preserve">
+    <value>Layout</value>
+  </data>
+  <data name="Menu_Layout_Classic" xml:space="preserve">
+    <value>Classica</value>
+  </data>
+  <data name="Menu_Layout_Compact" xml:space="preserve">
+    <value>Compatta</value>
+  </data>
+  <data name="Layout_CompactUnavailable" xml:space="preserve">
+    <value>Il layout compatto richiede che la scheda della vista 3D sia visibile.</value>
+  </data>
+  <data name="Range_ModelPreviewFormat" xml:space="preserve">
+    <value>inizio {0} → fine {1}</value>
+  </data>
+  <data name="Compact_Comet_Title" xml:space="preserve">
+    <value>1 · Cometa</value>
+  </data>
+  <data name="Compact_Comet_Help" xml:space="preserve">
+    <value>Scegli la cometa da studiare.
+
+Scrivi il nome o il numero e premi Cerca, poi selezionala nell'elenco. I due pulsanti scelgono direttamente la 67P o la 10P.
+
+Poi premi il pulsante colorato: il programma scarica il percorso della cometa attorno al Sole e la mostra nella vista. Serve la connessione a Internet.</value>
+  </data>
+  <data name="Compact_Comet_SearchWatermark" xml:space="preserve">
+    <value>Nome o numero della cometa (es. 67P, Halley)</value>
+  </data>
+  <data name="Compact_Comet_SearchButton" xml:space="preserve">
+    <value>Cerca</value>
+  </data>
+  <data name="Compact_Comet_Record" xml:space="preserve">
+    <value>Soluzione orbitale da usare</value>
+  </data>
+  <data name="Compact_Comet_Commit" xml:space="preserve">
+    <value>Scarica e mostra la cometa</value>
+  </data>
+  <data name="Compact_Period_Title" xml:space="preserve">
+    <value>2 · Periodo di osservazione</value>
+  </data>
+  <data name="Compact_Period_Help" xml:space="preserve">
+    <value>Indica quando è stata ripresa l'immagine e da quanto tempo prima il nucleo stava già emettendo polvere.
+
+Il modello inizia un certo numero di rotazioni del nucleo prima della data dell'immagine e finisce alla data dell'immagine. La riga sotto le caselle mostra l'inizio e la fine che verranno usati.
+
+'Imposta questo periodo' scrive soltanto il periodo. 'Calcola a questa data' carica anche la cometa per quel periodo e porta l'orologio alla data dell'immagine.</value>
+  </data>
+  <data name="Compact_Period_ImageDate" xml:space="preserve">
+    <value>Data dell'immagine (UTC)</value>
+  </data>
+  <data name="Compact_Period_ImageDateHelp" xml:space="preserve">
+    <value>La data e l'ora in cui è stata ripresa l'immagine, in Tempo Universale, scritte come anno-mese-giorno, la lettera T, poi ore:minuti:secondi. Esempio: 2021-12-05T21:30:00.
+
+Se è caricata un'immagine FITS, il pulsante qui sotto copia qui la sua data.</value>
+  </data>
+  <data name="Compact_Period_FromImage" xml:space="preserve">
+    <value>Usa la data dell'immagine FITS</value>
+  </data>
+  <data name="Compact_Period_RotationPeriod" xml:space="preserve">
+    <value>Periodo di rotazione (ore)</value>
+  </data>
+  <data name="Compact_Period_RotationPeriodHelp" xml:space="preserve">
+    <value>Quante ore impiega il nucleo a compiere un giro attorno al proprio asse. Per la 67P sono circa 12,4 ore.</value>
+  </data>
+  <data name="Compact_Period_Rotations" xml:space="preserve">
+    <value>Numero di rotazioni</value>
+  </data>
+  <data name="Compact_Period_RotationsHelp" xml:space="preserve">
+    <value>Quanti giri del nucleo copre il modello prima della data dell'immagine. Più rotazioni mostrano polvere più vecchia, più lontana dal nucleo, e richiedono più tempo di calcolo. Il periodo non è mai più breve di un giorno.</value>
+  </data>
+  <data name="Compact_Period_Apply" xml:space="preserve">
+    <value>Imposta questo periodo</value>
+  </data>
+  <data name="Compact_Period_Run" xml:space="preserve">
+    <value>Calcola a questa data</value>
+  </data>
+  <data name="Compact_Period_Recommit" xml:space="preserve">
+    <value>Ricarica la cometa con questo periodo</value>
+  </data>
+  <data name="Compact_Nucleus_Title" xml:space="preserve">
+    <value>3 · Nucleo</value>
+  </data>
+  <data name="Compact_Nucleus_Help" xml:space="preserve">
+    <value>La dimensione del nucleo e la direzione in cielo del suo asse di rotazione.</value>
+  </data>
+  <data name="Compact_Nucleus_Radius" xml:space="preserve">
+    <value>Raggio (km)</value>
+  </data>
+  <data name="Compact_Nucleus_RadiusHelp" xml:space="preserve">
+    <value>Il raggio del nucleo in chilometri. I getti partono dalla sua superficie. Lascialo vuoto per usare il valore di catalogo, quando esiste.</value>
+  </data>
+  <data name="Compact_Nucleus_PoleRa" xml:space="preserve">
+    <value>Asse di rotazione: ascensione retta (°)</value>
+  </data>
+  <data name="Compact_Nucleus_PoleDec" xml:space="preserve">
+    <value>Asse di rotazione: declinazione (°)</value>
+  </data>
+  <data name="Compact_Nucleus_PoleHelp" xml:space="preserve">
+    <value>Dove punta in cielo l'estremità nord dell'asse di rotazione, come ascensione retta e declinazione in gradi (J2000). La piccola vista in alto mostra l'asse come una linea azzurra.</value>
+  </data>
+  <data name="Compact_Jets_Title" xml:space="preserve">
+    <value>4 · Getti</value>
+  </data>
+  <data name="Compact_Jets_Help" xml:space="preserve">
+    <value>Un getto è un punto del nucleo che emette polvere. Aggiungine uno, selezionalo nell'elenco, poi indica dove si trova e come emette. L'elenco mostra la latitudine (φ) e la longitudine (λ) di ogni getto.</value>
+  </data>
+  <data name="Compact_Jets_Add" xml:space="preserve">
+    <value>Aggiungi un getto</value>
+  </data>
+  <data name="Compact_Jets_Remove" xml:space="preserve">
+    <value>Rimuovi il getto selezionato</value>
+  </data>
+  <data name="Compact_Jets_NeedComet" xml:space="preserve">
+    <value>Mostra prima una cometa (scheda 1) e assegna un raggio al nucleo (scheda 3).</value>
+  </data>
+  <data name="Compact_Jet_Latitude" xml:space="preserve">
+    <value>Latitudine (°)</value>
+  </data>
+  <data name="Compact_Jet_LatitudeHelp" xml:space="preserve">
+    <value>Quanto dista il getto dall'equatore del nucleo: +90 è il polo nord, 0 l'equatore, −90 il polo sud.</value>
+  </data>
+  <data name="Compact_Jet_Longitude" xml:space="preserve">
+    <value>Longitudine (°)</value>
+  </data>
+  <data name="Compact_Jet_LongitudeHelp" xml:space="preserve">
+    <value>La posizione del getto attorno all'asse di rotazione, in gradi dal meridiano di riferimento del nucleo.</value>
+  </data>
+  <data name="Compact_Jet_Aperture" xml:space="preserve">
+    <value>Apertura (°)</value>
+  </data>
+  <data name="Compact_Jet_ApertureHelp" xml:space="preserve">
+    <value>Quanto è largo il cono di polvere. Un angolo piccolo dà un getto stretto, uno grande un ventaglio ampio.</value>
+  </data>
+  <data name="Compact_Jet_Velocity" xml:space="preserve">
+    <value>Velocità della polvere (m/s)</value>
+  </data>
+  <data name="Compact_Jet_VelocityHelp" xml:space="preserve">
+    <value>A che velocità la polvere lascia il nucleo, in metri al secondo.</value>
+  </data>
+  <data name="Compact_Jet_Lifetime" xml:space="preserve">
+    <value>Durata della polvere (giorni)</value>
+  </data>
+  <data name="Compact_Jet_LifetimeHelp" xml:space="preserve">
+    <value>Per quanti giorni un granello viene seguito dopo aver lasciato il nucleo. I granelli più vecchi non vengono più disegnati.</value>
+  </data>
+  <data name="Compact_Jet_EmissionSteps" xml:space="preserve">
+    <value>Passi di emissione</value>
+  </data>
+  <data name="Compact_Jet_EmissionStepsHelp" xml:space="preserve">
+    <value>Con quale finezza l'emissione è suddivisa nel tempo. Il programma lo ricava dalla durata della polvere; è mostrato per informazione.</value>
+  </data>
+  <data name="Compact_Dust_Title" xml:space="preserve">
+    <value>5 · Polvere del getto selezionato</value>
+  </data>
+  <data name="Compact_Dust_Help" xml:space="preserve">
+    <value>Com'è fatta la polvere del getto selezionato nella scheda 4: le dimensioni dei granelli, come sono distribuite, quanto sono densi e quanto riflettono la luce.</value>
+  </data>
+  <data name="Compact_Dust_SelectJet" xml:space="preserve">
+    <value>Seleziona un getto nella scheda 4 per modificarne la polvere.</value>
+  </data>
+  <data name="Compact_Dust_MinDiameter" xml:space="preserve">
+    <value>Granello più piccolo (μm)</value>
+  </data>
+  <data name="Compact_Dust_MaxDiameter" xml:space="preserve">
+    <value>Granello più grande (μm)</value>
+  </data>
+  <data name="Compact_Dust_DiameterHelp" xml:space="preserve">
+    <value>I diametri del granello più piccolo e di quello più grande emessi dal getto, in millesimi di millimetro. La luce del Sole spinge via i granelli piccoli più velocemente di quelli grandi.</value>
+  </data>
+  <data name="Compact_Dust_SizeQ" xml:space="preserve">
+    <value>Esponente q della distribuzione</value>
+  </data>
+  <data name="Compact_Dust_SizeQHelp" xml:space="preserve">
+    <value>Come diminuisce il numero di granelli al crescere della dimensione. Un q più grande significa molti più granelli piccoli che grandi. Un valore comune è 3,5.</value>
+  </data>
+  <data name="Compact_Dust_Density" xml:space="preserve">
+    <value>Densità dei granelli (g/cm³)</value>
+  </data>
+  <data name="Compact_Dust_DensityHelp" xml:space="preserve">
+    <value>Quanto è pesante il materiale dei granelli. L'acqua è 1 g/cm³. I granelli più leggeri vengono spinti via più velocemente dalla luce del Sole.</value>
+  </data>
+  <data name="Compact_Dust_Albedo" xml:space="preserve">
+    <value>Albedo</value>
+  </data>
+  <data name="Compact_Dust_AlbedoHelp" xml:space="preserve">
+    <value>La frazione di luce solare riflessa da un granello: 0,04 è molto scuro, 0,5 è chiaro. Cambia la luminosità della polvere, non dove va.</value>
+  </data>
+  <data name="Compact_Dust_Beta" xml:space="preserve">
+    <value>β (spinta della luce solare)</value>
+  </data>
+  <data name="Compact_Dust_BetaHelp" xml:space="preserve">
+    <value>Quanto la luce del Sole spinge i granelli rispetto all'attrazione di gravità del Sole, dal granello più grande al più piccolo. Il programma lo calcola dalle dimensioni e dalla densità.</value>
+  </data>
+  <data name="Compact_Dust_CopyToAllJets" xml:space="preserve">
+    <value>Copia su tutti i getti</value>
+  </data>
+  <data name="Compact_Dust_CopyHelp" xml:space="preserve">
+    <value>Assegna a tutti gli altri getti la polvere di questo getto. Le posizioni, le aperture e le velocità dei getti restano come sono.</value>
+  </data>
+  <data name="Compact_Fits_Title" xml:space="preserve">
+    <value>6 · Immagine FITS</value>
+  </data>
+  <data name="Compact_Fits_Help" xml:space="preserve">
+    <value>Carica la tua immagine della cometa e sovrapponila alla vista, per confrontarla con il modello.
+
+Il pulsante chiede il file, lo carica e lo posiziona sopra la vista. Sotto puoi nasconderla, renderla più o meno trasparente e, per un'immagine con più piani, scegliere il piano.</value>
+  </data>
+  <data name="Compact_Fits_ImportAndOverlay" xml:space="preserve">
+    <value>Importa e sovrapponi</value>
+  </data>
+  <data name="Compact_Fits_None" xml:space="preserve">
+    <value>Nessuna immagine caricata.</value>
+  </data>
+  <data name="Compact_Fits_NothingImported" xml:space="preserve">
+    <value>Nessuna nuova immagine importata.</value>
+  </data>
+  <data name="Compact_Fits_Overlaid" xml:space="preserve">
+    <value>Sovrapposta:</value>
+  </data>
+  <data name="Compact_Fits_Visible" xml:space="preserve">
+    <value>Mostra l'immagine sopra la vista</value>
+  </data>
+  <data name="Compact_Fits_Opacity" xml:space="preserve">
+    <value>Opacità</value>
+  </data>
+  <data name="Compact_Fits_OpacityHelp" xml:space="preserve">
+    <value>Quanto l'immagine copre il modello sottostante: a sinistra è trasparente, a destra nasconde il modello.</value>
+  </data>
+  <data name="Compact_Fits_Plane" xml:space="preserve">
+    <value>Piano dell'immagine</value>
+  </data>
+  <data name="Compact_Fits_PlaneHelp" xml:space="preserve">
+    <value>Alcuni file FITS contengono più immagini, una per piano (per esempio una per filtro). Scegli quale mostrare.</value>
+  </data>
+  <data name="Compact_View_Title" xml:space="preserve">
+    <value>7 · Vista</value>
+  </data>
+  <data name="Compact_View_Help" xml:space="preserve">
+    <value>Che cosa mostra la vista grande.
+
+Orbita: il percorso della cometa attorno al Sole. Nucleo: il nucleo da vicino, con i suoi getti. Modello: la cometa vista dalla Terra, da confrontare con la tua immagine.</value>
+  </data>
+  <data name="Compact_View_DustFlow" xml:space="preserve">
+    <value>Mostra come scorre la polvere</value>
+  </data>
+  <data name="Compact_View_DustFlowHelp" xml:space="preserve">
+    <value>Disegna dei segni in movimento lungo la polvere, per vedere in che direzione viaggia. Cambia solo l'immagine, non il modello.</value>
+  </data>
+  <data name="Compact_Playback_Title" xml:space="preserve">
+    <value>8 · Riproduzione</value>
+  </data>
+  <data name="Compact_Playback_Help" xml:space="preserve">
+    <value>Fai scorrere il tempo e guarda la polvere formarsi.
+
+Il pulsante centrale avvia e ferma il tempo. Quello a sinistra torna all'inizio del periodo, quello a destra salta alla fine. La barra mostra a che punto del periodo ti trovi.</value>
+  </data>
+  <data name="Compact_Playback_NotCommitted" xml:space="preserve">
+    <value>Mostra prima una cometa (scheda 1).</value>
+  </data>
+  <data name="Compact_Playback_PlayPause" xml:space="preserve">
+    <value>Avvia o ferma il tempo</value>
+  </data>
+  <data name="Compact_Playback_Reset" xml:space="preserve">
+    <value>Torna all'inizio del periodo</value>
+  </data>
+  <data name="Compact_Playback_RunToEnd" xml:space="preserve">
+    <value>Salta alla fine del periodo</value>
+  </data>
+  <data name="Compact_Playback_Speed" xml:space="preserve">
+    <value>Velocità</value>
+  </data>
+  <data name="Compact_Playback_SpeedHelp" xml:space="preserve">
+    <value>A che velocità scorre il tempo durante la riproduzione.</value>
+  </data>
+  <data name="Compact_Playback_Epoch" xml:space="preserve">
+    <value>Data</value>
+  </data>
+  <data name="Compact_Playback_EpochHelp" xml:space="preserve">
+    <value>La data mostrata ora dalla vista. Per andare a un'altra data all'interno del periodo, scrivila come anno-mese-giorno ore:minuti:secondi e premi Vai.</value>
+  </data>
+  <data name="Compact_Playback_Seek" xml:space="preserve">
+    <value>Vai</value>
+  </data>
+  <data name="Compact_Export_Title" xml:space="preserve">
+    <value>9 · Esporta</value>
+  </data>
+  <data name="Compact_Export_Help" xml:space="preserve">
+    <value>Salva come file immagine ciò che mostra la vista grande. Se un'immagine è sovrapposta alla vista, viene salvata anche una seconda immagine con quella sopra.</value>
+  </data>
+  <data name="Compact_Export_Button" xml:space="preserve">
+    <value>Esporta immagine…</value>
+  </data>
+  <data name="Compact_MoreSettings" xml:space="preserve">
+    <value>Altre impostazioni → Layout classico</value>
+  </data>
+  <data name="Compact_MoreSettingsHelp" xml:space="preserve">
+    <value>Questo pannello mostra le impostazioni più usate. Tutte le altre si trovano nel layout classico. Puoi tornare qui in qualsiasi momento dal menu Layout; cambiando non si perde nulla.</value>
+  </data>
+  <data name="NucleusMini_Header" xml:space="preserve">
+    <value>Nucleo visto da Terra</value>
+  </data>
+  <data name="NucleusMini_CaptionEarth" xml:space="preserve">
+    <value>Come lo vede un telescopio da Terra: nord in alto, est a sinistra, illuminato dal Sole.</value>
+  </data>
+  <data name="NucleusMini_CaptionFree" xml:space="preserve">
+    <value>Vista libera: hai ruotato il nucleo trascinando.</value>
+  </data>
+  <data name="NucleusMini_SunLegend" xml:space="preserve">
+    <value>Linea gialla: direzione del Sole. Linea azzurra: asse di rotazione.</value>
+  </data>
+  <data name="NucleusMini_WaitingForComet" xml:space="preserve">
+    <value>Mostra una cometa (scheda 1) per vedere qui il suo nucleo.</value>
+  </data>
+  <data name="NucleusMini_DragHint" xml:space="preserve">
+    <value>Trascina sull'immagine per ruotare il nucleo.</value>
+  </data>
+  <data name="NucleusMini_ResetToEarth" xml:space="preserve">
+    <value>Torna alla vista da Terra</value>
+  </data>
 </root>

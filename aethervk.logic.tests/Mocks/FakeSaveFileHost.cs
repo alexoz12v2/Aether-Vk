@@ -27,6 +27,8 @@ internal sealed class FakeSaveFileHost(string root) : ISaveFileHost
   public readonly Dictionary<ulong, byte[]> AssetBytes = [];
   public CometAppearanceDto Appearance;
   public List<BillboardDto> Billboards = [];
+  /// <summary>The UI layout, as the index value (null: classic). New does not touch it.</summary>
+  public string? UiLayout;
   public EpochParts? Clock;
   public uint DumpVersion = 8;
   public bool Running;
@@ -61,7 +63,8 @@ internal sealed class FakeSaveFileHost(string root) : ISaveFileHost
     [.. Viewports],
     [.. Assets],
     SaveIndexMapping.ToDto(Appearance, id => Assets.FirstOrDefault(a => a.Id == id)?.Key),
-    [.. Billboards]);
+    [.. Billboards],
+    UiLayout);
 
   private static TimelineDto Clone(TimelineDto t) => new()
   {
@@ -184,6 +187,12 @@ internal sealed class FakeSaveFileHost(string root) : ISaveFileHost
   public void ApplyViewports(IReadOnlyList<ViewportDto> viewports) => Viewports = [.. viewports];
 
   public void ApplyBillboards(IReadOnlyList<BillboardDto> billboards) => Billboards = [.. billboards];
+
+  public void ApplyUiLayout(string? layout)
+  {
+    Calls.Add("layout " + (layout ?? "null"));
+    UiLayout = UiLayoutService.ToDto(UiLayoutService.FromDto(layout));
+  }
 
   public int ClockSyncs { get; private set; }
   public void SyncClock() => ClockSyncs++;

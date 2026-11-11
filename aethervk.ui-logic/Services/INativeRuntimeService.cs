@@ -74,6 +74,12 @@ public interface INativeRuntimeService : IDisposable
   /// <param name="handleType">
   /// Matches Rust <c>NativeHandleType</c>: 0 = windowless, 1 = Win32, 3 = Xlib, 5 = Metal.
   /// </param>
+  /// <param name="role">
+  /// <see cref="ViewportRole.Main"/> once; <see cref="ViewportRole.NucleusMini"/> once while a main
+  /// viewport is attached. Anything else is refused (false, logged). Only the main viewport sets
+  /// <see cref="PresentationEngineId"/> / <see cref="CameraEntityId"/>; the mini-view sets
+  /// <see cref="NucleusMiniPresentationEngineId"/> / <see cref="NucleusMiniCameraEntityId"/>.
+  /// </param>
   bool AddViewport(
     uint width,
     uint height,
@@ -81,7 +87,8 @@ public interface INativeRuntimeService : IDisposable
     Func<CNativeWindowHandle>? nativeHandleProvider,
     uint handleType,
     out ulong presentationEngineId,
-    out ulong cameraEntityId
+    out ulong cameraEntityId,
+    ViewportRole role = ViewportRole.Main
   );
 
   void RemoveViewport(ulong presentationEngineId);
@@ -255,6 +262,38 @@ public interface INativeRuntimeService : IDisposable
   /// Decided per camera, so viewports in different modes disagree. False: no scene or not a camera.
   /// </summary>
   bool SetCameraRenderMask(ulong cameraEntityId, uint mask);
+
+  /// <summary>
+  /// The camera <paramref name="cameraEntityId"/> draws no dust when <paramref name="noDust"/>: its
+  /// viewport allocates no per-view dust state and records no dust pass; the other viewports are
+  /// unaffected. False: no scene or not a camera.
+  /// </summary>
+  bool SetCameraNoDust(ulong cameraEntityId, bool noDust);
+
+  /// <summary>
+  /// The camera <paramref name="cameraEntityId"/> draws no UI layer when
+  /// <paramref name="noUiLayer"/>: no engine labels, leader lines, indicators or screen-space UI in
+  /// its viewport. False: no scene or not a camera.
+  /// </summary>
+  bool SetCameraNoUiLayer(ulong cameraEntityId, bool noUiLayer);
+
+  /// <summary>
+  /// Pauses (<paramref name="active"/> false) or resumes the viewport
+  /// <paramref name="presentationEngineId"/>: paused, the engine builds, acquires and presents no
+  /// frame for it; its window surface and camera stay. False: no scene or unknown viewport.
+  /// </summary>
+  bool SetViewportActive(ulong presentationEngineId, bool active);
+
+  /// <summary>
+  /// Caps the frame rate of the viewport <paramref name="presentationEngineId"/>: the engine
+  /// builds a frame for it at most once every <paramref name="intervalUs"/> µs (0: no cap, the
+  /// default). The other viewports are unaffected. False: no scene or unknown viewport.
+  /// </summary>
+  bool SetViewportMinFrameInterval(ulong presentationEngineId, ulong intervalUs);
+
+  /// <summary>Frames the viewport <paramref name="presentationEngineId"/> presented since it was
+  /// created; 0 for an unknown viewport.</summary>
+  ulong ViewportFrameCount(ulong presentationEngineId);
 
   /// <summary>
   /// How the camera <paramref name="cameraEntityId"/> shades meshes (bit 0: physical lighting, i.e.
@@ -679,6 +718,14 @@ public interface INativeRuntimeService : IDisposable
   /// Pass to <see cref="StartScopedRenderDocCapture"/> to scope frame captures.</summary>
   ulong? PresentationEngineId { get; }
 
+  /// <summary>The nucleus mini-view's presentation engine (<see cref="ViewportRole.NucleusMini"/>),
+  /// null while none is attached. Never the export, capture or save target.</summary>
+  ulong? NucleusMiniPresentationEngineId { get; }
+
+  /// <summary>The nucleus mini-view's camera entity, null while none is attached. Never registered
+  /// in <see cref="ICameraServiceRegistry"/>.</summary>
+  ulong? NucleusMiniCameraEntityId { get; }
+
   /// <summary>
   /// Earth body entity ID — populated from <c>CStartupReturn.EarthPlanetEntity</c> at startup.
   /// Used by <see cref="CameraService"/> to register a position-tracking listener.
@@ -1033,6 +1080,60 @@ internal unsafe static class PInvokeAetherVkCore
     uint handleType, // 0 = windowless | 1 = Win32 | 3 = Xlib | 4 = Xcb | 5 = Metal
     ulong* outPresentationEngine,
     ulong* outCameraEntity
+  );
+
+  /// <summary><c>avkSimulationContext_addViewport</c> with creation flags
+  /// (<see cref="ViewportPresentFlags"/>); flags 0 is that call.</summary>
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern bool avkSimulationContext_addViewportEx(
+    nint ctx,
+    ulong sceneId,
+    uint width,
+    uint height,
+    byte* name,
+    uint handleType, // 0 = windowless | 1 = Win32 | 3 = Xlib | 4 = Xcb | 5 = Metal
+    uint flags,
+    ulong* outPresentationEngine,
+    ulong* outCameraEntity
+  );
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.U1)]
+  public static extern bool avkSimulationContext_setViewportActive(
+    nint ctx,
+    ulong sceneId,
+    ulong peHandle,
+    [MarshalAs(UnmanagedType.U1)] bool active
+  );
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.U1)]
+  public static extern bool avkSimulationContext_setViewportMinFrameInterval(
+    nint ctx,
+    ulong sceneId,
+    ulong peHandle,
+    ulong intervalUs
+  );
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  public static extern ulong avkSimulationContext_viewportFrameCount(nint ctx, ulong peHandle);
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.U1)]
+  public static extern bool avkSimulationContext_setCameraNoDust(
+    nint ctx,
+    ulong sceneId,
+    ulong cameraEntity,
+    [MarshalAs(UnmanagedType.U1)] bool noDust
+  );
+
+  [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+  [return: MarshalAs(UnmanagedType.U1)]
+  public static extern bool avkSimulationContext_setCameraNoUiLayer(
+    nint ctx,
+    ulong sceneId,
+    ulong cameraEntity,
+    [MarshalAs(UnmanagedType.U1)] bool noUiLayer
   );
 
   [DllImport(LibName, ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
@@ -1854,6 +1955,21 @@ public sealed record BodyRotationalModelDto(
 
 #region implementation
 
+/// <summary>Viewport creation flags of <c>avkSimulationContext_addViewportEx</c> (Rust
+/// <c>gpu::PRESENTATION_ENGINE_FLAG_*</c>).</summary>
+public static class ViewportPresentFlags
+{
+  public const uint None = 0;
+
+  /// <summary>Present with the least-latency mode the surface offers: MAILBOX, else IMMEDIATE,
+  /// else FIFO.</summary>
+  public const uint LowLatency = 1u << 0;
+
+  /// <summary>The viewport starts paused, as after <c>SetViewportActive(false)</c>: no frame is
+  /// built, acquired or presented until it is resumed, so its camera is configured first.</summary>
+  public const uint StartInactive = 1u << 1;
+}
+
 // Note: this class is not perfect, as it is aware it is a singleton. Acceptable in our case as it
 // maps to a native library services of which we know we'll load only once
 public sealed class NativeRuntimeService : INativeRuntimeService
@@ -1877,11 +1993,20 @@ public sealed class NativeRuntimeService : INativeRuntimeService
 
   // ── Cached entity IDs ─────────────────────────────────────────────────────
 
-  /// <inheritdoc/>
-  public ulong? CameraEntityId { get; private set; }
+  /// <summary>Which roles are attached and their ids (the main viewport's are cached below).</summary>
+  private readonly ViewportRoleTable _viewports = new();
 
   /// <inheritdoc/>
-  public ulong? PresentationEngineId { get; private set; }
+  public ulong? CameraEntityId => _viewports.MainCameraEntityId;
+
+  /// <inheritdoc/>
+  public ulong? PresentationEngineId => _viewports.MainPresentationEngineId;
+
+  /// <inheritdoc/>
+  public ulong? NucleusMiniPresentationEngineId => _viewports.NucleusMiniPresentationEngineId;
+
+  /// <inheritdoc/>
+  public ulong? NucleusMiniCameraEntityId => _viewports.NucleusMiniCameraEntityId;
 
   /// <inheritdoc/>
   public ulong? EarthEntityId { get; private set; }
@@ -2356,6 +2481,14 @@ public sealed class NativeRuntimeService : INativeRuntimeService
 
   // ── INativeRuntimeService — Viewport & Rendering ──────────────────────────
 
+  /// <summary>
+  /// Creation flags of the nucleus mini-view's presentation engine
+  /// (<see cref="ViewportPresentFlags"/>), read by <see cref="AddViewport"/>: low-latency present,
+  /// and paused until its owner configured its camera and resumed it
+  /// (<see cref="SetViewportActive"/>). The main viewport is always created with no flag.
+  /// </summary>
+  public uint NucleusMiniPresentFlags { get; set; } = ViewportPresentFlags.LowLatency | ViewportPresentFlags.StartInactive;
+
   public unsafe bool AddViewport(
     uint width,
     uint height,
@@ -2363,17 +2496,18 @@ public sealed class NativeRuntimeService : INativeRuntimeService
     Func<CNativeWindowHandle>? nativeHandleProvider,
     uint handleType,
     out ulong presentationEngineId,
-    out ulong cameraEntityId
+    out ulong cameraEntityId,
+    ViewportRole role = ViewportRole.Main
   )
   {
     presentationEngineId = 0;
     cameraEntityId = 0;
 
-    // one camera / presentation engine: a second viewport crashed the render thread at shutdown
-    // (vkQueuePresentKHR on a dead window) and stole the camera hotkeys from the first one
-    if (PresentationEngineId is not null)
+    // one main viewport (a second one crashed the render thread at shutdown and stole the camera
+    // hotkeys from the first one) and one nucleus mini-view beside it
+    if (!_viewports.CanAdd(role, out var refusal))
     {
-      Console.WriteLine($"[AddViewport] refused: viewport PE={PresentationEngineId} is already attached");
+      Console.WriteLine($"[AddViewport] refused {role}: {refusal}");
       return false;
     }
 
@@ -2391,23 +2525,32 @@ public sealed class NativeRuntimeService : INativeRuntimeService
 
       ulong pe = 0,
         cam = 0;
-      bool ok = PInvokeAetherVkCore.avkSimulationContext_addViewport(
+      // flags 0 (the main viewport) is the plain addViewport
+      uint presentFlags = role == ViewportRole.NucleusMini ? NucleusMiniPresentFlags : ViewportPresentFlags.None;
+      bool ok = PInvokeAetherVkCore.avkSimulationContext_addViewportEx(
         _ctx,
         _sceneId,
         width,
         height,
         utf8Name,
         handleType,
+        presentFlags,
         &pe,
         &cam
       );
 
       if (ok)
       {
+        if (!_viewports.TryAdd(role, pe, cam))
+        {
+          // another add of the same role won the race: this engine goes again
+          Console.WriteLine($"[AddViewport] refused {role}: the role was taken during the add, removing PE={pe}");
+          PInvokeAetherVkCore.avkSimulationContext_removeViewport(_ctx, _sceneId, pe);
+          return false;
+        }
+        // the main viewport's ids stay the cached ones (camera hotkeys, export, captures)
         presentationEngineId = pe;
         cameraEntityId = cam;
-        CameraEntityId = cam;
-        PresentationEngineId = pe;
       }
 
       return ok;
@@ -2422,11 +2565,7 @@ public sealed class NativeRuntimeService : INativeRuntimeService
   {
     if (presentationEngineId == 0) return;
     PInvokeAetherVkCore.avkSimulationContext_removeViewport(_ctx, _sceneId, presentationEngineId);
-    if (PresentationEngineId == presentationEngineId)
-    {
-      PresentationEngineId = null;
-      CameraEntityId = null;
-    }
+    _viewports.Removed(presentationEngineId);
   }
 
   public void ResizeViewport(ulong presentationEngineId, uint width, uint height)
@@ -2883,6 +3022,29 @@ public sealed class NativeRuntimeService : INativeRuntimeService
   public bool SetCameraRenderMask(ulong cameraEntityId, uint mask) =>
     _ctx != 0
     && PInvokeAetherVkCore.avkSimulationContext_setCameraRenderMask(_ctx, _sceneId, cameraEntityId, mask);
+
+  public bool SetCameraNoDust(ulong cameraEntityId, bool noDust) =>
+    _ctx != 0
+    && PInvokeAetherVkCore.avkSimulationContext_setCameraNoDust(_ctx, _sceneId, cameraEntityId, noDust);
+
+  public bool SetCameraNoUiLayer(ulong cameraEntityId, bool noUiLayer) =>
+    _ctx != 0
+    && PInvokeAetherVkCore.avkSimulationContext_setCameraNoUiLayer(_ctx, _sceneId, cameraEntityId, noUiLayer);
+
+  public bool SetViewportActive(ulong presentationEngineId, bool active) =>
+    _ctx != 0
+    && presentationEngineId != 0
+    && PInvokeAetherVkCore.avkSimulationContext_setViewportActive(_ctx, _sceneId, presentationEngineId, active);
+
+  public bool SetViewportMinFrameInterval(ulong presentationEngineId, ulong intervalUs) =>
+    _ctx != 0
+    && presentationEngineId != 0
+    && PInvokeAetherVkCore.avkSimulationContext_setViewportMinFrameInterval(_ctx, _sceneId, presentationEngineId, intervalUs);
+
+  public ulong ViewportFrameCount(ulong presentationEngineId) =>
+    _ctx != 0 && presentationEngineId != 0
+      ? PInvokeAetherVkCore.avkSimulationContext_viewportFrameCount(_ctx, presentationEngineId)
+      : 0UL;
 
   public bool SetCameraShading(ulong cameraEntityId, uint flags) =>
     _ctx != 0

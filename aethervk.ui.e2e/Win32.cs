@@ -134,12 +134,7 @@ internal static partial class Win32
   /// </summary>
   public static double[] SampleLuminance(int left, int top, int width, int height, int n)
   {
-    var full = CaptureLuminance(left, top, width, height);
-    var lum = new double[n * n];
-    for (int j = 0; j < n; j++)
-      for (int i = 0; i < n; i++)
-        lum[j * n + i] = full[(2 * j + 1) * height / (2 * n) * width + (2 * i + 1) * width / (2 * n)];
-    return lum;
+    return AetherVk.UI.E2E.Shared.FrameMetricsCore.Grid(CaptureLuminance(left, top, width, height), width, height, n);
   }
 
   [DllImport("gdi32.dll")]

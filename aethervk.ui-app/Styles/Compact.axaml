@@ -1,0 +1,137 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <!--
+    The compact panel's look: rounded cards with a subtle border, settings rows (label, help,
+    control), accent primary buttons and number boxes, 8 px spacing. Included by CompactPanelView
+    only, and every selector starts at its ".compact-panel" root: nothing outside the panel changes.
+    Colours are the application's tokens (Styles/Colors.axaml), so light and dark follow the theme.
+  -->
+
+  <Style Selector="UserControl.compact-panel">
+    <Setter Property="Background" Value="{DynamicResource Bg.Canvas}" />
+  </Style>
+
+  <!-- cards -->
+  <Style Selector=".compact-panel Border.card">
+    <Setter Property="Background" Value="{DynamicResource Bg.Surface}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Bg.Outline}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="8" />
+    <Setter Property="Padding" Value="12" />
+  </Style>
+  <Style Selector=".compact-panel TextBlock.card-title">
+    <Setter Property="FontSize" Value="14" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="Foreground" Value="{DynamicResource Text.Primary}" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+
+  <!-- settings rows: label | help | control -->
+  <Style Selector=".compact-panel Grid.row">
+    <Setter Property="MinHeight" Value="32" />
+  </Style>
+  <Style Selector=".compact-panel TextBlock.row-label">
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="Foreground" Value="{DynamicResource Text.Primary}" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+    <Setter Property="TextWrapping" Value="Wrap" />
+  </Style>
+  <Style Selector=".compact-panel TextBlock.note">
+    <Setter Property="FontSize" Value="11" />
+    <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}" />
+    <Setter Property="TextWrapping" Value="Wrap" />
+  </Style>
+  <Style Selector=".compact-panel TextBlock.value">
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+    <Setter Property="TextWrapping" Value="Wrap" />
+  </Style>
+
+  <!-- buttons: stretch in their row; the primary one in the accent colour -->
+  <Style Selector=".compact-panel Button.wide">
+    <Setter Property="HorizontalAlignment" Value="Stretch" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="CornerRadius" Value="4" />
+    <Setter Property="Padding" Value="12,6" />
+  </Style>
+  <Style Selector=".compact-panel Button.primary">
+    <Setter Property="Background" Value="{DynamicResource Accent.Primary}" />
+    <Setter Property="Foreground" Value="{DynamicResource Text.On-Accent}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Accent.Primary}" />
+  </Style>
+  <Style Selector=".compact-panel Button.primary:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource Accent.Hover}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Accent.Hover}" />
+    <Setter Property="Foreground" Value="{DynamicResource Text.On-Accent}" />
+  </Style>
+  <Style Selector=".compact-panel Button.primary:pressed /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource Accent.Active}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Accent.Active}" />
+    <Setter Property="Foreground" Value="{DynamicResource Text.On-Accent}" />
+  </Style>
+
+  <!-- view mode buttons: the chosen one is filled -->
+  <Style Selector=".compact-panel Button.mode.active">
+    <Setter Property="Background" Value="{DynamicResource Accent.Subtle}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Accent.Primary}" />
+  </Style>
+
+  <!-- round playback buttons -->
+  <Style Selector=".compact-panel Button.playback">
+    <Setter Property="Width" Value="32" />
+    <Setter Property="Height" Value="32" />
+    <Setter Property="Padding" Value="4" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="CornerRadius" Value="16" />
+  </Style>
+  <Style Selector=".compact-panel Button.playback:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource Bg.Hover}" />
+  </Style>
+
+  <!-- number boxes: compact, rounded, an accent line under the focused one -->
+  <Style Selector=".compact-panel NumericUpDown">
+    <Setter Property="MinWidth" Value="0" />
+    <Setter Property="MinHeight" Value="30" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="CornerRadius" Value="4" />
+    <Setter Property="Background" Value="{DynamicResource Bg.Subtle}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Bg.Default}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="HorizontalAlignment" Value="Stretch" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+    <Setter Property="ShowButtonSpinner" Value="True" />
+  </Style>
+  <Style Selector=".compact-panel NumericUpDown:focus-within">
+    <Setter Property="BorderBrush" Value="{DynamicResource Accent.Primary}" />
+    <Setter Property="BorderThickness" Value="1,1,1,2" />
+  </Style>
+  <!-- a NumericUpDown has no automation peer: only its text box reaches UI Automation, so the
+       text box carries the control's AutomationId -->
+  <Style Selector=".compact-panel NumericUpDown /template/ TextBox">
+    <Setter Property="AutomationProperties.AutomationId"
+            Value="{Binding $parent[NumericUpDown].(AutomationProperties.AutomationId)}" />
+  </Style>
+
+  <Style Selector=".compact-panel TextBox.field">
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="MinHeight" Value="30" />
+    <Setter Property="CornerRadius" Value="4" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+  <Style Selector=".compact-panel ListBox.list">
+    <Setter Property="Background" Value="{DynamicResource Bg.Subtle}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Bg.Outline}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="4" />
+    <Setter Property="MaxHeight" Value="132" />
+  </Style>
+
+  <!-- the nucleus view's header strip -->
+  <Style Selector=".compact-panel Expander.mini">
+    <Setter Property="HorizontalAlignment" Value="Stretch" />
+    <Setter Property="CornerRadius" Value="8" />
+    <Setter Property="Padding" Value="8" />
+  </Style>
+</Styles>

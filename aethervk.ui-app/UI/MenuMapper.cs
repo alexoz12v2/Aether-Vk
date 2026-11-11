@@ -73,6 +73,26 @@ public static class MenuMapper
       // shouldn't get here?
     }
 
+    if (vm.ToggleType != MenuToggle.None)
+    {
+      item.ToggleType = vm.ToggleType == MenuToggle.Radio
+        ? NativeMenuItemToggleType.Radio
+        : NativeMenuItemToggleType.CheckBox;
+      item.Bind(
+        NativeMenuItem.IsCheckedProperty,
+        new Binding(nameof(MenuItemViewModel.IsChecked)) { Source = vm, Mode = BindingMode.TwoWay }
+      );
+      KeepCheckedInSync(vm, item, NativeMenuItem.IsCheckedProperty);
+    }
+    // a command drives IsEnabled itself (CanExecute); only a command-less entry takes the view model's
+    if (vm.Command is null)
+    {
+      item.Bind(
+        NativeMenuItem.IsEnabledProperty,
+        new Binding(nameof(MenuItemViewModel.IsEnabled)) { Source = vm }
+      );
+    }
+
     if (!string.IsNullOrEmpty(vm.Gesture))
     {
       try
@@ -93,6 +113,19 @@ public static class MenuMapper
     }
 
     return item;
+  }
+
+  /// <summary>
+  /// The view model's IsChecked always reaches the item, even if a local write by the menu (a click
+  /// on a toggle item) replaced the binding: a refused radio choice must show the previous one.
+  /// </summary>
+  private static void KeepCheckedInSync(MenuItemViewModel vm, AvaloniaObject item, StyledProperty<bool> isChecked)
+  {
+    vm.PropertyChanged += (_, e) =>
+    {
+      if (e.PropertyName == nameof(MenuItemViewModel.IsChecked) && item.GetValue(isChecked) != vm.IsChecked)
+        item.SetCurrentValue(isChecked, vm.IsChecked);
+    };
   }
 
   private static Control CreateStandardMenuItem(MenuItemViewModel vm)
@@ -121,6 +154,24 @@ public static class MenuMapper
       MenuItem.IsVisibleProperty,
       new Binding(nameof(MenuItemViewModel.IsVisible)) { Source = vm }
     );
+    item.Bind(
+      MenuItem.IsEnabledProperty,
+      new Binding(nameof(MenuItemViewModel.IsEnabled)) { Source = vm }
+    );
+
+    if (vm.ToggleType != MenuToggle.None)
+    {
+      // the menu checks the item on click (and unchecks the rest of a radio group) before the
+      // command runs; the command may then put the view model's state back, which wins
+      item.ToggleType = vm.ToggleType == MenuToggle.Radio ? MenuItemToggleType.Radio : MenuItemToggleType.CheckBox;
+      if (!string.IsNullOrEmpty(vm.GroupName))
+        item.GroupName = vm.GroupName;
+      item.Bind(
+        MenuItem.IsCheckedProperty,
+        new Binding(nameof(MenuItemViewModel.IsChecked)) { Source = vm, Mode = BindingMode.TwoWay }
+      );
+      KeepCheckedInSync(vm, item, MenuItem.IsCheckedProperty);
+    }
 
     if (!string.IsNullOrEmpty(vm.Gesture))
     {

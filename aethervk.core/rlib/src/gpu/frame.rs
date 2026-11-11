@@ -1145,6 +1145,11 @@ pub fn prepare_dust(
   use crate::gpu_backends::vulkan::device::dust::DustViewParams;
   let mut wait = 0u64;
   render_scene.dust_view = DustViewParams::default();
+  if render_scene.no_dust {
+    // nothing of the dust is evaluated, allocated or recorded for this view
+    debug_assert!(render_scene.depth_layers.iter().all(|l| l.dust_calls.is_empty()));
+    return Ok(0);
+  }
   let mut systems: Vec<u64> = Vec::new();
   for layer in render_scene.depth_layers.iter() {
     for call in layer.dust_calls.iter() {
@@ -2038,6 +2043,9 @@ pub struct RenderScene {
   /// lines, trajectory indicators): a viewport capture with the labels hidden
   /// (`ViewportCaptureRequest::hide_labels`). The scene is not touched: the next frame draws them.
   pub hide_ui_labels: bool,
+  /// the view's camera draws no dust (`scene::CAMERA_VIEW_NO_DUST`): [`prepare_dust`] returns
+  /// before any per-view dust state is touched or allocated
+  pub no_dust: bool,
 }
 
 impl RenderScene {
@@ -2077,6 +2085,7 @@ impl RenderScene {
       mesh_shading: 0,
       mesh_exposure: 1.0,
       hide_ui_labels: false,
+      no_dust: false,
     }
   }
 

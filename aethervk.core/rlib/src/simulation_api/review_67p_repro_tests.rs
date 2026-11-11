@@ -29,7 +29,7 @@ use anise::prelude::NAIFSummaryRecord;
 use hifitime::{Duration, Epoch, TimeScale};
 
 /// test asset paths (`aethervk_test_assets`)
-const SPK_COMMITTED: &str =
+pub(super) const SPK_COMMITTED: &str =
   "saves/review_67p_2021-12/spk/spk_67P_90000703_2021-12-12_2021-12-28.bsp";
 const SPK_M30: &str =
   "saves/review_67p_2021-12/spk/spk_m30_90000703_2021-12-15_2025-11-11.bsp";
@@ -47,7 +47,7 @@ const JET_TTL_US: i64 = 30 * 86_400 * 1_000_000i64;
 const NUCLEUS_RADIUS_KM: f32 = 2.0;
 
 /// committed range, TDB `(centuries, ns)` since J2000
-fn committed_start() -> Epoch {
+pub(super) fn committed_start() -> Epoch {
   Epoch::from_tdb_duration(Duration::from_parts(0, 692_539_200_000_000_000))
 }
 fn committed_end() -> Epoch {
@@ -81,7 +81,7 @@ fn save_elements() -> KeplerianElements {
 
 /// One `jets[]` record of the save.
 #[derive(Clone, Copy, Debug)]
-struct SaveJet {
+pub(super) struct SaveJet {
   lat_deg: f32,
   lon_deg: f32,
   aperture_deg: f32,
@@ -92,7 +92,7 @@ struct SaveJet {
 }
 
 /// `jets[]` in save order
-const SAVE_JETS: [SaveJet; 4] = [
+pub(super) const SAVE_JETS: [SaveJet; 4] = [
   SaveJet {
     lat_deg: -54.0,
     lon_deg: 0.0,
@@ -132,7 +132,7 @@ const SAVE_JETS: [SaveJet; 4] = [
 ];
 
 /// The DTO the UI sends for `jet` (the model's grain / activity values copied into the record).
-fn save_dto(jet: &SaveJet, emission_start_us: i64) -> ParticleSystemDTO {
+pub(super) fn save_dto(jet: &SaveJet, emission_start_us: i64) -> ParticleSystemDTO {
   let mut dto = ParticleSystemDTO {
     diametre_um: 30.0,
     density_gcm3: 0.8,
@@ -234,7 +234,7 @@ fn review_67p_spk_segment_bounds() {
 // shared GPU scene recipe
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn load_almanac_files(ctx: &SimulationContext, spk: &str) {
+pub(super) fn load_almanac_files(ctx: &SimulationContext, spk: &str) {
   let mut logic_state = ctx.logic_state.write();
   for f in [
     "../../assets/planets/pck00011.pca",
@@ -250,7 +250,7 @@ fn load_almanac_files(ctx: &SimulationContext, spk: &str) {
 /// cartesian cache (as the template does). Waits for the comet commit by polling the scene (no
 /// global external-state callback: it is shared with the other test modules). Returns
 /// `(scene_id, comet_body)`.
-fn committed_scene(ctx: &SimulationContext) -> (u64, crate::scene::EntityId) {
+pub(super) fn committed_scene(ctx: &SimulationContext) -> (u64, crate::scene::EntityId) {
   let (start, end) = (committed_start(), committed_end());
   let scene_id = ctx
     .create_empty_scene2(false, start, end)
@@ -321,7 +321,7 @@ fn committed_scene(ctx: &SimulationContext) -> (u64, crate::scene::EntityId) {
 /// `avkSimulationContext_addParticleSystem` (cdylib `ffi.rs`), line by line: the jet entity
 /// under the comet body, its transform, the direction line, `from_dto`, the 30 d TTL and the
 /// ignition resolved against the scene's clock. Returns the jet entity or the error verbatim.
-fn add_particle_system(
+pub(super) fn add_particle_system(
   ctx: &SimulationContext,
   scene_id: u64,
   dto: &ParticleSystemDTO,
@@ -406,7 +406,7 @@ fn particle_system_count(ctx: &SimulationContext, scene_id: u64) -> usize {
   n
 }
 
-fn wait_caught_up(ctx: &SimulationContext, scene_id: u64) -> Vec<DustTierStats> {
+pub(super) fn wait_caught_up(ctx: &SimulationContext, scene_id: u64) -> Vec<DustTierStats> {
   let t0 = std::time::Instant::now();
   loop {
     let busy = ctx

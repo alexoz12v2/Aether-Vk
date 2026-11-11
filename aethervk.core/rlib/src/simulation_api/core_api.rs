@@ -131,6 +131,19 @@ impl SimulationContext {
     height: u32,
     window_info: crate::gpu::OpaqueNativeHandleInfo,
   ) -> EngineResult<PresentationEngineHandle> {
+    self.create_presentation_engine_windowed_with_flags(scene_id, width, height, window_info, 0)
+  }
+
+  /// [`Self::create_presentation_engine_windowed`] with creation `flags`
+  /// (`gpu::PRESENTATION_ENGINE_FLAG_*`; unknown bits are ignored).
+  pub fn create_presentation_engine_windowed_with_flags(
+    &self,
+    scene_id: u64,
+    width: u32,
+    height: u32,
+    window_info: crate::gpu::OpaqueNativeHandleInfo,
+    flags: u32,
+  ) -> EngineResult<PresentationEngineHandle> {
     let scene_ctx = expect_scene!(
       self.get_scene(scene_id),
       "scene_api:create_presentation_engine"
@@ -143,12 +156,18 @@ impl SimulationContext {
         ty: gpu::PresentationEngineType::Window,
         window_info,
         buffer_count: 3,
+        low_latency: flags & gpu::PRESENTATION_ENGINE_FLAG_LOW_LATENCY != 0,
       };
       let h = render_device.create_presentation_engine(&params)?;
       render_device.init_archetypes(h)?;
       let read_scene = scene_ctx.read();
       let mut presentation_engines = read_scene.presentation_engines.write();
-      if presentation_engines.insert(h, crate::simulation_api::structs::PresentationEngineData { is_windowless: false, camera_entity: None, }, ).is_none() {
+      let pe_data = crate::simulation_api::structs::PresentationEngineData::new(false);
+      if flags & gpu::PRESENTATION_ENGINE_FLAG_START_INACTIVE != 0 {
+        // paused before the frame loop can see it: inserted under the same write lock
+        pe_data.active.store(false, core::sync::atomic::Ordering::Release);
+      }
+      if presentation_engines.insert(h, pe_data).is_none() {
         Ok(h)
       } else {
         if let Err(e) = render_device.destroy_presentation_engine(h) {
@@ -274,10 +293,7 @@ impl SimulationContext {
       if presentation_engines
         .insert(
           h,
-          crate::simulation_api::structs::PresentationEngineData {
-            is_windowless: true,
-            camera_entity: None,
-          },
+          crate::simulation_api::structs::PresentationEngineData::new(true),
         )
         .is_none()
       {
@@ -378,10 +394,91 @@ impl SimulationContext {
     self.with_device(|render_device| render_device.process_main_thread_cleanup_queue())?;
 
     if let Some(camera_internal_id) = camera_to_remove {
-      let write_scene = scene_ctx.write();
+      let mut write_scene = scene_ctx.write();
+      // an Earth observer that posed this camera goes with it
+      write_scene.earth_observers.remove(camera_internal_id);
       write_scene.scene.remove_entity(camera_internal_id);
     }
     retired
+  }
+
+  /// Pauses (`active = false`) or resumes presentation engine `handle` of `scene_id`. Paused, the
+  /// logic thread builds no frame for it and the render thread neither acquires nor presents it
+  /// (a frame already queued is dropped; one already being recorded completes). The engine, its
+  /// swapchain and its camera stay. On resume the next frame acquires again: a swapchain that
+  /// went stale meanwhile (window resized or remapped) answers OUT_OF_DATE / SUBOPTIMAL and is
+  /// recreated by that acquire, as for any resize. False when the scene or the engine is missing.
+  pub fn set_viewport_active(
+    &self,
+    scene_id: u64,
+    handle: PresentationEngineHandle,
+    active: bool,
+  ) -> bool {
+    let Some(scene_ctx) = self.get_scene(scene_id) else {
+      return false;
+    };
+    let read_scene = scene_ctx.read();
+    let presentation_engines = read_scene.presentation_engines.read();
+    match presentation_engines.get(&handle) {
+      Some(pe_data) => {
+        pe_data.active.store(active, core::sync::atomic::Ordering::Release);
+        true
+      }
+      None => false,
+    }
+  }
+
+  /// Caps the frame rate of presentation engine `handle` of `scene_id`: the logic thread builds a
+  /// frame for it at most once every `interval_us` µs of wall time (0 = every display slot, the
+  /// default). The other views are unaffected. False when the scene or the engine is missing.
+  pub fn set_viewport_min_frame_interval(
+    &self,
+    scene_id: u64,
+    handle: PresentationEngineHandle,
+    interval_us: u64,
+  ) -> bool {
+    let Some(scene_ctx) = self.get_scene(scene_id) else {
+      return false;
+    };
+    let read_scene = scene_ctx.read();
+    let presentation_engines = read_scene.presentation_engines.read();
+    match presentation_engines.get(&handle) {
+      Some(pe_data) => {
+        pe_data
+          .min_frame_interval_us
+          .store(interval_us, core::sync::atomic::Ordering::Release);
+        true
+      }
+      None => false,
+    }
+  }
+
+  /// Whether presentation engine `handle` of `scene_id` is active ([`Self::set_viewport_active`]);
+  /// `None` when the scene or the engine is missing.
+  pub fn viewport_active(&self, scene_id: u64, handle: PresentationEngineHandle) -> Option<bool> {
+    let scene_ctx = self.get_scene(scene_id)?;
+    let read_scene = scene_ctx.read();
+    let presentation_engines = read_scene.presentation_engines.read();
+    presentation_engines
+      .get(&handle)
+      .map(|d| d.active.load(core::sync::atomic::Ordering::Acquire))
+  }
+
+  /// Frames of presentation engine `handle` (of any scene) that the render thread recorded,
+  /// submitted and passed to `present` since the engine was created (windowless engines: frames
+  /// submitted). 0 for an unknown engine.
+  pub fn viewport_frame_count(&self, handle: PresentationEngineHandle) -> u64 {
+    let scenes = self.scenes.read();
+    let ids: alloc::vec::Vec<u64> = scenes.keys().copied().collect();
+    for id in ids {
+      if let Some(scene_ctx) = scenes.get_scene(id) {
+        let read_scene = scene_ctx.read();
+        if let Some(d) = read_scene.presentation_engines.read().get(&handle) {
+          return d.frames_presented.load(core::sync::atomic::Ordering::Acquire);
+        }
+      }
+    }
+    0
   }
 
   /// Hands presentation engine `handle` to the render thread for destruction and waits until it

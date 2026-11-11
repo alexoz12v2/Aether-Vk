@@ -69,6 +69,31 @@ pub(super) enum PresentationState {
   Windowless(WindowlessPresentationState),
 }
 
+/// The present mode of a windowed swapchain among the modes the surface `supported`:
+/// - `low_latency`: MAILBOX, else IMMEDIATE, else FIFO (the newest finished frame reaches the
+///   screen without queueing behind older ones; tearing is accepted before a queue is);
+/// - otherwise MAILBOX with `vsync`, IMMEDIATE without, else FIFO.
+///
+/// FIFO is the one mode every surface supports: it is the answer whatever the list holds.
+pub fn choose_present_mode(
+  supported: &[vk::PresentModeKHR],
+  vsync: bool,
+  low_latency: bool,
+) -> vk::PresentModeKHR {
+  let preference: &[vk::PresentModeKHR] = if low_latency {
+    &[vk::PresentModeKHR::MAILBOX, vk::PresentModeKHR::IMMEDIATE]
+  } else if vsync {
+    &[vk::PresentModeKHR::MAILBOX]
+  } else {
+    &[vk::PresentModeKHR::IMMEDIATE]
+  };
+  preference
+    .iter()
+    .copied()
+    .find(|mode| supported.contains(mode))
+    .unwrap_or(vk::PresentModeKHR::FIFO)
+}
+
 pub(super) struct WindowedPresentationState {
   surface_instance: ash::khr::surface::Instance,
   surface_capabilities: ash::khr::get_surface_capabilities2::Instance,
@@ -89,6 +114,8 @@ pub(super) struct WindowedPresentationState {
   pre_transform: vk::SurfaceTransformFlagsKHR,
   surface_format: vk::SurfaceFormatKHR,
   vsync: bool,
+  /// present mode preference MAILBOX > IMMEDIATE > FIFO ([`choose_present_mode`])
+  low_latency: bool,
   pub native_handle: OpaqueNativeHandleInfo,
 
   swapchain_generation: u64,
@@ -729,6 +756,7 @@ impl WindowedPresentationState {
       surface_format: vk::SurfaceFormatKHR::default(),
       pre_transform: vk::SurfaceTransformFlagsKHR::IDENTITY,
       vsync: params.vsync,
+      low_latency: params.low_latency,
       native_handle,
       swapchain_generation: 0,
       physical_device,
@@ -1283,16 +1311,7 @@ impl WindowedPresentationState {
         .surface_instance
         .get_physical_device_surface_present_modes(physical_device.get(), self.surface.get())
     }?;
-    let desired_present_mode = if self.vsync {
-      vk::PresentModeKHR::MAILBOX
-    } else {
-      vk::PresentModeKHR::IMMEDIATE
-    };
-    if present_modes.contains(&desired_present_mode) {
-      Ok(desired_present_mode)
-    } else {
-      Ok(vk::PresentModeKHR::FIFO)
-    }
+    Ok(choose_present_mode(&present_modes, self.vsync, self.low_latency))
   }
 
   fn create_surface(
@@ -1544,8 +1563,40 @@ impl WindowedPresentationState {
           swapchain_generation: self.swapchain_generation,
         })
       }
-      _ => {
+      // the device is gone or out of memory: the caller's business
+      vk::Result::ERROR_DEVICE_LOST
+      | vk::Result::ERROR_OUT_OF_HOST_MEMORY
+      | vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => {
         return Err(vk_result.into());
+      }
+      _ => {
+        // Any other failure (ERROR_SURFACE_LOST_KHR, ERROR_UNKNOWN, NOT_READY, ...) leaves no
+        // image acquired and nothing of our state changed. It used to be returned as an error
+        // the render loop dropped without a word, every frame, for as long as the driver kept
+        // answering it: the view stayed black with nothing in the log. Say it (first time, then
+        // every 300th) and rebuild the swapchain as for OUT_OF_DATE, on the first failure and
+        // then on every 30th: a surface that keeps failing is not rebuilt at frame rate.
+        static OTHER_ACQUIRE_FAILURES: core::sync::atomic::AtomicU64 =
+          core::sync::atomic::AtomicU64::new(0);
+        let n = OTHER_ACQUIRE_FAILURES.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        if n % 300 == 0 {
+          aethervk_oshal_rlib::log!(
+            "[swapchain] vkAcquireNextImageKHR failed with {:?} on a {}x{} swapchain ({} such failures): the frame is skipped, the swapchain rebuilt",
+            vk_result,
+            self.width,
+            self.height,
+            n + 1
+          );
+        }
+        if n % 30 == 0 {
+          self.pending_resize = Some((self.width, self.height));
+        }
+        Ok(AcquireResult {
+          image_index: u32::MAX,
+          status: SwapchainStatus::NeedsRecreation,
+          frame_index: self.current_frame as u64,
+          swapchain_generation: self.swapchain_generation,
+        })
       }
     }
   }

@@ -37,6 +37,7 @@ public sealed class AppSaveFileHost : ISaveFileHost
   private readonly ICometMessenger _messenger;
   private readonly BreadcrumbService _breadcrumbs;
   private readonly TimeScaleService _timeScale;
+  private readonly UiLayoutService? _uiLayout;
   // asset ids are never reused: their content hashes are fetched once
   private readonly ConcurrentDictionary<ulong, ulong> _hashes = new();
 
@@ -53,9 +54,11 @@ public sealed class AppSaveFileHost : ISaveFileHost
     ICometMessenger messenger,
     BreadcrumbService breadcrumbs,
     ISchedulerProvider schedulers,
-    TimeScaleService? timeScale = null)
+    TimeScaleService? timeScale = null,
+    UiLayoutService? uiLayout = null)
   {
     _runtime = runtime;
+    _uiLayout = uiLayout;
     _timeScale = timeScale ?? TimeScaleService.TdbOnly();
     _cometSessions = cometSessions;
     _timelineSessions = timelineSessions;
@@ -151,7 +154,8 @@ public sealed class AppSaveFileHost : ISaveFileHost
       liveAssets,
       appearance,
       // each centre also against the viewport, so the save reopens over it on any monitor
-      [.. _billboards.Current.Select(b => SaveIndexMapping.ToDto(b, _billboards.ViewportOffsetOf(b)))]);
+      [.. _billboards.Current.Select(b => SaveIndexMapping.ToDto(b, _billboards.ViewportOffsetOf(b)))],
+      _uiLayout is null ? null : UiLayoutService.ToDto(_uiLayout.Current));
   }
 
   private LiveAsset ToLive(ImportedAsset a, Func<ulong, string?> keyOf)
@@ -406,6 +410,8 @@ public sealed class AppSaveFileHost : ISaveFileHost
 
   public void ApplyBillboards(IReadOnlyList<BillboardDto> billboards) =>
     _billboards.RestoreOverViewport(billboards.Select(b => (SaveIndexMapping.FromDto(b), SaveIndexMapping.ViewportOffsetOf(b))));
+
+  public void ApplyUiLayout(string? layout) => _uiLayout?.Set(UiLayoutService.FromDto(layout));
 
   public void SyncClock()
   {

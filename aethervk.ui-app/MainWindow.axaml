@@ -134,9 +134,20 @@
                    VerticalAlignment="Center"/>
       </StackPanel>
     </Border>
-    <Border Grid.Row="2">
-      <views:DockingManagerView DataContext="{Binding DockingManager}"/>
-    </Border>
+    <!-- Compact panel | splitter | docking area, always these three columns. The docking area
+         never changes column or parent: it hosts the native 3D viewport, and re-parenting that
+         destroys its window. The code-behind sets the widths: 3* / 7* in the compact layout,
+         0 / 1* (panel and splitter hidden) in the classic one. -->
+    <Grid Grid.Row="2" x:Name="WorkArea" ColumnDefinitions="0,0,*">
+      <views:CompactPanelView x:Name="CompactPanelHost" Grid.Column="0" IsVisible="False"
+                              DataContext="{Binding CompactPanel}" />
+      <GridSplitter x:Name="CompactSplitter" Grid.Column="1" Width="6" IsVisible="False"
+                    ResizeDirection="Columns" ResizeBehavior="PreviousAndNext"
+                    Background="{DynamicResource Bg.Outline}" />
+      <Border Grid.Column="2">
+        <views:DockingManagerView DataContext="{Binding DockingManager}"/>
+      </Border>
+    </Grid>
 
 
   </Grid>

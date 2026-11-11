@@ -32,7 +32,8 @@ public sealed record LiveComet(string SpkSourcePath, SpkDto Spk);
 
 /// <summary>
 /// The live application state the index stores, captured at once on the UI thread. Asset keys
-/// (appearance, billboards) are the live keys of <see cref="Assets"/>.
+/// (appearance, billboards) are the live keys of <see cref="Assets"/>. <see cref="UiLayout"/> is the
+/// index value of the UI layout (<see cref="UiLayoutService.ToDto"/>: null for classic).
 /// </summary>
 public sealed record SaveSnapshot(
   TimelineDto Timeline,
@@ -42,7 +43,8 @@ public sealed record SaveSnapshot(
   IReadOnlyList<ViewportDto> Viewports,
   IReadOnlyList<LiveAsset> Assets,
   CometAppearanceIndexDto? Appearance,
-  IReadOnlyList<BillboardDto> Billboards);
+  IReadOnlyList<BillboardDto> Billboards,
+  string? UiLayout = null);
 
 /// <summary>
 /// Everything <see cref="SaveFileService"/> needs from the running application. The app adapter
@@ -106,6 +108,10 @@ public interface ISaveFileHost
   void ApplyViewports(IReadOnlyList<ViewportDto> viewports);
 
   void ApplyBillboards(IReadOnlyList<BillboardDto> billboards);
+
+  /// <summary>Switches the UI layout to the index value <paramref name="layout"/>
+  /// (<see cref="UiLayoutService.FromDto"/>: absent or unknown is classic).</summary>
+  void ApplyUiLayout(string? layout);
 
   /// <summary>Shows the engine's clock (where a restore or seek left it) on the timeline: its
   /// progress and the viewport's date label.</summary>

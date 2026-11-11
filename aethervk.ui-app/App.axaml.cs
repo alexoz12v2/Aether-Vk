@@ -141,6 +141,10 @@ public partial class App : Application
             var preferences = ServiceProviderServiceExtensions.GetRequiredService<PreferencesService>(Host!.Services);
             preferences.Load();
             _ = inputRegistry;
+            // the session starts in the last chosen UI layout, before the main window is built and
+            // before the save service's first dirty check takes the startup baseline
+            ServiceProviderServiceExtensions.GetRequiredService<UiLayoutService>(Host!.Services)
+              .Set(preferences.LastUiLayout);
             // the interface language chosen in Settings (English when none); AETHERVK_UI_CULTURE,
             // when it names a supported language, wins for this run only (documentation shots); an
             // e2e run is English unless it names one (its text lookups are English, whatever this
@@ -297,14 +301,13 @@ public partial class App : Application
   }
 
   /// <summary>
-  /// Removes the viewport's presentation engine while its window still exists: presenting to a
-  /// destroyed window deadlocked the render thread at shutdown. Idempotent.
+  /// Removes every viewport's presentation engine (the nucleus mini-view first, then the main one)
+  /// while their windows still exist: presenting to a destroyed window deadlocked the render thread
+  /// at shutdown. Idempotent.
   /// </summary>
   private void DetachViewport()
   {
-    var runtime = Host?.Services.GetService<INativeRuntimeService>();
-    if (runtime?.PresentationEngineId is ulong pe)
-      runtime.RemoveViewport(pe);
+    Host?.Services.GetService<INativeRuntimeService>()?.RemoveAllViewports();
   }
 }
 
@@ -324,11 +327,12 @@ public class MockNativeRuntimeService : INativeRuntimeService
     Func<CNativeWindowHandle>? nativeHandleProvider,
     uint handleType,
     out ulong presentationEngineId,
-    out ulong cameraEntityId
+    out ulong cameraEntityId,
+    ViewportRole role = ViewportRole.Main
   )
   {
-    presentationEngineId = 1;
-    cameraEntityId = 2;
+    presentationEngineId = role == ViewportRole.Main ? 1UL : 3UL;
+    cameraEntityId = role == ViewportRole.Main ? 2UL : 4UL;
     return true;
   }
 
@@ -373,6 +377,11 @@ public class MockNativeRuntimeService : INativeRuntimeService
 
   public bool SetCometIndicatorVisible(bool visible) => true;
   public bool SetCameraRenderMask(ulong cameraEntityId, uint mask) => true;
+  public bool SetCameraNoDust(ulong cameraEntityId, bool noDust) => true;
+  public bool SetCameraNoUiLayer(ulong cameraEntityId, bool noUiLayer) => true;
+  public bool SetViewportActive(ulong presentationEngineId, bool active) => true;
+  public bool SetViewportMinFrameInterval(ulong presentationEngineId, ulong intervalUs) => true;
+  public ulong ViewportFrameCount(ulong presentationEngineId) => 0UL;
   public bool SetCameraShading(ulong cameraEntityId, uint flags) => true;
   public bool SetCameraExposure(ulong cameraEntityId, float factor) => true;
   public CometScreenPosition? GetCometScreenPosition(ulong cameraEntityId, uint widthPx, uint heightPx) => null;
@@ -613,6 +622,8 @@ public class MockNativeRuntimeService : INativeRuntimeService
   // ── Cached State ──────────────────────────────────────────────────────────
   public ulong? CameraEntityId => 2UL;
   public ulong? PresentationEngineId => 1UL;
+  public ulong? NucleusMiniPresentationEngineId => null;
+  public ulong? NucleusMiniCameraEntityId => null;
   public ulong? CometEntityId => null;
   public ulong? EarthEntityId => null;
 

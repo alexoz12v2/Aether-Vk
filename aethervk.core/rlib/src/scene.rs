@@ -833,6 +833,19 @@ pub const CAMERA_SHADING_LAMBERT_DARK: u32 = 1 << 2;
 pub struct CameraShadingComponent(pub u32);
 impl Component for CameraShadingComponent {}
 
+/// [`CameraViewFlagsComponent`] bit: the camera draws no dust. Its view builds no dust draw calls,
+/// so its presentation engine allocates no dust view, no cadence state and records no dust pass.
+pub const CAMERA_VIEW_NO_DUST: u32 = 1 << 0;
+/// [`CameraViewFlagsComponent`] bit: the camera draws no UI layer (the engine's UI and text
+/// batches: labels, leader lines, trajectory indicators, screen-space UI).
+pub const CAMERA_VIEW_NO_UI_LAYER: u32 = 1 << 1;
+
+/// What a camera leaves out of its view (`CAMERA_VIEW_*` bits). A camera without it draws
+/// everything. Decided per camera, so two viewports of one scene can disagree.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct CameraViewFlagsComponent(pub u32);
+impl Component for CameraViewFlagsComponent {}
+
 /// Linear factor a camera multiplies the sunlight on meshes by (both shadings; ambient fill
 /// unchanged). A camera without it uses 1.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -1765,6 +1778,7 @@ impl Scene {
     self.register_component::<CameraRenderMaskComponent>(&[]);
     self.register_component::<CameraShadingComponent>(&[]);
     self.register_component::<CameraExposureComponent>(&[]);
+    self.register_component::<CameraViewFlagsComponent>(&[]);
     self.register_component::<SphereGizmoPartsComponent>(&[]);
 
     // TODO remove

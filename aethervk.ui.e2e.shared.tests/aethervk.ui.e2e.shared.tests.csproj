@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The e2e suites' shared probe math (aethervk.ui.e2e.shared: frame metrics, point → pixel
+       scaling, the PNG codec), tested without a driver or a display: runs on every platform. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <AssemblyName>AetherVk.UI.E2E.Shared.Tests</AssemblyName>
+    <RootNamespace>AetherVk.UI.E2E.Shared.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="xunit" Version="2.5.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- only the driver-free parts: the scenarios need a running app -->
+    <Compile Include="..\aethervk.ui.e2e.shared\E2ERect.cs" Link="Shared\E2ERect.cs" />
+    <Compile Include="..\aethervk.ui.e2e.shared\ScreenScale.cs" Link="Shared\ScreenScale.cs" />
+    <Compile Include="..\aethervk.ui.e2e.shared\FrameMetricsCore.cs" Link="Shared\FrameMetricsCore.cs" />
+    <Compile Include="..\aethervk.ui.e2e.shared\PngCodec.cs" Link="Shared\PngCodec.cs" />
+    <Compile Include="..\aethervk.ui-logic\Automation\CompactAutomationIds.cs" Link="Shared\CompactAutomationIds.cs" />
+  </ItemGroup>
+</Project>

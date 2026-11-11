@@ -313,6 +313,138 @@ pub unsafe extern "C" fn avkSimulationContext_addViewport(
   out_presentation_engine: *mut u64,
   out_camera_entity: *mut u64,
 ) -> bool {
+  unsafe {
+    add_viewport(
+      ctx,
+      scene_id,
+      width,
+      height,
+      name,
+      handle_type,
+      0,
+      out_presentation_engine,
+      out_camera_entity,
+    )
+  }
+}
+
+/// `avkSimulationContext_addViewport` with creation `flags`:
+/// - bit 0 (`gpu::PRESENTATION_ENGINE_FLAG_LOW_LATENCY`): a windowed viewport presents with the
+///   least-latency mode its surface offers (MAILBOX, else IMMEDIATE, else FIFO).
+/// - bit 1 (`gpu::PRESENTATION_ENGINE_FLAG_START_INACTIVE`): a windowed viewport starts paused,
+///   as after `avkSimulationContext_setViewportActive(.., false)`: no frame is built, acquired or
+///   presented for it until it is resumed, so its camera can be configured first.
+///
+/// Unknown bits are ignored; windowless viewports ignore every flag. With `flags == 0` it is
+/// `avkSimulationContext_addViewport`.
+///
+/// # Safety
+/// FFI Contract: as `avkSimulationContext_addViewport`
+#[unsafe(no_mangle)]
+#[allow(non_snake_case, clippy::too_many_arguments)]
+pub unsafe extern "C" fn avkSimulationContext_addViewportEx(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  width: u32,
+  height: u32,
+  name: *const c_char,
+  handle_type: u32,
+  flags: u32,
+  out_presentation_engine: *mut u64,
+  out_camera_entity: *mut u64,
+) -> bool {
+  unsafe {
+    add_viewport(
+      ctx,
+      scene_id,
+      width,
+      height,
+      name,
+      handle_type,
+      flags,
+      out_presentation_engine,
+      out_camera_entity,
+    )
+  }
+}
+
+/// Pauses (`active == false`) or resumes viewport `handle` of `scene_id`
+/// (`SimulationContext::set_viewport_active`): paused, no frame is built, acquired or presented
+/// for it; the viewport, its window surface and its camera stay. Resuming recreates a swapchain
+/// that went stale meanwhile on its first frame. Returns false when the scene or the viewport is
+/// missing.
+///
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setViewportActive(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  handle: u64,
+  active: bool,
+) -> bool {
+  if ctx.is_null() || handle == 0 {
+    return false;
+  }
+  unsafe { &*ctx }.set_viewport_active(scene_id, gpu::PresentationEngineHandle(handle), active)
+}
+
+/// Caps the frame rate of viewport `handle` of `scene_id`
+/// (`SimulationContext::set_viewport_min_frame_interval`): a frame at most every `interval_us`
+/// µs, 0 = no cap (the default). Returns false when the scene or the viewport is missing.
+///
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setViewportMinFrameInterval(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  handle: u64,
+  interval_us: u64,
+) -> bool {
+  if ctx.is_null() || handle == 0 {
+    return false;
+  }
+  unsafe { &*ctx }.set_viewport_min_frame_interval(
+    scene_id,
+    gpu::PresentationEngineHandle(handle),
+    interval_us,
+  )
+}
+
+/// Frames of viewport `handle` presented since it was created
+/// (`SimulationContext::viewport_frame_count`); 0 for an unknown viewport.
+///
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_viewportFrameCount(
+  ctx: *mut SimulationContext,
+  handle: u64,
+) -> u64 {
+  if ctx.is_null() || handle == 0 {
+    return 0;
+  }
+  unsafe { &*ctx }.viewport_frame_count(gpu::PresentationEngineHandle(handle))
+}
+
+/// # Safety
+/// FFI Contract: see `avkSimulationContext_addViewport`
+#[allow(clippy::too_many_arguments)]
+unsafe fn add_viewport(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  width: u32,
+  height: u32,
+  name: *const c_char,
+  handle_type: u32,
+  flags: u32,
+  out_presentation_engine: *mut u64,
+  out_camera_entity: *mut u64,
+) -> bool {
   oshal::prof_zone!("ffi: addViewport");
   // Null check
   if ctx.is_null() {
@@ -363,7 +495,13 @@ pub unsafe extern "C" fn avkSimulationContext_addViewport(
           handle_type: ht,
         };
         ctx_ref
-          .create_presentation_engine_windowed(scene_id, width, height, window_info)
+          .create_presentation_engine_windowed_with_flags(
+            scene_id,
+            width,
+            height,
+            window_info,
+            flags,
+          )
           .and_then(|pe_id| {
             ctx_ref
               .add_perspective_camera(
@@ -643,6 +781,58 @@ pub unsafe extern "C" fn avkSimulationContext_setCameraRenderMask(
   ctx_ref.set_camera_render_mask(scene_id, camera_entity, mask)
 }
 
+/// Sets whether the camera `camera_entity` draws no dust (`CAMERA_VIEW_NO_DUST`): with
+/// `no_dust`, its viewport builds no dust draw call, allocates no per-view dust state and records
+/// no dust pass; the other viewports are unaffected. Returns false when the scene is missing or
+/// the entity is not a camera.
+///
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setCameraNoDust(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  camera_entity: u64,
+  no_dust: bool,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  unsafe { &*ctx }.set_camera_view_flags(
+    scene_id,
+    camera_entity,
+    aethervk_core_rlib::scene::CAMERA_VIEW_NO_DUST,
+    no_dust,
+  )
+}
+
+/// Sets whether the camera `camera_entity` draws no UI layer (`CAMERA_VIEW_NO_UI_LAYER`): with
+/// `no_ui_layer`, its viewport draws neither the engine's UI batch nor its text batch (labels,
+/// leader lines, trajectory indicators, screen-space UI). Returns false when the scene is missing
+/// or the entity is not a camera.
+///
+/// # Safety
+/// FFI Contract
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_setCameraNoUiLayer(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  camera_entity: u64,
+  no_ui_layer: bool,
+) -> bool {
+  if ctx.is_null() {
+    return false;
+  }
+  unsafe { &*ctx }.set_camera_view_flags(
+    scene_id,
+    camera_entity,
+    aethervk_core_rlib::scene::CAMERA_VIEW_NO_UI_LAYER,
+    no_ui_layer,
+  )
+}
+
 /// Where the Earth observer camera `camera_entity` draws its comet on a `width_px` × `height_px`
 /// (physical px) viewport: writes `x_px`/`y_px` from the top-left corner when projectable.
 /// Returns 1 on screen, 0 projectable but outside the viewport, −1 unavailable (no observer comet,
@@ -743,7 +933,8 @@ pub unsafe extern "C" fn avkSimulationContext_setSphereGizmoParts(
 /// Sets the native Earth observer (camera posed in every logic commit, see
 /// `simulation_api::earth_observer`): `mode` 0 Free, 2 CometTracking, 4 SunTracking (C#
 /// `EarthObserverOrientationMode`; the retired lock-in values 1 / 3 read as Free), `u32::MAX`
-/// clears it (C# poses the camera). `look` points to 4 f64 (xyzw): the Free inertial world look.
+/// clears the observer of `camera_id` (C# poses that camera; the observers of other cameras stay,
+/// they are per camera). `look` points to 4 f64 (xyzw): the Free inertial world look.
 /// The camera is at the Earth's centre, or with `topocentric` at geodetic `lat_deg` / `lon_deg`
 /// (east positive) on the WGS84 ellipsoid, `elev_m` metres above it; the Earth's rotation never
 /// turns the look. With a comet, the comet and its dust are drawn at the light-time retarded epoch.
@@ -799,7 +990,8 @@ pub unsafe extern "C" fn avkSimulationContext_setEarthObserver(
 /// Sets the native "nucleus from Earth" view (reviewer feedback #17): the camera `distance_au`
 /// short of the astrometric comet on the Earth → comet line, J2000 celestial north up, re-posed in
 /// every commit (`SimulationContext::set_nucleus_view_from_earth`). Cleared like the Earth
-/// observer (`avkSimulationContext_setEarthObserver` with mode `u32::MAX`). Returns false when the
+/// observer (`avkSimulationContext_setEarthObserver` with mode `u32::MAX` and this camera).
+/// Observers are per camera: setting or clearing this camera's leaves every other camera's. Returns false when the
 /// scene, the camera, the Earth or the comet is missing, or for a non-positive distance.
 ///
 /// # Safety
@@ -851,6 +1043,37 @@ pub unsafe extern "C" fn avkSimulationContext_earthObserverStatus(
     return false;
   }
   let status = match unsafe { &*ctx }.earth_observer_status(scene_id) {
+    Some((mode, err, elev)) => CEarthObserverStatus {
+      active: 1,
+      mode: mode as u32,
+      aim_error_rad: err,
+      target_elevation_rad: elev,
+    },
+    None => CEarthObserverStatus::default(),
+  };
+  unsafe { out.write(status) };
+  true
+}
+
+/// Writes the native Earth observer status of the camera `camera_id` of `scene_id` into `out`
+/// (`active` 0 when no observer poses that camera): the per-camera form of
+/// `avkSimulationContext_earthObserverStatus`, which reports the main viewport's. Returns false
+/// when `out` is null.
+///
+/// # Safety
+/// FFI Contract: `out` points to one writable `CEarthObserverStatus`
+#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn avkSimulationContext_earthObserverStatusOf(
+  ctx: *mut SimulationContext,
+  scene_id: u64,
+  camera_id: u64,
+  out: *mut CEarthObserverStatus,
+) -> bool {
+  if ctx.is_null() || out.is_null() {
+    return false;
+  }
+  let status = match unsafe { &*ctx }.earth_observer_status_of(scene_id, camera_id) {
     Some((mode, err, elev)) => CEarthObserverStatus {
       active: 1,
       mode: mode as u32,

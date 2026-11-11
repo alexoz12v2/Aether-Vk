@@ -1723,7 +1723,20 @@ pub struct PresentationEngineParams {
   pub window_info: OpaqueNativeHandleInfo,
   pub ty: PresentationEngineType,
   pub buffer_count: u32,
+  /// windowed engines: prefer the present mode with the least latency the surface offers
+  /// (MAILBOX, then IMMEDIATE, then FIFO) whatever `vsync` says
+  /// (`PRESENTATION_ENGINE_FLAG_LOW_LATENCY`)
+  pub low_latency: bool,
 }
+
+/// Presentation engine creation flag: low-latency present (see
+/// [`PresentationEngineParams::low_latency`]). Windowless engines ignore it.
+pub const PRESENTATION_ENGINE_FLAG_LOW_LATENCY: u32 = 1 << 0;
+
+/// Presentation engine creation flag: the engine starts paused (no frame built, acquired or
+/// presented) until `SimulationContext::set_viewport_active(.., true)`, so its camera can be
+/// configured before its first frame.
+pub const PRESENTATION_ENGINE_FLAG_START_INACTIVE: u32 = 1 << 1;
 
 impl PresentationEngineParams {
   pub fn windowless(width: u32, height: u32) -> Self {
@@ -1738,6 +1751,7 @@ impl PresentationEngineParams {
         handle_type: NativeHandleType::Unknown,
       },
       buffer_count: 3,
+      low_latency: false,
     }
   }
 }

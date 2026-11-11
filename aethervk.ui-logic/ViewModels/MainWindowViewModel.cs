@@ -27,7 +27,12 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
   private readonly IUnsavedChangesPrompt? _unsavedPrompt;
   private readonly ImageExportService? _imageExport;
   private readonly ITranslationService? _translation;
+  private readonly UiLayoutService? _uiLayout;
   private readonly IDisposable? _titleTimer;
+  private readonly IDisposable? _cultureSubscription;
+
+  /// <summary>The radio group of the Layout menu's entries.</summary>
+  public const string UiLayoutGroupName = "UiLayout";
 
   public const string AppName = "AetherVk";
   public const int RecentMenuSize = PreferencesFile.MaxRecentSaves;
@@ -92,9 +97,12 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     IUnsavedChangesPrompt? unsavedPrompt = null,
     ViewModeBarViewModel? modeBar = null,
     ImageExportService? imageExport = null,
-    ITranslationService? translation = null
+    ITranslationService? translation = null,
+    UiLayoutService? uiLayout = null,
+    INativeInputHandlerFactory? inputHandlerFactory = null
   )
   {
+    _uiLayout = uiLayout;
     ModeBar = modeBar;
     _imageExport = imageExport;
     _translation = translation;
@@ -116,6 +124,41 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
     BuildMenu();
 
+    // the compact layout's panel: its cards bind to the docking tree's own tab view models
+    var nucleusMini = new NucleusMiniViewModel(
+      runtimeService,
+      // the mini-view's native view: an engine and a camera, no main-viewport model behind it
+      pointer => new VulkanViewportControlViewModel(inputRouter, inputHandlerFactory!, runtimeService, null!)
+      {
+        Role = ViewportRole.NucleusMini,
+        MiniPointer = pointer,
+      },
+      translation,
+      preferences,
+      dispatcher);
+    CompactPanel = new CompactPanelViewModel(
+      EnsureLayoutTab,
+      nucleusMini,
+      modeBar,
+      ExportImageCommand,
+      new RelayCommand(() => SetLayout(UiLayout.Classic)),
+      translation,
+      dispatcher);
+
+    if (_uiLayout is not null)
+    {
+      _uiLayout.Changed += OnUiLayoutChanged;
+      if (_uiLayout.Current != UiLayout.Classic)
+        ApplyUiLayout(_uiLayout.Current);
+    }
+    if (_translation is not null)
+    {
+      // the first emission is the current culture, already read by BuildMenu
+      _cultureSubscription = System.Reactive.Linq.Observable
+        .Skip(_translation.CultureChanged, 1)
+        .Subscribe(_ => _dispatcher?.Dispatch(RefreshLayoutHeaders));
+    }
+
     if (_saveFiles is not null)
     {
       _saveFiles.Changed += () => _dispatcher?.Dispatch(RefreshFileState);
@@ -125,6 +168,27 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         .Subscribe(_ => _dispatcher?.Dispatch(RefreshTitle));
     }
     RefreshFileState();
+  }
+
+  /// <summary>The compact layout's panel (shown left of the docking area while
+  /// <see cref="IsCompactLayout"/>).</summary>
+  public CompactPanelViewModel CompactPanel { get; }
+
+  /// <summary>The docking tree's tab of <paramref name="tabType"/> (created parked when missing);
+  /// null without a docking tree or when the tab cannot be made.</summary>
+  private TabItemViewModel? EnsureLayoutTab(Type tabType)
+  {
+    if (DockingManager is not { } docking)
+      return null;
+    try
+    {
+      return docking.EnsureTab(tabType);
+    }
+    catch (InvalidOperationException e)
+    {
+      Console.WriteLine($"[MainWindowViewModel] compact panel: no {tabType.Name}: {e.Message}");
+      return null;
+    }
   }
 
   /// <summary>Whether closing the application should ask first.</summary>
@@ -153,6 +217,10 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
   {
     _disposed = true;
     _titleTimer?.Dispose();
+    _cultureSubscription?.Dispose();
+    if (_uiLayout is not null)
+      _uiLayout.Changed -= OnUiLayoutChanged;
+    CompactPanel.Dispose();
   }
 
   /// <summary>The open save's name: the <c>.avk</c> without its extension, else the folder's.</summary>
@@ -244,6 +312,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
   /// <summary>The last export's outcome, for the status line and tests.</summary>
   [ObservableProperty]
   private string? _exportStatus;
+
+  partial void OnExportStatusChanged(string? value) => CompactPanel.ExportStatus = value;
 
   /// <summary>
   /// File › Export image...: asks for a .png name and writes <c>name_model.png</c> (the 3D viewport
@@ -347,6 +417,119 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     editMenu.Items.Add(new MenuItemViewModel { Header = "Toggle Theme", Command = ToggleThemeCommand });
 
     MainMenu.Add(editMenu);
+
+    var current = _uiLayout?.Current ?? UiLayout.Classic;
+    _layoutMenu = new MenuItemViewModel();
+    _classicLayoutItem = new MenuItemViewModel
+    {
+      ToggleType = MenuToggle.Radio,
+      GroupName = UiLayoutGroupName,
+      IsChecked = current == UiLayout.Classic,
+      Command = new RelayCommand(() => SetLayout(UiLayout.Classic)),
+    };
+    _compactLayoutItem = new MenuItemViewModel
+    {
+      ToggleType = MenuToggle.Radio,
+      GroupName = UiLayoutGroupName,
+      IsChecked = current == UiLayout.Compact,
+      Command = new RelayCommand(() => SetLayout(UiLayout.Compact)),
+    };
+    _layoutMenu.Items.Add(_classicLayoutItem);
+    _layoutMenu.Items.Add(_compactLayoutItem);
+    RefreshLayoutHeaders();
+    MainMenu.Add(_layoutMenu);
+  }
+
+  private MenuItemViewModel? _layoutMenu;
+  private MenuItemViewModel? _classicLayoutItem;
+  private MenuItemViewModel? _compactLayoutItem;
+
+  /// <summary>Layout › Compact is shown: the docking area holds the 3D viewport only.</summary>
+  [ObservableProperty]
+  private bool _isCompactLayout;
+
+  /// <summary>Why the last layout switch was refused (null after a switch that went through).</summary>
+  [ObservableProperty]
+  private string? _layoutStatus;
+
+  /// <summary>The Layout menu's headers in the current language.</summary>
+  private void RefreshLayoutHeaders()
+  {
+    if (_layoutMenu is null) return;
+    _layoutMenu.Header = T("Menu_Layout", "Layout");
+    _classicLayoutItem!.Header = T("Menu_Layout_Classic", "Classic");
+    _compactLayoutItem!.Header = T("Menu_Layout_Compact", "Compact");
+  }
+
+  /// <summary>
+  /// Layout › Classic / Compact. Compact is refused (the radio stays on Classic and the status line
+  /// says why) when the docking area has no 3D viewport to show alone; otherwise the choice becomes
+  /// the current layout and the preferred one for the next start.
+  /// </summary>
+  [RelayCommand]
+  private void SetLayout(UiLayout layout)
+  {
+    if (layout == UiLayout.Compact && DockingManager is { } docking && !docking.CanEnterViewportOnly)
+    {
+      var why = T("Layout_CompactUnavailable", "Compact layout needs the 3D viewport tab to be visible.");
+      LayoutStatus = why;
+      _ = _breadcrumbService.ShowMessageAsync(T("Menu_Layout", "Layout"), why, default, 2);
+      // the menu checked the clicked entry before this ran: put the current one back
+      UpdateLayoutChecks(_uiLayout?.Current ?? (IsCompactLayout ? UiLayout.Compact : UiLayout.Classic));
+      return;
+    }
+    LayoutStatus = null;
+    if (_uiLayout is null)
+      ApplyUiLayout(layout);
+    else
+    {
+      _uiLayout.Set(layout);
+      // also when Set saw no change and raised nothing: the menu's own check may be stale
+      ApplyUiLayout(_uiLayout.Current);
+    }
+    _preferences?.SetLastUiLayout(layout);
+  }
+
+  private void OnUiLayoutChanged(object? sender, UiLayout layout)
+  {
+    if (_dispatcher is null || _dispatcher.CheckAccess())
+      ApplyUiLayout(layout);
+    else
+      _dispatcher.Dispatch(() => ApplyUiLayout(layout));
+  }
+
+  /// <summary>Shows <paramref name="layout"/>: the docking area's viewport-only mode and the radio entries.</summary>
+  private void ApplyUiLayout(UiLayout layout)
+  {
+    bool compact = layout == UiLayout.Compact;
+    bool refused = false;
+    // SetViewportOnly refuses (false) when there is no viewport to keep: stay Classic then
+    if (compact != IsCompactLayout && DockingManager is { } docking && !docking.SetViewportOnly(compact) && compact)
+    {
+      compact = false;
+      refused = true;
+    }
+    IsCompactLayout = compact;
+    if (compact)
+      CompactPanel.Activate();
+    else
+      CompactPanel.Deactivate();
+    UpdateLayoutChecks(compact ? UiLayout.Compact : UiLayout.Classic);
+    if (refused)
+    {
+      // a layout asked from elsewhere (an opened save, the preferences): say why, and leave the
+      // service at the layout that is shown
+      var why = T("Layout_CompactUnavailable", "Compact layout needs the 3D viewport tab to be visible.");
+      LayoutStatus = why;
+      _ = _breadcrumbService?.ShowMessageAsync(T("Menu_Layout", "Layout"), why, default, 2);
+      _uiLayout?.Set(UiLayout.Classic);
+    }
+  }
+
+  private void UpdateLayoutChecks(UiLayout layout)
+  {
+    if (_classicLayoutItem is not null) _classicLayoutItem.IsChecked = layout == UiLayout.Classic;
+    if (_compactLayoutItem is not null) _compactLayoutItem.IsChecked = layout == UiLayout.Compact;
   }
 
   [RelayCommand]

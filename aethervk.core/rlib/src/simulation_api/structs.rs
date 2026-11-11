@@ -354,7 +354,22 @@ pub struct SimulationThreads {
   /// Presentation engines the render thread is asked to destroy between two frame batches; the
   /// render thread polls its clone (see [`RetireRequests`]).
   pub retire_requests: RetireRequests,
+  /// Frame batches sent to the render thread and not finished yet, see [`RenderBatchesInFlight`].
+  pub render_batches_in_flight: RenderBatchesInFlight,
 }
+
+/// Frame batches (`RenderCommand::RenderFrames`) the logic thread has sent and the render thread
+/// has not finished: raised by the logic thread on each send, lowered by the render thread after
+/// each batch. A batch only says "render these views now" (each frame reads the scene as it is
+/// when recorded), so a queue of them buys nothing: the logic thread sends no new batch while
+/// [`MAX_RENDER_BATCHES_IN_FLIGHT`] are pending. Unbounded, a render thread slower than the
+/// display rate fell up to the channel's 128 batches behind: a view added meanwhile got its first
+/// frame only once every older batch had been rendered (seconds), and a shutdown command found
+/// the channel full.
+pub type RenderBatchesInFlight = Arc<core::sync::atomic::AtomicUsize>;
+
+/// See [`RenderBatchesInFlight`]: one batch being rendered and the next one queued.
+pub const MAX_RENDER_BATCHES_IN_FLIGHT: usize = 2;
 
 impl Drop for SimulationThreads {
   fn drop(&mut self) {
@@ -682,6 +697,7 @@ impl SimulationThreads {
       audio_device: None,
       skip_present,
       retire_requests: Arc::new(parking_lot::Mutex::new(alloc::vec::Vec::new())),
+      render_batches_in_flight: Arc::new(core::sync::atomic::AtomicUsize::new(0)),
     })
   }
 
@@ -701,6 +717,7 @@ impl SimulationThreads {
         render_feedback_tx,
         Arc::clone(&closing),
         Arc::clone(&self.retire_requests),
+        Arc::clone(&self.render_batches_in_flight),
       ),
     )?;
     self.render_thread.closing = closing;
@@ -727,6 +744,7 @@ impl SimulationThreads {
         logic_feedback_tx,
         self.render_thread.tx.as_ref().unwrap().clone(),
         Arc::clone(&closing),
+        Arc::clone(&self.render_batches_in_flight),
       )),
     )?;
     self.logic_thread.closing = closing;
@@ -1096,6 +1114,11 @@ pub struct RenderFrame {
   pub sky_entity: Option<EntityId>,
   pub cursor_entity: Option<EntityId>,
   pub custom_render_callback: Option<CustomRenderCallback>,
+  /// the engine's pause switch (`PresentationEngineData::active`): read again by the render
+  /// thread, so a frame queued before the pause is dropped, not acquired
+  pub active: Arc<core::sync::atomic::AtomicBool>,
+  /// the engine's presented-frame counter (`PresentationEngineData::frames_presented`)
+  pub frames_presented: Arc<AtomicU64>,
 
   /// particles constants to reproduce cluster params coherent with what the logic thread computes
   pub mean_intra_grains_distance_mm: f32,
@@ -1238,6 +1261,47 @@ pub enum PhysicsEngineType {
 pub struct PresentationEngineData {
   pub is_windowless: bool,
   pub camera_entity: Option<EntityId>,
+  /// false: the view is paused (`SimulationContext::set_viewport_active`): the logic thread
+  /// builds no frame for it, the render thread neither acquires nor presents it. Shared with
+  /// the frames already queued, which the render thread then drops.
+  pub active: Arc<core::sync::atomic::AtomicBool>,
+  /// frames of this engine that went through `present` (`SimulationContext::viewport_frame_count`)
+  pub frames_presented: Arc<AtomicU64>,
+  /// the shortest time between two frames of this view, µs
+  /// (`SimulationContext::set_viewport_min_frame_interval`): 0 = every display slot; otherwise the
+  /// logic thread skips this view in the slots that come sooner than that after its last frame
+  pub min_frame_interval_us: Arc<AtomicU64>,
+  /// monotonic time (µs) of the display slot that last built a frame for this view
+  pub last_frame_us: Arc<AtomicU64>,
+}
+
+impl PresentationEngineData {
+  /// An active engine without a camera, no frame presented yet
+  pub fn new(is_windowless: bool) -> Self {
+    Self {
+      is_windowless,
+      camera_entity: None,
+      active: Arc::new(core::sync::atomic::AtomicBool::new(true)),
+      frames_presented: Arc::new(AtomicU64::new(0)),
+      min_frame_interval_us: Arc::new(AtomicU64::new(0)),
+      last_frame_us: Arc::new(AtomicU64::new(0)),
+    }
+  }
+
+  /// Whether a frame of this view is due in the display slot at monotonic time `now_us`
+  /// (`min_frame_interval_us` since its last frame, or no interval set); a due slot becomes the
+  /// view's last frame time.
+  pub fn take_frame_slot(&self, now_us: u64) -> bool {
+    let interval = self.min_frame_interval_us.load(core::sync::atomic::Ordering::Acquire);
+    if interval > 0 {
+      let last = self.last_frame_us.load(core::sync::atomic::Ordering::Acquire);
+      if last != 0 && now_us.saturating_sub(last) < interval {
+        return false;
+      }
+    }
+    self.last_frame_us.store(now_us.max(1), core::sync::atomic::Ordering::Release);
+    true
+  }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1440,9 +1504,10 @@ pub struct SceneContext {
   /// dust flow clock (time-lapse phase, eased sim rate), advanced by the render thread, held while
   /// paused (`dust::DustFlowClock`)
   pub dust_flow_clock: Arc<spin::Mutex<crate::scene::dust::DustFlowClock>>,
-  /// Earth observer posed natively in every commit (`earth_observer::apply`), `None` = C# poses
-  /// the camera (other modes, fly-in). Set through `SimulationContext::set_earth_observer`.
-  pub earth_observer: Option<crate::simulation_api::earth_observer::EarthObserverState>,
+  /// Earth observers posed natively in every commit (`earth_observer::apply`), one per camera;
+  /// a camera without one is posed by C# (other modes, fly-in). Set through
+  /// `SimulationContext::set_earth_observer` / `set_nucleus_view_from_earth`.
+  pub earth_observers: crate::simulation_api::earth_observer::EarthObservers,
 }
 
 impl Drop for SceneContext {
@@ -1646,7 +1711,7 @@ impl SceneContext {
       )),
       dust_exposure_ev: Arc::new(core::sync::atomic::AtomicU32::new(0.0f32.to_bits())),
       dust_flow_clock: Arc::new(spin::Mutex::new(Default::default())),
-      earth_observer: None,
+      earth_observers: Default::default(),
     }
   }
 
@@ -1717,8 +1782,10 @@ impl RenderThreadParams {
     render_feedback_tx: mpsc::Sender<RenderFeedback>,
     closing: Arc<core::sync::atomic::AtomicBool>,
     retire_requests: RetireRequests,
+    render_batches_in_flight: RenderBatchesInFlight,
   ) -> RenderThreadContext {
     RenderThreadContext {
+      render_batches_in_flight,
       closing,
       render_feedback_tx,
       render_frontend: RefCell::new(Some(self.render_frontend)),
@@ -1745,6 +1812,8 @@ pub struct RenderThreadContext {
   pub closing: Arc<core::sync::atomic::AtomicBool>,
   /// Presentation engines to destroy before the next command, see [`RetireRequests`].
   pub retire_requests: RetireRequests,
+  /// Lowered after each frame batch, see [`RenderBatchesInFlight`].
+  pub render_batches_in_flight: RenderBatchesInFlight,
 }
 
 impl RenderThreadContext {
@@ -1800,8 +1869,10 @@ impl LogicThreadParams {
     logic_feedback_tx: mpsc::Sender<LogicFeedback>,
     render_tx: mpsc::Sender<RenderCommand>,
     closing: Arc<core::sync::atomic::AtomicBool>,
+    render_batches_in_flight: RenderBatchesInFlight,
   ) -> LogicThreadContext {
     LogicThreadContext {
+      render_batches_in_flight,
       closing,
       logic_state: self.logic_state,
       thread_pool: self.thread_pool,
@@ -1825,6 +1896,8 @@ pub struct LogicThreadContext {
   pub scenes: Arc<RwLock<SimulationSceneData>>,
   pub ctx_ptr: SendPtrMut<core::ffi::c_void>,
   pub render_tx: mpsc::Sender<RenderCommand>,
+  /// Raised on each frame batch sent, see [`RenderBatchesInFlight`].
+  pub render_batches_in_flight: RenderBatchesInFlight,
   pub kernels: (gpu::RenderFrontend, gpu::RenderDeviceHandle),
   /// See `ThreadTxContainer::closing`: an empty channel with this set counts as closed.
   pub closing: Arc<core::sync::atomic::AtomicBool>,

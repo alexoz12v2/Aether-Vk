@@ -40,6 +40,10 @@ public sealed class SaveIndex
   public List<AssetDto> Assets { get; set; } = [];
   public CometAppearanceIndexDto? CometAppearance { get; set; }
   public List<BillboardDto> Billboards { get; set; } = [];
+  /// <summary>The UI layout the save was made in: "compact"; absent / null (every older save, and
+  /// the classic layout): classic. Older builds ignore it.</summary>
+  [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+  public string? UiLayout { get; set; }
 }
 
 public sealed class TimelineDto

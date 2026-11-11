@@ -27,6 +27,67 @@ public partial class MainWindow : Window
       OnElementGotFocus,
       Avalonia.Interactivity.RoutingStrategies.Bubble
     );
+    DataContextChanged += (_, _) => OnViewModelChanged();
+  }
+
+  // ── Classic / Compact: the widths of the three fixed columns ──────────────────
+
+  /// <summary>The compact panel's least width, DIPs.</summary>
+  public const double CompactPanelMinWidth = 300;
+
+  private Logic.ViewModels.MainWindowViewModel? _layoutVm;
+  // the user's splitter position, kept across a visit to the classic layout
+  private GridLength _compactPanelWidth = new(3, GridUnitType.Star);
+  private GridLength _compactDockingWidth = new(7, GridUnitType.Star);
+  private bool _compactColumns;
+
+  private void OnViewModelChanged()
+  {
+    if (_layoutVm is not null)
+      _layoutVm.PropertyChanged -= OnViewModelPropertyChanged;
+    _layoutVm = DataContext as Logic.ViewModels.MainWindowViewModel;
+    if (_layoutVm is not null)
+      _layoutVm.PropertyChanged += OnViewModelPropertyChanged;
+    ApplyLayoutColumns();
+  }
+
+  private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+  {
+    if (e.PropertyName == nameof(Logic.ViewModels.MainWindowViewModel.IsCompactLayout))
+      ApplyLayoutColumns();
+  }
+
+  /// <summary>
+  /// Compact: panel 3* (at least <see cref="CompactPanelMinWidth"/>), splitter, docking area 7*, or
+  /// where the user left the splitter. Classic: the docking area alone, exactly as without a panel.
+  /// Only widths and visibility change; no control changes parent or column.
+  /// </summary>
+  private void ApplyLayoutColumns()
+  {
+    bool compact = _layoutVm?.IsCompactLayout ?? false;
+    var columns = WorkArea.ColumnDefinitions;
+    if (_compactColumns && !compact)
+    {
+      _compactPanelWidth = columns[0].Width;
+      _compactDockingWidth = columns[2].Width;
+    }
+    _compactColumns = compact;
+    CompactPanelHost.IsVisible = compact;
+    CompactSplitter.IsVisible = compact;
+    if (compact)
+    {
+      columns[0].MinWidth = CompactPanelMinWidth;
+      columns[0].Width = _compactPanelWidth;
+      columns[1].Width = GridLength.Auto;
+      columns[2].Width = _compactDockingWidth;
+    }
+    else
+    {
+      columns[0].MinWidth = 0;
+      columns[0].Width = new GridLength(0);
+      columns[1].Width = new GridLength(0);
+      columns[2].Width = new GridLength(1, GridUnitType.Star);
+    }
   }
 
   protected override void OnOpened(EventArgs e)
@@ -105,6 +166,9 @@ public partial class MainWindow : Window
       Views.Viewport3DView? view = null;
       while (el != null)
       {
+        // the nucleus mini-view is never the active viewport, wherever it is placed
+        if (el is Controls.VulkanViewportControl { DataContext: Logic.ViewModels.VulkanViewportControlViewModel { Role: Logic.Services.ViewportRole.NucleusMini } })
+          break;
         if (el is Views.Viewport3DView v)
         {
           view = v;

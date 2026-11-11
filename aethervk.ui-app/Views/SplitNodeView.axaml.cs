@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel;
 using System.Globalization;
 using AetherVk.Logic.ViewModels;
 using Avalonia;
@@ -61,6 +62,16 @@ public class InverseRatioToStarConverter : Avalonia.Data.Converters.IValueConver
 
 public partial class SplitNodeView : UserControl
 {
+  private SplitNodeViewModel? _vm;
+
+  // Viewport-only collapse: the track lengths of the active grid before collapsing, and the
+  // Animation-priority overrides that zero one side. Disposing an override lets the bound (or
+  // splitter-dragged) length show again; a track whose override could not be undone gets its
+  // saved length back.
+  private GridLength[]? _savedTracks;
+  private Grid? _collapsedGrid;
+  private readonly IDisposable?[] _trackOverrides = new IDisposable?[3];
+
   public SplitNodeView()
   {
     InitializeComponent();
@@ -70,25 +81,77 @@ public partial class SplitNodeView : UserControl
   {
     base.OnDataContextChanged(e);
 
-    if (DataContext is SplitNodeViewModel vm)
-    {
-      // Run first build
-      // BuildGrid(vm);
+    if (_vm is not null)
+      _vm.PropertyChanged -= OnViewModelPropertyChanged;
+    RestoreTracks();
 
-      // Listen changes at runtime
-      vm.PropertyChanged += (s, args) =>
-      {
-        if (
-          args.PropertyName == nameof(vm.Orientation)
-          || args.PropertyName == nameof(vm.FirstChild)
-          || args.PropertyName == nameof(vm.SecondChild)
-        )
-        {
-          //BuildGrid(vm);
-          Console.WriteLine("FJDKSLFJDKSLFJ");
-        }
-      };
+    _vm = DataContext as SplitNodeViewModel;
+    if (_vm is not null)
+    {
+      _vm.PropertyChanged += OnViewModelPropertyChanged;
+      ApplyCollapsed(_vm.Collapsed);
     }
+  }
+
+  private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs args)
+  {
+    if (args.PropertyName == nameof(SplitNodeViewModel.Collapsed) && sender is SplitNodeViewModel vm)
+      ApplyCollapsed(vm.Collapsed);
+  }
+
+  /// <summary>
+  /// Zeroes the collapsed side's track and the splitter's track of the active orientation grid, so
+  /// the shown side takes the whole area; <see cref="CollapsedSide.None"/> restores the saved tracks.
+  /// The children stay where they are: only lengths and visibilities change.
+  /// </summary>
+  private void ApplyCollapsed(CollapsedSide side)
+  {
+    RestoreTracks();
+    if (side == CollapsedSide.None || _vm is null)
+      return;
+
+    var horizontal = _vm.Orientation == SplitOrientation.Horizontal;
+    var grid = horizontal ? HorizontalGrid : VerticalGrid;
+    var star = new GridLength(1, GridUnitType.Star);
+    var zero = new GridLength(0, GridUnitType.Pixel);
+    GridLength[] lengths = side == CollapsedSide.Second ? [star, zero, zero] : [zero, zero, star];
+
+    _collapsedGrid = grid;
+    _savedTracks = new GridLength[3];
+    for (var i = 0; i < 3; ++i)
+    {
+      if (horizontal)
+      {
+        var column = grid.ColumnDefinitions[i];
+        _savedTracks[i] = column.Width;
+        _trackOverrides[i] = column.SetValue(ColumnDefinition.WidthProperty, lengths[i], BindingPriority.Animation);
+      }
+      else
+      {
+        var row = grid.RowDefinitions[i];
+        _savedTracks[i] = row.Height;
+        _trackOverrides[i] = row.SetValue(RowDefinition.HeightProperty, lengths[i], BindingPriority.Animation);
+      }
+    }
+  }
+
+  private void RestoreTracks()
+  {
+    if (_collapsedGrid is { } grid && _savedTracks is { } saved)
+    {
+      for (var i = 0; i < 3; ++i)
+      {
+        if (_trackOverrides[i] is { } undo)
+          undo.Dispose();
+        else if (grid == HorizontalGrid)
+          grid.ColumnDefinitions[i].Width = saved[i];
+        else
+          grid.RowDefinitions[i].Height = saved[i];
+        _trackOverrides[i] = null;
+      }
+    }
+    _collapsedGrid = null;
+    _savedTracks = null;
   }
 
   private class SplitRatioToWidth(SplitNodeView self, SplitOrientation orientation)

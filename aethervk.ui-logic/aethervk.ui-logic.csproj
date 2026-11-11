@@ -49,6 +49,7 @@
       -->
     <InternalsVisibleTo Include="AetherVk.Logic.Tests" />
     <InternalsVisibleTo Include="AetherVk.AppNS.Tests" />
+    <InternalsVisibleTo Include="AetherVk.X11.Tests" />
   </ItemGroup>
 
   <ItemGroup>

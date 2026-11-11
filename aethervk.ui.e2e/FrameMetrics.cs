@@ -1,3 +1,4 @@
+using AetherVk.UI.E2E.Shared;
 using OpenQA.Selenium.Appium;
 
 namespace AetherVk.UI.E2E;
@@ -5,26 +6,23 @@ namespace AetherVk.UI.E2E;
 /// <summary>
 /// What the viewport shows, measured off the screen: a coarse luminance grid compared frame to
 /// frame (did the picture change, and how much), and the brightness around the comet against the
-/// sky in the viewport's corners (is there dust at all).
+/// sky in the viewport's corners (is there dust at all). The math is the shared
+/// <see cref="FrameMetricsCore"/> (the Mac suite runs the same), over Win32 BitBlt captures.
 /// </summary>
 public static class FrameMetrics
 {
   /// <summary>Grid cells per side of <see cref="Sample"/>.</summary>
-  public const int GridSize = 32;
+  public const int GridSize = FrameMetricsCore.GridSize;
 
   /// <summary>A cell counts as changed when its luminance moved by more than this (0..1).</summary>
-  public const double CellThreshold = 0.01;
+  public const double CellThreshold = FrameMetricsCore.CellThreshold;
 
   /// <summary>The viewport's central 90 %, on a 32 × 32 luminance grid (the nucleus stays centred).</summary>
-  public static double[] Sample(AppiumWebElement vp)
-  {
-    int w = (int)(vp.Size.Width * 0.9), h = (int)(vp.Size.Height * 0.9);
-    return Win32.SampleLuminance(vp.Location.X + (vp.Size.Width - w) / 2, vp.Location.Y + (vp.Size.Height - h) / 2, w, h, GridSize);
-  }
+  public static double[] Sample(AppiumWebElement vp) =>
+    FrameMetricsCore.Sample((r, n) => Win32.SampleLuminance(r.X, r.Y, r.Width, r.Height, n), RectOf(vp));
 
   /// <summary>The share of cells whose luminance moved by more than <see cref="CellThreshold"/>.</summary>
-  public static double Changed(double[] a, double[] b) =>
-    a.Zip(b, (x, y) => Math.Abs(x - y) > CellThreshold ? 1.0 : 0.0).Average();
+  public static double Changed(double[] a, double[] b) => FrameMetricsCore.Changed(a, b);
 
   /// <summary>
   /// The mean luminance of the ring <paramref name="innerPx"/>–<paramref name="outerPx"/> around
@@ -32,29 +30,9 @@ public static class FrameMetrics
   /// corners (an overlay panel in one corner cannot raise it).
   /// </summary>
   public static (double Ring, double Sky) RingAndSky(AppiumWebElement vp, (double X, double Y) comet,
-    int innerPx = 10, int outerPx = 60)
-  {
-    int cx = (int)Math.Round(comet.X), cy = (int)Math.Round(comet.Y);
-    int size = 2 * outerPx + 1;
-    var box = Win32.CaptureLuminance(cx - outerPx, cy - outerPx, size, size);
-    double sum = 0;
-    int n = 0;
-    for (int j = 0; j < size; j++)
-      for (int i = 0; i < size; i++)
-      {
-        int dx = i - outerPx, dy = j - outerPx;
-        int r2 = dx * dx + dy * dy;
-        if (r2 < innerPx * innerPx || r2 > outerPx * outerPx)
-          continue;
-        sum += box[j * size + i];
-        n++;
-      }
+    int innerPx = 10, int outerPx = 60) =>
+    FrameMetricsCore.RingAndSky(r => Win32.CaptureLuminance(r.X, r.Y, r.Width, r.Height), RectOf(vp), comet, innerPx, outerPx);
 
-    const int Corner = 40, Inset = 8;
-    int left = vp.Location.X + Inset, top = vp.Location.Y + Inset;
-    int right = vp.Location.X + vp.Size.Width - Inset - Corner, bottom = vp.Location.Y + vp.Size.Height - Inset - Corner;
-    double sky = new[] { (left, top), (right, top), (left, bottom), (right, bottom) }
-      .Min(c => Win32.CaptureLuminance(c.Item1, c.Item2, Corner, Corner).Average());
-    return (sum / n, sky);
-  }
+  /// <summary>The element's rectangle in screen pixels (WinAppDriver's frame).</summary>
+  public static E2ERect RectOf(AppiumWebElement e) => new(e.Location.X, e.Location.Y, e.Size.Width, e.Size.Height);
 }
