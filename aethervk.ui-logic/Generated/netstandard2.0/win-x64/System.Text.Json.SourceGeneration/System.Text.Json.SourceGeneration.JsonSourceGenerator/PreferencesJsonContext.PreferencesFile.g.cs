@@ -46,7 +46,7 @@ namespace AetherVk.Logic.Services
 
         private static global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[] PreferencesFilePropInit(global::System.Text.Json.JsonSerializerOptions options)
         {
-            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[18];
+            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[20];
 
             var info0 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<int>
             {
@@ -412,6 +412,46 @@ namespace AetherVk.Logic.Services
             
             properties[17] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<string>(options, info17);
 
+            var info18 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<string>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.Services.PreferencesFile),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.Services.PreferencesFile)obj).UiLayout,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.Services.PreferencesFile)obj).UiLayout = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "UiLayout",
+                JsonPropertyName = "ui_layout",
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.Services.PreferencesFile).GetProperty("UiLayout", InstanceMemberBindingFlags, null, typeof(string), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[18] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<string>(options, info18);
+
+            var info19 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<bool?>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.Services.PreferencesFile),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.Services.PreferencesFile)obj).NucleusMiniExpanded,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.Services.PreferencesFile)obj).NucleusMiniExpanded = value!,
+                IgnoreCondition = null,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "NucleusMiniExpanded",
+                JsonPropertyName = "nucleus_mini_expanded",
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.Services.PreferencesFile).GetProperty("NucleusMiniExpanded", InstanceMemberBindingFlags, null, typeof(bool?), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[19] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<bool?>(options, info19);
+
             return properties;
         }
 
@@ -459,6 +499,9 @@ namespace AetherVk.Logic.Services
             writer.WritePropertyName(PropName_orbit_lines);
             global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.Services.PreferencesFile)value).OrbitLines, NullableBoolean);
             writer.WriteString(PropName_language, ((global::AetherVk.Logic.Services.PreferencesFile)value).Language);
+            writer.WriteString(PropName_ui_layout, ((global::AetherVk.Logic.Services.PreferencesFile)value).UiLayout);
+            writer.WritePropertyName(PropName_nucleus_mini_expanded);
+            global::System.Text.Json.JsonSerializer.Serialize(writer, ((global::AetherVk.Logic.Services.PreferencesFile)value).NucleusMiniExpanded, NullableBoolean);
 
             writer.WriteEndObject();
         }

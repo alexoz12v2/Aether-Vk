@@ -97,6 +97,7 @@ public sealed class GlobalInputRouter(InputRegistry registry) : IWindowInputRout
     if (!_attachedWindows.Remove(window))
       return; // wasn't attached — no-op
 
+    _viewportOverlays.Remove(window);
     window.RemoveHandler(InputElement.KeyDownEvent, OnKeyDown);
     window.RemoveHandler(InputElement.KeyUpEvent, OnKeyUp);
     window.RemoveHandler(InputElement.PointerPressedEvent, OnPointerPressed);
@@ -120,8 +121,27 @@ public sealed class GlobalInputRouter(InputRegistry registry) : IWindowInputRout
       window.RemoveHandler(InputElement.PointerCaptureLostEvent, OnPointerCaptureLost);
     }
     _attachedWindows.Clear();
+    _viewportOverlays.Clear();
     _pressedVisuals.Clear();
   }
+
+  // windows that sit over a viewport (the desktop billboards)
+  private readonly HashSet<TopLevel> _viewportOverlays = [];
+
+  /// <summary>
+  /// Attaches a window that sits over a viewport, a desktop billboard: a press on it counts as a
+  /// press in the viewport below, and the camera keys typed while it is active go to the viewport.
+  /// On Windows and macOS a billboard window takes the clicks over its whole rectangle (Linux lets
+  /// the transparent margin through), and a FITS overlay can cover the whole view: without this, a
+  /// click on the view never gave the camera the keyboard.
+  /// </summary>
+  public void AttachViewportOverlay(TopLevel window)
+  {
+    AttachToWindow(window);
+    _viewportOverlays.Add(window);
+  }
+
+  private bool IsViewportOverlay(TopLevel? window) => window is not null && _viewportOverlays.Contains(window);
 
   private void OnKeyDown(object? sender, KeyEventArgs e) => HandleInput(e, true);
 
@@ -132,9 +152,10 @@ public sealed class GlobalInputRouter(InputRegistry registry) : IWindowInputRout
     if (e.Handled)
       return;
 
-    var focused =
-      TopLevel.GetTopLevel(e.Source as Visual)?.FocusManager?.GetFocusedElement() as Visual;
-    if (focused == null)
+    var top = TopLevel.GetTopLevel(e.Source as Visual);
+    var focused = top?.FocusManager?.GetFocusedElement() as Visual;
+    // a billboard has no text input: what has focus in it is the window or its canvas
+    if (focused == null || IsViewportOverlay(top))
     {
       if (_keyboardInNativeViewport)
         RouteUnfocusedKeyToViewport(e, isPressed);
@@ -207,8 +228,10 @@ public sealed class GlobalInputRouter(InputRegistry registry) : IWindowInputRout
 
   private void OnPointerPressed(object? sender, PointerPressedEventArgs e)
   {
-    // a click on the overlay's transparent void is a click in the viewport below it
-    _keyboardInNativeViewport = e.Source is Control { Name: "TransparentRoot" };
+    // a click on the overlay's transparent void, or on a billboard window, is a click in the
+    // viewport below it
+    _keyboardInNativeViewport = e.Source is Control { Name: "TransparentRoot" }
+      || IsViewportOverlay(TopLevel.GetTopLevel(e.Source as Visual));
     HandlePointerInput(e, true);
   }
 

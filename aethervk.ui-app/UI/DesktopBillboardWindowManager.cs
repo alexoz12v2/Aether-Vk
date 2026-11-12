@@ -50,6 +50,8 @@ public sealed class DesktopBillboardWindowManager : IDisposable
   private Window? _main;
   private bool _appActive = true;
   private nint _root;
+  // the camera keys typed on a billboard go to the viewport below it (null in the X11 tests)
+  private readonly Input.GlobalInputRouter? _router;
 
   public enum StackingMode
   {
@@ -69,8 +71,10 @@ public sealed class DesktopBillboardWindowManager : IDisposable
     INativeRuntimeService runtime,
     IPlatformWindowService platform,
     IScreenInfoProvider screens,
-    ISchedulerProvider schedulers)
+    ISchedulerProvider schedulers,
+    IWindowInputRouter? inputRouter = null)
   {
+    _router = inputRouter as Input.GlobalInputRouter;
     _service = service;
     _assets = assets;
     _runtime = runtime;
@@ -202,6 +206,7 @@ public sealed class DesktopBillboardWindowManager : IDisposable
     w.Activated += OnWindowActivated;
     w.Deactivated += OnWindowDeactivated;
     _windows[b.Id] = w;
+    _router?.AttachViewportOverlay(w);
     w.Apply(b);
     if (ShouldShow)
       ShowWindow(w);
@@ -261,6 +266,7 @@ public sealed class DesktopBillboardWindowManager : IDisposable
     w.Activated -= OnWindowActivated;
     w.Deactivated -= OnWindowDeactivated;
     _service.SetDragging(id, false);
+    _router?.DetachFromWindow(w);
     w.Close();
   }
 

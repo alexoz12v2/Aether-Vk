@@ -46,7 +46,7 @@ namespace AetherVk.Logic.SaveFile
 
         private static global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[] SaveIndexPropInit(global::System.Text.Json.JsonSerializerOptions options)
         {
-            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[13];
+            var properties = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfo[14];
 
             var info0 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<int>
             {
@@ -326,6 +326,26 @@ namespace AetherVk.Logic.SaveFile
             properties[12].IsGetNullable = false;
             properties[12].IsSetNullable = false;
 
+            var info13 = new global::System.Text.Json.Serialization.Metadata.JsonPropertyInfoValues<string>
+            {
+                IsProperty = true,
+                IsPublic = true,
+                IsVirtual = false,
+                DeclaringType = typeof(global::AetherVk.Logic.SaveFile.SaveIndex),
+                Converter = null,
+                Getter = static obj => ((global::AetherVk.Logic.SaveFile.SaveIndex)obj).UiLayout,
+                Setter = static (obj, value) => ((global::AetherVk.Logic.SaveFile.SaveIndex)obj).UiLayout = value!,
+                IgnoreCondition = global::System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+                HasJsonInclude = false,
+                IsExtensionData = false,
+                NumberHandling = null,
+                PropertyName = "UiLayout",
+                JsonPropertyName = null,
+                AttributeProviderFactory = static () => typeof(global::AetherVk.Logic.SaveFile.SaveIndex).GetProperty("UiLayout", InstanceMemberBindingFlags, null, typeof(string), global::System.Array.Empty<global::System.Type>(), null),
+            };
+            
+            properties[13] = global::System.Text.Json.Serialization.Metadata.JsonMetadataServices.CreatePropertyInfo<string>(options, info13);
+
             return properties;
         }
 
@@ -363,6 +383,11 @@ namespace AetherVk.Logic.SaveFile
             CometAppearanceIndexDtoSerializeHandler(writer, ((global::AetherVk.Logic.SaveFile.SaveIndex)value).CometAppearance);
             writer.WritePropertyName(PropName_billboards);
             ListBillboardDtoSerializeHandler(writer, ((global::AetherVk.Logic.SaveFile.SaveIndex)value).Billboards);
+            string __value_UiLayout = ((global::AetherVk.Logic.SaveFile.SaveIndex)value).UiLayout;
+            if (__value_UiLayout is not null)
+            {
+                writer.WriteString(PropName_ui_layout, __value_UiLayout);
+            }
 
             writer.WriteEndObject();
         }

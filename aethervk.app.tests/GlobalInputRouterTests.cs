@@ -314,4 +314,52 @@ public class GlobalInputRouterTests
     router.Dispose();
     window.Close();
   }
+
+  // ── A desktop billboard over the viewport (Windows: its window takes the clicks) ──
+
+  /// <summary>A billboard window: a canvas with a focusable image, as DesktopBillboardWindow.</summary>
+  private static (Window Window, Border Image) Billboard()
+  {
+    var image = new Border { Focusable = true, Width = 100, Height = 100, Background = Avalonia.Media.Brushes.Gray };
+    var window = new Window { Content = new Canvas { Children = { image } }, Width = 120, Height = 120 };
+    window.Show();
+    return (window, image);
+  }
+
+  [AvaloniaFact]
+  public void KeyOnABillboard_AfterAClickOnIt_GoesToTheViewportBelow()
+  {
+    var (router, window, mock, _) = UnfocusedViewport();
+    var (billboard, image) = Billboard();
+    router.AttachViewportOverlay(billboard);
+    billboard.MouseDown(new Avalonia.Point(50, 50), MouseButton.Left);
+    billboard.MouseUp(new Avalonia.Point(50, 50), MouseButton.Left);
+    image.Focus();
+
+    billboard.KeyPressQwerty(PhysicalKey.Digit3, RawInputModifiers.None);
+    billboard.KeyReleaseQwerty(PhysicalKey.Digit3, RawInputModifiers.None);
+
+    VerifyCometOrbiting(mock, Times.Once());
+    router.Dispose();
+    billboard.Close();
+    window.Close();
+  }
+
+  [AvaloniaFact]
+  public void KeyOnABillboard_AfterItIsDetached_IsNotRouted()
+  {
+    var (router, window, mock, _) = UnfocusedViewport();
+    var (billboard, _) = Billboard();
+    router.AttachViewportOverlay(billboard);
+    router.DetachFromWindow(billboard);
+    billboard.MouseDown(new Avalonia.Point(50, 50), MouseButton.Left);
+    billboard.MouseUp(new Avalonia.Point(50, 50), MouseButton.Left);
+
+    billboard.KeyPressQwerty(PhysicalKey.Digit3, RawInputModifiers.None);
+
+    VerifyCometOrbiting(mock, Times.Never());
+    router.Dispose();
+    billboard.Close();
+    window.Close();
+  }
 }

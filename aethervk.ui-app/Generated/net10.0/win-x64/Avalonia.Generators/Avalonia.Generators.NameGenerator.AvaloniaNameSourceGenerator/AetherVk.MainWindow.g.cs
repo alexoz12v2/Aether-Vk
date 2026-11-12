@@ -16,6 +16,12 @@ namespace AetherVk
         internal global::Avalonia.Controls.Border TitleDragArea;
         [global::System.CodeDom.Compiler.GeneratedCode("Avalonia.Generators.NameGenerator.InitializeComponentCodeGenerator", "11.3.12.0")]
         internal global::Avalonia.Controls.Border ModeBar;
+        [global::System.CodeDom.Compiler.GeneratedCode("Avalonia.Generators.NameGenerator.InitializeComponentCodeGenerator", "11.3.12.0")]
+        internal global::Avalonia.Controls.Grid WorkArea;
+        [global::System.CodeDom.Compiler.GeneratedCode("Avalonia.Generators.NameGenerator.InitializeComponentCodeGenerator", "11.3.12.0")]
+        internal global::AetherVk.Views.CompactPanelView CompactPanelHost;
+        [global::System.CodeDom.Compiler.GeneratedCode("Avalonia.Generators.NameGenerator.InitializeComponentCodeGenerator", "11.3.12.0")]
+        internal global::Avalonia.Controls.GridSplitter CompactSplitter;
 
         /// <summary>
         /// Wires up the controls and optionally loads XAML markup and attaches dev tools (if Avalonia.Diagnostics package is referenced).
@@ -44,6 +50,9 @@ namespace AetherVk
             MenuContainer = __thisNameScope__?.Find<global::Avalonia.Controls.ContentControl>("MenuContainer");
             TitleDragArea = __thisNameScope__?.Find<global::Avalonia.Controls.Border>("TitleDragArea");
             ModeBar = __thisNameScope__?.Find<global::Avalonia.Controls.Border>("ModeBar");
+            WorkArea = __thisNameScope__?.Find<global::Avalonia.Controls.Grid>("WorkArea");
+            CompactPanelHost = __thisNameScope__?.Find<global::AetherVk.Views.CompactPanelView>("CompactPanelHost");
+            CompactSplitter = __thisNameScope__?.Find<global::Avalonia.Controls.GridSplitter>("CompactSplitter");
         }
     }
 }

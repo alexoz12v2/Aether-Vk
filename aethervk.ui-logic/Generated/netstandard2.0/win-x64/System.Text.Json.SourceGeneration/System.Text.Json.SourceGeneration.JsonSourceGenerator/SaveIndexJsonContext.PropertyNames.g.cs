@@ -138,6 +138,7 @@ namespace AetherVk.Logic.SaveFile
         private static readonly global::System.Text.Json.JsonEncodedText PropName_assets = global::System.Text.Json.JsonEncodedText.Encode("assets");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_comet_appearance = global::System.Text.Json.JsonEncodedText.Encode("comet_appearance");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_billboards = global::System.Text.Json.JsonEncodedText.Encode("billboards");
+        private static readonly global::System.Text.Json.JsonEncodedText PropName_ui_layout = global::System.Text.Json.JsonEncodedText.Encode("ui_layout");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_spk_id = global::System.Text.Json.JsonEncodedText.Encode("spk_id");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_designation = global::System.Text.Json.JsonEncodedText.Encode("designation");
         private static readonly global::System.Text.Json.JsonEncodedText PropName_full_name = global::System.Text.Json.JsonEncodedText.Encode("full_name");
