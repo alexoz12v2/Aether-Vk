@@ -487,6 +487,69 @@ public sealed class NucleusMiniViewX11Tests
   }
 
   /// <summary>
+  /// Proves the camera keys reach the main 3D view after a click on a desktop billboard (the review
+  /// save's FITS image, shown over the view in Compact): a real click on the billboard's image,
+  /// then V (cycle camera mode), changes the main camera's mode exactly once; then a real click on
+  /// the main view itself, away from the billboard's window, and V again changes it exactly once
+  /// more. The mode changes are counted on the camera's mode stream (a key delivered twice would
+  /// count two).
+  /// </summary>
+  [SkippableFact]
+  public void NucleusMiniView_KeyAfterAClickOnTheBillboardDrivesMainCamera()
+  {
+    using var rig = new AppRig();
+    var s = Build(rig);
+    var camera = CompactX11.MainViewport(rig).CameraService;
+    var billboards = rig.Host.Services.GetService(typeof(AetherVk.UI.DesktopBillboardWindowManager)) as AetherVk.UI.DesktopBillboardWindowManager;
+    Assert.NotNull(billboards);
+    AetherVk.UI.DesktopBillboardWindow? window = null;
+    Assert.True(WaitFor(() => (window = Ui(() => billboards!.Windows.FirstOrDefault(w => w.IsVisible
+      && w.GetVisualDescendants().OfType<Avalonia.Controls.Image>().Any(i => i.IsVisible && i.Source is not null)))) is not null, 30_000),
+      "the review save's billboard shows its image in Compact");
+    var image = Ui(() => window!.GetVisualDescendants().OfType<Avalonia.Controls.Image>().First(i => i.IsVisible && i.Source is not null));
+    var imageCentre = Ui(() => image.PointToScreen(new Point(image.Bounds.Width / 2, image.Bounds.Height / 2)));
+    var bw = XWinInfo(Ui(() => window!.TryGetPlatformHandle()!.Handle));
+    var vw = XWinInfo(CompactX11.HostVm(CompactX11.MainHost(rig)).NativeHandle);
+    Report($"billboard window {bw.Width}×{bw.Height}+{bw.X}+{bw.Y}, image centre {imageCentre.X},{imageCentre.Y}; "
+      + $"main view {vw.Width}×{vw.Height}+{vw.X}+{vw.Y}");
+
+    int changes = 0;
+    using var sub = camera.CameraModeChanged.Subscribe(_ => Interlocked.Increment(ref changes));
+    Settle(500);
+    int baseline = Volatile.Read(ref changes); // a replayed current value, if the stream has one
+
+    // 1. the billboard's image, then V
+    Step("click on the billboard image, V");
+    var mode0 = Ui(() => camera.CurrentMode);
+    XDo($"mousemove {imageCentre.X} {imageCentre.Y} sleep 0.2 click 1");
+    Settle(500);
+    XDo("key v");
+    Assert.True(WaitFor(() => Ui(() => camera.CurrentMode) != mode0, 10_000),
+      $"a click on the billboard, then V: the main camera stayed {mode0}");
+    Settle(1500);
+    var mode1 = Ui(() => camera.CurrentMode);
+    int afterBillboard = Volatile.Read(ref changes) - baseline;
+    Report($"after the billboard click: {mode0} → {mode1}, {afterBillboard} mode change(s)");
+    Assert.Equal(1, afterBillboard);
+
+    // 2. the main view, at a point outside the billboard's window, then V
+    var point = new[] { (vw.X + 12, vw.Y + 12), (vw.X + vw.Width - 12, vw.Y + 12), (vw.X + 12, vw.Y + vw.Height - 12),
+        (vw.X + vw.Width - 12, vw.Y + vw.Height - 12) }
+      .FirstOrDefault(p => p.Item1 < bw.X || p.Item1 >= bw.X + bw.Width || p.Item2 < bw.Y || p.Item2 >= bw.Y + bw.Height);
+    Skip.If(point == default, "the billboard window covers every corner of the main view");
+    Step($"click on the main view at {point.Item1},{point.Item2}, V");
+    XDo($"mousemove {point.Item1} {point.Item2} sleep 0.2 click 1");
+    Settle(500);
+    XDo("key v");
+    Assert.True(WaitFor(() => Ui(() => camera.CurrentMode) != mode1, 10_000),
+      $"a click on the main view, then V: the main camera stayed {mode1}");
+    Settle(1500);
+    int afterView = Volatile.Read(ref changes) - baseline - afterBillboard;
+    Report($"after the main view click: {mode1} → {Ui(() => camera.CurrentMode)}, {afterView} mode change(s)");
+    Assert.Equal(1, afterView);
+  }
+
+  /// <summary>
   /// Proves dragging over the mini-view orbits its camera and the reset button brings back the
   /// view from Earth: an xdotool drag of 80 × 30 px over the mini's window turns the view
   /// (IsEarthView false) and changes the capture (more than 2 % of the pixels differ by more than
