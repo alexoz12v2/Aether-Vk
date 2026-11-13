@@ -113,13 +113,13 @@ public partial class CometTabViewModel : StatefulTabViewModelBase<CometSession>,
   private bool _hasProposedTimeline;
 
   /// <summary>
-  /// Reference orbit choice for the commit, as a ComboBox index: -1 = nothing chosen yet (the
-  /// commit stays disabled, so the user reads the options at least once), 0 = SBDB solution,
-  /// 1 = re-osculated at the start epoch. See <see cref="Models.ReferenceOrbitMode"/>.
+  /// Reference orbit choice for the commit, as a ComboBox index: 0 = SBDB solution (the default,
+  /// so the compact layout, which has no picker, can commit), 1 = re-osculated at the start
+  /// epoch, -1 = nothing chosen (the commit stays disabled). See <see cref="Models.ReferenceOrbitMode"/>.
   /// </summary>
   [ObservableProperty]
   [NotifyPropertyChangedFor(nameof(ReferenceOrbitMode))]
-  private int _referenceOrbitIndex = -1;
+  private int _referenceOrbitIndex = 0;
 
   partial void OnReferenceOrbitIndexChanged(int value)
   {

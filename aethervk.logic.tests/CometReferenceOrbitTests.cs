@@ -7,8 +7,9 @@ using Xunit;
 
 namespace AetherVk.Logic.Tests;
 
-/// The reference orbit (SBDB solution vs re-osculated at the start epoch) is a required choice
-/// before committing a comet, and it is locked while a comet is committed.
+/// The reference orbit (SBDB solution vs re-osculated at the start epoch) defaults to SBDB, so a
+/// fresh session commits without a picker (the compact layout has none); no choice (-1) disables
+/// the commit, and the choice is locked while a comet is committed.
 public class CometReferenceOrbitTests
 {
   private static CometTabViewModel BuildVm() => BuildVm(new CometSession());
@@ -41,14 +42,19 @@ public class CometReferenceOrbitTests
   }
 
   [Fact]
-  public void Commit_IsDisabled_UntilAReferenceOrbitIsChosen()
+  public void Commit_IsEnabled_InAFreshSession_WithTheSbdbDefault()
   {
     var vm = BuildVm();
     vm.SelectedComet = new CometSearchResult { Name = "67P/Churyumov-Gerasimenko", PrimaryDesignation = "67P" };
     vm.SelectedSpkRecord = new SpkRecordItem { RecordId = "90000703", Name = "67P" };
     vm.HasProposedTimeline = true;
 
-    Assert.Equal(-1, vm.ReferenceOrbitIndex);
+    // a fresh session (the compact layout has no picker) commits with the SBDB solution
+    Assert.Equal(0, vm.ReferenceOrbitIndex);
+    Assert.Equal(ReferenceOrbitMode.Sbdb, vm.ReferenceOrbitMode);
+    Assert.True(vm.DownloadAndCommitCommand.CanExecute(null));
+
+    vm.ReferenceOrbitIndex = -1;
     Assert.Null(vm.ReferenceOrbitMode);
     Assert.False(vm.DownloadAndCommitCommand.CanExecute(null));
 

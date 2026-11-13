@@ -17,7 +17,7 @@ public partial class DesignCometTabViewModel
   public string ProposedStartEpoch { get; } = "2015-08-01 00:00";
   public string ProposedEndEpoch   { get; } = "2016-01-01 00:00";
   public bool   HasProposedTimeline { get; } = true;
-  public int    ReferenceOrbitIndex { get; set; } = -1;
+  public int    ReferenceOrbitIndex { get; set; } = 0;
 
   // ── Range entry + guided flow ─────────────────────────────────────────────
   public RangeEntryViewModel Range { get; } = new();
