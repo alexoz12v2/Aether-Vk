@@ -66,6 +66,8 @@ cp -R "$PUBLISH_DIR/"* "$BUNDLE_DIR/Contents/MacOS/"
 # licence texts: the project's, and those of the static CFITSIO + zlib linked into the engine
 cp LICENSE "$BUNDLE_DIR/Contents/Resources/LICENSE"
 cp aethervk.cfitsio/sys/THIRD_PARTY_LICENSES.md "$BUNDLE_DIR/Contents/Resources/THIRD_PARTY_LICENSES.md"
+# Dock/Finder icon: referenced by CFBundleIconFile in Info.plist
+cp aethervk.ui-app/Assets/icon.icns "$BUNDLE_DIR/Contents/Resources/AppIcon.icns"
 
 echo "[5/5] Generating Info.plist..."
 cat > "$BUNDLE_DIR/Contents/Info.plist" <<EOF
@@ -81,6 +83,8 @@ cat > "$BUNDLE_DIR/Contents/Info.plist" <<EOF
     <string>$DISPLAY_NAME</string>
     <key>CFBundleVersion</key>
     <string>$APP_VERSION</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
