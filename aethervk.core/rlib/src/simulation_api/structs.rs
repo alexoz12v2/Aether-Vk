@@ -356,6 +356,27 @@ pub struct SimulationThreads {
   pub retire_requests: RetireRequests,
   /// Frame batches sent to the render thread and not finished yet, see [`RenderBatchesInFlight`].
   pub render_batches_in_flight: RenderBatchesInFlight,
+  /// Raised when the last clone of the running logic thread's [`LogicThreadContext`] is gone,
+  /// see [`LogicContextDropped`]; `drop` waits for it.
+  logic_context_dropped: Option<LogicContextDroppedFlag>,
+}
+
+/// `(dropped, wakeup)` of [`LogicContextDropped`].
+type LogicContextDroppedFlag = Arc<(parking_lot::Mutex<bool>, parking_lot::Condvar)>;
+
+/// Last field of [`LogicThreadContext`]: fields drop in declaration order, so when the last
+/// clone of the context drops this, its `kernels` (a strong reference to the device) are already
+/// gone. Pool workloads hold the context (`LogicWorkload`), so the last one can finish on a worker
+/// after the logic thread has exited; `SimulationThreads::drop` waits for this flag so the
+/// device is never destroyed after the engine's shutdown has returned (during process exit).
+pub struct LogicContextDropped(LogicContextDroppedFlag);
+
+impl Drop for LogicContextDropped {
+  fn drop(&mut self) {
+    let (lock, cvar) = &*self.0;
+    *lock.lock() = true;
+    cvar.notify_all();
+  }
 }
 
 /// Frame batches (`RenderCommand::RenderFrames`) the logic thread has sent and the render thread
@@ -559,6 +580,31 @@ impl Drop for SimulationThreads {
       }
     }
 
+    // ── Phase 5b: the logic context's last holder ────────────────────────────
+    // A `LogicWorkload` finishing on an engine pool worker can hold the last clone of the logic
+    // context, and with it the last device reference: wait until it is dropped, so the device
+    // is destroyed here and not after the shutdown has returned. Bounded, like the render join:
+    // the watchdog covers a stuck holder.
+    if let Some(flag) = self.logic_context_dropped.take() {
+      const LOGIC_CONTEXT_DROP_TIMEOUT_MS: u64 = 1_500;
+      let (lock, cvar) = &*flag;
+      let mut dropped = lock.lock();
+      if !*dropped {
+        oshal::log!("SimulationThreads: waiting for the logic context to be dropped...");
+        // only the flag's `Drop` notifies, so one timed wait per wakeup is bounded enough
+        while !*dropped {
+          let timeout = core::time::Duration::from_millis(LOGIC_CONTEXT_DROP_TIMEOUT_MS);
+          if cvar.wait_for(&mut dropped, timeout).timed_out() {
+            oshal::log!(
+              "SimulationThreads: the logic context outlived the shutdown by {} ms",
+              LOGIC_CONTEXT_DROP_TIMEOUT_MS
+            );
+            break;
+          }
+        }
+      }
+    }
+
     // ── Phase 6: Pool gather + audio ──────────────────────────────────────────
     // Ensure all logic-launched tasklets are finished before shutting down the renderer.
     oshal::log!("SimulationThreads waiting for thread pool tasks to complete...");
@@ -698,6 +744,7 @@ impl SimulationThreads {
       skip_present,
       retire_requests: Arc::new(parking_lot::Mutex::new(alloc::vec::Vec::new())),
       render_batches_in_flight: Arc::new(core::sync::atomic::AtomicUsize::new(0)),
+      logic_context_dropped: None,
     })
   }
 
@@ -738,6 +785,8 @@ impl SimulationThreads {
     let (logic_tx, logic_rx) = mpsc::channel(params.channel_capacity);
     let (logic_feedback_tx, logic_feedback_rx) = mpsc::channel(params.channel_capacity);
     let closing = Arc::new(core::sync::atomic::AtomicBool::new(false));
+    let dropped: LogicContextDroppedFlag =
+      Arc::new((parking_lot::Mutex::new(false), parking_lot::Condvar::new()));
     let logic_thread_handle = start_logic_thread(
       logic_rx,
       alloc::sync::Arc::new(params.to_context(
@@ -745,8 +794,10 @@ impl SimulationThreads {
         self.render_thread.tx.as_ref().unwrap().clone(),
         Arc::clone(&closing),
         Arc::clone(&self.render_batches_in_flight),
+        Arc::new(LogicContextDropped(Arc::clone(&dropped))),
       )),
     )?;
+    self.logic_context_dropped = Some(dropped);
     self.logic_thread.closing = closing;
     self.logic_thread.tx = Some(logic_tx);
     self.logic_thread.handle = Some(logic_thread_handle);
@@ -1870,8 +1921,10 @@ impl LogicThreadParams {
     render_tx: mpsc::Sender<RenderCommand>,
     closing: Arc<core::sync::atomic::AtomicBool>,
     render_batches_in_flight: RenderBatchesInFlight,
+    dropped: Arc<LogicContextDropped>,
   ) -> LogicThreadContext {
     LogicThreadContext {
+      dropped,
       render_batches_in_flight,
       closing,
       logic_state: self.logic_state,
@@ -1901,6 +1954,8 @@ pub struct LogicThreadContext {
   pub kernels: (gpu::RenderFrontend, gpu::RenderDeviceHandle),
   /// See `ThreadTxContainer::closing`: an empty channel with this set counts as closed.
   pub closing: Arc<core::sync::atomic::AtomicBool>,
+  /// Must stay the LAST field (dropped after `kernels`), see [`LogicContextDropped`].
+  pub dropped: Arc<LogicContextDropped>,
 }
 
 #[repr(i32)]

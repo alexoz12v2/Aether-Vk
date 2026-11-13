@@ -225,6 +225,12 @@ mod windows_pool {
 
         match status {
           WorkloadStatus::Complete => {
+            // dropped before the count: `gather` promises the workload, and everything it
+            // holds, is gone (a finished `LogicWorkload` held the engine's device, which then
+            // was destroyed after the shutdown had returned, during process exit). The pool's
+            // owner keeps its own `ThreadPool` reference across `gather`, so this never drops
+            // the pool from one of its own workers.
+            drop(workload);
             state.pending_tasks.fetch_sub(1, Ordering::Release);
           }
           WorkloadStatus::Yield => {
@@ -452,6 +458,12 @@ mod pthread_pool {
 
           match status {
             WorkloadStatus::Complete => {
+              // dropped before the count: `gather` promises the workload, and everything it
+              // holds, is gone (a finished `LogicWorkload` held the engine's device, which then
+              // was destroyed after the shutdown had returned, during process exit). The pool's
+              // owner keeps its own `ThreadPool` reference across `gather`, so this never drops
+              // the pool from one of its own workers.
+              drop(workload);
               state.pending_tasks.fetch_sub(1, Ordering::Release);
             }
             WorkloadStatus::Yield => {

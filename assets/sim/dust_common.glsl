@@ -338,7 +338,7 @@ vec3 df3_to_f32(Df3 a) {
 
 // ─── GPU layouts (mirror of DustCluster / DustRenderCluster / DustBatch) ────
 
-// 80 B: immutable emission record
+// 96 B: immutable emission record
 struct DustCluster {
     vec4 r0_t0_hi;    // heliocentric position (m), w = t0 (scaled s); df64 high part
     vec4 r0_t0_lo;    // ... low part

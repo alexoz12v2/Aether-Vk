@@ -3548,9 +3548,9 @@ impl Device {
   }
 
   /// Records (GPU) or performs (CPU mode) the speck pass of one tier of system `id` into the
-  /// pyramid of `pe` (see `dust_specks.comp`, mirror `dust::specks::specks_tier`): after the
-  /// tier's splat ([`Self::cmd_dust_splat`]), before [`Self::cmd_dust_post_splat_barrier`]; the
-  /// two passes only add into the pyramid (atomics), so they need no barrier between them. The
+  /// pyramid of `pe` (see `dust_specks.comp`, mirror `dust::specks::specks_tier`): before the
+  /// tier's splat ([`Self::cmd_dust_splat`]), with [`Self::cmd_dust_pre_splat_barrier`] between
+  /// them, because the splat reads the walk masks and adds into the texels this pass writes. The
   /// pass always runs (it measures the density at the eye for the next frame's shell); it draws
   /// only when the header's shell radius is positive.
   #[allow(clippy::too_many_arguments)]
